@@ -102,6 +102,22 @@ pub fn tl_x6_to_opq(x6: u8) -> u8 {
     127 - (x6 / 2)
 }
 
+/// Decay1 Level / Sustain Level: OPQ（減衰量 0=減衰なし/フルレベル, 15=ほぼ無音）→
+/// 38x6（サスティンレベル 0=ほぼ無音, 255=フルレベル）。TLと同じ極性反転 + ×17:
+/// `(15 - sl) * 17`（`sl_to_level`のreg=0→sl=255 / reg=15→sl=0アンカーに対応）。
+#[inline]
+pub fn sl_opq_to_x6(sl: u8) -> u8 {
+    (15 - sl.min(15)) * 17
+}
+
+/// 逆変換（可逆性検証用 / 将来のOPQ書き戻し用）: `15 - (x6 / 17)`。
+/// `sl_opq_to_x6`は17の倍数のみ生成するため0〜15で完全可逆。現状はテストからのみ使用。
+#[allow(dead_code)]
+#[inline]
+pub fn sl_x6_to_opq(x6: u8) -> u8 {
+    15 - (x6 / 17)
+}
+
 // ---------------------------------------------------------------------------
 // 構造体変換
 // ---------------------------------------------------------------------------
@@ -117,7 +133,7 @@ impl OpqOperator {
             ar: scale_5bit(self.ar),
             d1r: scale_5bit(self.d1r),
             d2r: scale_5bit(self.d2r),
-            d1l: scale_4bit(self.d1l),
+            d1l: sl_opq_to_x6(self.d1l),
             rr: scale_4bit(self.rr),
             mul: self.mul.min(15),
             dt1: detune_to_dt1(self.detune),
@@ -233,6 +249,19 @@ mod tests {
     }
 
     #[test]
+    fn sl_polarity_inverts() {
+        assert_eq!(sl_opq_to_x6(0), 255); // OPQ減衰なし → 38x6フルレベル（サスティンする）
+        assert_eq!(sl_opq_to_x6(15), 0); // OPQほぼ無音 → 38x6ほぼ無音（すぐ減衰）
+    }
+
+    #[test]
+    fn sl_is_fully_reversible_over_full_range() {
+        for sl in 0u8..=15 {
+            assert_eq!(sl_x6_to_opq(sl_opq_to_x6(sl)), sl, "sl={sl}");
+        }
+    }
+
+    #[test]
     fn operator_fills_38x6_specific_fields_with_defaults() {
         let op = OpqOperator {
             tl: 10,
@@ -248,6 +277,7 @@ mod tests {
         };
         let p = op.to_operator_params();
         assert_eq!(p.tl, tl_opq_to_x6(10));
+        assert_eq!(p.d1l, sl_opq_to_x6(8));
         assert_eq!(p.ar, 248);
         assert_eq!(p.mul, 3);
         assert_eq!(p.dt1, 160);

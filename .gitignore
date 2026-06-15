@@ -4,4 +4,4 @@ gesture-app/src-tauri/gen/
 .vscode/
 docs/
 # psr2x6 の入出力データ置き場（コミット対象外）
-/private/
+/tools/psr2x6/private/
