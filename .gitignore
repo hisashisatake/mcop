@@ -3,5 +3,6 @@ gesture-app/node_modules/
 gesture-app/src-tauri/gen/
 .vscode/
 docs/
-# psr2x6 の入出力データ置き場（コミット対象外）
+# 変換ツールの入出力データ置き場（コミット対象外）
 /tools/psr2x6/private/
+/tools/mucom2x6/private/

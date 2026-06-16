@@ -5,6 +5,7 @@ members = [
     "ym38x6-vst",
     "gesture-app/src-tauri",
     "tools/psr2x6",
+    "tools/mucom2x6",
 ]
 resolver = "2"
 
