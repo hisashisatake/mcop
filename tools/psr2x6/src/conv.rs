@@ -57,16 +57,56 @@ pub struct NamedVoice {
 // スカラー変換（spec-sound.md L768-791 準拠・線形で可逆）
 // ---------------------------------------------------------------------------
 
-/// 5bit（0〜31）→ 8bit（0〜255）: ×8。AR/D1R/D2R に使用。
+/// OPQ 5bit レート（AR/D1R/D2R, 0〜31）+ KSR（0〜3）→ 38x6 rate（0〜255）。
+///
+/// mucom2x6 の `opn_rate_to_x6`（OPN実機カーブ）をそのまま流用する。
+/// ユーザー判断により OPQ(YM3806) の eg_rate/KSR 機構は OPM/OPN系と同一前提で進める（2026-06-16）。
+///
+/// OPN/OPQ の eg_rate_eff = 2×rate + ksr_at_a4(ks)。
+/// A4（key_code≈19）でのKSR貢献分を base rate に織り込むことで、
+/// 38x6 の decay_to_delta / ar_to_delta と実機タイミングを合わせる。
+/// - rate=0 → 0（フリーズ）
+/// - eg_rate (2〜62) → 38x6 rate (1〜255) の線形マッピング
 #[inline]
-pub fn scale_5bit(v: u8) -> u8 {
-    (v.min(31)) * 8
+pub fn opq_rate_to_x6(rate_5bit: u8, ksr: u8) -> u8 {
+    if rate_5bit == 0 {
+        return 0;
+    }
+    // A4 の key_code ≈ 19 (block=4, note=A)
+    const KEY_CODE_A4: u16 = 19;
+    let ksr_shift = 3u16.saturating_sub(ksr.min(3) as u16);
+    let ksr_add = KEY_CODE_A4 >> ksr_shift;
+    let eg_rate = (2 * rate_5bit as u16 + ksr_add).min(62);
+    (1 + (eg_rate.saturating_sub(2)) * 254 / 60).min(255) as u8
 }
 
-/// 4bit（0〜15）→ 8bit（0〜255）: ×17。RR / D1L(Sustain Level) に使用。
+/// AR専用のオンセット補正バイアス（38x6 rate 加算値）。mucom2x6 と同値。
+///
+/// 38x6のアタックはdBリニアで、可聴オンセット（≈−30dB到達）はアタック時間の約69%地点に来る。
+/// 一方OPN/OPQ実機のアタックは指数接近で −30dB到達は約24%地点と早い。同じ総アタック時間でも
+/// 38x6の方が発音開始が遅れて聞こえる。変換側でARを速める（+30で時間約0.30倍）ことで
+/// オンセットを実機に寄せる。詳細は mucom2x6/conv.rs の同名定数コメント参照。
+const ATTACK_ONSET_BIAS: u16 = 30;
+
+/// OPQ 5bit AR（0〜31）+ KSR（0〜3）→ 38x6 ar（0〜255）。
+/// [opq_rate_to_x6] に [ATTACK_ONSET_BIAS] を加算し、dBリニアアタックのオンセット遅れを補正する。
 #[inline]
-pub fn scale_4bit(v: u8) -> u8 {
-    (v.min(15)) * 17
+pub fn opq_ar_to_x6(ar_5bit: u8, ksr: u8) -> u8 {
+    if ar_5bit == 0 {
+        return 0;
+    }
+    (opq_rate_to_x6(ar_5bit, ksr) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
+}
+
+/// OPQ 4bit RR（0〜15）+ KSR（0〜3）→ 38x6 rr（0〜255）。
+/// RR の eg_rate_eff = 4×rr + 2 + ksr_at_a4(ks)。mucom2x6 の `opn_rr_to_x6` と同一。
+#[inline]
+pub fn opq_rr_to_x6(rr_4bit: u8, ksr: u8) -> u8 {
+    const KEY_CODE_A4: u16 = 19;
+    let ksr_shift = 3u16.saturating_sub(ksr.min(3) as u16);
+    let ksr_add = KEY_CODE_A4 >> ksr_shift;
+    let eg_rate = (4 * rr_4bit as u16 + 2 + ksr_add).min(62);
+    (1 + (eg_rate.saturating_sub(2)) * 254 / 60).min(255) as u8
 }
 
 /// 3bit（0〜7）→ 8bit（0〜255）: ×36。Feedback に使用。
@@ -130,11 +170,11 @@ impl OpqOperator {
     pub fn to_operator_params(self) -> OperatorParams {
         OperatorParams {
             tl: tl_opq_to_x6(self.tl),
-            ar: scale_5bit(self.ar),
-            d1r: scale_5bit(self.d1r),
-            d2r: scale_5bit(self.d2r),
+            ar: opq_ar_to_x6(self.ar, self.ksr),
+            d1r: opq_rate_to_x6(self.d1r, self.ksr),
+            d2r: opq_rate_to_x6(self.d2r, self.ksr),
             d1l: sl_opq_to_x6(self.d1l),
-            rr: scale_4bit(self.rr),
+            rr: opq_rr_to_x6(self.rr, self.ksr),
             mul: self.mul.min(15),
             dt1: detune_to_dt1(self.detune),
             ksr: scale_2bit(self.ksr),
@@ -211,21 +251,38 @@ mod tests {
 
     #[test]
     fn scaling_reaches_upper_bound() {
-        assert_eq!(scale_5bit(31), 248);
-        assert_eq!(scale_4bit(15), 255);
         assert_eq!(scale_3bit(7), 252);
         assert_eq!(scale_2bit(3), 255);
-        // 0は0へ
-        assert_eq!(scale_5bit(0), 0);
-        assert_eq!(scale_4bit(0), 0);
     }
 
     #[test]
     fn scaling_clamps_out_of_range_input() {
-        assert_eq!(scale_5bit(99), 248);
-        assert_eq!(scale_4bit(99), 255);
         assert_eq!(scale_3bit(99), 252);
         assert_eq!(scale_2bit(99), 255);
+    }
+
+    #[test]
+    fn rate_zero_freezes_and_max_saturates() {
+        // rate=0 は 38x6 rate=0（フリーズ）。
+        assert_eq!(opq_rate_to_x6(0, 0), 0);
+        assert_eq!(opq_ar_to_x6(0, 0), 0);
+        // rate=31 は KSR 加算で eg_rate が上限に張り付き 255。
+        assert_eq!(opq_rate_to_x6(31, 0), 255);
+        assert_eq!(opq_rr_to_x6(15, 0), 255);
+    }
+
+    #[test]
+    fn ar_applies_onset_bias() {
+        // バイアスが効いている中域の AR で base + 30 になることを確認。
+        let base = opq_rate_to_x6(18, 0);
+        assert!(base < 255 - ATTACK_ONSET_BIAS as u8);
+        assert_eq!(opq_ar_to_x6(18, 0), base + ATTACK_ONSET_BIAS as u8);
+    }
+
+    #[test]
+    fn higher_ksr_speeds_up_rate() {
+        // 同じ register rate でも KSR が大きいほど 38x6 rate は速く（大きく）なる。
+        assert!(opq_rate_to_x6(10, 3) >= opq_rate_to_x6(10, 0));
     }
 
     #[test]
@@ -278,7 +335,7 @@ mod tests {
         let p = op.to_operator_params();
         assert_eq!(p.tl, tl_opq_to_x6(10));
         assert_eq!(p.d1l, sl_opq_to_x6(8));
-        assert_eq!(p.ar, 248);
+        assert_eq!(p.ar, opq_ar_to_x6(31, 2)); // KSR込みのレート変換 + オンセット補正
         assert_eq!(p.mul, 3);
         assert_eq!(p.dt1, 160);
         assert_eq!(p.ksr, 170);
