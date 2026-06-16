@@ -2,10 +2,12 @@
 //!
 //! 使い方:
 //! ```text
-//! psr2x6 <ROM2.bin> <output_dir> [--bank <N>]
+//! psr2x6 <ROM2.bin> <output_dir> [--bank <N>] [--voices panel|extended|all] [--wav]
 //! ```
 //! - 入力は PSR-70 サウンドROM（`ROM2.bin`、32KB）。出力ともに本クレートには同梱しない（パスは引数指定）。
 //! - `--bank` の既定は `WAVEFORM_MEMORY_BANK + 1`（Bank 0はML自動生成用に空けておく）。
+//! - `--voices` の既定は `all`（全68音色）。`panel`=voice0-31（32パネル音色）、
+//!   `extended`=voice0-31+52-67（48音色、2op複製テーブルvoice32-51を除外）。
 //! - 出力は `<output_dir>/b<bank>.38x6`（128件超は連番バンクへ分割）。
 //!
 //! ROM2内の音色テーブル（`0x0660`から68音色×64バイト）の抽出は [`rom2`]、
@@ -19,24 +21,62 @@ use std::process::ExitCode;
 
 use conv::{bank_of, preset_count, voices_to_preset_files, NamedVoice};
 
+/// 出力対象の音色範囲。
+///
+/// ROM2 の 68 音色は 3 グループに分かれる（analyze8.ps1 で確定）:
+/// - voice0-31 : 4op 通常音色・32パネル音色
+/// - voice32-51: op0==op1 AND op2==op3 が平均 12/16 行で成立する 2op 複製テーブル（変換品質が低い）
+/// - voice52-67: 4op 通常音色・追加16音色（パネル外）
+#[derive(Clone, Copy, Debug, Default)]
+enum VoiceMode {
+    Panel,    // voice0-31 のみ（32音色）
+    Extended, // voice0-31 + voice52-67（48音色、2op複製テーブルを除外）
+    #[default]
+    All, // 全68音色
+}
+
+impl VoiceMode {
+    fn filter(&self, voices: Vec<NamedVoice>) -> Vec<NamedVoice> {
+        match self {
+            VoiceMode::Panel => voices.into_iter().take(32).collect(),
+            VoiceMode::Extended => voices
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| *i < 32 || *i >= 52)
+                .map(|(_, v)| v)
+                .collect(),
+            VoiceMode::All => voices,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            VoiceMode::Panel => "panel (voice0-31, 32音色)",
+            VoiceMode::Extended => "extended (voice0-31 + 52-67, 48音色)",
+            VoiceMode::All => "all (全68音色)",
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("psr2x6: {msg}");
-            eprintln!("usage: psr2x6 <ROM2.bin> <output_dir> [--bank <N>]");
+            eprintln!("usage: psr2x6 <ROM2.bin> <output_dir> [--bank <N>] [--voices panel|extended|all] [--wav]");
             ExitCode::FAILURE
         }
     }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (input, output_dir, start_bank) = parse_args(args)?;
+    let (input, output_dir, start_bank, voice_mode) = parse_args(args)?;
 
     let rom = std::fs::read(&input)
         .map_err(|e| format!("ROM2の読み込みに失敗: {}: {e}", input.display()))?;
-    let voices = rom2::parse_rom2_voices(&rom)?;
+    let all_voices = rom2::parse_rom2_voices(&rom)?;
+    let voices = voice_mode.filter(all_voices);
     if voices.is_empty() {
         return Err("変換対象のボイスが0件でした".to_string());
     }
@@ -60,20 +100,31 @@ fn run(args: &[String]) -> Result<(), String> {
             .map_err(|e| format!("書き込みに失敗: {}: {e}", path.display()))?;
         println!("書き出し: {} ({} 音色)", path.display(), preset_count(file));
     }
-    println!("完了: {} バンク / {} 音色", files.len(), voices.len());
+    println!("完了: {} バンク / {} 音色 [--voices {}]", files.len(), voices.len(), voice_mode.label());
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16), String> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode), String> {
     let mut positional: Vec<&String> = Vec::new();
     // 既定: 波形メモリ音源バンクの直後(WAVEFORM_MEMORY_BANK+1)。Bank 0はML自動生成用に空けておく
     let mut start_bank: u16 = ym38x6_core::WAVEFORM_MEMORY_BANK + 1;
+    let mut voice_mode = VoiceMode::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--bank" => {
                 let v = args.get(i + 1).ok_or("--bank に値がありません")?;
                 start_bank = v.parse().map_err(|_| format!("--bank の値が不正: {v}"))?;
+                i += 2;
+            }
+            "--voices" => {
+                let v = args.get(i + 1).ok_or("--voices に値がありません")?;
+                voice_mode = match v.as_str() {
+                    "panel" => VoiceMode::Panel,
+                    "extended" => VoiceMode::Extended,
+                    "all" => VoiceMode::All,
+                    _ => return Err(format!("--voices の値が不正: {v}（panel / extended / all）")),
+                };
                 i += 2;
             }
             "--wav" => {
@@ -93,6 +144,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16), String> {
         PathBuf::from(positional[0]),
         PathBuf::from(positional[1]),
         start_bank,
+        voice_mode,
     ))
 }
 
