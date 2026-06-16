@@ -4321,6 +4321,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavetest"
+version = "0.1.0"
+dependencies = [
+ "ym38x6-core",
+]
+
+[[package]]
 name = "web-sys"
 version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
