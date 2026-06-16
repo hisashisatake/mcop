@@ -178,10 +178,9 @@ impl OpnVoice {
             ],
             channel: ChannelParams {
                 algorithm: self.algorithm.min(7),
-                // OPN FB=7 の実機推定強度（≈0.5〜2.0サイクル）に合わせるため fb*26 でマッピング。
-                // scale_3bit(7)=252 は feedback_to_scale≈7.56 と強すぎる。
-                // fb*26: 7→182 → feedback_to_scale≈2.0、0→0 のまま線形。
-                feedback: (self.feedback.min(7) as u16 * 26) as u8,
+                // OPN FB(3bit, 0〜7) → 38x6 feedback(0〜255)。
+                // scale_3bit(7)=252 → feedback_to_scale≈0.47サイクル（OPN FB=7実機値0.5サイクルに対応）。
+                feedback: scale_3bit(self.feedback.min(7)),
                 ..ChannelParams::default()
             },
         }
@@ -312,7 +311,7 @@ mod tests {
         };
         let patch = voice.to_ym38x6_patch();
         assert_eq!(patch.channel.algorithm, 4);
-        assert_eq!(patch.channel.feedback, 182); // fb*26: 7→182 (feedback_to_scale≈2.0)
+        assert_eq!(patch.channel.feedback, 252); // scale_3bit(7)=252 → feedback_to_scale≈0.47サイクル（OPN FB=7実機値）
         assert_eq!(patch.channel.filter_cutoff, 255);
     }
 }
