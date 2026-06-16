@@ -148,7 +148,8 @@ impl Operator {
 
     fn tick_envelope(&mut self, sample_rate: f32, note: u8) {
         let ksr_mul = ksr_rate_multiplier(self.params.ksr, note);
-        let sustain_level = sl_to_level(self.params.d1l);
+        // env_level 空間での閾値: d1l=255→1.0（即D2R移行）、d1l=0→0.0（D1Rが全域減衰）
+        let sustain_level = self.params.d1l as f32 / 255.0;
         match self.env_phase {
             EnvPhase::Attack => {
                 self.env_level += ar_to_delta(self.params.ar, sample_rate) * ksr_mul;
@@ -195,7 +196,10 @@ impl Operator {
 
         let eff_tl = effective_tl(self.params.tl, self.velocity, self.params.velocity_sensitivity);
         let amp_factor = (1.0 - self.tone_lfo_amp_mod).clamp(0.0, 1.0);
-        wave.sample_at(idx) * self.env_level * tl_to_gain(eff_tl) * amp_factor
+        // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
+        // 4.8 = 96.0 / 20.0
+        let env_amp = 10f32.powf(-(1.0 - self.env_level) * 4.8);
+        wave.sample_at(idx) * env_amp * tl_to_gain(eff_tl) * amp_factor
     }
 }
 

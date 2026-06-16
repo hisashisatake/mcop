@@ -82,10 +82,13 @@ pub fn sl_to_level(sl: u8) -> f32 {
 /// 実機OPM/OPNのKSR(2bit)は1オクターブあたりのレート倍率が約1.09倍(KSR=0)〜
 /// 2倍(KSR=3)で、1段ごとに倍々(指数的)に増える。ksr=0〜255をこの範囲の
 /// 指数カーブにマッピングする（ksr=0でも実機KSR=0と同じ約9%/octの変化が残る）。
+///
+/// A4より低いノートでは 1.0 にクランプする（OPN/OPMのKSRは最低ノートを基準に
+/// 加算のみで、低ノートでレートが遅くなる逆方向の効果は存在しない）。
 pub fn ksr_rate_multiplier(ksr: u8, note: u8) -> f32 {
     let octave_diff = (note as f32 - 69.0) / 12.0;
     let exponent = 0.125 * 2f32.powf(3.0 * ksr as f32 / 255.0);
-    2f32.powf(octave_diff * exponent)
+    2f32.powf(octave_diff * exponent).max(1.0)
 }
 
 /// 実効TL = clamp(TLベース値 + (Velocity/127) × VelocitySensitivity, 0, 255)
