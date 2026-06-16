@@ -130,6 +130,31 @@ pub fn opn_rate_to_x6(rate_5bit: u8, ks: u8) -> u8 {
     (1 + (eg_rate.saturating_sub(2)) * 254 / 60).min(255) as u8
 }
 
+/// AR専用のオンセット補正バイアス（38x6 rate 加算値）。
+///
+/// 38x6のアタックはdBリニア（設計原則：ノブ全域で知覚的に均等）で、出力dB=−96×(1−env_level)が
+/// 時間に対して直線的に上昇する。このため可聴オンセット（≈−30dB到達）はアタック時間の約69%地点に来る。
+/// 一方OPN実機のアタックは「減衰量が現在値に比例して減る」指数接近で、−30dB到達は約24%地点と早い。
+/// 同じ総アタック時間でも38x6の方が発音開始が遅れて聞こえ、ALG4等の複数キャリア音色で
+/// オペレーター間の発音タイミングがばらついて感じられる。
+///
+/// 38x6のアタック形状は原則上維持したいので、変換側でARを速める（=総アタックを短くする）ことで
+/// オンセットをOPNに寄せる。38x6 rate→時間は指数なので、rateへの一定加算=時間の一定倍率。
+/// +30で時間は約0.30倍（38x6オンセット0.69×0.30≒0.21 ≈ OPN 0.24）となりオンセットがほぼ一致する。
+/// 代償としてスウェル（緩やかな膨らみ）は短くなる。これはdBリニア維持下での知覚的妥協。
+const ATTACK_ONSET_BIAS: u16 = 30;
+
+/// OPN 5bit AR（0〜31）+ KS（0〜3）→ 38x6 ar（0〜255）。
+///
+/// [opn_rate_to_x6] に [ATTACK_ONSET_BIAS] を加算し、dBリニアアタックの可聴オンセット遅れを補正する。
+/// Decay/Release は形状がOPNと一致するため補正不要（[opn_rate_to_x6] / [opn_rr_to_x6] をそのまま使う）。
+pub fn opn_ar_to_x6(ar_5bit: u8, ks: u8) -> u8 {
+    if ar_5bit == 0 {
+        return 0;
+    }
+    (opn_rate_to_x6(ar_5bit, ks) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
+}
+
 /// OPN 4bit RR（0〜15）+ KS（0〜3）→ 38x6 rr（0〜255）。
 ///
 /// OPN RR の eg_rate_eff = 4×rr + 2 + ksr_at_a4(ks)。
@@ -150,7 +175,7 @@ impl OpnOperator {
     pub fn to_operator_params(self) -> OperatorParams {
         OperatorParams {
             tl: tl_opn_to_x6(self.tl),
-            ar: opn_rate_to_x6(self.ar, self.ks),
+            ar: opn_ar_to_x6(self.ar, self.ks),
             d1r: opn_rate_to_x6(self.d1r, self.ks),
             d2r: opn_rate_to_x6(self.d2r, self.ks),
             d1l: sl_opn_to_x6(self.d1l),
@@ -278,6 +303,17 @@ mod tests {
         assert!(opn_dt1_to_x6(5) < 128);
         assert!(opn_dt1_to_x6(6) < opn_dt1_to_x6(5));
         assert!(opn_dt1_to_x6(7) < opn_dt1_to_x6(6));
+    }
+
+    #[test]
+    fn opn_ar_applies_onset_bias() {
+        // AR=0 はフリーズ（バイアスなし）
+        assert_eq!(opn_ar_to_x6(0, 0), 0);
+        // 中速ARはバイアス分だけ opn_rate_to_x6 より大きくなる（=より速い）
+        let base = opn_rate_to_x6(18, 0);
+        assert_eq!(opn_ar_to_x6(18, 0), base + ATTACK_ONSET_BIAS as u8);
+        // 既に255付近の高速ARは255にクランプされる
+        assert_eq!(opn_ar_to_x6(31, 0), 255);
     }
 
     #[test]
