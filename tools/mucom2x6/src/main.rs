@@ -100,10 +100,11 @@ fn render_wavs(voices: &[conv::NamedVoice], output_dir: &std::path::Path) -> Res
     for nv in voices {
         let patch = nv.voice.to_ym38x6_patch();
         let mut engine = Ym38x6Engine::new(SR);
-        engine.note_on_with_velocity(0, 261.63, 110, patch);
+        // MUCOM88win のプレビューは C5（octave:1 相当）で長めに保持する
+        engine.note_on_with_velocity(0, 523.25, 110, patch);
 
-        let on = (SR * 1.2) as usize;
-        let off = (SR * 3.0) as usize;
+        let on = (SR * 3.0) as usize;
+        let off = (SR * 1.5) as usize;
         let mut samples = vec![0.0f32; on];
         engine.render(&mut samples, 1);
         engine.note_off(0);
