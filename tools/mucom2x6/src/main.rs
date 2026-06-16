@@ -2,7 +2,7 @@
 //!
 //! 使い方:
 //! ```text
-//! mucom2x6 <voice.dat> <output_dir> [--bank <N>] [--wav] [--on <秒>] [--octave <N>] [--note <音階>]
+//! mucom2x6 <voice.dat> <output_dir> [--bank <N>] [--wav] [--on <秒>] [--octave <N>] [--note <音階>] [--slot <N>]
 //! ```
 //! - 入力は MUCOM88 バイナリ音色バンク（256スロット × 32バイト = 8192バイト固定）。
 //! - `--bank` の既定は `WAVEFORM_MEMORY_BANK + 1`。
@@ -12,6 +12,7 @@
 //! - `--on <秒>` でキーオン時間（既定 4.0 秒）を指定する。
 //! - `--octave <N>` でオクターブ（既定 4）を指定する。
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
+//! - `--slot <N>` を指定すると WAV 出力をその音色番号（MUCOM88 の @N）1件のみに絞る。
 
 mod conv;
 mod mucom88;
@@ -45,7 +46,7 @@ fn main() -> ExitCode {
             eprintln!("mucom2x6: {msg}");
             eprintln!(
                 "usage: mucom2x6 <voice.dat> <output_dir> [--bank <N>] [--wav] \
-                 [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>]"
+                 [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>] [--slot <N>]"
             );
             ExitCode::FAILURE
         }
@@ -53,7 +54,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (input, output_dir, start_bank, wav_cfg) = parse_args(args)?;
+    let (input, output_dir, start_bank, wav_cfg, slot_filter) = parse_args(args)?;
 
     let dat = std::fs::read(&input)
         .map_err(|e| format!("voice.dat の読み込みに失敗: {}: {e}", input.display()))?;
@@ -66,7 +67,7 @@ fn run(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("出力ディレクトリ作成に失敗: {}: {e}", output_dir.display()))?;
 
     if args.iter().any(|a| a == "--wav") {
-        render_wavs(&voices, &output_dir, &wav_cfg)?;
+        render_wavs(&voices, &output_dir, &wav_cfg, slot_filter)?;
     }
 
     let files = voices_to_preset_files(start_bank, &voices);
@@ -104,12 +105,13 @@ fn note_to_freq(octave: i32, note: &str) -> Result<f32, String> {
     Ok(440.0 * 2f32.powf((midi - 69) as f32 / 12.0))
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig), String> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig, Option<u16>), String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut start_bank: u16 = ym38x6_core::WAVEFORM_MEMORY_BANK + 1;
     let mut on_secs: f32 = 4.0;
     let mut octave: i32 = 4;
     let mut note: String = "C".to_string();
+    let mut slot_filter: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -137,6 +139,15 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig), Str
                 note = v.to_string();
                 i += 2;
             }
+            "--slot" => {
+                let v = args.get(i + 1).ok_or("--slot に値がありません")?;
+                let n: u16 = v.parse().map_err(|_| format!("--slot の値が不正: {v}"))?;
+                if n > 255 {
+                    return Err(format!("--slot は 0〜255 で指定してください: {v}"));
+                }
+                slot_filter = Some(n);
+                i += 2;
+            }
             "--wav" => {
                 i += 1;
             }
@@ -151,15 +162,17 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig), Str
     }
     let frequency = note_to_freq(octave, &note)?;
     let wav_cfg = WavConfig { on_secs, off_secs: 1.5, frequency };
-    Ok((PathBuf::from(positional[0]), PathBuf::from(positional[1]), start_bank, wav_cfg))
+    Ok((PathBuf::from(positional[0]), PathBuf::from(positional[1]), start_bank, wav_cfg, slot_filter))
 }
 
 /// 各音色を WAV（mono 44.1kHz 16bit）へレンダリングする（試聴検証用）。
 /// ファイル名は MUCOM88 の @N 番号に対応するスロット番号（slot000.wav 等）。
+/// `slot_filter` が `Some(N)` のときは音色番号 N の1件のみを出力する。
 fn render_wavs(
     voices: &[conv::NamedVoice],
     output_dir: &std::path::Path,
     cfg: &WavConfig,
+    slot_filter: Option<u16>,
 ) -> Result<(), String> {
     use ym38x6_core::{SoundEngine, Ym38x6Engine};
     const SR: f32 = 44_100.0;
@@ -167,7 +180,19 @@ fn render_wavs(
     std::fs::create_dir_all(&wav_dir)
         .map_err(|e| format!("wav ディレクトリ作成に失敗: {e}"))?;
 
-    for nv in voices {
+    let targets: Vec<&conv::NamedVoice> = match slot_filter {
+        Some(n) => voices.iter().filter(|nv| nv.slot == n).collect(),
+        None => voices.iter().collect(),
+    };
+    if let Some(n) = slot_filter {
+        if targets.is_empty() {
+            return Err(format!(
+                "--slot {n} に対応する音色が見つかりません（AR=0で除外された可能性があります）"
+            ));
+        }
+    }
+
+    for nv in &targets {
         let patch = nv.voice.to_ym38x6_patch();
         let mut engine = Ym38x6Engine::new(SR);
         engine.note_on_with_velocity(0, cfg.frequency, 110, patch);
@@ -185,7 +210,7 @@ fn render_wavs(
         write_wav_mono16(&path, &samples, SR as u32)
             .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", path.display()))?;
     }
-    println!("WAV 書き出し: {} に {} 音色", wav_dir.display(), voices.len());
+    println!("WAV 書き出し: {} に {} 音色", wav_dir.display(), targets.len());
     Ok(())
 }
 
