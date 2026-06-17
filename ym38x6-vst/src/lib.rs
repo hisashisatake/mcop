@@ -1,4 +1,5 @@
 mod editor;
+mod knob;
 mod midi;
 mod params;
 
@@ -155,7 +156,7 @@ impl Default for Ym38x6Plugin {
             program_patch: None,
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
-            egui_state: EguiState::from_size(320, 480),
+            egui_state: EguiState::from_size(800, 680),
         }
     }
 }
