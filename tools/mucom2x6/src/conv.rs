@@ -204,7 +204,7 @@ impl OpnVoice {
             channel: ChannelParams {
                 algorithm: self.algorithm.min(7),
                 // OPN FB(3bit, 0〜7) → 38x6 feedback(0〜255)。
-                // scale_3bit(7)=252 → feedback_to_scale≈0.47サイクル（OPN FB=7実機値0.5サイクルに対応）。
+                // scale_3bit(7)=252 → feedback_to_scale≈1.7サイクル（実機@113等のFBノイズ再現に合わせ調整）。
                 feedback: scale_3bit(self.feedback.min(7)),
                 ..ChannelParams::default()
             },
@@ -347,7 +347,7 @@ mod tests {
         };
         let patch = voice.to_ym38x6_patch();
         assert_eq!(patch.channel.algorithm, 4);
-        assert_eq!(patch.channel.feedback, 252); // scale_3bit(7)=252 → feedback_to_scale≈0.47サイクル（OPN FB=7実機値）
+        assert_eq!(patch.channel.feedback, 252); // scale_3bit(7)=252 → feedback_to_scale≈1.7サイクル
         assert_eq!(patch.channel.filter_cutoff, 255);
     }
 }

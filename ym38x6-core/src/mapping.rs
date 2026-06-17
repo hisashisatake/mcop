@@ -102,15 +102,19 @@ pub fn effective_tl(base_tl: u8, velocity: u8, sensitivity: u8) -> u8 {
 }
 
 /// フィードバック値(0〜255)→自己変調の強さ（位相オフセット換算、単位：サイクル）。
-/// OPN実機FB=7の最大位相オフセット = ±0.5サイクルに基づきスケール設定。
 /// OPM/OPNのFB(3bit、0=オフ・1〜7は1段ごとに2倍)を踏まえ、feedback=0は実機FB=0と
 /// 同じ「フィードバックなし」の特殊値。feedback=1〜255は7オクターブ
-/// （約36刻みごとに2倍、feedback=255で最大0.5サイクル）の指数カーブにマッピングする。
+/// （約36刻みごとに2倍）の指数カーブにマッピングする。
+///
+/// 最大値は1.8（feedback=255で1.8サイクル、FB=7相当のfeedback=252で約1.7サイクル）。
+/// OPN実機の理論値は±0.5サイクルだが、38x6のフィードバックは直近1サンプル帰還で
+/// 実機の2サンプル平均より自己変調の効きが弱く、0.5ではハイハット等のFBリッチな音色の
+/// ノイズ成分を再現できなかった。fmgen原音(@113 HI_HAT/@1/@77)と聴き比べてM=1.8に調整。
 pub fn feedback_to_scale(feedback: u8) -> f32 {
     if feedback == 0 {
         return 0.0;
     }
-    0.5 * 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0))
+    1.8 * 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0))
 }
 
 /// オペレーター間FM変調の深さスケール（固定の内部定数、暫定値）。
@@ -250,7 +254,7 @@ mod tests {
     #[test]
     fn feedback_to_scale_bounds() {
         assert_eq!(feedback_to_scale(0), 0.0);
-        assert!((feedback_to_scale(255) - 0.5).abs() < 1e-3);
+        assert!((feedback_to_scale(255) - 1.8).abs() < 1e-3);
         // 指数カーブ：feedback=0(オフ)以外は全域で滑らかに増加する
         assert!(feedback_to_scale(1) > 0.0);
         assert!(feedback_to_scale(64) < feedback_to_scale(128));
