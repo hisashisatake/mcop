@@ -194,6 +194,28 @@ fn render_wavs(
 
     for nv in &targets {
         let patch = nv.voice.to_ym38x6_patch();
+        if slot_filter.is_some() {
+            let v = &nv.voice;
+            eprintln!("=== slot {} '{}' ===", nv.slot, nv.name);
+            eprintln!("OPN raw: algorithm={} feedback={}", v.algorithm, v.feedback);
+            for (i, op) in v.operators.iter().enumerate() {
+                eprintln!(
+                    "  OP{} tl={:3} ar={:2} d1r={:2} d2r={:2} d1l={:2} rr={:2} mul={:2} dt1={} ks={} am={}",
+                    i + 1, op.tl, op.ar, op.d1r, op.d2r, op.d1l, op.rr, op.mul, op.dt1, op.ks, op.am_enable
+                );
+            }
+            let carriers = ym38x6_core::algorithm::ALGORITHMS[patch.channel.algorithm as usize].carriers;
+            eprintln!(
+                "38x6 patch: algorithm={} feedback={} carriers(op_index)={:?}",
+                patch.channel.algorithm, patch.channel.feedback, carriers
+            );
+            for (i, op) in patch.operators.iter().enumerate() {
+                eprintln!(
+                    "  OP{} tl={:3} ar={:3} d1r={:3} d2r={:3} d1l={:3} rr={:3} mul={:2} dt1={:3} ksr={:3}",
+                    i + 1, op.tl, op.ar, op.d1r, op.d2r, op.d1l, op.rr, op.mul, op.dt1, op.ksr
+                );
+            }
+        }
         let mut engine = Ym38x6Engine::new(SR);
         engine.note_on_with_velocity(0, cfg.frequency, 110, patch);
 
