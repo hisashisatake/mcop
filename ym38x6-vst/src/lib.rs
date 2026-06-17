@@ -1,8 +1,17 @@
+mod editor;
+mod midi;
+mod params;
+
+use midi::{apply_at_modulation, cc_to_u8, cc_to_u7, AtDestination, RpnSelection};
+use params::{
+    Ym38x6Params, DEFAULT_ALGORITHM, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH,
+    DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_REVERB_TIME,
+};
+
 use nice_plug::prelude::*;
-use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
+use nice_plug_egui::EguiState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use ym38x6_core::algorithm::ALGORITHMS;
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
     pitch_depth_cents, presets_dir, volume_depth, ChannelParams, ChorusType, LfoWaveform,
@@ -14,121 +23,6 @@ use ym38x6_core::{
 /// （1ノート=1チャンネル）、発音中チャンネルを走査するループの上限に使う。
 /// 将来MIDI規格でノート番号空間が拡張された場合はここだけ変えればよい。
 const MIDI_NOTE_COUNT: u8 = 128;
-
-/// マスター単位5パラメーターのデフォルト値（`MasterEffects::new()`の内部初期値と一致）
-const DEFAULT_REVERB_TIME: u8 = 128;
-const DEFAULT_CHORUS_MOD_RATE: u8 = 128;
-const DEFAULT_CHORUS_MOD_DEPTH: u8 = 128;
-const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
-const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
-
-/// Algorithmのデフォルト値（NRPN(0,9)併用のnice-plugパラメーター、`ChannelParams::default()`の内部初期値と一致）
-const DEFAULT_ALGORITHM: u8 = 0;
-
-/// MIDI CC値（0.0〜1.0正規化）を本プロジェクトの内部表現（0〜255）に変換
-fn cc_to_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-/// MIDI CC値（0.0〜1.0正規化）をGM2準拠の7bit値（0〜127）に変換
-fn cc_to_u7(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 127.0).round() as u8
-}
-
-/// CC99/98(NRPN)・CC101/100(RPN) で選択中のパラメーター番号。
-/// CC6(Data Entry MSB)はこの選択状態に応じて値を適用する。
-#[derive(Clone, Copy, PartialEq, Default)]
-enum RpnSelection {
-    #[default]
-    None,
-    Rpn(u8, u8),
-    Nrpn(u8, u8),
-}
-
-/// Channel Pressure / Poly Key Pressureの加算先（NRPN(0,16)/(0,17)、spec.md AT Destination参照）。
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-enum AtDestination {
-    #[default]
-    LfoPmd,
-    LfoAmd,
-    FilterCutoff,
-    FilterResonance,
-    TlAllOps,
-    TlCarriers,
-}
-
-impl AtDestination {
-    fn from_u8(value: u8) -> Self {
-        match value {
-            0 => AtDestination::LfoPmd,
-            1 => AtDestination::LfoAmd,
-            2 => AtDestination::FilterCutoff,
-            3 => AtDestination::FilterResonance,
-            4 => AtDestination::TlAllOps,
-            _ => AtDestination::TlCarriers,
-        }
-    }
-}
-
-/// Channel Pressure / Poly Key Pressureの加算モデルを指定ノートのパッチへ適用する。
-/// `実効値 = clamp(ベース値 + プレッシャー値, 0, 255)`（spec.md AT Destination参照）。
-/// `note_channels`の借用と`engine`への可変アクセスを同じループ内で行うため、
-/// `&self`を取らないフリー関数にしている。
-fn apply_at_modulation(
-    note: u8,
-    at_destination: AtDestination,
-    poly_at_destination: AtDestination,
-    channel_pressure: u8,
-    poly_pressure: &HashMap<u8, u8>,
-    patch: &mut Ym38x6Patch,
-) {
-    let pressure_for = |destination: AtDestination| -> u8 {
-        let mut total: u16 = 0;
-        if at_destination == destination {
-            total += channel_pressure as u16;
-        }
-        if poly_at_destination == destination {
-            total += *poly_pressure.get(&note).unwrap_or(&0) as u16;
-        }
-        total.min(255) as u8
-    };
-    let add = |base: u8, pressure: u8| (base as u16 + pressure as u16).min(255) as u8;
-
-    let pmd = pressure_for(AtDestination::LfoPmd);
-    if pmd > 0 {
-        patch.channel.tone_lfo_pmd = add(patch.channel.tone_lfo_pmd, pmd);
-    }
-    let amd = pressure_for(AtDestination::LfoAmd);
-    if amd > 0 {
-        patch.channel.tone_lfo_amd = add(patch.channel.tone_lfo_amd, amd);
-    }
-    let cutoff = pressure_for(AtDestination::FilterCutoff);
-    if cutoff > 0 {
-        patch.channel.filter_cutoff = add(patch.channel.filter_cutoff, cutoff);
-    }
-    let resonance = pressure_for(AtDestination::FilterResonance);
-    if resonance > 0 {
-        patch.channel.filter_resonance = add(patch.channel.filter_resonance, resonance);
-    }
-    let tl_all = pressure_for(AtDestination::TlAllOps);
-    if tl_all > 0 {
-        for op in patch.operators.iter_mut() {
-            op.tl = add(op.tl, tl_all);
-        }
-    }
-    let tl_carriers = pressure_for(AtDestination::TlCarriers);
-    if tl_carriers > 0 {
-        for &i in ALGORITHMS[patch.channel.algorithm as usize].carriers {
-            patch.operators[i].tl = add(patch.operators[i].tl, tl_carriers);
-        }
-    }
-}
-
-/// GUI プリセットブラウザの状態（`create_egui_editor` のユーザー状態型）
-struct EditorState {
-    preset_bank: PresetBank,
-    selected_key: Option<(u16, u8)>,
-}
 
 struct Ym38x6Plugin {
     params: Arc<Ym38x6Params>,
@@ -211,153 +105,6 @@ struct Ym38x6Plugin {
 
     // GUIエディターのウィンドウサイズ状態（editor()で使い回す）
     egui_state: Arc<EguiState>,
-}
-
-/// オペレーター単位パラメーター一式（11個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
-/// `#[nested(array, ...)]`展開し、各IDに`_1`〜`_4`が付与される（DAW上は「Operator 1」〜「Operator 4」）。
-#[derive(Params)]
-struct OperatorVstParams {
-    #[id = "tl"]
-    pub tl: IntParam,
-    #[id = "ar"]
-    pub ar: IntParam,
-    #[id = "d1r"]
-    pub d1r: IntParam,
-    #[id = "d2r"]
-    pub d2r: IntParam,
-    #[id = "d1l"]
-    pub d1l: IntParam,
-    #[id = "rr"]
-    pub rr: IntParam,
-    #[id = "mul"]
-    pub mul: IntParam,
-    #[id = "dt1"]
-    pub dt1: IntParam,
-    #[id = "ksr"]
-    pub ksr: IntParam,
-    #[id = "ame"]
-    pub ame: BoolParam,
-    #[id = "vel_sens"]
-    pub vel_sens: IntParam,
-    #[id = "op_fine"]
-    pub op_fine_tune: IntParam,
-}
-
-impl Default for OperatorVstParams {
-    /// 「鳴る」状態を初期値とする（コアの`OperatorParams::default()`は全0で
-    /// TL=0≒無音・AR=0≒極端に遅いアタックのため、VST起動直後に無音にならないよう
-    /// 個別に明示値を設定する）。
-    fn default() -> Self {
-        Self {
-            tl: IntParam::new("TL", 200, IntRange::Linear { min: 0, max: 255 }),
-            ar: IntParam::new("AR", 255, IntRange::Linear { min: 0, max: 255 }),
-            d1r: IntParam::new("D1R", 100, IntRange::Linear { min: 0, max: 255 }),
-            d2r: IntParam::new("D2R", 80, IntRange::Linear { min: 0, max: 255 }),
-            d1l: IntParam::new("D1L", 180, IntRange::Linear { min: 0, max: 255 }),
-            rr: IntParam::new("RR", 150, IntRange::Linear { min: 0, max: 255 }),
-            mul: IntParam::new("MUL", 1, IntRange::Linear { min: 0, max: 15 }),
-            dt1: IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 }),
-            ksr: IntParam::new("KSR", 64, IntRange::Linear { min: 0, max: 255 }),
-            ame: BoolParam::new("AM Enable", false),
-            vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
-            // 中心128＝オフセットなし（±1オクターブ）。DT1で足りない広いデチューン用
-            op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
-        }
-    }
-}
-
-#[derive(Params)]
-struct Ym38x6Params {
-    // ---- チャンネル単位（20個、spec.md MIDI実装方針参照） ----
-    #[id = "algorithm"]
-    pub algorithm: IntParam,
-    #[id = "feedback"]
-    pub feedback: IntParam,
-    #[id = "lfo_rate"]
-    pub lfo_rate: IntParam,
-    #[id = "lfo_depth"]
-    pub lfo_depth: IntParam,
-    #[id = "lfo_delay"]
-    pub lfo_delay: IntParam,
-    #[id = "tone_freq"]
-    pub tone_freq: IntParam,
-    #[id = "tone_pmd"]
-    pub tone_pmd: IntParam,
-    #[id = "tone_amd"]
-    pub tone_amd: IntParam,
-    #[id = "tone_delay"]
-    pub tone_delay: IntParam,
-    #[id = "pms"]
-    pub pms: IntParam,
-    #[id = "ams"]
-    pub ams: IntParam,
-    #[id = "cutoff"]
-    pub cutoff: IntParam,
-    #[id = "resonance"]
-    pub resonance: IntParam,
-    #[id = "feg_a"]
-    pub feg_a: IntParam,
-    #[id = "feg_d"]
-    pub feg_d: IntParam,
-    #[id = "feg_s"]
-    pub feg_s: IntParam,
-    #[id = "feg_r"]
-    pub feg_r: IntParam,
-    #[id = "feg_depth"]
-    pub feg_depth: IntParam,
-    #[id = "rev_send"]
-    pub rev_send: IntParam,
-    #[id = "cho_send"]
-    pub cho_send: IntParam,
-
-    // ---- オペレーター単位（12個 × 4op = 48個） ----
-    #[nested(array, group = "Operator")]
-    pub operators: [OperatorVstParams; 4],
-
-    // ---- マスター単位（5個、MasterEffectsの5パラメーターに対応） ----
-    #[id = "rev_time"]
-    pub reverb_time: IntParam,
-    #[id = "cho_rate"]
-    pub chorus_mod_rate: IntParam,
-    #[id = "cho_depth"]
-    pub chorus_mod_depth: IntParam,
-    #[id = "cho_fb"]
-    pub chorus_feedback: IntParam,
-    #[id = "cho_to_rev"]
-    pub chorus_send_to_reverb: IntParam,
-}
-
-impl Default for Ym38x6Params {
-    fn default() -> Self {
-        Self {
-            algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
-            feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_rate: IntParam::new("Perf LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_depth: IntParam::new("Perf LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_delay: IntParam::new("Perf LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_freq: IntParam::new("Tone LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_pmd: IntParam::new("Tone LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_amd: IntParam::new("Tone LFO AMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_delay: IntParam::new("Tone LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
-            pms: IntParam::new("PMS", 0, IntRange::Linear { min: 0, max: 255 }),
-            ams: IntParam::new("AMS", 0, IntRange::Linear { min: 0, max: 255 }),
-            cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
-            resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_a: IntParam::new("Filter EG Attack", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_d: IntParam::new("Filter EG Decay", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_s: IntParam::new("Filter EG Sustain", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_r: IntParam::new("Filter EG Release", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_depth: IntParam::new("Filter EG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
-            cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
-            operators: Default::default(),
-            reverb_time: IntParam::new("Reverb Time", DEFAULT_REVERB_TIME as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_mod_rate: IntParam::new("Chorus Mod Rate", DEFAULT_CHORUS_MOD_RATE as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_mod_depth: IntParam::new("Chorus Mod Depth", DEFAULT_CHORUS_MOD_DEPTH as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_feedback: IntParam::new("Chorus Feedback", DEFAULT_CHORUS_FEEDBACK as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_send_to_reverb: IntParam::new("Chorus Send To Reverb", DEFAULT_CHORUS_SEND_TO_REVERB as i32, IntRange::Linear { min: 0, max: 255 }),
-        }
-    }
 }
 
 impl Default for Ym38x6Plugin {
@@ -691,72 +438,10 @@ impl Plugin for Ym38x6Plugin {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let params = self.params.clone();
-        let pending = self.pending_gui_preset.clone();
-        create_egui_editor(
+        editor::create_editor(
             self.egui_state.clone(),
-            EditorState {
-                preset_bank: PresetBank::load_from_dir(&presets_dir()),
-                selected_key: None,
-            },
-            EguiSettings::default(),
-            |_ctx, _queue, _state| {},
-            move |ui, setter, _queue, state| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for ((bank, program), preset) in state.preset_bank.sorted_entries() {
-                        let label = if bank == 0 {
-                            format!("{program:03} {}", preset.name)
-                        } else {
-                            format!("[{bank:04X}:{program:03}] {}", preset.name)
-                        };
-                        let selected = state.selected_key == Some((bank, program));
-                        if ui.selectable_label(selected, &label).clicked() {
-                            state.selected_key = Some((bank, program));
-                            // NRPN専用パラメーターをprocess()側へ転送
-                            *pending.lock().unwrap() = Some(preset.patch);
-                            // DAW公開パラメーターをParamSetter経由で書き戻す
-                            macro_rules! set {
-                                ($p:expr, $v:expr) => {
-                                    setter.begin_set_parameter(&$p);
-                                    setter.set_parameter(&$p, $v);
-                                    setter.end_set_parameter(&$p);
-                                };
-                            }
-                            let ch = &preset.patch.channel;
-                            set!(params.algorithm, ch.algorithm as i32);
-                            set!(params.feedback, ch.feedback as i32);
-                            set!(params.tone_freq, ch.tone_lfo_freq as i32);
-                            set!(params.tone_pmd, ch.tone_lfo_pmd as i32);
-                            set!(params.tone_amd, ch.tone_lfo_amd as i32);
-                            set!(params.tone_delay, ch.tone_lfo_delay as i32);
-                            set!(params.pms, ch.pms as i32);
-                            set!(params.ams, ch.ams as i32);
-                            set!(params.cutoff, ch.filter_cutoff as i32);
-                            set!(params.resonance, ch.filter_resonance as i32);
-                            set!(params.feg_a, ch.filter_eg_attack as i32);
-                            set!(params.feg_d, ch.filter_eg_decay as i32);
-                            set!(params.feg_s, ch.filter_eg_sustain as i32);
-                            set!(params.feg_r, ch.filter_eg_release as i32);
-                            set!(params.feg_depth, ch.filter_eg_depth as i32);
-                            for (i, op) in preset.patch.operators.iter().enumerate() {
-                                let op_p = &params.operators[i];
-                                set!(op_p.tl, op.tl as i32);
-                                set!(op_p.ar, op.ar as i32);
-                                set!(op_p.d1r, op.d1r as i32);
-                                set!(op_p.d2r, op.d2r as i32);
-                                set!(op_p.d1l, op.d1l as i32);
-                                set!(op_p.rr, op.rr as i32);
-                                set!(op_p.mul, op.mul as i32);
-                                set!(op_p.dt1, op.dt1 as i32);
-                                set!(op_p.ksr, op.ksr as i32);
-                                set!(op_p.ame, op.am_enable);
-                                set!(op_p.vel_sens, op.velocity_sensitivity as i32);
-                                set!(op_p.op_fine_tune, op.op_fine_tune as i32);
-                            }
-                        }
-                    }
-                });
-            },
+            self.pending_gui_preset.clone(),
+            self.params.clone(),
         )
     }
 
@@ -900,8 +585,7 @@ impl Plugin for Ym38x6Plugin {
                     self.poly_pressure.insert(note, cc_to_u8(pressure));
                 }
                 // Program Change：CC0/CC32で選択中のバンクと合わせてパッチを選択する
-                // （VST3では届かない。CLAPのみ。MidiConfig::MidiCCsの仕様。VST3では代わりに
-                // Programパラメーターを使う、process()参照）。
+                // （VST3では届かない。CLAPのみ。MidiConfig::MidiCCsの仕様。VST3ではGUI経由のParamSetterを使う）。
                 NoteEvent::MidiProgramChange { program, .. } => {
                     let bank = (self.bank_select_msb as u16) * 128 + self.bank_select_lsb as u16;
                     self.program_patch = Some(self.preset_bank.patch_for_program(bank, program));
