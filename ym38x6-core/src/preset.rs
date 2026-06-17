@@ -421,6 +421,13 @@ impl PresetBank {
         self.presets.get(&(bank, program))
     }
 
+    /// 全プリセットを (bank, program) 昇順でソートして返す（GUI一覧表示用）。
+    pub fn sorted_entries(&self) -> Vec<((u16, u8), Preset)> {
+        let mut entries: Vec<_> = self.presets.iter().map(|(&k, v)| (k, v.clone())).collect();
+        entries.sort_by_key(|(k, _)| *k);
+        entries
+    }
+
     /// (bank, program)に対応するパッチを解決する（MIDI Program Change・VST3
     /// Programパラメーター・gesture-appのProgram選択コマンドから共通で使う）。
     /// 優先順位: ユーザープリセット(.38x6) > 波形メモリバンク(`WAVEFORM_MEMORY_BANK`、

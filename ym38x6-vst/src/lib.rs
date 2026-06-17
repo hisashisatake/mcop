@@ -1,6 +1,7 @@
 use nice_plug::prelude::*;
+use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use ym38x6_core::algorithm::ALGORITHMS;
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
@@ -123,6 +124,12 @@ fn apply_at_modulation(
     }
 }
 
+/// GUI プリセットブラウザの状態（`create_egui_editor` のユーザー状態型）
+struct EditorState {
+    preset_bank: PresetBank,
+    selected_key: Option<(u16, u8)>,
+}
+
 struct Ym38x6Plugin {
     params: Arc<Ym38x6Params>,
     engine: Ym38x6Engine,
@@ -187,18 +194,23 @@ struct Ym38x6Plugin {
     data_entry_lsb: u8,                     // CC38 (Data Entry LSB) の最新値
     operator_f_number_override: [u16; 4],   // 各Opの上書き値。初期値F_NUMBER_CENTER（上書きなし）
 
-    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change（CLAP）/ Programパラメーター（VST3/CLAP共通）：
-    // プリセット選択状態
+    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change（CLAP）：プリセット選択状態
     bank_select_msb: u8,                 // CC0
     bank_select_lsb: u8,                 // CC32
-    program_patch: Option<Ym38x6Patch>,  // 選択後はbuild_patch()の代わりにこれを使う
-
-    // Programパラメーター（0=Manual/1〜128=Program 0〜127）の「前回ブロックで適用した値」
-    // （1シャドウ差分検知方式、last_algorithmと同型。process()参照）
-    last_program: u8,
+    // CLAPのMIDI Program Change経由で選択されたパッチ（VST3ではGUI経由のParamSetterを使う）。
+    // GUIでプリセットを選択した際にNoneへ戻す（pending_gui_presetハンドラ参照）。
+    program_patch: Option<Ym38x6Patch>,
 
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
+
+    // GUIプリセット選択時のNRPN専用パラメーター転送用（egui→processスレッド）。
+    // DAW公開パラメーターはParamSetterで書き戻し済みのため、ここではfilter_type/
+    // filter_self_oscillation/operator_waveformsの3種のみ運ぶ。
+    pending_gui_preset: Arc<Mutex<Option<Ym38x6Patch>>>,
+
+    // GUIエディターのウィンドウサイズ状態（editor()で使い回す）
+    egui_state: Arc<EguiState>,
 }
 
 /// オペレーター単位パラメーター一式（11個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
@@ -256,13 +268,6 @@ impl Default for OperatorVstParams {
 
 #[derive(Params)]
 struct Ym38x6Params {
-    // ---- プリセット選択（1個） ----
-    // 0=Manual（DAWパラメーター/NRPNで手動チューニングしたパッチを使う、build_patch()）、
-    // 1〜128=Program 0〜127（CC0/CC32で選択中のbankの該当プリセットへ切り替える、process()参照）。
-    // VST3ではMIDI Program Changeが届かないため、こちらが代替の選択手段になる。
-    #[id = "program"]
-    pub program: IntParam,
-
     // ---- チャンネル単位（20個、spec.md MIDI実装方針参照） ----
     #[id = "algorithm"]
     pub algorithm: IntParam,
@@ -325,14 +330,6 @@ struct Ym38x6Params {
 impl Default for Ym38x6Params {
     fn default() -> Self {
         Self {
-            program: IntParam::new("Program", 0, IntRange::Linear { min: 0, max: 128 })
-                .with_value_to_string(Arc::new(|v: i32| {
-                    if v == 0 {
-                        "Manual".to_string()
-                    } else {
-                        format!("Program {}", v - 1)
-                    }
-                })),
             algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
             feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
             lfo_rate: IntParam::new("Perf LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
@@ -409,8 +406,9 @@ impl Default for Ym38x6Plugin {
             bank_select_msb: 0,
             bank_select_lsb: 0,
             program_patch: None,
-            last_program: 0,
             preset_bank: PresetBank::default(),
+            pending_gui_preset: Arc::new(Mutex::new(None)),
+            egui_state: EguiState::from_size(320, 480),
         }
     }
 }
@@ -690,7 +688,76 @@ impl Plugin for Ym38x6Plugin {
         self.bank_select_msb = 0;
         self.bank_select_lsb = 0;
         self.program_patch = None;
-        self.last_program = 0;
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let params = self.params.clone();
+        let pending = self.pending_gui_preset.clone();
+        create_egui_editor(
+            self.egui_state.clone(),
+            EditorState {
+                preset_bank: PresetBank::load_from_dir(&presets_dir()),
+                selected_key: None,
+            },
+            EguiSettings::default(),
+            |_ctx, _queue, _state| {},
+            move |ui, setter, _queue, state| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for ((bank, program), preset) in state.preset_bank.sorted_entries() {
+                        let label = if bank == 0 {
+                            format!("{program:03} {}", preset.name)
+                        } else {
+                            format!("[{bank:04X}:{program:03}] {}", preset.name)
+                        };
+                        let selected = state.selected_key == Some((bank, program));
+                        if ui.selectable_label(selected, &label).clicked() {
+                            state.selected_key = Some((bank, program));
+                            // NRPN専用パラメーターをprocess()側へ転送
+                            *pending.lock().unwrap() = Some(preset.patch);
+                            // DAW公開パラメーターをParamSetter経由で書き戻す
+                            macro_rules! set {
+                                ($p:expr, $v:expr) => {
+                                    setter.begin_set_parameter(&$p);
+                                    setter.set_parameter(&$p, $v);
+                                    setter.end_set_parameter(&$p);
+                                };
+                            }
+                            let ch = &preset.patch.channel;
+                            set!(params.algorithm, ch.algorithm as i32);
+                            set!(params.feedback, ch.feedback as i32);
+                            set!(params.tone_freq, ch.tone_lfo_freq as i32);
+                            set!(params.tone_pmd, ch.tone_lfo_pmd as i32);
+                            set!(params.tone_amd, ch.tone_lfo_amd as i32);
+                            set!(params.tone_delay, ch.tone_lfo_delay as i32);
+                            set!(params.pms, ch.pms as i32);
+                            set!(params.ams, ch.ams as i32);
+                            set!(params.cutoff, ch.filter_cutoff as i32);
+                            set!(params.resonance, ch.filter_resonance as i32);
+                            set!(params.feg_a, ch.filter_eg_attack as i32);
+                            set!(params.feg_d, ch.filter_eg_decay as i32);
+                            set!(params.feg_s, ch.filter_eg_sustain as i32);
+                            set!(params.feg_r, ch.filter_eg_release as i32);
+                            set!(params.feg_depth, ch.filter_eg_depth as i32);
+                            for (i, op) in preset.patch.operators.iter().enumerate() {
+                                let op_p = &params.operators[i];
+                                set!(op_p.tl, op.tl as i32);
+                                set!(op_p.ar, op.ar as i32);
+                                set!(op_p.d1r, op.d1r as i32);
+                                set!(op_p.d2r, op.d2r as i32);
+                                set!(op_p.d1l, op.d1l as i32);
+                                set!(op_p.rr, op.rr as i32);
+                                set!(op_p.mul, op.mul as i32);
+                                set!(op_p.dt1, op.dt1 as i32);
+                                set!(op_p.ksr, op.ksr as i32);
+                                set!(op_p.ame, op.am_enable);
+                                set!(op_p.vel_sens, op.velocity_sensitivity as i32);
+                                set!(op_p.op_fine_tune, op.op_fine_tune as i32);
+                            }
+                        }
+                    }
+                });
+            },
+        )
     }
 
     fn process(
@@ -707,18 +774,16 @@ impl Plugin for Ym38x6Plugin {
             self.last_algorithm = algorithm;
         }
 
-        // Program：DAWで値が変化した場合のみ反映する（差分検知方式）。
-        // 0=Manualならprogram_patchをクリアしてbuild_patch()に戻し、1〜128ならProgram 0〜127の
-        // パッチをCC0/CC32で選択中のbankから解決する（MidiProgramChangeハンドラと同じロジック）。
-        let program = self.params.program.value() as u8;
-        if program != self.last_program {
-            self.last_program = program;
-            self.program_patch = if program == 0 {
-                None
-            } else {
-                let bank = (self.bank_select_msb as u16) * 128 + self.bank_select_lsb as u16;
-                Some(self.preset_bank.patch_for_program(bank, program - 1))
-            };
+        // GUIプリセット選択のNRPN専用パラメーター（filter_type/filter_self_oscillation/
+        // operator_waveforms）を反映し、CLAPのprogram_patchをクリアする。
+        // DAW公開パラメーターはeditor()内でParamSetter経由で書き戻し済み。
+        if let Ok(mut pending) = self.pending_gui_preset.try_lock() {
+            if let Some(patch) = pending.take() {
+                self.filter_type = patch.channel.filter_type;
+                self.filter_self_oscillation = patch.channel.filter_self_oscillation;
+                self.operator_waveforms = patch.operators.map(|op| op.waveform);
+                self.program_patch = None;
+            }
         }
 
         let patch = self.program_patch.unwrap_or_else(|| self.build_patch());
