@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use algorithm::ALGORITHMS;
 use filter::{cutoff_to_hz, effective_cutoff, FilterEnvelope, FilterType, Svf};
-use mapping::{feedback_to_scale, frequency_to_note, FM_MODULATION_INDEX_SCALE};
+use mapping::{
+    feedback_to_scale, frequency_to_note, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
+};
 use operator::Operator;
 // Ym38x6Patch::operators / set_operator_paramsの型として外部に公開する
 pub use operator::OperatorParams;
@@ -157,8 +159,12 @@ struct Channel {
 impl Channel {
     fn new(frequency: f32, velocity: u8, patch: Ym38x6Patch) -> Self {
         let note = frequency_to_note(frequency);
-        let operators = patch.operators.map(|params| {
-            let mut op = Operator::new(params);
+        // アルゴリズムからキャリア/モジュレーターを判定し、各OPに伝える
+        // （Velocity Sensitivity=明るさをモジュレーターにのみ効かせるため）。
+        let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
+        let operators = std::array::from_fn(|i| {
+            let mut op = Operator::new(patch.operators[i]);
+            op.set_carrier(algo.carriers.contains(&i));
             op.note_on(frequency, velocity);
             op
         });
@@ -301,7 +307,9 @@ impl Channel {
         let carrier_sum: f32 = algo.carriers.iter().map(|&i| op_outputs[i]).sum();
         let tl_carrier_gain = (1.0 + self.tl_carrier_mod_delta).max(0.0);
         let volume_gain = (1.0 + self.volume_mod_delta).max(0.0);
-        let dry = carrier_sum * tl_carrier_gain * volume_gain;
+        // ベロシティは音量のみに作用（通常のMIDI楽器と同じ常時ONの挙動）。音色は変えない。
+        let velocity_gain = velocity_to_volume_gain(self.velocity);
+        let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain;
 
         // SVFフィルター + Filter EG（4op合成後）
         let filter_eg_level = self.filter_eg.tick(
@@ -602,16 +610,17 @@ mod tests {
     }
 
     #[test]
-    fn velocity_sensitivity_changes_output_amplitude() {
-        let mut patch = loud_patch(255);
+    fn velocity_changes_output_volume_regardless_of_sensitivity() {
+        // Velocity Sensitivity=0（明るさ無効）でも、ベロシティは音量に常時作用する。
+        let mut patch = loud_patch(0);
         for op in patch.operators.iter_mut() {
-            op.tl = 100;
+            op.tl = 200;
         }
 
         let mut engine_lo = Ym38x6Engine::new(44100.0);
         let mut engine_hi = Ym38x6Engine::new(44100.0);
-        engine_lo.note_on_with_velocity(0, 440.0, 0, patch);
-        engine_hi.note_on_with_velocity(0, 440.0, 127, patch);
+        engine_lo.note_on_with_velocity(0, 440.0, 40, patch);
+        engine_hi.note_on_with_velocity(0, 440.0, 120, patch);
 
         let mut buf_lo = vec![0.0f32; 100];
         let mut buf_hi = vec![0.0f32; 100];
@@ -621,6 +630,83 @@ mod tests {
         let peak_lo = buf_lo.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
         let peak_hi = buf_hi.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
         assert!(peak_hi > peak_lo, "higher velocity should be louder: {peak_hi} vs {peak_lo}");
+    }
+
+    #[test]
+    fn velocity_sensitivity_ignored_on_carriers() {
+        // 全並列(algo7)＝全OPキャリア。Velocity Sensitivityは明るさ専用なので、
+        // 同一ベロシティならvel_sensの値に関わらずキャリアの音量は変わらない。
+        let mut patch_zero = loud_patch(0);
+        let mut patch_max = loud_patch(255);
+        for op in patch_zero.operators.iter_mut() {
+            op.tl = 200;
+        }
+        for op in patch_max.operators.iter_mut() {
+            op.tl = 200;
+        }
+
+        let mut engine_zero = Ym38x6Engine::new(44100.0);
+        let mut engine_max = Ym38x6Engine::new(44100.0);
+        engine_zero.note_on_with_velocity(0, 440.0, 100, patch_zero);
+        engine_max.note_on_with_velocity(0, 440.0, 100, patch_max);
+
+        let mut buf_zero = vec![0.0f32; 100];
+        let mut buf_max = vec![0.0f32; 100];
+        engine_zero.render(&mut buf_zero, 1);
+        engine_max.render(&mut buf_max, 1);
+
+        let peak_zero = buf_zero.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        let peak_max = buf_max.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        assert!(
+            (peak_zero - peak_max).abs() < 1e-6,
+            "velocity sensitivity must not change carrier volume: {peak_zero} vs {peak_max}"
+        );
+    }
+
+    #[test]
+    fn velocity_sensitivity_affects_modulator_brightness() {
+        // algo0: O1->O2->O3->O4。O1はモジュレーター。
+        // モジュレーターのVelocity Sensitivityは変調量（明るさ）を変えるので、
+        // 同一ベロシティでもvel_sensの有無で出力波形が変わる。
+        let base = OperatorParams {
+            tl: 100,
+            ar: 255,
+            d1r: 0,
+            d2r: 0,
+            d1l: 255,
+            rr: 255,
+            mul: 1,
+            dt1: 128,
+            ksr: 0,
+            am_enable: false,
+            velocity_sensitivity: 0,
+            waveform: 0,
+            op_fine_tune: 128,
+        };
+        let make = |op0_sens: u8| {
+            let mut patch = Ym38x6Patch::default();
+            patch.operators = [base; 4];
+            patch.operators[0].velocity_sensitivity = op0_sens;
+            patch.channel.algorithm = 0;
+            patch.channel.feedback = 0;
+            patch
+        };
+
+        let mut engine_flat = Ym38x6Engine::new(44100.0);
+        let mut engine_bright = Ym38x6Engine::new(44100.0);
+        engine_flat.note_on_with_velocity(0, 440.0, 100, make(0));
+        engine_bright.note_on_with_velocity(0, 440.0, 100, make(255));
+
+        let mut buf_flat = vec![0.0f32; 512];
+        let mut buf_bright = vec![0.0f32; 512];
+        engine_flat.render(&mut buf_flat, 1);
+        engine_bright.render(&mut buf_bright, 1);
+
+        let differs = buf_flat
+            .iter()
+            .zip(buf_bright.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(differs, "modulator velocity sensitivity should change the timbre");
     }
 
     #[test]

@@ -97,5 +97,6 @@ docker run --rm -v ${PWD}:/work opm2x6 /work/voice.opm /work/out --operator-orde
 | NFRQ / NE / PAN / SLOT | - | - | 対応なし（無視。SLOTで一部OPが無効化されている音色は警告を出力） |
 
 velocity_sensitivity・waveform（OP波形）は、OPMに相当パラメーターが無いため
-全オペレーターで0（感度なし・サイン波）固定。filter_*はデフォルト値
+全オペレーターで0（明るさのベロシティ感度なし・サイン波）固定。
+※velocity_sensitivity=0でも音量はベロシティに従う（音量は常時ベロシティ担当、明るさのみがopt-in）。filter_*はデフォルト値
 （Cutoff全開・Self-Oscillation有効・Filter EG無効）固定。

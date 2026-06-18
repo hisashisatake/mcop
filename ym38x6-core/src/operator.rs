@@ -85,6 +85,9 @@ pub struct Operator {
     perf_lfo_pitch_mod_cents: f32,
     /// OP単位F-Number上書き(NRPN Operator F-Number)による周波数比。1.0=上書きなし（Note-Onでリセット）。
     f_number_ratio: f32,
+    /// 現在のアルゴリズムでこのOPがキャリア（出力に直接合算される）かどうか。
+    /// Velocity Sensitivity（明るさ専用）はモジュレーターにのみ効かせるため、キャリアでは無視する。
+    is_carrier: bool,
 }
 
 impl Operator {
@@ -100,7 +103,13 @@ impl Operator {
             tone_lfo_amp_mod: 0.0,
             perf_lfo_pitch_mod_cents: 0.0,
             f_number_ratio: 1.0,
+            is_carrier: false,
         }
+    }
+
+    /// このOPがキャリアかどうかを設定する（Channelがアルゴリズムから決めて呼ぶ）。
+    pub fn set_carrier(&mut self, is_carrier: bool) {
+        self.is_carrier = is_carrier;
     }
 
     pub fn note_on(&mut self, base_frequency: f32, velocity: u8) {
@@ -194,7 +203,10 @@ impl Operator {
         let modulated_phase = (self.phase + modulation).rem_euclid(1.0);
         let idx = (modulated_phase * wave.len() as f32) as usize;
 
-        let eff_tl = effective_tl(self.params.tl, self.velocity, self.params.velocity_sensitivity);
+        // Velocity Sensitivityは明るさ専用：モジュレーターのTL（=変調量）にのみ効かせる。
+        // キャリアでは無視し、音量はチャンネル側のvelocity_to_volume_gainに一本化する。
+        let vel_sens = if self.is_carrier { 0 } else { self.params.velocity_sensitivity };
+        let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
         let amp_factor = (1.0 - self.tone_lfo_amp_mod).clamp(0.0, 1.0);
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
         // 4.8 = 96.0 / 20.0

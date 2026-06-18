@@ -96,9 +96,19 @@ pub fn ksr_rate_multiplier(ksr: u8, note: u8) -> f32 {
 }
 
 /// 実効TL = clamp(TLベース値 + (Velocity/127) × VelocitySensitivity, 0, 255)
+/// Velocity Sensitivityは「音の明るさ」専用：モジュレーターのTL（=変調量）にのみ作用させる。
+/// キャリアの音量はこの式ではなく`velocity_to_volume_gain`に一本化する（spec-sound.md参照）。
 pub fn effective_tl(base_tl: u8, velocity: u8, sensitivity: u8) -> u8 {
     let add = (velocity as f32 / 127.0) * sensitivity as f32;
     (base_tl as f32 + add).round().clamp(0.0, 255.0) as u8
+}
+
+/// ベロシティ(0〜127)→チャンネル出力にかかる音量ゲイン（音色は一切変えない）。
+/// 通常のMIDI楽器と同じく、ベロシティは音量だけに作用する常時ONの挙動。
+/// velocity=127で1.0（フル）、低ベロシティほど小さくなる線形振幅カーブ。
+/// （聴感カーブは実装後に調整する前提の第一案）
+pub fn velocity_to_volume_gain(velocity: u8) -> f32 {
+    velocity as f32 / 127.0
 }
 
 /// フィードバック値(0〜255)→自己変調の強さ（位相オフセット換算、単位：サイクル）。

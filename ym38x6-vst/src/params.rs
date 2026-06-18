@@ -53,6 +53,8 @@ impl Default for OperatorVstParams {
             dt1: IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 }),
             ksr: IntParam::new("KSR", 64, IntRange::Linear { min: 0, max: 255 }),
             ame: BoolParam::new("AM Enable", false),
+            // Velocity Sensitivityは「明るさ」専用のopt-inパラメーター（デフォルト0）。
+            // ベロシティ→音量は常時ONなので、0でも素のパッチでベロシティの表情は出る。
             vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（±1オクターブ）。DT1で足りない広いデチューン用
             op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
