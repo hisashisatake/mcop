@@ -58,6 +58,20 @@ impl SmfBuilder {
         self.tracks[track].push((tick, vec![0xC0 | ch, program & 0x7F]));
     }
 
+    pub fn add_cc(&mut self, track: usize, tick: u64, ch: u8, cc: u8, val: u8) {
+        self.tracks[track].push((tick, vec![0xB0 | ch, cc, val]));
+    }
+
+    /// RPN 0（ピッチベンド感度）を設定する。`semitones` は感度の半音数。
+    pub fn set_pitch_bend_sensitivity(&mut self, track: usize, ch: u8, semitones: u8) {
+        self.add_cc(track, 0, ch, 101, 0);   // RPN MSB
+        self.add_cc(track, 0, ch, 100, 0);   // RPN LSB
+        self.add_cc(track, 0, ch, 6,   semitones); // Data Entry MSB
+        self.add_cc(track, 0, ch, 38,  0);   // Data Entry LSB
+        self.add_cc(track, 0, ch, 101, 127); // RPN null
+        self.add_cc(track, 0, ch, 100, 127); // RPN null
+    }
+
     fn add_meta(&mut self, track: usize, tick: u64, meta_type: u8, data: &[u8]) {
         let mut ev = vec![0xFF, meta_type];
         write_vlq_to_vec(&mut ev, data.len() as u64);

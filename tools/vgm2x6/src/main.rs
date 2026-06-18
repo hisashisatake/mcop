@@ -2,8 +2,11 @@
 //!
 //! 使い方:
 //! ```text
-//! vgm2x6 <input.vgz|.vgm> [--out-bank output.38x6] [--out-midi output.mid] [--bank N]
+//! vgm2x6 <input.vgz|.vgm> [--out <dir>] [--out-bank <file>] [--out-midi <file>] [--bank N]
 //! ```
+//! - `--out <dir>`: 出力ディレクトリを指定（ファイル名は入力ステム名を使用）
+//! - `--out-bank` / `--out-midi`: 個別ファイルパスを明示指定（--out より優先）
+//! - 何も指定しない場合: カレントディレクトリに <stem>.38x6 / <stem>.mid を出力
 
 mod opm;
 mod patch;
@@ -13,7 +16,7 @@ mod vgm;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use opm::{kc_to_midi_note, kf_to_pitch_bend, OpmState};
+use opm::{compute_pitch_bend, kc_to_midi_note, OpmState, PB_SENSITIVITY};
 use patch::PatchBank;
 use smf::SmfBuilder;
 use vgm::{VgmCmd, VgmIter};
@@ -25,8 +28,8 @@ fn main() -> ExitCode {
         Err(msg) => {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
-                "usage: vgm2x6 <input.vgz|.vgm> \
-                 [--out-bank output.38x6] [--out-midi output.mid] [--bank N]"
+                "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
+                 [--out-bank <file>] [--out-midi <file>] [--bank N]"
             );
             ExitCode::FAILURE
         }
@@ -35,19 +38,26 @@ fn main() -> ExitCode {
 
 struct Args {
     input: PathBuf,
-    out_bank: Option<PathBuf>,
-    out_midi: Option<PathBuf>,
+    out_bank: PathBuf,
+    out_midi: PathBuf,
     bank: u16,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut input: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
     let mut out_bank: Option<PathBuf> = None;
     let mut out_midi: Option<PathBuf> = None;
     let mut bank: u16 = 1;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--out" => {
+                out_dir = Some(PathBuf::from(
+                    args.get(i + 1).ok_or("--out に値がありません")?,
+                ));
+                i += 2;
+            }
             "--out-bank" => {
                 out_bank = Some(PathBuf::from(
                     args.get(i + 1).ok_or("--out-bank に値がありません")?,
@@ -72,15 +82,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         }
     }
     let input = input.ok_or("入力ファイルのパスが必要です")?;
-
-    // デフォルト出力パス: 入力と同じディレクトリ、同じステム
-    let stem = input.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("out");
-    let dir = input.parent().unwrap_or(Path::new("."));
-
-    let out_bank = Some(out_bank.unwrap_or_else(|| dir.join(format!("{stem}.38x6"))));
-    let out_midi = Some(out_midi.unwrap_or_else(|| dir.join(format!("{stem}.mid"))));
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+    // --out-bank / --out-midi が明示されていない場合は --out（またはカレント）を使う
+    let base_dir = out_dir.as_deref().unwrap_or(Path::new("."));
+    let out_bank = out_bank.unwrap_or_else(|| base_dir.join(format!("{stem}.38x6")));
+    let out_midi = out_midi.unwrap_or_else(|| base_dir.join(format!("{stem}.mid")));
 
     Ok(Args { input, out_bank, out_midi, bank })
 }
@@ -108,9 +114,15 @@ fn run(args: &[String]) -> Result<(), String> {
 
     // OPMチャンネルごとの演奏状態
     // track インデックス = ch + 1 (track 0 はテンポ専用)
-    let mut active_note:    [Option<u8>;   8] = [None; 8]; // 現在鳴らしているMIDIノート
-    let mut active_patch:   [Option<usize>; 8] = [None; 8]; // 現在のパッチインデックス
-    let mut last_pb:        [i16; 8]           = [8192; 8]; // 直前のピッチベンド値
+    let mut active_note:  [Option<u8>;    8] = [None; 8]; // 現在鳴らしているMIDIノート
+    let mut base_kc:      [u8;            8] = [0;    8]; // ノートオン時の基準KC
+    let mut active_patch: [Option<usize>; 8] = [None; 8]; // 現在のパッチインデックス
+    let mut last_pb:      [i16;           8] = [8192; 8]; // 直前のピッチベンド値
+
+    // 各チャンネルのピッチベンド感度を ±PB_SENSITIVITY 半音に設定
+    for ch in 0..8usize {
+        smf.set_pitch_bend_sensitivity(ch + 1, ch as u8, PB_SENSITIVITY);
+    }
 
     // 3. VGM コマンドループ
     for cmd in VgmIter::new(&data, header.data_start) {
@@ -147,15 +159,17 @@ fn run(args: &[String]) -> Result<(), String> {
                                 active_patch[ch] = Some(patch_idx);
                             }
 
-                            // KF → ピッチベンド
-                            let pb = kf_to_pitch_bend(opm.kf(ch));
+                            // 基準KC を更新してピッチベンドをリセット
+                            let kc = opm.kc(ch);
+                            base_kc[ch] = kc;
+                            let (pb, _) = compute_pitch_bend(kc, kc, opm.kf(ch));
                             if pb != last_pb[ch] {
                                 smf.add_pitch_bend(tr, tick, ch as u8, pb);
                                 last_pb[ch] = pb;
                             }
 
-                            // ノートオン
-                            let note = kc_to_midi_note(opm.kc(ch));
+                            // ノートオン（基準KCのMIDIノート）
+                            let note = kc_to_midi_note(kc);
                             smf.add_note_on(tr, tick, ch as u8, note, 100);
                             active_note[ch] = Some(note);
                         } else {
@@ -166,30 +180,41 @@ fn run(args: &[String]) -> Result<(), String> {
                         }
                     }
 
-                    // KC 変更（音程変化 = ノートオフ→オン）
+                    // KC 変更（ビブラート・ポルタメント → ピッチベンドで表現）
                     0x28..=0x2F => {
                         let ch = (reg - 0x28) as usize;
                         opm.write(reg, val);
-                        if let Some(prev_note) = active_note[ch].take() {
+                        if active_note[ch].is_some() {
                             let tr = ch + 1;
-                            smf.add_note_off(tr, tick, ch as u8, prev_note);
-                            let pb = kf_to_pitch_bend(opm.kf(ch));
-                            if pb != last_pb[ch] {
+                            let (pb, out_of_range) =
+                                compute_pitch_bend(val, base_kc[ch], opm.kf(ch));
+                            if out_of_range {
+                                // 感度を超える大きな音程変化 → Note Off + On
+                                if let Some(prev_note) = active_note[ch].take() {
+                                    smf.add_note_off(tr, tick, ch as u8, prev_note);
+                                }
+                                base_kc[ch] = val;
+                                let (pb2, _) = compute_pitch_bend(val, val, opm.kf(ch));
+                                if pb2 != last_pb[ch] {
+                                    smf.add_pitch_bend(tr, tick, ch as u8, pb2);
+                                    last_pb[ch] = pb2;
+                                }
+                                let note = kc_to_midi_note(val);
+                                smf.add_note_on(tr, tick, ch as u8, note, 100);
+                                active_note[ch] = Some(note);
+                            } else if pb != last_pb[ch] {
                                 smf.add_pitch_bend(tr, tick, ch as u8, pb);
                                 last_pb[ch] = pb;
                             }
-                            let note = kc_to_midi_note(val);
-                            smf.add_note_on(tr, tick, ch as u8, note, 100);
-                            active_note[ch] = Some(note);
                         }
                     }
 
-                    // KF 変更 → ピッチベンド更新
+                    // KF 変更 → ピッチベンド更新（KC delta と合算）
                     0x30..=0x37 => {
                         let ch = (reg - 0x30) as usize;
                         opm.write(reg, val);
                         if active_note[ch].is_some() {
-                            let pb = kf_to_pitch_bend(val);
+                            let (pb, _) = compute_pitch_bend(opm.kc(ch), base_kc[ch], val);
                             if pb != last_pb[ch] {
                                 smf.add_pitch_bend(ch + 1, tick, ch as u8, pb);
                                 last_pb[ch] = pb;
@@ -216,14 +241,11 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 
     // 4. ファイル出力
-    if let Some(ref bp) = args.out_bank {
-        bank.write(bp, args.bank)?;
-        println!("音色バンク: {} ({} 音色)", bp.display(), bank.len());
-    }
-    if let Some(ref mp) = args.out_midi {
-        smf.write(mp).map_err(|e| format!("MIDI書き出し失敗: {e}"))?;
-        println!("MIDI: {}", mp.display());
-    }
+    bank.write(&args.out_bank, args.bank)?;
+    println!("音色バンク: {} ({} 音色)", args.out_bank.display(), bank.len());
+
+    smf.write(&args.out_midi).map_err(|e| format!("MIDI書き出し失敗: {e}"))?;
+    println!("MIDI: {}", args.out_midi.display());
 
     Ok(())
 }

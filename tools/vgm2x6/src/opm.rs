@@ -105,19 +105,27 @@ pub fn kc_to_midi_note(kc: u8) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// KF → MIDI ピッチベンド
+// KC + KF → MIDI ピッチベンド（±12半音感度）
 // ---------------------------------------------------------------------------
 
-/// OPM KF レジスタ値 → MIDI ピッチベンド値（center=8192, ±2半音デフォルト範囲）。
+/// ピッチベンド感度（半音数）。RPN 0 でDAW側にも同じ値を設定する。
+pub const PB_SENSITIVITY: u8 = 12;
+
+/// KC/KF の現在値と基準KC から MIDI ピッチベンド値を計算する。
 ///
-/// KF は KC ノートより何 1/64 半音高いかを示す（常に正方向）。
-/// MIDI デフォルト範囲 ±2半音: KF_6bit × 64 でベンド量を計算。
+/// delta_semitones = (current_kc - base_kc) + kf_6bit/64
+/// pitch_bend = 8192 + delta / PB_SENSITIVITY * 8192
 ///
-/// KF=0  → 8192（ベンドなし）
-/// KF=63 → 8192 + 63×64 = 12224（≈ 0.98半音上）
-pub fn kf_to_pitch_bend(kf: u8) -> i16 {
-    let kf_6bit = (kf >> 2) & 0x3F;
-    (8192u16 + kf_6bit as u16 * 64) as i16
+/// 戻り値: ピッチベンド値（0-16383）と、範囲外かどうかのフラグ。
+/// 範囲外（|delta| > 感度）の場合は呼び出し元で Note Off + On を行う。
+pub fn compute_pitch_bend(current_kc: u8, base_kc: u8, kf: u8) -> (i16, bool) {
+    let kf_6bit = ((kf >> 2) & 0x3F) as f32;
+    let delta = (current_kc as i16 - base_kc as i16) as f32 + kf_6bit / 64.0;
+    let out_of_range = delta.abs() > PB_SENSITIVITY as f32;
+    let bend = (8192.0 + delta / PB_SENSITIVITY as f32 * 8192.0)
+        .round()
+        .clamp(0.0, 16383.0) as i16;
+    (bend, out_of_range)
 }
 
 // ---------------------------------------------------------------------------
@@ -147,15 +155,32 @@ mod tests {
     }
 
     #[test]
-    fn kf_zero_is_center() {
-        assert_eq!(kf_to_pitch_bend(0), 8192);
+    fn pb_no_delta_no_kf_is_center() {
+        let (pb, oor) = compute_pitch_bend(0x4B, 0x4B, 0);
+        assert_eq!(pb, 8192);
+        assert!(!oor);
     }
 
     #[test]
-    fn kf_max_is_below_one_semitone() {
-        // KF=0xFC (最大: bits[7:2]=63) → 8192 + 63*64 = 12224
-        assert_eq!(kf_to_pitch_bend(0xFC), 12224);
-        // 12224 < 16383 (MIDI最大) ✓
-        assert!(kf_to_pitch_bend(0xFC) <= 16383);
+    fn pb_kf_max_adds_fraction() {
+        // KF=0xFC（最大63/64半音）、KC変化なし → センターより少し上
+        let (pb, oor) = compute_pitch_bend(0x4B, 0x4B, 0xFC);
+        assert!(pb > 8192);
+        assert!(!oor);
+    }
+
+    #[test]
+    fn pb_one_semitone_up() {
+        // KC+1（1半音上）、感度12半音 → 8192 + 8192/12 ≈ 8875
+        let (pb, oor) = compute_pitch_bend(0x4C, 0x4B, 0);
+        assert!((pb as i32 - 8875).abs() <= 2);
+        assert!(!oor);
+    }
+
+    #[test]
+    fn pb_out_of_range_over_sensitivity() {
+        // KC+13（感度12を超える）→ out_of_range=true
+        let (_pb, oor) = compute_pitch_bend(0x4B + 13, 0x4B, 0);
+        assert!(oor);
     }
 }
