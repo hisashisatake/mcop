@@ -8,6 +8,7 @@ members = [
     "tools/mucom2x6",
     "tools/opm2x6",
     "tools/wavetest",
+    "tools/vgm2x6",
 ]
 resolver = "2"
 

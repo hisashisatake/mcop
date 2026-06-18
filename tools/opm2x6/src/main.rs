@@ -9,13 +9,12 @@
 //! - `--split` を指定すると音色ごとに個別ファイル（Programs形式）を出力する。
 //!   省略時は全音色を1ファイル（Presets形式）にまとめる。
 
-mod conv;
-mod parse;
+use opm2x6::conv;
+use opm2x6::parse;
+use opm2x6::parse::OperatorOrder;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-use parse::OperatorOrder;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
