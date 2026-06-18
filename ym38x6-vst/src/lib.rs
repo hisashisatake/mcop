@@ -89,12 +89,13 @@ struct Ym38x6Plugin {
     data_entry_lsb: u8,                     // CC38 (Data Entry LSB) の最新値
     operator_f_number_override: [u16; 4],   // 各Opの上書き値。初期値F_NUMBER_CENTER（上書きなし）
 
-    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change（CLAP）：プリセット選択状態
-    bank_select_msb: u8,                 // CC0
-    bank_select_lsb: u8,                 // CC32
-    // CLAPのMIDI Program Change経由で選択されたパッチ（VST3ではGUI経由のParamSetterを使う）。
-    // GUIでプリセットを選択した際にNoneへ戻す（pending_gui_presetハンドラ参照）。
-    program_patch: Option<Ym38x6Patch>,
+    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change：MIDIチャンネルごとに管理。
+    // CC0/CC32/CC92/Program Changeはすべて論理MIDIチャンネル単位で作用する。
+    bank_select_msb: [u8; 16],           // CC0 per MIDI ch
+    bank_select_lsb: [u8; 16],           // CC32 per MIDI ch
+    // Program Change（CC92/CLAP MidiProgramChange）で選択されたパッチ（MIDIチャンネルごと）。
+    // GUIでプリセットを選択した際に全チャンネルをNoneへ戻す（pending_gui_presetハンドラ参照）。
+    program_patch: [Option<Ym38x6Patch>; 16],
 
     // ピッチベンド（MIDIチャンネル単位）。エンジンのボイスIDは midi_ch*128+note で符号化し、
     // ベンドは set_pitch_bend_group で同一MIDIチャンネルの全ノートへ一括適用する
@@ -167,9 +168,9 @@ impl Default for Ym38x6Plugin {
             data_entry_msb: 0,
             data_entry_lsb: 0,
             operator_f_number_override: [F_NUMBER_CENTER; 4],
-            bank_select_msb: 0,
-            bank_select_lsb: 0,
-            program_patch: None,
+            bank_select_msb: [0; 16],
+            bank_select_lsb: [0; 16],
+            program_patch: [None; 16],
             channel_bend_cents: [0.0; 16],
             pitch_bend_range: 2.0,
             preset_bank: PresetBank::default(),
@@ -455,9 +456,9 @@ impl Plugin for Ym38x6Plugin {
         self.data_entry_msb = 0;
         self.data_entry_lsb = 0;
         self.operator_f_number_override = [F_NUMBER_CENTER; 4];
-        self.bank_select_msb = 0;
-        self.bank_select_lsb = 0;
-        self.program_patch = None;
+        self.bank_select_msb = [0; 16];
+        self.bank_select_lsb = [0; 16];
+        self.program_patch = [None; 16];
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
@@ -490,19 +491,23 @@ impl Plugin for Ym38x6Plugin {
                 self.filter_type = patch.channel.filter_type;
                 self.filter_self_oscillation = patch.channel.filter_self_oscillation;
                 self.operator_waveforms = patch.operators.map(|op| op.waveform);
-                self.program_patch = None;
+                self.program_patch = [None; 16];
             }
         }
 
-        let patch = self.program_patch.unwrap_or_else(|| self.build_patch());
-        self.engine.set_patch(patch);
+        // channel_patchは発音中ボイスのリアルタイムDAWパラメーター更新用（常にGUI/DAW値）。
+        // Program Change（CC92/MidiProgramChange）はMIDIチャンネルごとに program_patch[ch] へ保存し、
+        // note-on時にそのMIDIチャンネルの program_patch を参照する。
+        // 発音中の既存ボイスへは影響しない（チャンネルループは常にchannel_patchを使用）。
+        let channel_patch = self.build_patch();
+        self.engine.set_patch(channel_patch);
 
         // 発音中チャンネルへDAWオートメーションの変更とAT/Poly AT Destinationの加算を反映する
         // （MIDIノート番号をそのままチャンネルIDとして使うため0〜127を走査する。
         // 非発音チャンネルへのset_*はno-opになる）
         for note in 0u8..MIDI_NOTE_COUNT {
             let ch_id = note as usize;
-            let mut note_patch = patch;
+            let mut note_patch = channel_patch;
             apply_at_modulation(
                 note,
                 self.at_destination,
@@ -588,7 +593,9 @@ impl Plugin for Ym38x6Plugin {
                     // ボイスIDは midi_ch*128+note で符号化する。一意性（Note Off/同音再アタック）と
                     // グループ性（ピッチベンドのMIDIチャンネル一括適用 = id>>7）を同時に満たす。
                     let ch_id = midi_channel_note_id(channel, note);
-                    self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, patch);
+                    // このMIDIチャンネルのProgram Change（CC92/CLAP）パッチを優先。なければGUI値。
+                    let note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
+                    self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, note_on_patch);
                     // このMIDIチャンネルの現在のベンド量を新ボイスへ反映する
                     self.engine.set_pitch_bend(ch_id, self.channel_bend_cents[channel as usize]);
                     self.apply_performance_lfo(ch_id);
@@ -617,13 +624,15 @@ impl Plugin for Ym38x6Plugin {
                 }
                 // Program Change：CC0/CC32で選択中のバンクと合わせてパッチを選択する
                 // （VST3では届かない。CLAPのみ。MidiConfig::MidiCCsの仕様。VST3ではGUI経由のParamSetterを使う）。
-                NoteEvent::MidiProgramChange { program, .. } => {
-                    let bank = (self.bank_select_msb as u16) * 128 + self.bank_select_lsb as u16;
-                    self.program_patch = Some(self.preset_bank.patch_for_program(bank, program));
+                NoteEvent::MidiProgramChange { program, channel, .. } => {
+                    let bank = (self.bank_select_msb[channel as usize] as u16) * 128
+                        + self.bank_select_lsb[channel as usize] as u16;
+                    self.program_patch[channel as usize] =
+                        Some(self.preset_bank.patch_for_program(bank, program));
                 }
                 // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN Destination/Waveform）・
                 // マスターエフェクトセンドレベル（CC91/93）
-                NoteEvent::MidiCC { cc, value, .. } => match cc {
+                NoteEvent::MidiCC { cc, value, channel, .. } => match cc {
                     1 => {
                         self.lfo_cc1 = cc_to_u8(value);
                         self.apply_performance_lfo_to_active();
@@ -640,9 +649,9 @@ impl Plugin for Ym38x6Plugin {
                         self.effective_lfo_delay = cc_to_u8(value);
                         self.apply_performance_lfo_to_active();
                     }
-                    // Bank Select（CC0=MSB, CC32=LSB）：Program Change時のバンク決定に使う
-                    0 => self.bank_select_msb = cc_to_u7(value),
-                    32 => self.bank_select_lsb = cc_to_u7(value),
+                    // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
+                    0 => self.bank_select_msb[channel as usize] = cc_to_u7(value),
+                    32 => self.bank_select_lsb[channel as usize] = cc_to_u7(value),
                     98 => {
                         self.nrpn_lsb = cc_to_u7(value);
                         self.update_rpn_selection(true);
@@ -673,9 +682,10 @@ impl Plugin for Ym38x6Plugin {
                     // 現在の CC0/CC32 バンクと合わせてパッチを選択する。
                     92 => {
                         let prog = cc_to_u7(value);
-                        let bank = (self.bank_select_msb as u16) * 128
-                            + self.bank_select_lsb as u16;
-                        self.program_patch = Some(self.preset_bank.patch_for_program(bank, prog));
+                        let bank = (self.bank_select_msb[channel as usize] as u16) * 128
+                            + self.bank_select_lsb[channel as usize] as u16;
+                        self.program_patch[channel as usize] =
+                            Some(self.preset_bank.patch_for_program(bank, prog));
                     }
                     // Operator Key On/Off（CC102〜105、≧64でキーオン/<64でキーオフ、spec-sound.md参照）
                     102..=105 => {
