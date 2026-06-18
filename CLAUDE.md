@@ -36,7 +36,7 @@ cargo --version  # rustupでインストール済み前提
 架空FM音源「38x6」と、それを使った作曲支援アプリ（Tauri）のワークスペース。
 
 - **38x6**: YM3806(OPQ)ベース + OPZ系波形拡張の架空FM音源
-- **波形メモリ音源モード**: 38x6のOP1のみを鳴らす1オペレーター音色（旧WMS-1プロトタイプの後継。`ym38x6-core`の`waveform_memory_patch`が生成）
+- **波形メモリ専用音色バンク**: 38x6のOP1のみを鳴らす1オペレーター音色を予約バンクに用意したもの（エンジンのモードではなく通常パッチのバンク。フェーズ1のプロトタイプ「WMS-1」＝波形オシレーター＋ADSRの独立クレート（wms1-core/wms1-vst、廃止済み）の後継。`ym38x6-core`の`waveform_memory_patch`が生成）
 - **作曲支援アプリ**: グリッドなし・キャリブレーションベースのジェスチャーUIで、知識がなくても良い感じのコードが弾けることを目指す
 
 ---
@@ -120,8 +120,8 @@ sound-core（基盤）
 ym38x6-core（38x6実装）
   Ym38x6Engine：4opFM合成 + フィルター + 音色LFO + チャンネル管理（無制限）
   PerformanceLfoTarget実装（共通Destination + 拡張Destination=2: TLキャリア一括）
-  波形メモリ音源モード：waveform_memory_patch（Algorithm 7・OP1のみ可聴・OP2〜4はTL=0）
-    WAVEFORM_MEMORY_BANKでBank/Program経由で選択可（旧WMS-1の後継）
+  波形メモリ専用音色バンク：waveform_memory_patch（Algorithm 7・OP1のみ可聴・OP2〜4はTL=0の通常パッチ）
+    予約バンクWAVEFORM_MEMORY_BANKにBank/Program経由で用意（エンジンのモードではない。旧WMS-1の後継）
 ```
 
 コアは「この周波数でキーオン」「このパラメーターで発音」のAPIのみを提供する。

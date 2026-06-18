@@ -26,9 +26,11 @@ ym38x6/
 
 ## Sound Engine
 
-### Waveform Memory Mode (single-operator)
+### Waveform Memory Voice Bank (single-operator)
 
-A waveform memory voice — the 38x6 with only OP1 audible (Algorithm 7, OP2–4 muted at TL=0). It replaces the original standalone WMS-1 prototype crate (`waveform_memory_patch` in `ym38x6-core` builds the patch; selectable via `WAVEFORM_MEMORY_BANK` Bank/Program).
+A dedicated voice bank — *not* an engine mode. Each voice is an ordinary 38x6 patch with only OP1 audible (Algorithm 7, OP2–4 muted at TL=0). Voices are provided under the reserved `WAVEFORM_MEMORY_BANK` Bank Select; `waveform_memory_patch` in `ym38x6-core` builds each patch from the Program number.
+
+This bank succeeds **WMS-1**, the Phase-1 prototype: a standalone waveform-oscillator + ADSR crate (`wms1-core` / `wms1-vst`). It was removed once it became clear that its single-operator voice was equivalent to a one-operator 38x6 patch, so the same sounds are now produced by the 38x6 engine itself.
 
 - Internal wave format: 1024 × u16, log encoding (ymfm-compatible)
   - `bit14~0`: −log₂|amplitude| in 4.8 fixed point
