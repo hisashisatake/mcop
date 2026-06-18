@@ -96,6 +96,14 @@ struct Ym38x6Plugin {
     // GUIでプリセットを選択した際にNoneへ戻す（pending_gui_presetハンドラ参照）。
     program_patch: Option<Ym38x6Patch>,
 
+    // ピッチベンド（MIDIチャンネル単位）。エンジンのボイスIDは midi_ch*128+note で符号化し、
+    // ベンドは set_pitch_bend_group で同一MIDIチャンネルの全ノートへ一括適用する
+    // （和音が一緒に滑らかに上下する。VGM/OPMのソフトビブラート＝チャンネル全体のピッチ移動に一致）。
+    channel_bend_cents: [f32; 16], // 各MIDIチャンネルの現在のベンド量（セント）
+    // ピッチベンド感度（半音）。RPN(0,0)で設定。デフォルト±2半音。
+    // 現状は全MIDIチャンネル共通（RPN処理がチャンネル非依存のため）。vgm2x6 SMFは全chに同値を送る。
+    pitch_bend_range: f32,
+
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
 
@@ -106,6 +114,14 @@ struct Ym38x6Plugin {
 
     // GUIエディターのウィンドウサイズ状態（editor()で使い回す）
     egui_state: Arc<EguiState>,
+}
+
+/// MIDIチャンネル(0〜15)とノート番号(0〜127)からエンジンのボイスIDを符号化する。
+/// `midi_ch*128 + note`。一意性（Note Off・同音再アタックの突き合わせ）と、
+/// グループ性（`id >> 7` でMIDIチャンネルを復元してベンド一括適用）を両立する。
+#[inline]
+fn midi_channel_note_id(channel: u8, note: u8) -> usize {
+    (channel as usize) * 128 + note as usize
 }
 
 impl Default for Ym38x6Plugin {
@@ -154,6 +170,8 @@ impl Default for Ym38x6Plugin {
             bank_select_msb: 0,
             bank_select_lsb: 0,
             program_patch: None,
+            channel_bend_cents: [0.0; 16],
+            pitch_bend_range: 2.0,
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
             egui_state: EguiState::from_size(800, 680),
@@ -264,6 +282,10 @@ impl Ym38x6Plugin {
     fn handle_data_entry(&mut self, value: f32) {
         self.data_entry_msb = cc_to_u7(value);
         match self.rpn_selection {
+            // RPN(0,0): Pitch Bend Sensitivity（半音）。CC6の生値(0〜127)を半音数とする。
+            RpnSelection::Rpn(0, 0) => {
+                self.pitch_bend_range = cc_to_u7(value) as f32;
+            }
             // RPN0,5: Modulation Depth Range
             RpnSelection::Rpn(0, 5) => {
                 self.lfo_rpn0_5 = cc_to_u7(value);
@@ -560,23 +582,31 @@ impl Plugin for Ym38x6Plugin {
 
         while let Some(event) = context.next_event() {
             match event {
-                NoteEvent::NoteOn { note, velocity, .. } if velocity > 0.0 => {
+                NoteEvent::NoteOn { channel, note, velocity, .. } if velocity > 0.0 => {
                     let freq = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
                     let velocity_u8 = (velocity * 127.0).round() as u8;
-                    let ch_id = note as usize;
-                    // MIDIノート番号をそのままチャンネルIDとして使う。
-                    // 同じノートが発音中/リリース中でもnote_on_with_velocityが即座にカットして
-                    // Attackから再開する（実機Key-On挙動に準拠＝同音チョーク）。
+                    // ボイスIDは midi_ch*128+note で符号化する。一意性（Note Off/同音再アタック）と
+                    // グループ性（ピッチベンドのMIDIチャンネル一括適用 = id>>7）を同時に満たす。
+                    let ch_id = midi_channel_note_id(channel, note);
                     self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, patch);
+                    // このMIDIチャンネルの現在のベンド量を新ボイスへ反映する
+                    self.engine.set_pitch_bend(ch_id, self.channel_bend_cents[channel as usize]);
                     self.apply_performance_lfo(ch_id);
                     for (op_index, &f_number) in self.operator_f_number_override.iter().enumerate() {
                         self.engine.set_operator_f_number(ch_id, op_index, f_number);
                     }
                 }
-                NoteEvent::NoteOn { note, .. } | NoteEvent::NoteOff { note, .. } => {
+                NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     // velocity=0 の NoteOn も NoteOff として扱う（MIDI仕様）
-                    self.engine.note_off(note as usize);
+                    self.engine.note_off(midi_channel_note_id(channel, note));
                     self.poly_pressure.remove(&note);
+                }
+                // MIDIピッチベンド：このMIDIチャンネルの全ノートへセント換算で一括適用する。
+                // nice-plug/nih-plugのvalueは0.0〜1.0（0.5=センター）。
+                NoteEvent::MidiPitchBend { channel, value, .. } => {
+                    let cents = (value - 0.5) * 2.0 * self.pitch_bend_range * 100.0;
+                    self.channel_bend_cents[channel as usize] = cents;
+                    self.engine.set_pitch_bend_group(channel as usize, cents);
                 }
                 // AT/Poly AT Destination（NRPN(0,16)/(0,17)）の加算対象
                 NoteEvent::MidiChannelPressure { pressure, .. } => {

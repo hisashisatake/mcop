@@ -141,6 +141,9 @@ struct Channel {
     lfo_destination: Ym38x6LfoDestination,
     lfo_depth: f32,
     pitch_mod_cents: f32,
+    /// MIDIピッチベンド/RPN0によるピッチオフセット（セント、毎tickでpitch_mod_centsに加算）。
+    /// パフォーマンスLFO（pitch_mod_cents）が毎tick上書きされるのと独立に保持する。
+    bend_cents: f32,
     volume_mod_delta: f32,
     /// 拡張Destination=TlCarrier用：キャリア出力にかかる乗算ゲインのオフセット。
     tl_carrier_mod_delta: f32,
@@ -181,6 +184,7 @@ impl Channel {
             lfo_destination: Ym38x6LfoDestination::default(),
             lfo_depth: 0.0,
             pitch_mod_cents: 0.0,
+            bend_cents: 0.0,
             volume_mod_delta: 0.0,
             tl_carrier_mod_delta: 0.0,
             tone_lfo: ToneLfo::new(),
@@ -196,6 +200,29 @@ impl Channel {
     fn start_declick(&mut self, samples: u32) {
         self.declick_total = samples.max(1);
         self.declick_remaining = self.declick_total;
+    }
+
+    /// 発音/リリース中のチャンネルを、残響レベルを保持したまま再キーオンする
+    /// （実機 OPM の Key-On 挙動）。env_level を 0 に落とさず現在値からアタックを
+    /// 再開するため、同音連打でもプチノイズが出ず、残響ドラッグが再現される。
+    /// 新しいパッチ・周波数・ベロシティは適用し直す。ピッチベンド量は呼び出し側が
+    /// 別途設定するため、ここでは触らない（既存値を維持）。
+    fn retrigger(&mut self, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
+        let note = frequency_to_note(frequency);
+        let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
+        for (i, op) in self.operators.iter_mut().enumerate() {
+            op.params = patch.operators[i];
+            op.set_carrier(algo.carriers.contains(&i));
+            op.retrigger(frequency, velocity);
+        }
+        self.channel_params = patch.channel;
+        self.note = note;
+        self.base_frequency = frequency;
+        self.velocity = velocity;
+        self.filter_eg.note_on();
+        // チョーク経由でデクリック中だった場合は解除して通常再生に戻す。
+        self.declick_total = 0;
+        self.declick_remaining = 0;
     }
 
     fn set_performance_lfo(
@@ -262,7 +289,7 @@ impl Channel {
             }
         }
         for op in self.operators.iter_mut() {
-            op.set_pitch_modulation(self.pitch_mod_cents);
+            op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents);
         }
 
         // 音色LFO（プリセット・NRPNで設定する音作り用、PMS/AMS×PMD/AMD）
@@ -405,11 +432,23 @@ impl Ym38x6Engine {
     }
 
     /// 指定チャンネルIDへベロシティ・パッチを明示指定してNote-Onする（VST/Tauriから使用）。
-    /// 既に同じIDで発音中/リリース中のチャンネルがあれば、エンベロープを即座にカットして
-    /// Attackから再開する（同音チョーク）。
+    /// 既に同じIDで発音中/リリース中のチャンネルがあれば、env_levelを保持したまま
+    /// 残響から再アタックする（実機OPMのKey-On挙動。プチノイズが出ず、モジュレーターの
+    /// 残響ドラッグによるFMらしい明るさも再現される）。
     pub fn note_on_with_velocity(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
-        // 同じIDで発音中/リリース中のボイスがあれば、即破棄せず数msかけてフェードアウトさせる
-        // （瞬間消滅によるクリック緩和）。新ボイスは下で即座に発音するためレイテンシーは増えない。
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            if !ch.is_idle() {
+                ch.retrigger(frequency, velocity, patch);
+                return;
+            }
+        }
+        self.channels.insert(channel, Channel::new(frequency, velocity, patch));
+    }
+
+    /// 同一IDの旧ボイスをデクリックフェードでチョーク（数msで消音）してから新ボイスを発音する。
+    /// 残響再アタックではなく明示的に切り替えたい場合に使う（サステインペダルのスウェル等、
+    /// 将来のボイス管理用）。`note_on_with_velocity`がデフォルトの残響再アタック。
+    pub fn choke_and_note_on(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
         if let Some(mut old) = self.channels.remove(&channel) {
             if !old.is_idle() {
                 old.start_declick((self.sample_rate * DECLICK_SECONDS) as u32);
@@ -417,6 +456,24 @@ impl Ym38x6Engine {
             }
         }
         self.channels.insert(channel, Channel::new(frequency, velocity, patch));
+    }
+
+    /// 発音中チャンネルのピッチベンド量（セント）を設定する（MIDI Pitch Bend / RPN0）。
+    pub fn set_pitch_bend(&mut self, channel: usize, cents: f32) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.bend_cents = cents;
+        }
+    }
+
+    /// 指定グループ（`channel >> 7`が一致する全チャンネル）のピッチベンド量を一括設定する。
+    /// VST側のID符号化 `midi_ch*128 + note` において、MIDIチャンネル単位でベンドを
+    /// かけるために使う（和音の全ノートが一緒に滑らかに上下する）。
+    pub fn set_pitch_bend_group(&mut self, group: usize, cents: f32) {
+        for (id, ch) in self.channels.iter_mut() {
+            if id >> 7 == group {
+                ch.bend_cents = cents;
+            }
+        }
     }
 
     /// 発音中チャンネルのチャンネルパラメーターを更新する（DAWオートメーション/NRPN用）。

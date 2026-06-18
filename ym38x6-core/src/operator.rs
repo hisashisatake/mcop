@@ -121,6 +121,20 @@ impl Operator {
         self.f_number_ratio = 1.0;
     }
 
+    /// 残響レベルを保持したまま Attack 相位へ再突入する（実機 OPM の Key-On 挙動の再現）。
+    /// 前の音が消えきる前のキーオンで `env_level` を 0（無音）に落とさず、現在のレベルから
+    /// アタックを再開する。これにより同音連打でのプチノイズが消え、モジュレーター側の
+    /// エンベロープが残響に引きずられることで生じる「FMらしい再アタックの明るさ」も再現される。
+    /// 位相は実機同様リセットする。
+    pub fn retrigger(&mut self, base_frequency: f32, velocity: u8) {
+        self.frequency = base_frequency;
+        self.velocity = velocity;
+        self.phase = 0.0;
+        self.env_phase = EnvPhase::Attack;
+        // env_level は保持（残響から再アタック）
+        self.f_number_ratio = 1.0;
+    }
+
     pub fn note_off(&mut self) {
         if self.env_phase != EnvPhase::Idle {
             self.env_phase = EnvPhase::Release;

@@ -4,9 +4,11 @@
 
 `SoundEngine`トレイトは`note_on(channel, wave_slot, frequency, adsr)`で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。
 
-- 同じ`channel`へ再度`note_on`すると、発音中・リリース中を問わずエンベロープを即座にカットしてAttackから再開する（実機のKey-On挙動に準拠した「同音チョーク」、insert-or-replace契約）
-- 呼び出し側が「離す→再度押す」を同じ`channel`で行えば、直前のリリーステールが自動的にチョークされ次の発音にかぶらない
-- VST（ym38x6-vst）はMIDIノート番号をそのまま`channel`として使う
+- 同じ`channel`へ再度`note_on`すると、`env_level`を0（無音）に落とさず**残響レベルからAttackを再開**する（実機OPMのKey-On挙動。EGは減衰量をリセットせず現在値からアタックするため、前の音が消えきる前のキーオンではARが本来の立ち上がりをせず、モジュレーターのエンベロープが残響に引きずられる＝FMらしい再アタックの明るさが出る）。これにより同音連打でもプチノイズが出ない
+  - ※以前は「即座にカットしてAttackから再開する同音チョーク」を実機準拠としていたが、これは実機EGの誤解に基づくものだった。実機は切らずに残響から再アタックする
+- 明示的にチョークしたい場合は`choke_and_note_on`（旧ボイスを数msのデクリックフェードで消してから新ボイス発音）を使う。サステインペダルのスウェル等、将来のボイス管理用に温存
+- ピッチベンドは`set_pitch_bend(channel, cents)`、または`set_pitch_bend_group(group, cents)`で`channel >> 7`が一致する全ボイスへ一括適用する（MIDIチャンネル単位ベンド）
+- VST（ym38x6-vst）はボイスIDを`midi_ch*128 + note`で符号化する（一意性＝Note Off/同音再アタックの突き合わせ、グループ性＝`id >> 7`でMIDIチャンネルを復元しベンド一括適用、を両立）
 - gesture-appはコードの声部インデックス（0〜N-1の固定スロット）を`channel`として使う（[spec-app.md](spec-app.md)参照）
 
 ## 波形メモリ専用音色バンク（38x6のOP1のみ有効）
@@ -533,7 +535,7 @@ CC67 ON中に新規キーオンしたノートに対してのみ、実効TLとFi
 普通のサステイン（離鍵してもReleaseに入らない）は、チャンネルを新規確保せず、現状の1ノート=1チャンネル（[キーオン契約](#チャンネルidとキーオン契約sound-core共通)）のまま実現できる。VST側に `pedal_down: bool` と `pending_release: HashSet<note>`（離鍵済みだがペダル保持中のノート）を持つ。
 
 ```
-Note-On(note):   engine.note_on(note as id, ...)         // 現状どおり（チョーク＋デクリック）
+Note-On(note):   engine.note_on(id, ...)                 // 残響再アタックがデフォルト
                  pending_release.remove(note)            // 弾き直したら保持解除
 Note-Off(note):  if pedal_down { pending_release.insert(note) }  // 離鍵してもReleaseしない
                  else         { engine.note_off(note) }
@@ -542,21 +544,26 @@ CC64 OFF:        pedal_down = false
                  pending_release中の全ノートをengine.note_off()してdrain
 ```
 
-鍵がまだ押されている音は `pending_release` に入らない（ペダルを離しても鳴り続ける）。同じ鍵を弾き直すと保持中の音は自然にチョークされる（ピアノは1鍵=1組の弦なので物理的に正しい）。エンジンは無改造で済む（必要なら `set_sustain(channel, bool)` のようなAPIを足す案もあるが、まずはVST完結）。Sostenuto（CC66）は対象を限定した同じ仕組み。
+鍵がまだ押されている音は `pending_release` に入らない（ペダルを離しても鳴り続ける）。エンジンは無改造で済む（必要なら `set_sustain(channel, bool)` のようなAPIを足す案もあるが、まずはVST完結）。Sostenuto（CC66）は対象を限定した同じ仕組み。
+
+> **要再検討（残響再アタック化に伴う）：** デフォルトの同一ID再キーオンは「同音チョーク」から「残響からの再アタック」に変わった。ピアノの弦再打弦としてはむしろ残響再アタックの方が物理的に自然だが、ペダルON時に「同じ音を重ねて独立に減衰」させたい場合は、**ペダルON中は同一ノートでも同一チャンネルIDを使わない**フラグを立て、新規ユニークIDを払い出せばよい（下記(b)と同じ仕組み）。これによりデフォルトの残響再アタック挙動を汚さずにスウェルを実現できる。
 
 **(b) ペダルON時の同音重ね発音（スウェル、オプション拡張）：**
 
 パッド系などで「ペダルを踏んで同じ音を重ねて独立に減衰させる」表現が欲しい場合のみ必要。ピアノでは物理的に起きないので(a)とは別物。チャンネルIDをノート番号から切り離し、ペダルON時のみ新規ユニークIDを割り当てて重ね発音を許す。38x6はチャンネル無制限のため「空きチャンネル検索」は不要で、IDを払い出すだけ（カウンター採番や `note番号 + 世代` 等）でよい。choke/overlapの判定はVST側のID採番ポリシーのみで決まり、エンジンのinsert-or-replace契約は変更不要：
 
-- ペダルUP → `id = ノート番号`（前をチョーク、現状の挙動）
-- ペダルDOWN → `id = 新規ユニークID`（重なる）
+- ペダルUP → `id = 通常のボイスID`（同音は残響再アタック、デフォルト挙動）
+- ペダルDOWN → `id = 新規ユニークID`（重なって独立に減衰）
 
 代償はVST側に `note番号 → 複数channel ID` の多重マップが要ること（Note-Off／ペダル解放時に対象IDをまとめてReleaseする）。現スコープ（ペダル無しのgesture-app・ピアノ系音色）では不要のため未実装。
 
 ### Pitch Bend
 
-0xEn（14bit、中央値8192 = ベンドなし）でF-Numberを直接変化させる。
-ベンドレンジはRPN 0,0（Pitch Bend Sensitivity）で設定する。
+0xEn（14bit、中央値8192 = ベンドなし）をセント換算し、`set_pitch_bend_group(midi_ch, cents)`で
+**MIDIチャンネル単位**で全ボイスへ一括適用する（VSTのボイスID `midi_ch*128+note` の `id >> 7` でグループ判定）。
+和音は全ノートが一緒に滑らかに上下する（VGM/OPMのソフトビブラート＝チャンネル全体のピッチ移動に一致）。
+ベンドレンジはRPN 0,0（Pitch Bend Sensitivity、半音）で設定する。現状は全MIDIチャンネル共通。
+セント変換は `cents = (value/16383 - 0.5) * 2 * range半音 * 100`（VST側はnice-plugの正規化値0〜1を使用）。
 
 ### RPN（GM2準拠）
 

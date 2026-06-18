@@ -15,7 +15,7 @@ fn sustained_release_patch() -> Ym38x6Patch {
         ksr: 0,
         am_enable: false,
         velocity_sensitivity: 0,
-        waveform: 0, // サイン波（サンプル間の段差が小さく、デクリックの連続性を観測しやすい）
+        waveform: 0, // サイン波（サンプル間の段差が小さく、連続性を観測しやすい）
         op_fine_tune: 128,
     };
     Ym38x6Patch {
@@ -24,14 +24,14 @@ fn sustained_release_patch() -> Ym38x6Patch {
     }
 }
 
-/// リリース中の同じチャンネルIDへ再度note_onすると、旧ボイスは即座に瞬間消滅せず、
-/// 数ms（DECLICK_SECONDS=4ms≒176サンプル@44.1kHz）かけて線形にフェードアウトしてから消える
-/// （クリックノイズ緩和）。新ボイスの発音タイミングは遅れない（旧ボイスに重ねてフェードするため）。
+/// リリース中の同じチャンネルIDへ再度`note_on_with_velocity`すると、env_levelを0に
+/// リセットせず残響レベルから再アタックする（実機OPMのKey-On挙動）。
 ///
-/// 旧ボイスのフェードを単独で観測するため、チョーク後の新ボイスはアタック最遅(ar=0)にして
-/// 観測ウィンドウ内ではほぼ無音に保つ。
+/// 残響保持を単独で観測するため、再アタックのARを最遅(ar=0)にする。
+/// env_levelを0へ落とす旧「同音チョーク」実装なら無音から始まるが、残響再アタックなら
+/// 直前のリリースレベル付近を維持する。
 #[test]
-fn choke_declicks_old_voice_instead_of_hard_cut() {
+fn note_on_retriggers_from_residual_not_silence() {
     let mut engine = Ym38x6Engine::new(44100.0);
     let patch = sustained_release_patch();
     let ch = 0;
@@ -47,12 +47,54 @@ fn choke_declicks_old_voice_instead_of_hard_cut() {
     engine.render(&mut release_buf, 1);
     let release_peak = release_buf[900..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
-    // チョーク。新ボイスはアタック最遅(ar=0)にして、観測ウィンドウ内ではほぼ無音に保つ。
+    // 残響再アタック。ARを最遅(ar=0)にして、env_levelがほぼ動かない状態で観測する。
     let mut slow_attack = sustained_release_patch();
     for op in slow_attack.operators.iter_mut() {
         op.ar = 0;
     }
     engine.note_on_with_velocity(ch, 440.0, 127, slow_attack);
+
+    let mut after = vec![0.0f32; 500];
+    engine.render(&mut after, 1);
+    let after_peak = after.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+
+    // 残響レベルを保持しているので、ar=0でも無音に落ちず直前のリリースレベル付近を維持する。
+    assert!(
+        after_peak > release_peak * 0.8,
+        "note_on should re-attack from residual (not reset to silence): after_peak={after_peak}, release_peak={release_peak}"
+    );
+}
+
+/// `choke_and_note_on`（明示チョークAPI、将来のサステインペダル等向け）は旧ボイスを
+/// 即座に瞬間消滅させず、数ms（DECLICK_SECONDS=4ms≒176サンプル@44.1kHz）かけて
+/// 線形にフェードアウトしてから消す（クリックノイズ緩和）。新ボイスの発音タイミングは
+/// 遅れない（旧ボイスに重ねてフェードするため）。
+///
+/// 旧ボイスのフェードを単独で観測するため、新ボイスはアタック最遅(ar=0)にして
+/// 観測ウィンドウ内ではほぼ無音に保つ。
+#[test]
+fn choke_and_note_on_declicks_old_voice_instead_of_hard_cut() {
+    let mut engine = Ym38x6Engine::new(44100.0);
+    let patch = sustained_release_patch();
+    let ch = 0;
+    engine.note_on_with_velocity(ch, 440.0, 127, patch);
+
+    let mut warmup = vec![0.0f32; 100];
+    engine.render(&mut warmup, 1);
+
+    engine.note_off(ch);
+
+    // RR=200のリリースで1000サンプル分減衰させる（env_level: 1.0 → 約0.72）
+    let mut release_buf = vec![0.0f32; 1000];
+    engine.render(&mut release_buf, 1);
+    let release_peak = release_buf[900..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+
+    // 明示チョーク。新ボイスはアタック最遅(ar=0)にして、観測ウィンドウ内ではほぼ無音に保つ。
+    let mut slow_attack = sustained_release_patch();
+    for op in slow_attack.operators.iter_mut() {
+        op.ar = 0;
+    }
+    engine.choke_and_note_on(ch, 440.0, 127, slow_attack);
 
     let mut after = vec![0.0f32; 2000];
     engine.render(&mut after, 1);
@@ -71,11 +113,10 @@ fn choke_declicks_old_voice_instead_of_hard_cut() {
     );
 }
 
-/// SoundEngine::note_onはカレントパッチを使って同じチャンネルIDで同音チョークし、
-/// 新ボイスがAttackから立ち上がってフルレベルへ向かう（チョークされた旧リリースは
-/// 数msで消えるため、次の発音にかぶらない）。
+/// SoundEngine::note_onはカレントパッチを使い、同じチャンネルIDで残響レベルから
+/// 再アタックする。新しいAttackがフルレベルへ向かうため、リリース残響レベルを上回る。
 #[test]
-fn trait_note_on_chokes_release_and_restarts_attack() {
+fn trait_note_on_reattacks_toward_full_level() {
     let mut engine = Ym38x6Engine::new(44100.0);
     engine.set_patch(sustained_release_patch());
     let ch = 0;
@@ -94,11 +135,11 @@ fn trait_note_on_chokes_release_and_restarts_attack() {
 
     let mut after = vec![0.0f32; 500];
     engine.render(&mut after, 1);
-    // デクリック期間を過ぎた後半は、Attackで立ち上がった新ボイスがリリースレベルを超える
+    // 残響から再アタックし、フルレベルへ立ち上がるためリリースレベルを超える
     let after_peak = after[300..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
     assert!(
         after_peak > release_peak,
-        "note_on should restart Attack toward full level: after_peak={after_peak}, release_peak={release_peak}"
+        "note_on should re-attack toward full level: after_peak={after_peak}, release_peak={release_peak}"
     );
 }
