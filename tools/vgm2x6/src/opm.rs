@@ -95,9 +95,14 @@ impl OpmState {
 /// - octave=4, code=11（A）→ 4×12 + 9 + 12 = 69 = A4 ✓
 /// - octave=3, code=14（C）→ 3×12 + 12 + 12 = 60 = C4（中央 C）✓
 pub fn kc_to_midi_note(kc: u8) -> u8 {
-    // ノートコード → C からの半音数
-    // code 14/15 は次オクターブの C（= 12 半音）として扱う
-    const NOTE_SEMITONES: [u8; 16] = [1, 1, 2, 2, 3, 4, 5, 5, 6, 7, 8, 9, 10, 11, 12, 12];
+    // ノートコード → C からの半音数（C#=1 起点）。
+    // 実機YM2151は「3半音×4グループ」構造：下位2bitが 0/1/2 で半音、3 は欠番。
+    //   code 0,1,2   = C#,D,D#（グループ0）
+    //   code 4,5,6   = E,F,F#  （グループ1）
+    //   code 8,9,10  = G,G#,A  （グループ2）
+    //   code 12,13,14= A#,B,C  （グループ3）
+    // 欠番コード(3,7,11,15)は直前の有効コードへclampする。
+    const NOTE_SEMITONES: [u8; 16] = [1, 2, 3, 3, 4, 5, 6, 6, 7, 8, 9, 9, 10, 11, 12, 12];
     let octave = (kc >> 4) & 0x07;
     let note   = (kc & 0x0F) as usize;
     let midi   = octave as u16 * 12 + NOTE_SEMITONES[note] as u16 + 12;
@@ -113,19 +118,61 @@ pub const PB_SENSITIVITY: u8 = 12;
 
 /// KC/KF の現在値と基準KC から MIDI ピッチベンド値を計算する。
 ///
-/// delta_semitones = (current_kc - base_kc) + kf_6bit/64
-/// pitch_bend = 8192 + delta / PB_SENSITIVITY * 8192
+/// OPM KC は「オクターブ(3bit) + ノートコード(4bit)」で、バイト差は非線形
+/// （1オクターブ = KC差16 ≠ 12半音、C#/D/F のコード重複あり）。
+/// kc_to_midi_note() で実際の半音差に変換してから計算する。
 ///
 /// 戻り値: ピッチベンド値（0-16383）と、範囲外かどうかのフラグ。
 /// 範囲外（|delta| > 感度）の場合は呼び出し元で Note Off + On を行う。
 pub fn compute_pitch_bend(current_kc: u8, base_kc: u8, kf: u8) -> (i16, bool) {
-    let kf_6bit = ((kf >> 2) & 0x3F) as f32;
-    let delta = (current_kc as i16 - base_kc as i16) as f32 + kf_6bit / 64.0;
+    let semitone_delta =
+        kc_to_midi_note(current_kc) as i16 - kc_to_midi_note(base_kc) as i16;
+    let kf_semitones = ((kf >> 2) & 0x3F) as f32 / 64.0;
+    let delta = semitone_delta as f32 + kf_semitones;
     let out_of_range = delta.abs() > PB_SENSITIVITY as f32;
     let bend = (8192.0 + delta / PB_SENSITIVITY as f32 * 8192.0)
         .round()
         .clamp(0.0, 16383.0) as i16;
     (bend, out_of_range)
+}
+
+// ---------------------------------------------------------------------------
+// 診断用：実機YM2151 canonical変換（--dump-pitch）
+// ---------------------------------------------------------------------------
+
+/// 実機YM2151 KC/KF → 浮動小数MIDIノート番号（真値リファレンス）。
+///
+/// 実機OPMのノートコード（KC下位4bit）は下位2bitが `11`（=3,7,11,15）が欠番で、
+/// 残り12個が半音ずつに対応する。canonicalな半音インデックスは
+/// `index = (code>>2)*3 + (code&3)`（code&3==3 は欠番のため 2 にclamp）。
+/// オクターブ（KC[6:4]）と KF（6bit, 1/64半音）を合わせて絶対ピッチを求める。
+///
+/// アンカー: A4=440Hz は KC=0x4A（octave4, code10→index8）→ MIDI 69。
+/// `midi = octave*12 + index + 13 + kf_6bit/64`
+pub fn kc_kf_to_ref_midi(kc: u8, kf: u8) -> f32 {
+    let octave = ((kc >> 4) & 0x07) as f32;
+    let code = kc & 0x0F;
+    let lo = (code & 0x03).min(2);
+    let index = ((code >> 2) * 3 + lo) as f32;
+    let kf_frac = ((kf >> 2) & 0x3F) as f32 / 64.0;
+    octave * 12.0 + index + 13.0 + kf_frac
+}
+
+/// SMFピッチベンド値（0-16383, center=8192）→ 半音数。
+/// エンジン/VST側の解釈 `(value/16383 - 0.5) * 2 * PB_SENSITIVITY` に合わせる。
+pub fn pb_to_semitones(pb: i16) -> f32 {
+    (pb as f32 / 16383.0 - 0.5) * 2.0 * PB_SENSITIVITY as f32
+}
+
+/// 浮動小数MIDIノート番号 → 音名（例: 69.0 → "A4"）。
+pub fn midi_note_name(midi: f32) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let r = midi.round() as i32;
+    let name = NAMES[r.rem_euclid(12) as usize];
+    let oct = r / 12 - 1;
+    format!("{name}{oct}")
 }
 
 // ---------------------------------------------------------------------------
@@ -178,9 +225,34 @@ mod tests {
     }
 
     #[test]
+    fn ref_midi_anchors() {
+        // canonical実機表のアンカー検証
+        assert!((kc_kf_to_ref_midi(0x4A, 0) - 69.0).abs() < 1e-4); // A4 = 0x4A（code10）
+        assert!((kc_kf_to_ref_midi(0x3E, 0) - 60.0).abs() < 1e-4); // C4 = 0x3E（code14）
+        assert!((kc_kf_to_ref_midi(0x40, 0) - 61.0).abs() < 1e-4); // C#4 = 0x40（code0）
+    }
+
+    #[test]
+    fn pipeline_matches_ref_on_all_valid_codes() {
+        // ノートテーブル修正後、pipeline(kc_to_midi_note) と canonical実機表が
+        // 全有効ノートコードで一致することを検証する（--dump-pitchのerror_cents=0に対応）。
+        // 欠番コード(3,7,11,15)は除く。
+        for code in [0u8, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14] {
+            let kc = 0x40 | code; // octave 4
+            let repro = kc_to_midi_note(kc) as f32;
+            let refm = kc_kf_to_ref_midi(kc, 0);
+            assert!(
+                (repro - refm).abs() < 1e-4,
+                "code {code}: pipeline={repro}, ref={refm}"
+            );
+        }
+    }
+
+    #[test]
     fn pb_out_of_range_over_sensitivity() {
-        // KC+13（感度12を超える）→ out_of_range=true
-        let (_pb, oor) = compute_pitch_bend(0x4B + 13, 0x4B, 0);
+        // 0x4B(A4=69) → 0x5C(A#5=82): 実際の半音差=13 > PB_SENSITIVITY=12 → out_of_range=true
+        // ※ 旧実装の 0x4B+13=0x58 は KC差13でも実際の半音差が9にとどまるため使えない
+        let (_pb, oor) = compute_pitch_bend(0x5C, 0x4B, 0);
         assert!(oor);
     }
 }

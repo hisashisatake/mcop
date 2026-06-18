@@ -19,6 +19,11 @@ impl PatchBank {
         self.voices.len()
     }
 
+    /// 指定インデックスの音色を `Ym38x6Patch` として返す（WAVレンダリング用）。
+    pub fn patch_at(&self, idx: usize) -> ym38x6_core::Ym38x6Patch {
+        self.entries[idx].patch
+    }
+
     /// OpmVoice を登録し、重複していればそのインデックスを、新規なら追加してインデックスを返す。
     ///
     /// 音色同一性の判定: 音色パラメーター（KC/KF以外）が全て一致するか。
