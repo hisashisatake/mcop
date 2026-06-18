@@ -638,6 +638,15 @@ impl Plugin for Ym38x6Plugin {
                     }
                     91 => self.effects.set_reverb_send(cc_to_u8(value)),
                     93 => self.effects.set_chorus_send(cc_to_u8(value)),
+                    // CC92: Program Change 代替（VST3 では MidiProgramChange が届かないため）
+                    // VOPMex の CC92 互換。値 0-127 をプログラム番号として、
+                    // 現在の CC0/CC32 バンクと合わせてパッチを選択する。
+                    92 => {
+                        let prog = cc_to_u7(value);
+                        let bank = (self.bank_select_msb as u16) * 128
+                            + self.bank_select_lsb as u16;
+                        self.program_patch = Some(self.preset_bank.patch_for_program(bank, prog));
+                    }
                     // Operator Key On/Off（CC102〜105、≧64でキーオン/<64でキーオフ、spec-sound.md参照）
                     102..=105 => {
                         let op_index = (cc - 102) as usize;
