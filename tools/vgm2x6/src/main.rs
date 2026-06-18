@@ -152,10 +152,12 @@ fn run(args: &[String]) -> Result<(), String> {
                             let patch_idx = bank.find_or_insert(voice);
 
                             // プログラムチェンジ（音色が変わったとき）
+                            // Program Change (0xCn) + CC92 の両方を送ることで
+                            // CLAP（Program Change）と VST3（CC92）の両方に対応する。
                             if active_patch[ch] != Some(patch_idx) {
-                                smf.add_program_change(
-                                    tr, tick, ch as u8, (patch_idx % 128) as u8,
-                                );
+                                let prog = (patch_idx % 128) as u8;
+                                smf.add_program_change(tr, tick, ch as u8, prog);
+                                smf.add_cc(tr, tick, ch as u8, 92, prog);
                                 active_patch[ch] = Some(patch_idx);
                             }
 
