@@ -3219,6 +3219,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "opm2x6"
+version = "0.1.0"
+dependencies = [
+ "ym38x6-core",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

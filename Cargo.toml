@@ -6,6 +6,7 @@ members = [
     "gesture-app/src-tauri",
     "tools/psr2x6",
     "tools/mucom2x6",
+    "tools/opm2x6",
     "tools/wavetest",
 ]
 resolver = "2"
