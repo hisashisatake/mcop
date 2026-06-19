@@ -1,16 +1,15 @@
-//! wavetest — 非サイン波形（OPZ系 waveform 1〜7）をFMのキャリア/モジュレーターに
-//! 使ったときの音色変化を試聴で確認するツール。
+//! wavetest — OPZ準拠8波形をFMのキャリア/モジュレーターに使ったときの
+//! 音色変化を試聴で確認するツール。
 //!
 //! 8系統の基本音色（ピアノ/E.ピアノ/シンセベース/リード/ブラス/ベル/オルガン/プラック）に
-//! 対し、波形をオペレーター全体に適用したバリエーション（サイン/ハーフサイン/絶対値サイン/
-//! ノコギリの4種）を作り、`<output_dir>/wav/NN_<音色>_<波形>.wav` と
-//! `<output_dir>/b<bank>.38x6` を書き出す。
+//! 対し、波形0〜7をオペレーター全体に適用したバリエーション（8種）を作り、
+//! `<output_dir>/wav/NN_<音色>_<波形>.wav` と `<output_dir>/b<bank>.38x6` を書き出す。
 //!
 //! 使い方:
 //! ```text
-//! wavetest <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>]
+//! wavetest <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>] [--release <秒>]
 //! ```
-//! - 既定: bank=1 / C4 / on=1.2秒 + リリース2.0秒。
+//! - 既定: bank=1 / C4 / on=1.2秒 + リリース3.0秒。
 //!
 //! 波形はモジュレーターにも適用される（FM下での倍音変化が本ツールの主目的のため、
 //! キャリアだけでなく全オペレーターに同じ波形を割り当てる）。
@@ -22,13 +21,16 @@ use ym38x6_core::{
     ChannelParams, OperatorParams, PresetEntry, PresetFile, SoundEngine, Ym38x6Engine, Ym38x6Patch,
 };
 
-/// 試聴に使う波形（番号と表示名）。OPZ系8波形のうち代表4種。
-/// 0=サイン（ベースライン）、1=ハーフサイン、2=絶対値サイン、4=ノコギリ。
-const WAVE_VARIANTS: [(u8, &str); 4] = [
+/// 試聴に使う波形（番号と表示名）。OPZ準拠8波形（ymfm実装準拠）を全て出力する。
+const WAVE_VARIANTS: [(u8, &str); 8] = [
     (0, "sine"),
-    (1, "halfsine"),
-    (2, "abssine"),
-    (4, "saw"),
+    (1, "sin2"),
+    (2, "halfsine"),
+    (3, "halfsin2"),
+    (4, "sine2x_h"),     // 2倍速サイン前半（正負両方）
+    (5, "sin2_2x_h"),    // 2倍速sin²前半（符号付き）
+    (6, "abssine2x_h"),  // 2倍速絶対値サイン前半（常に正）
+    (7, "possin2_2x_h"), // 2倍速正sin²前半（常に正）
 ];
 
 /// オペレーター1個を簡潔に組み立てるヘルパー。
@@ -67,6 +69,20 @@ struct BaseTimbre {
 /// アルゴリズムのトポロジーは algorithm.rs（OPN準拠）に従う。
 fn base_timbres() -> Vec<BaseTimbre> {
     vec![
+        // 0) Pure: Alg7（全並列4キャリア）。AR=255・無限サスティン・MUL=1。
+        //    FMモジュレーション効果なし・波形そのものの音色を確認するための基準音色。
+        BaseTimbre {
+            name: "pure",
+            patch: Ym38x6Patch {
+                operators: [
+                    op(240, 255, 0, 0, 255, 100, 1, 128),
+                    op(240, 255, 0, 0, 255, 100, 1, 128),
+                    op(240, 255, 0, 0, 255, 100, 1, 128),
+                    op(240, 255, 0, 0, 255, 100, 1, 128),
+                ],
+                channel: channel(7, 0),
+            },
+        },
         // 1) Piano: Alg4 (O1→O2)+(O3→O4)。2つの倍音グループ、片方を微デチューン。
         BaseTimbre {
             name: "piano",
@@ -221,9 +237,9 @@ fn expand_voices(bases: &[BaseTimbre], override_freq: Option<f32>) -> Vec<Voice>
     out
 }
 
-/// フィルター入りデモ（ノコギリ波）。レゾナンス/カットオフ/フィルターEGで「凶悪」な音を
+/// フィルター入りデモ（2倍速ハーフサイン）。レゾナンス/カットオフ/フィルターEGで「凶悪」な音を
 /// 試聴するための追加音色。指定した基本音色のオペレーター構成を流用し、全オペレーターを
-/// ノコギリ波(waveform=4)にしてからローパスフィルターを設定する。
+/// 2倍速ハーフサイン(waveform=4)にしてからローパスフィルターを設定する。
 struct FilterDemo {
     name: &'static str,
     /// 流用する基本音色名（[`base_timbres`] の name）。
@@ -310,7 +326,7 @@ fn build_filter_demo(
         .expect("FilterDemo.base は既知の基本音色名");
     let mut patch = base.patch;
     for op in patch.operators.iter_mut() {
-        op.waveform = 4; // ノコギリ
+        op.waveform = 4; // 2倍速ハーフサイン
     }
     let (a, d, s, r) = demo.eg;
     patch.channel.filter_type = 0; // LP
@@ -334,14 +350,14 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("wavetest: {msg}");
-            eprintln!("usage: wavetest <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>]");
+            eprintln!("usage: wavetest <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>] [--release <秒>]");
             ExitCode::FAILURE
         }
     }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (output_dir, bank, override_freq, on_secs) = parse_args(args)?;
+    let (output_dir, bank, override_freq, on_secs, release_secs) = parse_args(args)?;
 
     let bases = base_timbres();
     let mut voices = expand_voices(&bases, override_freq);
@@ -357,7 +373,7 @@ fn run(args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("出力ディレクトリ作成に失敗: {}: {e}", output_dir.display()))?;
 
-    render_wavs(&voices, &output_dir, on_secs)?;
+    render_wavs(&voices, &output_dir, on_secs, release_secs)?;
 
     let presets = voices
         .iter()
@@ -386,12 +402,13 @@ fn run(args: &[String]) -> Result<(), String> {
 
 /// 戻り値の3つ目は試聴周波数の上書き指定（`--note`/`--octave` のどちらかが指定された場合のみ
 /// `Some`。未指定なら `None` で、音色ごとの基準音 [`timbre_pitch`] を使う）。
-fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32), String> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32, f32), String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut bank: u16 = 1;
     let mut octave: Option<i32> = None;
     let mut note: Option<String> = None;
     let mut on_secs: f32 = 1.2;
+    let mut release_secs: f32 = 3.0;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -419,6 +436,14 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32), Strin
                 }
                 i += 2;
             }
+            "--release" => {
+                let v = args.get(i + 1).ok_or("--release に値がありません")?;
+                release_secs = v.parse().map_err(|_| format!("--release の値が不正: {v}"))?;
+                if release_secs < 0.0 {
+                    return Err(format!("--release は0以上の値を指定してください: {v}"));
+                }
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -433,7 +458,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32), Strin
         (None, None) => None,
         (n, o) => Some(note_to_freq(o.unwrap_or(4), n.as_deref().unwrap_or("C"))?),
     };
-    Ok((PathBuf::from(positional[0]), bank, override_freq, on_secs))
+    Ok((PathBuf::from(positional[0]), bank, override_freq, on_secs, release_secs))
 }
 
 fn note_to_semitone(note: &str) -> Result<i32, String> {
@@ -456,9 +481,14 @@ fn note_to_freq(octave: i32, note: &str) -> Result<f32, String> {
 }
 
 /// 各音色を WAV（mono 44.1kHz 16bit）へレンダリングする。各音色は自身の試聴周波数
-/// （[`Voice::freq`]）で鳴らす。`on_secs` キーオン後、2.0秒リリース。ノコギリ全Op等の
-/// ホットな音色のクリップを抑えるため、書き出し時に控えめなマスターゲイン(0.7)を掛ける。
-fn render_wavs(voices: &[Voice], output_dir: &Path, on_secs: f32) -> Result<(), String> {
+/// （[`Voice::freq`]）で鳴らす。ノコギリ全Op等のホットな音色のクリップを抑えるため、
+/// 書き出し時に控えめなマスターゲイン(0.7)を掛ける。
+fn render_wavs(
+    voices: &[Voice],
+    output_dir: &Path,
+    on_secs: f32,
+    release_secs: f32,
+) -> Result<(), String> {
     const SR: f32 = 44_100.0;
     const MASTER_GAIN: f32 = 0.7;
     let wav_dir = output_dir.join("wav");
@@ -469,7 +499,7 @@ fn render_wavs(voices: &[Voice], output_dir: &Path, on_secs: f32) -> Result<(), 
         engine.note_on_with_velocity(0, v.freq, 110, v.patch);
 
         let on = (SR * on_secs) as usize;
-        let off = (SR * 2.0) as usize;
+        let off = (SR * release_secs) as usize;
         let mut samples = vec![0.0f32; on];
         engine.render(&mut samples, 1);
         engine.note_off(0);

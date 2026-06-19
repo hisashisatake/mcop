@@ -295,9 +295,9 @@ fn electric_piano_1_patch() -> Ym38x6Patch {
     patch
 }
 
-/// Program 80: Lead 1 (Square)。
-/// Algorithm 7（全並列）で矩形波(waveform=3)を3本デチューンして重ね、O4を1オクターブ上の
-/// 矩形波で薄く重ねる、デチューンユニゾン構成のシンセリード。d1l=255 + d2r=0でキーオン中は
+/// Program 80: Lead 1 (Sync)。
+/// Algorithm 7（全並列）でハーフsin²(waveform=3)を3本デチューンして重ね、O4を1オクターブ上で
+/// 薄く重ねる、デチューンユニゾン構成のシンセリード。d1l=255 + d2r=0でキーオン中は
 /// 減衰しない（無限サスティン）。フィルターでわずかに角を取りつつ共振を効かせる。
 fn lead_1_square_patch() -> Ym38x6Patch {
     let mut patch = Ym38x6Patch::default();
