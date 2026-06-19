@@ -60,7 +60,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut out_dir: Option<PathBuf> = None;
     let mut out_bank: Option<PathBuf> = None;
     let mut out_midi: Option<PathBuf> = None;
-    let mut bank: u16 = 1;
+    let mut bank: u16 = 0;
     let mut dump_pitch = false;
     let mut out_wav: Option<PathBuf> = None;
     let mut wav_flag = false;
