@@ -24,9 +24,18 @@ const CARRIERS: [&[usize]; 8] = [
 // スカラー変換
 // ---------------------------------------------------------------------------
 
-/// OUT (TX81Z Output Level 0-99, 99=最大) → 38x6 TL (0=無音, 254=最大)。
+/// OUT (TX81Z Output Level 0-99, 99=最大) → 38x6 TL（キャリア用、0=無音, 254=最大）。
 fn out_to_tl(out: u8) -> u8 {
     (out.min(99) as f32 / 99.0 * 254.0).round() as u8
+}
+
+/// OUT → 38x6 TL（モジュレーター用、上限 200）。
+///
+/// エンジンの FM_MODULATION_INDEX_SCALE=4.0 により、TL=254 のモジュレーターは
+/// 変調深度 β≈24rad（ノイズ）になる。TL=200 に抑えることで β≈2.4rad（音楽的）。
+/// キャリアは音量に直結するため out_to_tl を使う。
+fn out_to_tl_mod(out: u8) -> u8 {
+    (out.min(99) as f32 / 99.0 * 200.0).round() as u8
 }
 
 /// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L（opm2x6 と同実装）。
@@ -139,7 +148,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
     OperatorParams {
-        tl: out_to_tl(op.out),
+        tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out) },
         ar: ar_to_x6(op.ar, op.rs),
         d1r: opm_rate_to_x6(op.d1r, op.rs),
         d2r: opm_rate_to_x6(d2r, op.rs),
@@ -150,8 +159,9 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
         ksr: op.rs.min(3) * 85,
         am_enable: op.ame,
         // キャリアは velocity_sensitivity=0（38x6の「velocity=音量」設計を維持）
-        // モジュレーターは KVS を写像: KVS(0-7) → 0..255
-        velocity_sensitivity: if is_carrier { 0 } else { (op.kvs.min(7) as u16 * 255 / 7) as u8 },
+        // モジュレーターは KVS を写像: KVS(0-7) → 0..70
+        // (* 255/7 は実効TLを最大にクランプさせすぎるため * 10 に抑制)
+        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 10 },
         waveform: op.ow.min(7),
         op_fine_tune,
     }
@@ -211,8 +221,15 @@ mod tests {
     #[test]
     fn out_to_tl_polarity() {
         assert_eq!(out_to_tl(0), 0);    // 無音
-        assert_eq!(out_to_tl(99), 254); // 最大
+        assert_eq!(out_to_tl(99), 254); // 最大（キャリア用）
         assert!(out_to_tl(50) > 0 && out_to_tl(50) < 254);
+    }
+
+    #[test]
+    fn out_to_tl_mod_caps_at_200() {
+        assert_eq!(out_to_tl_mod(0), 0);
+        assert_eq!(out_to_tl_mod(99), 200);
+        assert!(out_to_tl_mod(50) > 0 && out_to_tl_mod(50) < 200);
     }
 
     #[test]
@@ -261,10 +278,10 @@ mod tests {
     }
 
     #[test]
-    fn kvs_modulator_maps_255_at_max() {
+    fn kvs_modulator_maps_70_at_max() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
         let p = convert_op(&op, false);
-        assert_eq!(p.velocity_sensitivity, 255);
+        assert_eq!(p.velocity_sensitivity, 70);
     }
 
     #[test]
