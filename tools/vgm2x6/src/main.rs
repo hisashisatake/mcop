@@ -3,10 +3,16 @@
 //! 使い方:
 //! ```text
 //! vgm2x6 <input.vgz|.vgm> [--out <dir>] [--out-bank <file>] [--out-midi <file>] [--bank N]
+//!        [--out-wav <file>] [--wav] [--gain <factor>] [--dump-pitch]
 //! ```
 //! - `--out <dir>`: 出力ディレクトリを指定（ファイル名は入力ステム名を使用）
-//! - `--out-bank` / `--out-midi`: 個別ファイルパスを明示指定（--out より優先）
-//! - 何も指定しない場合: カレントディレクトリに <stem>.38x6 / <stem>.mid を出力
+//! - `--out-bank` / `--out-midi` / `--out-wav`: 個別ファイルパスを明示指定（--out より優先）
+//! - WAV非指定時のみ: カレント（または--out）ディレクトリに <stem>.38x6 / <stem>.mid を出力
+//! - `--wav`: <stem>.wav のみを出力する（.mid/.38x6は出さない排他モード。
+//!   DAW/VST/SMFを経由せず ym38x6-core で直接レンダリング）
+//! - `--out-wav <file>`: WAV出力パスを明示指定（同じく.wavのみ排他出力）
+//! - `--gain <factor>`: WAV書き出し前の出力レベル倍率（クリップ対策、既定1.0）
+//! - `--dump-pitch`: ピッチ二重変換の比較CSVを標準出力へ出す（音程デバッグ用）
 
 mod opm;
 mod patch;
@@ -32,7 +38,7 @@ fn main() -> ExitCode {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
                 "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
-                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--wav <file>] [--gain <factor>]"
+                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>]"
             );
             ExitCode::FAILURE
         }
@@ -56,7 +62,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut out_midi: Option<PathBuf> = None;
     let mut bank: u16 = 1;
     let mut dump_pitch = false;
-    let mut wav: Option<PathBuf> = None;
+    let mut out_wav: Option<PathBuf> = None;
+    let mut wav_flag = false;
     let mut gain: f32 = 1.0;
     let mut i = 0;
     while i < args.len() {
@@ -65,11 +72,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 dump_pitch = true;
                 i += 1;
             }
-            "--wav" => {
-                wav = Some(PathBuf::from(
-                    args.get(i + 1).ok_or("--wav に値がありません")?,
+            "--out-wav" => {
+                out_wav = Some(PathBuf::from(
+                    args.get(i + 1).ok_or("--out-wav に値がありません")?,
                 ));
                 i += 2;
+            }
+            "--wav" => {
+                wav_flag = true;
+                i += 1;
             }
             "--gain" => {
                 let v = args.get(i + 1).ok_or("--gain に値がありません")?;
@@ -111,6 +122,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let base_dir = out_dir.as_deref().unwrap_or(Path::new("."));
     let out_bank = out_bank.unwrap_or_else(|| base_dir.join(format!("{stem}.38x6")));
     let out_midi = out_midi.unwrap_or_else(|| base_dir.join(format!("{stem}.mid")));
+    // WAVは要求時のみ出力する。--out-wav（明示パス）が最優先、なければ--wavフラグで
+    // base_dir/<stem>.wav。どちらも無ければNone（WAV出力なし）。
+    let wav = out_wav.or_else(|| {
+        wav_flag.then(|| base_dir.join(format!("{stem}.wav")))
+    });
 
     Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain })
 }
@@ -381,8 +397,8 @@ fn run(args: &[String]) -> Result<(), String> {
         return dump_pitch(&data, header.data_start);
     }
 
-    // --wav: DAW/VST/SMFを一切経由せず、ym38x6-coreで直接演奏をWAVへ書き出す。
-    // 原曲VGZと聴き比べることで、変換器＋エンジンが正しい音程を出せるかを切り分ける。
+    // --wav/--out-wav: WAVのみを排他出力する（.mid/.38x6は出さない）。
+    // DAW/VST/SMFを経由せず ym38x6-core で直接レンダリングし、原曲VGZとの聴き比べに使う。
     if let Some(wav_path) = &args.wav {
         return render_wav(&data, header.data_start, wav_path, args.gain);
     }
