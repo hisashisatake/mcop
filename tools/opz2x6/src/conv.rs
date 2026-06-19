@@ -38,9 +38,9 @@ fn sl_to_x6(reg: u8) -> u8 {
 /// TX81Z DET (0-6, 3=中心) → 38x6 dt1（中心128）。
 fn det_to_x6(det: u8) -> u8 {
     // DET 3=無デチューン → OPM DT1=0（+0¢）
-    // DET 4,5,6 = 正方向 → DT1=1,2,3
-    // DET 2,1,0 = 負方向 → DT1=7,6,5
-    const DT1_FROM_DET: [u8; 7] = [5, 6, 7, 0, 1, 2, 3];
+    // DET 4,5,6 = 正方向（増大）→ DT1=1,2,3
+    // DET 0,1,2 = 負方向（増大）→ DT1=7,6,5（DET 0が最強）
+    const DT1_FROM_DET: [u8; 7] = [7, 6, 5, 0, 1, 2, 3];
     let dt1 = DT1_FROM_DET[det.min(6) as usize];
     const DT1_TO_X6: [u8; 8] = [128, 131, 134, 136, 128, 125, 122, 120];
     DT1_TO_X6[dt1 as usize]
@@ -151,7 +151,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
         am_enable: op.ame,
         // キャリアは velocity_sensitivity=0（38x6の「velocity=音量」設計を維持）
         // モジュレーターは KVS を写像: KVS(0-7) → 0..255
-        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 255 / 7 },
+        velocity_sensitivity: if is_carrier { 0 } else { (op.kvs.min(7) as u16 * 255 / 7) as u8 },
         waveform: op.ow.min(7),
         op_fine_tune,
     }
