@@ -225,6 +225,7 @@ pub(crate) fn create_editor(
                                     set!(op_p.ame, op.am_enable);
                                     set!(op_p.vel_sens, op.velocity_sensitivity as i32);
                                     set!(op_p.op_fine_tune, op.op_fine_tune as i32);
+                                    set!(op_p.waveform, op.waveform as i32);
                                 }
                             }
                         }
@@ -278,6 +279,7 @@ pub(crate) fn create_editor(
                             knob(ui, setter, &op.ksr, "KSR");
                             knob(ui, setter, &op.vel_sens, "VEL");
                             knob(ui, setter, &op.op_fine_tune, "FINE");
+                            knob(ui, setter, &op.waveform, "WAVE");
                             let mut am = op.ame.modulated_plain_value();
                             if ui.checkbox(&mut am, "AM").changed() {
                                 setter.begin_set_parameter(&op.ame);

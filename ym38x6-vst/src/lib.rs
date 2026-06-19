@@ -34,11 +34,13 @@ struct Ym38x6Plugin {
     // Algorithm：NRPN(0,9)に加えてnice-plugのチャンネル単位パラメーターとしても公開する
     // （last_algorithmで差分検知、process()参照）。
     algorithm: u8,
-    // NRPN専用パラメーター（DAWオートメーション非公開、3.3.4でNRPN(0,10)〜(0,15)から配線）。
-    // デフォルト値はChannelParams::default()/OperatorParams::default()に合わせる。
+    // NRPN専用パラメーター（DAWオートメーション非公開）。
     filter_type: u8,
     filter_self_oscillation: bool,
+    // operator_waveformsはDAWパラメーター（params.operators[i].waveform）との二重管理。
+    // DAWオートメーション変化時はprocess()内の差分検知で上書き、NRPN(0,10)〜(0,13)は直接書き込む。
     operator_waveforms: [u8; 4],
+    last_operator_waveforms: [u8; 4],
 
     // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN(0,0)/(0,1)）の状態
     lfo_cc1: u8,    // CC1 Modulation Wheel（Depth加算分）
@@ -110,7 +112,7 @@ struct Ym38x6Plugin {
 
     // GUIプリセット選択時のNRPN専用パラメーター転送用（egui→processスレッド）。
     // DAW公開パラメーターはParamSetterで書き戻し済みのため、ここではfilter_type/
-    // filter_self_oscillation/operator_waveformsの3種のみ運ぶ。
+    // filter_self_oscillationの2種のみ運ぶ（waveformはDAWパラメーターなのでParamSetter経由）。
     pending_gui_preset: Arc<Mutex<Option<Ym38x6Patch>>>,
 
     // GUIエディターのウィンドウサイズ状態（editor()で使い回す）
@@ -138,6 +140,7 @@ impl Default for Ym38x6Plugin {
             filter_type: 0,
             filter_self_oscillation: true,
             operator_waveforms: [0; 4],
+            last_operator_waveforms: [0; 4],
             lfo_cc1: 0,
             lfo_rpn0_5: 64,
             lfo_destination: Ym38x6LfoDestination::Pitch,
@@ -483,6 +486,15 @@ impl Plugin for Ym38x6Plugin {
             self.last_algorithm = algorithm;
         }
 
+        // Waveform Op0〜3：algorithmと同じ差分検知方式。NRPN(0,10)〜(0,13)直接書き込みと共存する。
+        for i in 0..4 {
+            let wf = self.params.operators[i].waveform.value() as u8;
+            if wf != self.last_operator_waveforms[i] {
+                self.operator_waveforms[i] = wf;
+                self.last_operator_waveforms[i] = wf;
+            }
+        }
+
         // GUIプリセット選択のNRPN専用パラメーター（filter_type/filter_self_oscillation/
         // operator_waveforms）を反映し、CLAPのprogram_patchをクリアする。
         // DAW公開パラメーターはeditor()内でParamSetter経由で書き戻し済み。
@@ -490,7 +502,6 @@ impl Plugin for Ym38x6Plugin {
             if let Some(patch) = pending.take() {
                 self.filter_type = patch.channel.filter_type;
                 self.filter_self_oscillation = patch.channel.filter_self_oscillation;
-                self.operator_waveforms = patch.operators.map(|op| op.waveform);
                 self.program_patch = [None; 16];
             }
         }

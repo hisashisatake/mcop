@@ -7,7 +7,7 @@ pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
 pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
 pub(crate) const DEFAULT_ALGORITHM: u8 = 0;
 
-/// オペレーター単位パラメーター一式（12個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
+/// オペレーター単位パラメーター一式（13個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
 /// `#[nested(array, ...)]`展開し、各IDに`_1`〜`_4`が付与される（DAW上は「Operator 1」〜「Operator 4」）。
 #[derive(Params)]
 pub(crate) struct OperatorVstParams {
@@ -35,6 +35,8 @@ pub(crate) struct OperatorVstParams {
     pub vel_sens: IntParam,
     #[id = "op_fine"]
     pub op_fine_tune: IntParam,
+    #[id = "wf"]
+    pub waveform: IntParam,
 }
 
 impl Default for OperatorVstParams {
@@ -58,6 +60,7 @@ impl Default for OperatorVstParams {
             vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（±1オクターブ）。DT1で足りない広いデチューン用
             op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
+            waveform: IntParam::new("Waveform", 0, IntRange::Linear { min: 0, max: 255 }),
         }
     }
 }
