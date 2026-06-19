@@ -6,7 +6,6 @@ pub(crate) const DEFAULT_CHORUS_MOD_DEPTH: u8 = 128;
 pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
 pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
 pub(crate) const DEFAULT_ALGORITHM: u8 = 0;
-pub(crate) const DEFAULT_PITCH_BEND_RANGE: u8 = 2;
 
 /// オペレーター単位パラメーター一式（12個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
 /// `#[nested(array, ...)]`展開し、各IDに`_1`〜`_4`が付与される（DAW上は「Operator 1」〜「Operator 4」）。
@@ -111,11 +110,6 @@ pub(crate) struct Ym38x6Params {
     #[nested(array, group = "Operator")]
     pub operators: [OperatorVstParams; 4],
 
-    // ---- グローバル単位 ----
-    /// ピッチベンド感度（半音）。RPN(0,0)でも設定可能（2シャドウ方式）。
-    #[id = "pb_range"]
-    pub pitch_bend_range: IntParam,
-
     // ---- マスター単位（5個、MasterEffectsの5パラメーターに対応） ----
     #[id = "rev_time"]
     pub reverb_time: IntParam,
@@ -153,7 +147,6 @@ impl Default for Ym38x6Params {
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
             operators: Default::default(),
-            pitch_bend_range: IntParam::new("Pitch Bend Range", DEFAULT_PITCH_BEND_RANGE as i32, IntRange::Linear { min: 1, max: 24 }),
             reverb_time: IntParam::new("Reverb Time", DEFAULT_REVERB_TIME as i32, IntRange::Linear { min: 0, max: 255 }),
             chorus_mod_rate: IntParam::new("Chorus Mod Rate", DEFAULT_CHORUS_MOD_RATE as i32, IntRange::Linear { min: 0, max: 255 }),
             chorus_mod_depth: IntParam::new("Chorus Mod Depth", DEFAULT_CHORUS_MOD_DEPTH as i32, IntRange::Linear { min: 0, max: 255 }),
