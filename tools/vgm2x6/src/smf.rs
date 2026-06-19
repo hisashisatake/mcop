@@ -63,13 +63,12 @@ impl SmfBuilder {
     }
 
     /// RPN 0（ピッチベンド感度）を設定する。`semitones` は感度の半音数。
+    /// RPN null（CC101/100=127）は送らない：同一tickに重複CCがあるとDominoが最後の値のみ
+    /// 送信し CC6=semitones が届かないため。vgm2x6 SMF は CC6 を他に使わないので問題ない。
     pub fn set_pitch_bend_sensitivity(&mut self, track: usize, ch: u8, semitones: u8) {
-        self.add_cc(track, 0, ch, 101, 0);   // RPN MSB
-        self.add_cc(track, 0, ch, 100, 0);   // RPN LSB
-        self.add_cc(track, 0, ch, 6,   semitones); // Data Entry MSB
-        self.add_cc(track, 0, ch, 38,  0);   // Data Entry LSB
-        self.add_cc(track, 0, ch, 101, 127); // RPN null
-        self.add_cc(track, 0, ch, 100, 127); // RPN null
+        self.add_cc(track, 0, ch, 101, 0);       // RPN MSB = 0
+        self.add_cc(track, 0, ch, 100, 0);       // RPN LSB = 0
+        self.add_cc(track, 0, ch, 6, semitones); // Data Entry MSB = semitones
     }
 
     fn add_meta(&mut self, track: usize, tick: u64, meta_type: u8, data: &[u8]) {

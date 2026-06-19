@@ -6,7 +6,8 @@ mod params;
 use midi::{apply_at_modulation, cc_to_u8, cc_to_u7, AtDestination, RpnSelection};
 use params::{
     Ym38x6Params, DEFAULT_ALGORITHM, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH,
-    DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_REVERB_TIME,
+    DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_PITCH_BEND_RANGE,
+    DEFAULT_REVERB_TIME,
 };
 
 use nice_plug::prelude::*;
@@ -101,9 +102,11 @@ struct Ym38x6Plugin {
     // ベンドは set_pitch_bend_group で同一MIDIチャンネルの全ノートへ一括適用する
     // （和音が一緒に滑らかに上下する。VGM/OPMのソフトビブラート＝チャンネル全体のピッチ移動に一致）。
     channel_bend_cents: [f32; 16], // 各MIDIチャンネルの現在のベンド量（セント）
-    // ピッチベンド感度（半音）。RPN(0,0)で設定。デフォルト±2半音。
-    // 現状は全MIDIチャンネル共通（RPN処理がチャンネル非依存のため）。vgm2x6 SMFは全chに同値を送る。
+    // ピッチベンド感度（半音）。DAWパラメーター(params.pitch_bend_range)とRPN(0,0)の両方から
+    // 設定可能（2シャドウ方式: last_pitch_bend_range_param でDAW側差分検知）。
+    // 全MIDIチャンネル共通。vgm2x6 SMFは全chに同値を送る。
     pitch_bend_range: f32,
+    last_pitch_bend_range_param: u8,
 
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
@@ -172,7 +175,8 @@ impl Default for Ym38x6Plugin {
             bank_select_lsb: [0; 16],
             program_patch: [None; 16],
             channel_bend_cents: [0.0; 16],
-            pitch_bend_range: 2.0,
+            pitch_bend_range: DEFAULT_PITCH_BEND_RANGE as f32,
+            last_pitch_bend_range_param: DEFAULT_PITCH_BEND_RANGE,
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
             egui_state: EguiState::from_size(800, 680),
@@ -583,6 +587,14 @@ impl Plugin for Ym38x6Plugin {
         if chorus_send_to_reverb != self.last_chorus_send_to_reverb {
             self.effects.set_chorus_send_to_reverb(chorus_send_to_reverb);
             self.last_chorus_send_to_reverb = chorus_send_to_reverb;
+        }
+
+        // ピッチベンド感度：DAWパラメーターとRPN(0,0)の両方から設定され得るため、
+        // 2シャドウ方式で差分検知する（algorithmと同型）。
+        let pb_range_param = self.params.pitch_bend_range.value() as u8;
+        if pb_range_param != self.last_pitch_bend_range_param {
+            self.pitch_bend_range = pb_range_param as f32;
+            self.last_pitch_bend_range_param = pb_range_param;
         }
 
         while let Some(event) = context.next_event() {
