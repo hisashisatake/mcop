@@ -13,3 +13,4 @@ path = "src/main.rs"
 
 [dependencies]
 ym38x6-core = { path = "../../ym38x6-core" }
+smf2wav = { path = "../smf2wav" }

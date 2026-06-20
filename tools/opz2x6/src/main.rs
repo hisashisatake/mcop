@@ -3,10 +3,10 @@
 //! 使い方:
 //! ```text
 //! opz2x6 <input.syx> [output_dir] [--bank <N>] [--split] [--wav]
-//!        [--on <秒>] [--octave <N>] [--note <音階>] [--voice <N>]
+//!        [--on <秒>] [--octave <N>] [--note <音階>] [--voice <N>] [--mod-cap <N>] [--fb <N>]
 //! ```
 //! - `output_dir` 省略時は入力ファイルと同じディレクトリに出力する。
-//! - `--bank` の既定は 1。
+//! - `--bank` の既定は 0。
 //! - `--split` を指定すると音色ごとに個別ファイル（Programs形式）を出力する。
 //!   省略時は全音色を1ファイル（Presets形式）にまとめる。
 //! - `--wav` を指定すると `<output_dir>/wav/<NNN>_<name>.wav` へ試聴用WAVを出力する。
@@ -14,6 +14,14 @@
 //! - `--octave <N>` でオクターブ（既定 4）を指定する。
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
 //! - `--voice <N>` を指定すると WAV 出力をその音色番号（0始まり）1件のみに絞る。
+//! - `--mod-cap <N>` でモジュレーター TL 天井（既定 200）を上書きする。
+//!   大きいほど変調が深く明るい（254 でノイズ寄り）。音質追い込み用。
+//! - `--fb <N>` でチャンネルフィードバック（0-255）を全音色一律で上書きする。
+//!   省略時は .syx 由来。切り分け診断用（`--fb 0` でフィードバック無効）。
+//! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
+//!   省略時は .syx 由来。`--ksr 0` で高音のエンベロープ加速を弱める。
+//! - `--smf <song.mid>` を指定すると、変換した音色バンクで SMF を ym38x6-core 再生し、
+//!   `<output_dir>/smf/<midistem>.wav` へ出力する（プログラム番号＝ボイス番号）。
 
 use opz2x6::conv;
 use opz2x6::parse;
@@ -31,7 +39,7 @@ fn main() -> ExitCode {
                 "usage: opz2x6 <input.syx> [output_dir] [--bank <N>] [--split] [--wav]"
             );
             eprintln!(
-                "       [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>] [--voice <N>]"
+                "       [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>] [--voice <N>] [--mod-cap <N>] [--fb <N>]"
             );
             ExitCode::FAILURE
         }
@@ -58,6 +66,8 @@ struct Args {
     wav: bool,
     wav_cfg: WavConfig,
     voice_filter: Option<usize>,
+    opts: conv::ConvOptions,
+    smf: Option<PathBuf>,
 }
 
 fn note_name_to_semitone(note: &str) -> Result<i32, String> {
@@ -76,13 +86,17 @@ fn note_to_freq(octave: i32, note: &str) -> Result<f32, String> {
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut positional: Vec<&str> = Vec::new();
-    let mut bank: u16 = 1;
+    let mut bank: u16 = 0;
     let mut split = false;
     let mut wav = false;
     let mut on_secs: f32 = 2.0;
     let mut octave: i32 = 4;
     let mut note = "C".to_string();
     let mut voice_filter: Option<usize> = None;
+    let mut mod_cap: u8 = opz2x6::conv::DEFAULT_MOD_TL_CAP;
+    let mut fb_override: Option<u8> = None;
+    let mut ksr_override: Option<u8> = None;
+    let mut smf: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -115,6 +129,26 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 voice_filter = Some(v.parse::<usize>().map_err(|_| format!("--voice の値が不正: {v}"))?);
                 i += 2;
             }
+            "--mod-cap" => {
+                let v = args.get(i + 1).ok_or("--mod-cap に値がありません")?;
+                mod_cap = v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?;
+                i += 2;
+            }
+            "--fb" => {
+                let v = args.get(i + 1).ok_or("--fb に値がありません")?;
+                fb_override = Some(v.parse::<u8>().map_err(|_| format!("--fb の値が不正(0-255): {v}"))?);
+                i += 2;
+            }
+            "--ksr" => {
+                let v = args.get(i + 1).ok_or("--ksr に値がありません")?;
+                ksr_override = Some(v.parse::<u8>().map_err(|_| format!("--ksr の値が不正(0-255): {v}"))?);
+                i += 2;
+            }
+            "--smf" => {
+                let v = args.get(i + 1).ok_or("--smf に値がありません")?;
+                smf = Some(PathBuf::from(v));
+                i += 2;
+            }
             _ => { positional.push(&args[i]); i += 1; }
         }
     }
@@ -132,6 +166,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         input, output_dir, bank, split, wav,
         wav_cfg: WavConfig { on_secs, off_secs: 1.5, frequency },
         voice_filter,
+        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override },
+        smf,
     })
 }
 
@@ -162,13 +198,17 @@ fn run(args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&args.output_dir)
         .map_err(|e| format!("出力ディレクトリ作成に失敗: {e}"))?;
 
+    if let Some(smf_path) = &args.smf {
+        render_smf_to_wav(&voices, smf_path, &args.output_dir, args.opts)?;
+    }
+
     if args.wav {
-        render_wavs(&voices, &args.output_dir, &args.wav_cfg, args.voice_filter)?;
+        render_wavs(&voices, &args.output_dir, &args.wav_cfg, args.voice_filter, args.opts)?;
     }
 
     if args.split {
         for voice in &voices {
-            let entry = conv::voice_to_entry(voice);
+            let entry = conv::voice_to_entry_opts(voice, args.opts);
             let file = ym38x6_core::PresetFile::Programs {
                 bank: args.bank,
                 programs: vec![entry],
@@ -187,7 +227,7 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("書き出し: {}", out_path.display());
         }
     } else {
-        let presets: Vec<_> = voices.iter().map(|v| conv::voice_to_entry(v)).collect();
+        let presets: Vec<_> = voices.iter().map(|v| conv::voice_to_entry_opts(v, args.opts)).collect();
         let file = ym38x6_core::PresetFile::Presets {
             bank: args.bank,
             presets,
@@ -213,6 +253,7 @@ fn render_wavs(
     output_dir: &Path,
     cfg: &WavConfig,
     voice_filter: Option<usize>,
+    opts: conv::ConvOptions,
 ) -> Result<(), String> {
     use ym38x6_core::{SoundEngine, Ym38x6Engine};
     const SR: f32 = 44_100.0;
@@ -232,7 +273,7 @@ fn render_wavs(
     };
 
     for (idx, voice) in &targets {
-        let patch = conv::voice_to_patch(voice);
+        let patch = conv::voice_to_patch_opts(voice, opts);
         let mut engine = Ym38x6Engine::new(SR);
         engine.note_on_with_velocity(0, cfg.frequency, 80, patch);
 
@@ -259,33 +300,38 @@ fn render_wavs(
         }
 
         let path = wav_dir.join(&filename);
-        write_wav_mono16(&path, &buf, SR as u32)
+        smf2wav::write_wav_mono16(&path, &buf, SR as u32)
             .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", path.display()))?;
     }
     println!("WAV 書き出し: {} に {} 音色", wav_dir.display(), targets.len());
     Ok(())
 }
 
-/// mono / 16bit PCM の最小 WAV ライター。
-fn write_wav_mono16(path: &Path, samples: &[f32], sr: u32) -> std::io::Result<()> {
-    let data_len = (samples.len() * 2) as u32;
-    let mut out: Vec<u8> = Vec::with_capacity(44 + data_len as usize);
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());       // PCM
-    out.extend_from_slice(&1u16.to_le_bytes());       // mono
-    out.extend_from_slice(&sr.to_le_bytes());
-    out.extend_from_slice(&(sr * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
-    for &s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    std::fs::write(path, out)
+/// SMF を変換済み音色バンクで再生し、`<output_dir>/smf/<midistem>.wav` へ出力する。
+/// プログラム番号 = ボイス番号で音色を選ぶ（smf2wav に委譲）。
+fn render_smf_to_wav(
+    voices: &[parse::OpzVoice],
+    smf_path: &Path,
+    output_dir: &Path,
+    opts: conv::ConvOptions,
+) -> Result<(), String> {
+    const SR: f32 = 44_100.0;
+    let smf_data = std::fs::read(smf_path)
+        .map_err(|e| format!("{}: {e}", smf_path.display()))?;
+    let patches: Vec<_> = voices.iter().map(|v| conv::voice_to_patch_opts(v, opts)).collect();
+    let bank = smf2wav::PatchBank::from_patches(&patches)?;
+
+    let mut buf = smf2wav::render_smf(&smf_data, &bank, SR, 2.0)?;
+    smf2wav::normalize_peak(&mut buf, 0.5);
+
+    let smf_dir = output_dir.join("smf");
+    std::fs::create_dir_all(&smf_dir)
+        .map_err(|e| format!("smf ディレクトリ作成に失敗: {e}"))?;
+    let stem = smf_path.file_stem().and_then(|s| s.to_str()).unwrap_or("song");
+    let safe = parse::sanitize_filename(stem);
+    let out_path = smf_dir.join(format!("{}.wav", if safe.is_empty() { "song".into() } else { safe }));
+    smf2wav::write_wav_mono16(&out_path, &buf, SR as u32)
+        .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", out_path.display()))?;
+    println!("SMF レンダリング: {} ({:.1}秒)", out_path.display(), buf.len() as f32 / SR);
+    Ok(())
 }

@@ -29,13 +29,17 @@ fn out_to_tl(out: u8) -> u8 {
     (out.min(99) as f32 / 99.0 * 254.0).round() as u8
 }
 
-/// OUT → 38x6 TL（モジュレーター用、上限 200）。
+/// モジュレーター TL 天井の既定値。
 ///
-/// エンジンの FM_MODULATION_INDEX_SCALE=4.0 により、TL=254 のモジュレーターは
-/// 変調深度 β≈24rad（ノイズ）になる。TL=200 に抑えることで β≈2.4rad（音楽的）。
-/// キャリアは音量に直結するため out_to_tl を使う。
-fn out_to_tl_mod(out: u8) -> u8 {
-    (out.min(99) as f32 / 99.0 * 200.0).round() as u8
+/// エンジンの `modulation` は位相サイクル単位（1.0=1周=2πrad）で、変調深度は
+/// β[rad] = tl_to_gain(tl) × FM_MODULATION_INDEX_SCALE(4.0) × 2π。
+/// TL=254 → β≈24rad（ノイズ）、TL=200 → β≈2.4rad（音楽的）。
+/// キャリアは音量に直結するため天井を設けず out_to_tl を使う。
+pub const DEFAULT_MOD_TL_CAP: u8 = 200;
+
+/// OUT → 38x6 TL（モジュレーター用、上限 `cap`）。
+fn out_to_tl_mod(out: u8, cap: u8) -> u8 {
+    (out.min(99) as f32 / 99.0 * cap as f32).round() as u8
 }
 
 /// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L（opm2x6 と同実装）。
@@ -140,7 +144,8 @@ fn fb_to_x6(fb: u8) -> u8 {
 // オペレーター変換
 // ---------------------------------------------------------------------------
 
-fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams {
+fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions) -> OperatorParams {
+    let mod_tl_cap = opts.mod_tl_cap;
     let (mul, op_fine_tune) = freq_to_mul_fine(op.freq);
 
     // EGT=1 のとき D2R を強制的に高値にしてリリース挙動を作る
@@ -148,7 +153,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
     OperatorParams {
-        tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out) },
+        tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out, mod_tl_cap) },
         ar: ar_to_x6(op.ar, op.rs),
         d1r: opm_rate_to_x6(op.d1r, op.rs),
         d2r: opm_rate_to_x6(d2r, op.rs),
@@ -156,7 +161,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
         rr: rr_to_x6(op.rr, op.rs),
         mul,
         dt1: det_to_x6(op.det),
-        ksr: op.rs.min(3) * 85,
+        ksr: opts.ksr_override.unwrap_or(op.rs.min(3) * 85),
         am_enable: op.ame,
         // キャリアは velocity_sensitivity=0（38x6の「velocity=音量」設計を維持）
         // モジュレーターは KVS を写像: KVS(0-7) → 0..70
@@ -171,8 +176,27 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool) -> OperatorParams 
 // ボイス変換
 // ---------------------------------------------------------------------------
 
-/// OpzVoice → Ym38x6Patch。
-pub fn voice_to_patch(voice: &OpzVoice) -> Ym38x6Patch {
+/// 変換オプション（音質追い込み用の上書き群）。
+#[derive(Clone, Copy, Debug)]
+pub struct ConvOptions {
+    /// モジュレーター TL 天井。
+    pub mod_tl_cap: u8,
+    /// チャンネルフィードバックの上書き（`Some(n)` で 38x6 feedback を直接指定、`None` で .syx 由来）。
+    /// 切り分け診断用：`Some(0)` でフィードバックを無効化できる。
+    pub fb_override: Option<u8>,
+    /// 全オペレーターの KSR（鍵盤レート追従）上書き（`None` で .syx 由来）。
+    /// 切り分け診断用：`Some(0)` で高音のエンベロープ加速を弱められる。
+    pub ksr_override: Option<u8>,
+}
+
+impl Default for ConvOptions {
+    fn default() -> Self {
+        Self { mod_tl_cap: DEFAULT_MOD_TL_CAP, fb_override: None, ksr_override: None }
+    }
+}
+
+/// OpzVoice → Ym38x6Patch（オプション指定）。
+pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     let alg = voice.algorithm.min(7) as usize;
     let carriers = CARRIERS[alg];
 
@@ -181,14 +205,14 @@ pub fn voice_to_patch(voice: &OpzVoice) -> Ym38x6Patch {
     let operators = std::array::from_fn(|i| {
         let op = &voice.ops[3 - i]; // operators[i] ← VCED ops[3-i]
         let is_carrier = carriers.contains(&i);
-        convert_op(op, is_carrier)
+        convert_op(op, is_carrier, opts)
     });
 
     Ym38x6Patch {
         operators,
         channel: ChannelParams {
             algorithm: alg as u8,
-            feedback: fb_to_x6(voice.feedback),
+            feedback: opts.fb_override.unwrap_or_else(|| fb_to_x6(voice.feedback)),
             tone_lfo_freq: (voice.lfo_spd as f32 * 255.0 / 99.0).round() as u8,
             tone_lfo_pmd: lfo_depth_to_x6(voice.pmd),
             tone_lfo_amd: lfo_depth_to_x6(voice.amd),
@@ -200,13 +224,23 @@ pub fn voice_to_patch(voice: &OpzVoice) -> Ym38x6Patch {
     }
 }
 
-/// OpzVoice → PresetEntry（ファイル出力用）。
-pub fn voice_to_entry(voice: &OpzVoice) -> PresetEntry {
+/// OpzVoice → Ym38x6Patch（既定オプション）。
+pub fn voice_to_patch(voice: &OpzVoice) -> Ym38x6Patch {
+    voice_to_patch_opts(voice, ConvOptions::default())
+}
+
+/// OpzVoice → PresetEntry（オプション指定）。
+pub fn voice_to_entry_opts(voice: &OpzVoice, opts: ConvOptions) -> PresetEntry {
     PresetEntry {
         program: (voice.number % 128) as u8,
         name: voice.name.clone(),
-        patch: voice_to_patch(voice),
+        patch: voice_to_patch_opts(voice, opts),
     }
+}
+
+/// OpzVoice → PresetEntry（既定オプション）。
+pub fn voice_to_entry(voice: &OpzVoice) -> PresetEntry {
+    voice_to_entry_opts(voice, ConvOptions::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -226,10 +260,13 @@ mod tests {
     }
 
     #[test]
-    fn out_to_tl_mod_caps_at_200() {
-        assert_eq!(out_to_tl_mod(0), 0);
-        assert_eq!(out_to_tl_mod(99), 200);
-        assert!(out_to_tl_mod(50) > 0 && out_to_tl_mod(50) < 200);
+    fn out_to_tl_mod_caps_at_given_cap() {
+        assert_eq!(out_to_tl_mod(0, 200), 0);
+        assert_eq!(out_to_tl_mod(99, 200), 200);
+        assert!(out_to_tl_mod(50, 200) > 0 && out_to_tl_mod(50, 200) < 200);
+        // 天井を変えると最大値も追従する
+        assert_eq!(out_to_tl_mod(99, 254), 254);
+        assert_eq!(out_to_tl_mod(99, 180), 180);
     }
 
     #[test]
@@ -273,42 +310,42 @@ mod tests {
     #[test]
     fn kvs_carrier_is_zero() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true);
+        let p = convert_op(&op, true, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 0, "carrier velocity_sensitivity must be 0");
     }
 
     #[test]
     fn kvs_modulator_maps_70_at_max() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false);
+        let p = convert_op(&op, false, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 70);
     }
 
     #[test]
     fn kvs_modulator_zero_stays_zero() {
         let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false);
+        let p = convert_op(&op, false, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 0);
     }
 
     #[test]
     fn egt1_forces_d2r_nonzero() {
         let op = OpzOpData { d2r: 0, egt: 1, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true);
+        let p = convert_op(&op, true, ConvOptions::default());
         assert!(p.d2r > 0, "EGT=1 with D2R=0 should force d2r > 0");
     }
 
     #[test]
     fn egt0_d2r_zero_stays_zero() {
         let op = OpzOpData { d2r: 0, egt: 0, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true);
+        let p = convert_op(&op, true, ConvOptions::default());
         assert_eq!(p.d2r, 0, "EGT=0 D2R=0 → sustain型（d2r=0のまま）");
     }
 
     #[test]
     fn waveform_direct_copy() {
         let op = OpzOpData { ow: 5, freq: 4, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false);
+        let p = convert_op(&op, false, ConvOptions::default());
         assert_eq!(p.waveform, 5);
     }
 
