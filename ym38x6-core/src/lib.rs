@@ -8,12 +8,57 @@ pub mod waveform;
 
 use std::collections::HashMap;
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use algorithm::ALGORITHMS;
 use filter::{cutoff_to_hz, effective_cutoff, FilterEnvelope, FilterType, Svf};
 use mapping::{
-    feedback_to_scale, frequency_to_note, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
+    feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
+    FM_MODULATION_INDEX_SCALE,
 };
 use operator::Operator;
+
+// ---------------------------------------------------------------------------
+// EXPERIMENT(fb-2sample): フィードバック帰還方式の実験スイッチ（デフォルト=現状の1サンプル帰還）
+//
+// 実機OPM/OPN/OPZは feedback 経路を (out[n-1]+out[n-2])/2 の2サンプル平均で帰還する。
+// 38x6は従来 out[n-1] のみの1サンプル帰還で、その弱さを feedback_to_scale の max=1.8 で
+// 補正してきた。OPZ音色の倍音構造（H3ディップ/H4-6棚）を実機に近づけられるか測定するため、
+// 2サンプル平均経路と feedback_to_scale 最大値の override をプロセスグローバルで切替可能にする。
+// production 既定は false / max=1.8 のままで挙動は不変。
+//
+// 測定結果(2026-06-20): 2サンプル平均は音色帯(基音415Hz)で1サンプルとほぼ完全一致し、OPZ
+// 忠実度を上げる効果は無かった（高周波しか効かない）。本足場は高周波/将来の feedback 調査用に
+// 維持する。一括除去する場合は "EXPERIMENT(fb-2sample)" で grep すること。
+// ---------------------------------------------------------------------------
+
+/// true で feedback 経路を (out[n-1]+out[n-2])/2 の2サンプル平均にする（既定 false）。
+static FEEDBACK_TWO_SAMPLE: AtomicBool = AtomicBool::new(false);
+/// feedback_to_scale の最大値 override。f32 を to_bits で格納し 0 を「未設定（=1.8）」とする。
+static FEEDBACK_SCALE_MAX_BITS: AtomicU32 = AtomicU32::new(0);
+
+/// 実験用: feedback 帰還方式を 2サンプル平均にするか設定する。
+pub fn set_feedback_two_sample(enabled: bool) {
+    FEEDBACK_TWO_SAMPLE.store(enabled, Ordering::Relaxed);
+}
+
+/// 実験用: feedback_to_scale の最大値を override する。None で既定(1.8)へ戻す。
+pub fn set_feedback_scale_max(max: Option<f32>) {
+    let bits = match max {
+        Some(m) if m > 0.0 => m.to_bits(),
+        _ => 0,
+    };
+    FEEDBACK_SCALE_MAX_BITS.store(bits, Ordering::Relaxed);
+}
+
+fn current_feedback_scale_max() -> f32 {
+    let bits = FEEDBACK_SCALE_MAX_BITS.load(Ordering::Relaxed);
+    if bits == 0 {
+        1.8
+    } else {
+        f32::from_bits(bits)
+    }
+}
 // Ym38x6Patch::operators / set_operator_paramsの型として外部に公開する
 pub use operator::OperatorParams;
 pub use preset::{
@@ -131,6 +176,8 @@ struct Channel {
     channel_params: ChannelParams,
     /// フィードバックオペレーターの直前の出力（自己変調に使う）。
     feedback_buffer: f32,
+    /// EXPERIMENT(fb-2sample): 2サンプル平均帰還用の、さらに1つ前の出力 out[n-2]。
+    feedback_buffer2: f32,
     /// KSR計算用のノート番号（Note-On時の周波数から近似）。
     note: u8,
     /// OP単位キーオン/オフ（CC102〜105）でのリトリガー用に保持するNote-On時の周波数。
@@ -177,6 +224,7 @@ impl Channel {
             operators,
             channel_params: patch.channel,
             feedback_buffer: 0.0,
+            feedback_buffer2: 0.0,
             note,
             base_frequency: frequency,
             velocity,
@@ -320,13 +368,22 @@ impl Channel {
                 }
             }
             if op_idx == algo.feedback_op {
-                modulation +=
-                    self.feedback_buffer * feedback_to_scale(self.channel_params.feedback);
+                // EXPERIMENT(fb-2sample): 2サンプル平均帰還の切替（既定は1サンプル）。
+                let fb_source = if FEEDBACK_TWO_SAMPLE.load(Ordering::Relaxed) {
+                    // 実機OPM/OPN/OPZ準拠: 直近2サンプルの平均で帰還（帰還経路の1次ローパス）
+                    0.5 * (self.feedback_buffer + self.feedback_buffer2)
+                } else {
+                    self.feedback_buffer
+                };
+                let scale =
+                    feedback_to_scale_with_max(self.channel_params.feedback, current_feedback_scale_max());
+                modulation += fb_source * scale;
             }
             let wave = wave_table_for(wave_tables, self.operators[op_idx].params.waveform);
             let out = self.operators[op_idx].tick(sample_rate, wave, modulation, self.note);
             op_outputs[op_idx] = out;
             if op_idx == algo.feedback_op {
+                self.feedback_buffer2 = self.feedback_buffer;
                 self.feedback_buffer = out;
             }
         }

@@ -121,10 +121,16 @@ pub fn velocity_to_volume_gain(velocity: u8) -> f32 {
 /// 実機の2サンプル平均より自己変調の効きが弱く、0.5ではハイハット等のFBリッチな音色の
 /// ノイズ成分を再現できなかった。fmgen原音(@113 HI_HAT/@1/@77)と聴き比べてM=1.8に調整。
 pub fn feedback_to_scale(feedback: u8) -> f32 {
+    feedback_to_scale_with_max(feedback, 1.8)
+}
+
+/// [feedback_to_scale]の最大値を可変にした版（フィードバック帰還方式の実験・測定用）。
+/// 通常の発音は`feedback_to_scale`（max=1.8）を使う。
+pub fn feedback_to_scale_with_max(feedback: u8, max: f32) -> f32 {
     if feedback == 0 {
         return 0.0;
     }
-    1.8 * 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0))
+    max * 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0))
 }
 
 /// オペレーター間FM変調の深さスケール（固定の内部定数、暫定値）。

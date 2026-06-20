@@ -15,6 +15,8 @@
 //!   全chに掛けていたリバーブ（CC91 相当）を再現する診断用。0 のとき従来どおり完全ドライ。
 //! - `--reverb-type <0-7>` リバーブタイプ（既定 3=Hall1。0:Room1〜5:Plate,6:Delay,7:PanningDelay）。
 //! - `--reverb-time <N>` リバーブタイム（0-255、既定 128）。
+//! - `--fb-two-sample`（実験用 EXPERIMENT(fb-2sample)）feedback 帰還を実機準拠の2サンプル平均にする。
+//! - `--fb-scale-max <f>`（実験用 EXPERIMENT(fb-2sample)）feedback_to_scale の最大値を override（既定 1.8）。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,6 +45,10 @@ struct Args {
     tail_secs: f32,
     normalize: bool,
     reverb: ReverbConfig,
+    /// EXPERIMENT(fb-2sample): feedback を2サンプル平均帰還にする。
+    feedback_two_sample: bool,
+    /// EXPERIMENT(fb-2sample): feedback_to_scale 最大値 override（None=既定1.8）。
+    feedback_scale_max: Option<f32>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -51,6 +57,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut tail_secs: f32 = 2.0;
     let mut normalize = true;
     let mut reverb = ReverbConfig::default();
+    let mut feedback_two_sample = false;
+    let mut feedback_scale_max: Option<f32> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -93,6 +101,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 normalize = false;
                 i += 1;
             }
+            // EXPERIMENT(fb-2sample): feedback 帰還方式の測定用フラグ。
+            "--fb-two-sample" => {
+                feedback_two_sample = true;
+                i += 1;
+            }
+            "--fb-scale-max" => {
+                let v = args.get(i + 1).ok_or("--fb-scale-max に値がありません")?;
+                let m = v.parse::<f32>().map_err(|_| format!("--fb-scale-max の値が不正: {v}"))?;
+                if m <= 0.0 {
+                    return Err(format!("--fb-scale-max は正の値を指定してください: {v}"));
+                }
+                feedback_scale_max = Some(m);
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -110,7 +132,17 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         let stem = song.file_stem().and_then(|s| s.to_str()).unwrap_or("song");
         song.parent().unwrap_or(Path::new(".")).join(format!("{stem}.wav"))
     };
-    Ok(Args { bank, song, out, sample_rate, tail_secs, normalize, reverb })
+    Ok(Args {
+        bank,
+        song,
+        out,
+        sample_rate,
+        tail_secs,
+        normalize,
+        reverb,
+        feedback_two_sample,
+        feedback_scale_max,
+    })
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -121,6 +153,10 @@ fn run(args: &[String]) -> Result<(), String> {
     let file = PresetFile::from_json(&json)
         .map_err(|e| format!("{} のパースに失敗: {e}", args.bank.display()))?;
     let bank = PatchBank::from_preset_file(&file)?;
+
+    // EXPERIMENT(fb-2sample): フィードバック帰還方式の切替（プロセスグローバル、既定は1サンプル帰還）。
+    ym38x6_core::set_feedback_two_sample(args.feedback_two_sample);
+    ym38x6_core::set_feedback_scale_max(args.feedback_scale_max);
 
     let smf_data = std::fs::read(&args.song)
         .map_err(|e| format!("{}: {e}", args.song.display()))?;
