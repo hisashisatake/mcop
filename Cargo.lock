@@ -3240,6 +3240,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "opzref"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "opz2x6",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
