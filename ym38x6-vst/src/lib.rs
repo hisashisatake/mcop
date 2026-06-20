@@ -92,10 +92,10 @@ struct Ym38x6Plugin {
     operator_f_number_override: [u16; 4],   // 各Opの上書き値。初期値F_NUMBER_CENTER（上書きなし）
 
     // Bank Select（CC0=MSB, CC32=LSB）+ Program Change：MIDIチャンネルごとに管理。
-    // CC0/CC32/CC92/Program Changeはすべて論理MIDIチャンネル単位で作用する。
+    // CC0/CC32/CC102/Program Changeはすべて論理MIDIチャンネル単位で作用する。
     bank_select_msb: [u8; 16],           // CC0 per MIDI ch
     bank_select_lsb: [u8; 16],           // CC32 per MIDI ch
-    // Program Change（CC92/CLAP MidiProgramChange）で選択されたパッチ（MIDIチャンネルごと）。
+    // Program Change（CC102/CLAP MidiProgramChange）で選択されたパッチ（MIDIチャンネルごと）。
     // GUIでプリセットを選択した際に全チャンネルをNoneへ戻す（pending_gui_presetハンドラ参照）。
     program_patch: [Option<Ym38x6Patch>; 16],
 
@@ -507,7 +507,7 @@ impl Plugin for Ym38x6Plugin {
         }
 
         // channel_patchは発音中ボイスのリアルタイムDAWパラメーター更新用（常にGUI/DAW値）。
-        // Program Change（CC92/MidiProgramChange）はMIDIチャンネルごとに program_patch[ch] へ保存し、
+        // Program Change（CC102/MidiProgramChange）はMIDIチャンネルごとに program_patch[ch] へ保存し、
         // note-on時にそのMIDIチャンネルの program_patch を参照する。
         // 発音中の既存ボイスへは影響しない（チャンネルループは常にchannel_patchを使用）。
         let channel_patch = self.build_patch();
@@ -604,7 +604,7 @@ impl Plugin for Ym38x6Plugin {
                     // ボイスIDは midi_ch*128+note で符号化する。一意性（Note Off/同音再アタック）と
                     // グループ性（ピッチベンドのMIDIチャンネル一括適用 = id>>7）を同時に満たす。
                     let ch_id = midi_channel_note_id(channel, note);
-                    // このMIDIチャンネルのProgram Change（CC92/CLAP）パッチを優先。なければGUI値。
+                    // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければGUI値。
                     let note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
                     self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, note_on_patch);
                     // このMIDIチャンネルの現在のベンド量を新ボイスへ反映する
@@ -688,19 +688,21 @@ impl Plugin for Ym38x6Plugin {
                     }
                     91 => self.effects.set_reverb_send(cc_to_u8(value)),
                     93 => self.effects.set_chorus_send(cc_to_u8(value)),
-                    // CC92: Program Change 代替（VST3 では MidiProgramChange が届かないため）
-                    // VOPMex の CC92 互換。値 0-127 をプログラム番号として、
-                    // 現在の CC0/CC32 バンクと合わせてパッチを選択する。
-                    92 => {
+                    // CC102: Program Change 代替（VST3 では MidiProgramChange が届かないため）。
+                    // 値 0-127 をプログラム番号として、現在の CC0/CC32 バンクと合わせてパッチを選択する。
+                    // 旧実装は VOPMex 互換で CC92 を使っていたが、CC92 は GM2 で Effects 2 Depth
+                    // （トレモロ）に予約され衝突するため、GM2 未定義ブロックの先頭 CC102 へ移した。
+                    102 => {
                         let prog = cc_to_u7(value);
                         let bank = (self.bank_select_msb[channel as usize] as u16) * 128
                             + self.bank_select_lsb[channel as usize] as u16;
                         self.program_patch[channel as usize] =
                             Some(self.preset_bank.patch_for_program(bank, prog));
                     }
-                    // Operator Key On/Off（CC102〜105、≧64でキーオン/<64でキーオフ、spec-sound.md参照）
-                    102..=105 => {
-                        let op_index = (cc - 102) as usize;
+                    // Operator Key On/Off（CC103〜106、≧64でキーオン/<64でキーオフ、spec-sound.md参照）。
+                    // CC102 を Program Change 代替に使うため、OP単位キーオンは1つ繰り下げた。
+                    103..=106 => {
+                        let op_index = (cc - 103) as usize;
                         let key_on = cc_to_u7(value) >= 64;
                         if op_index == 3 && !key_on {
                             // Op3（マスター）キーオフ：全チャンネルのNote-Off相当として扱う

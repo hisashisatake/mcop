@@ -378,7 +378,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 - **Op3がマスター**：Op3がOffになると全Op強制Off
 - Op3がOnの間、Op0/1/2は個別に制御可能
 - 作曲支援アプリでのアボイドノート音量制御に応用可能
-- CC102〜105でOP単位のキーオン/オフを制御可能（詳細はMIDI実装方針のOperator Key On/Offセクション参照）
+- CC103〜106でOP単位のキーオン/オフを制御可能（詳細はMIDI実装方針のOperator Key On/Offセクション参照）
 
 ---
 
@@ -456,7 +456,7 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 | SSG-EG | 需要なし |
 | ノイズ | 需要なし |
 | DT2 | 需要なし |
-| CSMモード（タイマー駆動の自動キーオン） | 需要なし。OP単位F-Number＋CC102〜105によるOP単位キーオン/オフ（MIDI実装方針参照）をシーケンサーから高速送信することでCSM風の効果を代替可能 |
+| CSMモード（タイマー駆動の自動キーオン） | 需要なし。OP単位F-Number＋CC103〜106によるOP単位キーオン/オフ（MIDI実装方針参照）をシーケンサーから高速送信することでCSM風の効果を代替可能 |
 
 ---
 
@@ -510,11 +510,15 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC 78 | Vibrato Delay | パフォーマンスLFO Delay | 完全準拠 |
 | CC 91 | Reverb Send Level | Reverb Send | 完全準拠（マスターエフェクト参照） |
 | CC 93 | Chorus Send Level | Chorus Send | 完全準拠（マスターエフェクト参照） |
+| CC 102 | （未定義） | Program Change 代替（VST3用。下記 Bank Select / Program Change 参照） | 38x6独自拡張（GM2未定義領域 CC102〜119 の先頭） |
+| CC 103〜106 | （未定義） | Operator Key On/Off（Op0〜Op3。下記 Operator Key On/Off 参照） | 38x6独自拡張（GM2未定義領域） |
 | CC 120 | All Sound Off | All Sound Off | 完全準拠 |
 | CC 121 | Reset All Controllers | Reset All Controllers | 完全準拠 |
 | CC 123 | All Notes Off | All Notes Off | 完全準拠 |
 | CC 126 | Mono Mode On | Mono Mode | 完全準拠 |
 | CC 127 | Poly Mode On | Poly Mode | 完全準拠 |
+
+**GM2未定義領域（CC102〜119）の独自割り当て：** GM2にコントローラー定義のないCC102〜119を、38x6独自機能に使う（標準コントローラーとの意味的衝突を避けるため）。先頭のCC102をProgram Change代替（VST3ではMIDI Program Changeが受信できないため）、続くCC103〜106をOperator Key On/Off（Op0〜Op3）に割り当てる。旧実装はVOPMex互換でCC92をProgram Change代替に使っていたが、CC92はGM2でEffects 2 Depth（トレモロ）に予約され衝突するため廃止し、未定義領域の先頭CC102へ移した。
 
 **Portamento（CC5/CC65）：**
 
@@ -619,6 +623,12 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   暫定構成。優先順位はユーザープリセット(.38x6) > Bank0手動チューニング > `placeholder_patch`）。
 - nice-plugの制約により、MIDI Program ChangeイベントはCLAPでのみ受信可能（VST3では
   受信不可、`MidiConfig::MidiCCs`の仕様）。CC0/CC32（Bank Select）はVST3でも受信可能。
+- VST3でMIDIファイル等からProgram Changeを行うため、CC102（GM2未定義領域の先頭）を
+  Program Change代替として受信する（値0〜127=プログラム番号、CC0/CC32バンクと組み合わせて
+  `patch_for_program`で解決）。CLAPでは本来のMIDI Program Changeが届くため代替は不要だが、
+  両対応のため変換ツール（tools/vgm2x6等）はProgram ChangeとCC102を併送する。
+  旧実装はVOPMex互換のCC92を使っていたが、CC92はGM2のEffects 2 Depth（トレモロ）と
+  衝突するため廃止した（MIDI CCセクション参照）。
 - VST3でもプリセットを切り替えられるよう、nice-plugパラメーター「Program」
   （0=Manual/1〜128=Program 0〜127）を公開する。CC0/CC32で選択中のbankと組み合わせて
   Program Changeと同じロジック（`patch_for_program`）でパッチを解決する。
@@ -773,17 +783,17 @@ F-Number値はNote-On時の周波数（全Op共通）に対する比率として
 
 デフォルトはNote-Onで設定された値（全Op共通、比率1.0）。NRPN送信時点から、該当オペレーターの周波数のみを独立して上書きする（オクターブ＝他Opとの基準周波数は変化しない）。
 
-### Operator Key On/Off（OP単位キーオン/オフ、CC102〜105）
+### Operator Key On/Off（OP単位キーオン/オフ、CC103〜106）
 
-CC102=Op0、CC103=Op1、CC104=Op2、CC105=Op3に、オペレーター単位のキーオン/オフを割り当てる。
+CC103=Op0、CC104=Op1、CC105=Op2、CC106=Op3に、オペレーター単位のキーオン/オフを割り当てる。
 CC66/67と同じ閾値判定（値≧64でキーオン、値<64でキーオフ）を採用し、NRPNの3メッセージ手順より応答性の高いCC単発メッセージで即時反映する。
 
 38x6はチャンネル数無制限のため、1ノート=1チャンネルとして扱うことで、チャンネル単位のCCがそのままノート単位のOP制御になる。
 
-- CC105（Op3）< 64 → Op3がマスターのため全OP強制キーオフ（そのノートのNote-Off相当）
-- CC102〜104（Op0〜2）< 64 → 該当オペレーターのみキーオフ（Op3は鳴り続ける）
+- CC106（Op3）< 64 → Op3がマスターのため全OP強制キーオフ（そのノートのNote-Off相当）
+- CC103〜105（Op0〜2）< 64 → 該当オペレーターのみキーオフ（Op3は鳴り続ける）
 
-未定義領域（CC102〜119、GM2にコントローラー定義のないCC）を使用し、GM2標準コントローラーとの意味的な衝突を避ける。
+未定義領域（CC102〜119、GM2にコントローラー定義のないCC）を使用し、GM2標準コントローラーとの意味的な衝突を避ける。先頭のCC102はProgram Change代替に割り当てているため、OP単位キーオンはCC103〜106を用いる。
 
 主な用途：シーケンサーから各CCを高速かつ周期的に送ることで、Op単位のエンベロープを繰り返しトリガーし、OPN系実機のCSMモード（タイマー駆動の自動キーオンによるフォルマント的効果）に近い効果をシミュレートする（演奏時のリアルタイム操作ではなく、シーケンサーによる自動化を想定）。
 

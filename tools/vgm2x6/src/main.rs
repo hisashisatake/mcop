@@ -449,12 +449,14 @@ fn run(args: &[String]) -> Result<(), String> {
                             let patch_idx = bank.find_or_insert(voice);
 
                             // プログラムチェンジ（音色が変わったとき）
-                            // Program Change (0xCn) + CC92 の両方を送ることで
-                            // CLAP（Program Change）と VST3（CC92）の両方に対応する。
+                            // Program Change (0xCn) + CC102 の両方を送ることで
+                            // CLAP（Program Change）と VST3（CC102 = PC 代替）の両方に対応する。
+                            // CC102 は GM2 未定義ブロック（102-119）の先頭。CC92 は GM2 で
+                            // Effects 2 Depth（トレモロ）に予約されているため使わない。
                             if active_patch[ch] != Some(patch_idx) {
                                 let prog = (patch_idx % 128) as u8;
                                 smf.add_program_change(tr, tick, ch as u8, prog);
-                                smf.add_cc(tr, tick, ch as u8, 92, prog);
+                                smf.add_cc(tr, tick, ch as u8, 102, prog);
                                 active_patch[ch] = Some(patch_idx);
                             }
 
