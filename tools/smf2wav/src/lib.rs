@@ -5,10 +5,12 @@
 //! 変換直後のパッチ列を直接渡して再生することもできる。
 
 pub mod bank;
+pub mod fx;
 pub mod render;
 pub mod smf;
 pub mod wav;
 
 pub use bank::PatchBank;
+pub use fx::{apply_reverb, ReverbConfig};
 pub use render::render_smf;
 pub use wav::{normalize_peak, write_wav_mono16};
