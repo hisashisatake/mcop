@@ -233,6 +233,13 @@ pub struct ConvOptions {
     /// キャリアのみ D1L（サステインレベル）を満レベル方向へ持ち上げ、D1R/D2R（減衰レート）を
     /// 遅くする。モジュレーターには触れず音色の明るさ変化は保つ。
     pub carrier_sustain: f32,
+    /// ローパスフィルターのカットオフ上書き（味付け用、`None`=全開255、20kHz）。
+    ///
+    /// 倍音過多/耳障りな高域を抑えるためのレバー。`--mod-cap`/`--fb` で変調自体を削ると
+    /// FMサイドバンドが作る基音まで失われ音程感が壊れる（高い音だけ残る）。フィルターなら
+    /// 変調はそのままに出力の高域だけ削るので、低域の基音を保ったまま明るさを落とせる。
+    /// 値は 0〜255（指数で 20Hz〜20kHz、180≈2.8kHz / 200≈4.5kHz）。
+    pub filter_cutoff: Option<u8>,
 }
 
 impl Default for ConvOptions {
@@ -242,6 +249,7 @@ impl Default for ConvOptions {
             fb_override: None,
             ksr_override: None,
             carrier_sustain: 0.0,
+            filter_cutoff: None,
         }
     }
 }
@@ -286,6 +294,7 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
             tone_lfo_delay: (voice.lfo_dly as f32 * 255.0 / 99.0).round() as u8,
             pms: pms_to_x6(voice.pms),
             ams: ams_to_x6(voice.ams),
+            filter_cutoff: opts.filter_cutoff.unwrap_or(255),
             ..ChannelParams::default()
         },
     }

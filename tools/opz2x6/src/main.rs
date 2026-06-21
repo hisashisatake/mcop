@@ -22,6 +22,9 @@
 //!   省略時は .syx 由来。`--ksr 0` で高音のエンベロープ加速を弱める。
 //! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機忠実）。
 //!   大きいほどエレピ/ピアノの鳴りが伸びる（実機の打鍵的な減衰から意図的に離す）。
+//! - `--cutoff <0-255>` ローパスフィルターのカットオフ（味付け、既定=全開255=20kHz）。
+//!   低いほど高域を削り倍音過多を抑える（180≈2.8kHz / 200≈4.5kHz）。変調は保つので
+//!   基音（FMサイドバンド）を失わずに明るさだけ落とせる（--mod-capより音程が壊れない）。
 //! - `--smf <song.mid>` を指定すると、変換した音色バンクで SMF を ym38x6-core 再生し、
 //!   `<output_dir>/smf/<midistem>.wav` へ出力する（プログラム番号＝ボイス番号）。
 
@@ -99,6 +102,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut fb_override: Option<u8> = None;
     let mut ksr_override: Option<u8> = None;
     let mut carrier_sustain: f32 = 0.0;
+    let mut filter_cutoff: Option<u8> = None;
     let mut smf: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
@@ -155,6 +159,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 }
                 i += 2;
             }
+            "--cutoff" => {
+                let v = args.get(i + 1).ok_or("--cutoff に値がありません")?;
+                filter_cutoff = Some(v.parse::<u8>().map_err(|_| format!("--cutoff の値が不正(0-255): {v}"))?);
+                i += 2;
+            }
             "--smf" => {
                 let v = args.get(i + 1).ok_or("--smf に値がありません")?;
                 smf = Some(PathBuf::from(v));
@@ -177,7 +186,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         input, output_dir, bank, split, wav,
         wav_cfg: WavConfig { on_secs, off_secs: 1.5, frequency },
         voice_filter,
-        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain },
+        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain, filter_cutoff },
         smf,
     })
 }
@@ -332,7 +341,7 @@ fn render_smf_to_wav(
     let patches: Vec<_> = voices.iter().map(|v| conv::voice_to_patch_opts(v, opts)).collect();
     let bank = smf2wav::PatchBank::from_patches(&patches)?;
 
-    let mut buf = smf2wav::render_smf(&smf_data, &bank, SR, 2.0)?;
+    let mut buf = smf2wav::render_smf(&smf_data, &bank, SR, 2.0, None)?;
     smf2wav::normalize_peak(&mut buf, 0.5);
 
     let smf_dir = output_dir.join("smf");
