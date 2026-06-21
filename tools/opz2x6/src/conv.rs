@@ -226,10 +226,26 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     let alg = voice.algorithm.min(7) as usize;
     let carriers = CARRIERS[alg];
 
-    // VCED格納順 [OP4=ops[0], OP3=ops[1], OP2=ops[2], OP1=ops[3]] を
-    // 38x6 operators[0..3] = [OP1, OP2, OP3, OP4] に逆順変換する
+    // ops[] = [OP4, OP3, OP2, OP1]（parse.rs で結線順4/3/2/1 に整列済み）を
+    // 38x6 operators[0..3] へ写像する。
+    //
+    // 38x6 の ALGORITHMS は ymfm の OPN系 s_algorithm_ops を移植したもので、
+    // operators[0..3] は ymfm の m_op[0..3]（アルゴリズム上の O1/O2/O3/O4）と一致する。
+    // OPZ(YM2414) は OPM系チップなので、レジスタ slot → m_op に slot1↔slot2 の
+    // インターリーブが入る（ymfm `opz_registers::operator_map`：m_op=[slot0,slot2,slot1,slot3]）。
+    // TX81Z が VMEM の OP1〜OP4 を slot0〜slot3 へ素直に書く（OP1→slot0 … OP4→slot3）ため、
+    //   m_op = [slot0, slot2, slot1, slot3] = [OP1, OP3, OP2, OP4]
+    // となる。よって operators = [OP1, OP3, OP2, OP4] = [ops[3], ops[1], ops[2], ops[0]]。
+    //
+    // 旧実装は単純逆順 [OP1, OP2, OP3, OP4] で、この slot1↔2 入替（OP2↔OP3）を
+    // 落としていた。そのため非整数キャリア比パッチ（LoTine81Z 等、alg4 のキャリアが
+    // OP2/OP4 にずれて基音 1.0× を失い tritone 上ずり）で音程が狂っていた。
+    // ymfm OPZ 参照（opzref）で alg4=LoTine が基音 415Hz に復帰し、alg2=GrandPiano の
+    // 倍音は実機録音と同等を維持することを確認済み（slot1↔2 はチップ固有で全 alg 共通、
+    // アルゴリズム番号の再マップは不要）。
+    const OP_SRC: [usize; 4] = [3, 1, 2, 0]; // operators[i] ← ops[OP_SRC[i]]
     let operators = std::array::from_fn(|i| {
-        let op = &voice.ops[3 - i]; // operators[i] ← VCED ops[3-i]
+        let op = &voice.ops[OP_SRC[i]];
         let is_carrier = carriers.contains(&i);
         convert_op(op, is_carrier, opts)
     });
@@ -399,8 +415,8 @@ mod tests {
 
     #[test]
     fn op_order_reversal() {
-        // VCED: ops[0]=OP4(out=10), ops[3]=OP1(out=80)
-        // 38x6: operators[0]=OP1(tl from 80), operators[3]=OP4(tl from 10)
+        // ops[] = [OP4, OP3, OP2, OP1]。端点は OP4↔OP1 が入れ替わる:
+        // operators[0]=OP1(ops[3]), operators[3]=OP4(ops[0])
         let mut voice = OpzVoice::default();
         voice.ops[0] = OpzOpData { out: 10, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP4
         voice.ops[3] = OpzOpData { out: 80, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP1
@@ -408,5 +424,22 @@ mod tests {
         // operators[0] ← OP1 (out=80) → tl should be large
         assert!(patch.operators[0].tl > patch.operators[3].tl,
             "operators[0](OP1,out=80) should have higher tl than operators[3](OP4,out=10)");
+    }
+
+    #[test]
+    fn opz_slot_interleave_swaps_op2_op3() {
+        // OPZ(YM2414) の slot1↔slot2 インターリーブ（ymfm operator_map）を反映し、
+        // operators = [OP1, OP3, OP2, OP4] になることを検証する。
+        // ops[] = [OP4, OP3, OP2, OP1] に判別用 freq（→mul）を仕込む。
+        let mut voice = OpzVoice::default();
+        voice.ops[0] = OpzOpData { freq: 8,  det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP4 → mul2
+        voice.ops[1] = OpzOpData { freq: 12, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP3 → mul3
+        voice.ops[2] = OpzOpData { freq: 16, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP2 → mul4
+        voice.ops[3] = OpzOpData { freq: 4,  det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP1 → mul1
+        let p = voice_to_patch(&voice);
+        assert_eq!(p.operators[0].mul, 1, "operators[0]=OP1");
+        assert_eq!(p.operators[1].mul, 3, "operators[1]=OP3 (slot1↔2 interleave)");
+        assert_eq!(p.operators[2].mul, 4, "operators[2]=OP2 (slot1↔2 interleave)");
+        assert_eq!(p.operators[3].mul, 2, "operators[3]=OP4");
     }
 }
