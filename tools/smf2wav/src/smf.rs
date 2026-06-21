@@ -1,14 +1,16 @@
 //! 標準MIDIファイル（SMF）のパース。
 //!
 //! 外部クレート不使用。Format 0/1 のメトリカル・タイミング（division>0）に対応する。
-//! ノートオン/オフ・プログラムチェンジ・テンポメタイベントのみを抽出する。
+//! ノートオン/オフ・プログラムチェンジ・ピッチベンド・コントロールチェンジ・テンポメタイベントを抽出する。
 
 /// 再生に必要なイベント種別。
 pub enum EvKind {
-    NoteOn(u8, u8, u8), // ch, note, vel
-    NoteOff(u8, u8),    // ch, note
-    Program(u8, u8),    // ch, program
-    Tempo(u32),         // µs/四分音符
+    NoteOn(u8, u8, u8),        // ch, note, vel
+    NoteOff(u8, u8),           // ch, note
+    Program(u8, u8),           // ch, program
+    Tempo(u32),                // µs/四分音符
+    PitchBend(u8, i16),        // ch, raw value (-8192〜8191、中心=0)
+    ControlChange(u8, u8, u8), // ch, cc番号, value
 }
 
 /// 絶対 tick 付きイベント。
@@ -94,8 +96,22 @@ pub fn parse_smf(data: &[u8]) -> Result<(u16, Vec<Ev>), String> {
                 0xD0 => {
                     j += 1;
                 }
-                0xA0 | 0xB0 | 0xE0 => {
+                0xA0 => {
+                    j += 2; // Poly Key Pressure: 無視
+                }
+                0xB0 => {
+                    let cc = data.get(j).copied().unwrap_or(0);
+                    let val = data.get(j + 1).copied().unwrap_or(0);
                     j += 2;
+                    events.push(Ev { tick, kind: EvKind::ControlChange(ch, cc, val) });
+                }
+                0xE0 => {
+                    let lsb = data.get(j).copied().unwrap_or(0);
+                    let msb = data.get(j + 1).copied().unwrap_or(0);
+                    let raw14 = ((msb as u16) << 7) | (lsb as u16);
+                    let raw = raw14 as i16 - 8192;
+                    j += 2;
+                    events.push(Ev { tick, kind: EvKind::PitchBend(ch, raw) });
                 }
                 _ => {
                     // 0xF0: メタ or sysex

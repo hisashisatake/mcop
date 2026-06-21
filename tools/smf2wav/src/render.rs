@@ -3,6 +3,13 @@
 //! ボイスIDは `midi_channel*128 + note` とし、エンジンの HashMap チャンネル管理で
 //! ポリフォニーをそのまま扱う（VST と同じID符号化方式）。
 //! プログラムチェンジ → `PatchBank::patch(program)` を音色として使う。
+//!
+//! 対応SMFイベント:
+//!   - Note On/Off、Program Change、Tempo
+//!   - Pitch Bend（チャンネル単位、RPN0,0でセンシティビティ設定可）
+//!   - CC64 Sustain Pedal（ホールドフラグ方式）
+//!   - CC100/101/6: RPN選択とData Entry（ピッチベンド感度のみ）
+//!   - CC120/CC123: All Sound Off / All Notes Off
 
 use ym38x6_core::{SoundEngine, Ym38x6Engine};
 
@@ -34,6 +41,15 @@ pub fn render_smf(
     let mut engine = Ym38x6Engine::new(sample_rate);
     let mut out: Vec<f32> = Vec::new();
     let mut programs = [0u8; 16];
+
+    // ピッチベンド感度（半音）: RPN(0,0)で変更可。MIDI規格の既定値は±2半音。
+    let mut pitch_bend_range = [2.0f32; 16];
+    // RPN選択状態（CC101=MSB, CC100=LSB）。0xFF=未選択。
+    let mut rpn_msb = [0xFFu8; 16];
+    let mut rpn_lsb = [0xFFu8; 16];
+    // サステインペダル（CC64）: ホールドフラグ + ペダル中のノートオフを保留するビットマスク。
+    let mut pedal_down = [false; 16];
+    let mut pending_release = [0u128; 16]; // bit N = note N が保留中
 
     let mut tempo_us: f64 = 500_000.0; // 既定 120BPM
     let mut spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64; // samples/tick
@@ -72,8 +88,57 @@ pub fn render_smf(
                 engine.note_on_with_velocity(id, freq, vel, patch);
             }
             EvKind::NoteOff(ch, note) => {
-                let id = ch as usize * 128 + note as usize;
-                engine.note_off(id);
+                let chi = ch as usize;
+                if pedal_down[chi] {
+                    // ペダル保持中: Note Offを保留する
+                    pending_release[chi] |= 1u128 << note;
+                } else {
+                    engine.note_off(chi * 128 + note as usize);
+                }
+            }
+            EvKind::PitchBend(ch, raw) => {
+                let chi = ch as usize;
+                // raw: -8192〜8191、8192=±1半音×pitch_bend_range半音
+                let cents = raw as f32 / 8192.0 * pitch_bend_range[chi] * 100.0;
+                engine.set_pitch_bend_group(chi, cents);
+            }
+            EvKind::ControlChange(ch, cc, val) => {
+                let chi = ch as usize;
+                match cc {
+                    // RPN選択（CC101=MSB, CC100=LSB）
+                    101 => rpn_msb[chi] = val,
+                    100 => rpn_lsb[chi] = val,
+                    // Data Entry MSB: RPN(0,0)のみ処理（ピッチベンド感度=半音数）
+                    6 => {
+                        if rpn_msb[chi] == 0 && rpn_lsb[chi] == 0 {
+                            pitch_bend_range[chi] = val as f32;
+                        }
+                    }
+                    // CC64 Sustain Pedal
+                    64 => {
+                        if val >= 64 {
+                            pedal_down[chi] = true;
+                        } else {
+                            pedal_down[chi] = false;
+                            // 保留中のNote Offをまとめて送出
+                            let mut mask = pending_release[chi];
+                            while mask != 0 {
+                                let note = mask.trailing_zeros() as usize;
+                                engine.note_off(chi * 128 + note);
+                                mask &= mask - 1;
+                            }
+                            pending_release[chi] = 0;
+                        }
+                    }
+                    // CC120 All Sound Off / CC123 All Notes Off
+                    120 | 123 => {
+                        for note in 0usize..128 {
+                            engine.note_off(chi * 128 + note);
+                        }
+                        pending_release[chi] = 0;
+                    }
+                    _ => {}
+                }
             }
         }
     }
