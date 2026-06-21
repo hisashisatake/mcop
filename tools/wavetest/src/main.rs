@@ -1,15 +1,17 @@
 //! wavetest — OPZ準拠8波形をFMのキャリア/モジュレーターに使ったときの
 //! 音色変化を試聴で確認するツール。
 //!
-//! 8系統の基本音色（ピアノ/E.ピアノ/シンセベース/リード/ブラス/ベル/オルガン/プラック）に
-//! 対し、波形0〜7をオペレーター全体に適用したバリエーション（8種）を作り、
-//! `<output_dir>/wav/NN_<音色>_<波形>.wav` と `<output_dir>/b<bank>.38x6` を書き出す。
+//! 9系統の基本音色（pure/ピアノ/E.ピアノ/シンセベース/リード/ブラス/ベル/オルガン/プラック）に
+//! 対し、ビルトイン32波形（0-7サイン/8-15ノコギリ/16-23矩形/24-31三角）をオペレーター全体に
+//! 適用したバリエーションを作り、`<output_dir>/wav/NN_<音色>_<波形>.wav` と
+//! `<output_dir>/b<bank>.38x6` を書き出す。
 //!
 //! 使い方:
 //! ```text
-//! wavetest <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>] [--release <秒>]
+//! wavetest <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres <名前,...>]
 //! ```
-//! - 既定: bank=1 / C4 / on=1.2秒 + リリース3.0秒。
+//! - 既定: bank=1 / C4 / on=1.2秒 + リリース3.0秒 / 全9音色 + フィルターデモ。
+//! - `--timbres pure,pluck` 等で基本音色を絞ると検証が速い（指定時はフィルターデモを省略）。
 //!
 //! 波形はモジュレーターにも適用される（FM下での倍音変化が本ツールの主目的のため、
 //! キャリアだけでなく全オペレーターに同じ波形を割り当てる）。
@@ -21,16 +23,45 @@ use ym38x6_core::{
     ChannelParams, OperatorParams, PresetEntry, PresetFile, SoundEngine, Ym38x6Engine, Ym38x6Patch,
 };
 
-/// 試聴に使う波形（番号と表示名）。OPZ準拠8波形（ymfm実装準拠）を全て出力する。
-const WAVE_VARIANTS: [(u8, &str); 8] = [
+/// 試聴に使う波形（番号と表示名）。ビルトイン32波形（4基本波 × 8変換）を全て出力する。
+/// 0-7=サイン系(OPZ由来) / 8-15=ノコギリ系 / 16-23=矩形系(PWM) / 24-31=三角系。
+const WAVE_VARIANTS: [(u8, &str); 32] = [
+    // 0-7: サイン系（OPZ由来）
     (0, "sine"),
     (1, "sin2"),
     (2, "halfsine"),
     (3, "halfsin2"),
-    (4, "sine2x_h"),     // 2倍速サイン前半（正負両方）
-    (5, "sin2_2x_h"),    // 2倍速sin²前半（符号付き）
-    (6, "abssine2x_h"),  // 2倍速絶対値サイン前半（常に正）
-    (7, "possin2_2x_h"), // 2倍速正sin²前半（常に正）
+    (4, "sine2x_h"),
+    (5, "sin2_2x_h"),
+    (6, "abssine2x_h"),
+    (7, "possin2_2x_h"),
+    // 8-15: ノコギリ系（saw × OPZ8変換）
+    (8, "saw"),
+    (9, "saw_sq"),
+    (10, "saw_half"),
+    (11, "saw_halfsq"),
+    (12, "saw_2xh"),
+    (13, "saw_sq2xh"),
+    (14, "saw_abs2xh"),
+    (15, "saw_possq2xh"),
+    // 16-23: 矩形系（PWMファミリー）
+    (16, "sq50"),
+    (17, "sq33"),
+    (18, "sq25"),
+    (19, "sq16"),
+    (20, "sq12"),
+    (21, "sq6"),
+    (22, "sq_half"),
+    (23, "sq_2xh"),
+    // 24-31: 三角系（triangle × OPZ8変換）
+    (24, "tri"),
+    (25, "tri_sq"),
+    (26, "tri_half"),
+    (27, "tri_halfsq"),
+    (28, "tri_2xh"),
+    (29, "tri_sq2xh"),
+    (30, "tri_abs2xh"),
+    (31, "tri_possq2xh"),
 ];
 
 /// オペレーター1個を簡潔に組み立てるヘルパー。
@@ -350,21 +381,36 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("wavetest: {msg}");
-            eprintln!("usage: wavetest <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>] [--release <秒>]");
+            eprintln!("usage: wavetest <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres pure,pluck,...]");
             ExitCode::FAILURE
         }
     }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (output_dir, bank, override_freq, on_secs, release_secs) = parse_args(args)?;
+    let (output_dir, bank, override_freq, on_secs, release_secs, timbres) = parse_args(args)?;
 
-    let bases = base_timbres();
+    let all_bases = base_timbres();
+    // --timbres 指定時はその基本音色名のみに絞る（検証用の時短）。
+    let bases: Vec<BaseTimbre> = match &timbres {
+        Some(names) => {
+            for n in names {
+                if !all_bases.iter().any(|b| b.name == n) {
+                    return Err(format!(
+                        "--timbres の不明な音色名: {n}（既知: {}）",
+                        all_bases.iter().map(|b| b.name).collect::<Vec<_>>().join(",")
+                    ));
+                }
+            }
+            all_bases.into_iter().filter(|b| names.iter().any(|n| n == b.name)).collect()
+        }
+        None => all_bases,
+    };
     let mut voices = expand_voices(&bases, override_freq);
     let grid_count = voices.len();
 
-    // フィルター入りデモ（ノコギリ）をグリッドの後ろに連番で追加する。
-    let demos = filter_demos();
+    // フィルター入りデモ（ノコギリ）。--timbres で絞り込んだ検証時はスキップする。
+    let demos = if timbres.is_some() { Vec::new() } else { filter_demos() };
     for (i, demo) in demos.iter().enumerate() {
         let program = (grid_count + i) as u8;
         voices.push(build_filter_demo(&bases, demo, program, override_freq));
@@ -402,13 +448,16 @@ fn run(args: &[String]) -> Result<(), String> {
 
 /// 戻り値の3つ目は試聴周波数の上書き指定（`--note`/`--octave` のどちらかが指定された場合のみ
 /// `Some`。未指定なら `None` で、音色ごとの基準音 [`timbre_pitch`] を使う）。
-fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32, f32), String> {
+type ParsedArgs = (PathBuf, u16, Option<f32>, f32, f32, Option<Vec<String>>);
+
+fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut bank: u16 = 1;
     let mut octave: Option<i32> = None;
     let mut note: Option<String> = None;
     let mut on_secs: f32 = 1.2;
     let mut release_secs: f32 = 3.0;
+    let mut timbres: Option<Vec<String>> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -444,6 +493,11 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32, f32), 
                 }
                 i += 2;
             }
+            "--timbres" => {
+                let v = args.get(i + 1).ok_or("--timbres に値がありません（例: pure,pluck,brass）")?;
+                timbres = Some(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -458,7 +512,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, u16, Option<f32>, f32, f32), 
         (None, None) => None,
         (n, o) => Some(note_to_freq(o.unwrap_or(4), n.as_deref().unwrap_or("C"))?),
     };
-    Ok((PathBuf::from(positional[0]), bank, override_freq, on_secs, release_secs))
+    Ok((PathBuf::from(positional[0]), bank, override_freq, on_secs, release_secs, timbres))
 }
 
 fn note_to_semitone(note: &str) -> Result<i32, String> {
