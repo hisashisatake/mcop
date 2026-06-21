@@ -295,19 +295,14 @@ impl Channel {
         self.filter_eg.note_off();
     }
 
-    /// CC102〜105（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。
+    /// CC103〜106（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。
     fn note_on_operator(&mut self, op_index: usize) {
         self.operators[op_index].note_on(self.base_frequency, self.velocity);
     }
 
-    /// CC102〜105（<64）：指定オペレーター(0〜3)をキーオフする。
-    /// Op3（op_index==3）はマスターのため、チャンネル全体をキーオフする（spec-sound.md参照）。
+    /// CC103〜106（<64）：指定オペレーター(0〜3)をキーオフする（全OP独立。Op3も特別扱いしない）。
     fn note_off_operator(&mut self, op_index: usize) {
-        if op_index == 3 {
-            self.note_off();
-        } else {
-            self.operators[op_index].note_off();
-        }
+        self.operators[op_index].note_off();
     }
 
     fn is_idle(&self) -> bool {
@@ -554,15 +549,14 @@ impl Ym38x6Engine {
         }
     }
 
-    /// CC102〜105（≧64）：指定チャンネルの指定オペレーター(0〜3)をキーオンする。
+    /// CC103〜106（≧64）：指定チャンネルの指定オペレーター(0〜3)をキーオンする。
     pub fn note_on_operator(&mut self, channel: usize, op_index: usize) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.note_on_operator(op_index);
         }
     }
 
-    /// CC102〜105（<64）：指定チャンネルの指定オペレーター(0〜3)をキーオフする。
-    /// op_index==3はOp3=マスターのためチャンネル全体をキーオフする。
+    /// CC103〜106（<64）：指定チャンネルの指定オペレーター(0〜3)をキーオフする（全OP独立）。
     pub fn note_off_operator(&mut self, channel: usize, op_index: usize) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.note_off_operator(op_index);
@@ -696,17 +690,22 @@ mod tests {
     }
 
     #[test]
-    fn note_off_operator_on_op3_master_removes_channel() {
+    fn note_off_operator_on_op3_is_independent_like_other_ops() {
         let mut engine = Ym38x6Engine::new(44100.0);
         let ch = 0;
         engine.note_on_with_velocity(ch, 440.0, 127, loud_patch(0));
 
         engine.note_off_operator(ch, 3);
 
-        // Op3（マスター）キーオフ→全OP強制キーオフ、rr=255の高速リリースで1秒以内に収束
-        let mut buf = vec![0.0f32; 44100];
+        // Op3は他Opと同じ独立扱い：チャンネルは消えず、他Opは鳴り続ける（Op3マスター廃止）
+        assert!(engine.channels.contains_key(&ch), "Op3 key-off must not remove the channel");
+        assert!(!engine.channels[&ch].is_idle());
+
+        // rr=255（最速リリース）でOp3のみ即idle、他Opは生存
+        let mut buf = vec![0.0f32; 100];
         engine.render(&mut buf, 1);
-        assert!(!engine.channels.contains_key(&ch), "Op3 key-off should remove the channel");
+        assert!(engine.channels[&ch].operators[3].is_idle());
+        assert!(!engine.channels[&ch].operators[0].is_idle());
     }
 
     #[test]

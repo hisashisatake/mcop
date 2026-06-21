@@ -702,22 +702,15 @@ impl Plugin for Ym38x6Plugin {
                     // Operator Key On/Off（CC103〜106、≧64でキーオン/<64でキーオフ、spec-sound.md参照）。
                     // CC102 を Program Change 代替に使うため、OP単位キーオンは1つ繰り下げた。
                     103..=106 => {
+                        // 全OP独立（Op3も特別扱いしない）。全消しはNote-Off/CC120で行う。
                         let op_index = (cc - 103) as usize;
                         let key_on = cc_to_u7(value) >= 64;
-                        if op_index == 3 && !key_on {
-                            // Op3（マスター）キーオフ：全チャンネルのNote-Off相当として扱う
-                            for note in 0u8..MIDI_NOTE_COUNT {
-                                self.engine.note_off_operator(note as usize, 3);
-                                self.poly_pressure.remove(&note);
-                            }
-                        } else {
-                            for note in 0u8..MIDI_NOTE_COUNT {
-                                let ch_id = note as usize;
-                                if key_on {
-                                    self.engine.note_on_operator(ch_id, op_index);
-                                } else {
-                                    self.engine.note_off_operator(ch_id, op_index);
-                                }
+                        for note in 0u8..MIDI_NOTE_COUNT {
+                            let ch_id = note as usize;
+                            if key_on {
+                                self.engine.note_on_operator(ch_id, op_index);
+                            } else {
+                                self.engine.note_off_operator(ch_id, op_index);
                             }
                         }
                     }
