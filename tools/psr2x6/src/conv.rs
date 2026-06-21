@@ -159,6 +159,64 @@ pub fn sl_x6_to_opq(x6: u8) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
+// 味付けオプション（opz2x6 と同じ思想。既定は実機準拠で従来挙動と一致）
+// ---------------------------------------------------------------------------
+
+/// 38x6 アルゴリズム別のキャリア（出力に直接合算される）オペレーターindex。
+/// `ym38x6-core/src/algorithm.rs` の `ALGORITHMS[].carriers` の複製（opz2x6 と同一）。
+const CARRIERS: [&[usize]; 8] = [
+    &[3],          // 0
+    &[3],          // 1
+    &[3],          // 2
+    &[3],          // 3
+    &[1, 3],       // 4
+    &[1, 2, 3],    // 5
+    &[1, 2, 3],    // 6
+    &[0, 1, 2, 3], // 7
+];
+
+/// モジュレーター TL 天井の既定値（opz2x6 の `DEFAULT_MOD_TL_CAP` と同値）。
+///
+/// 38x6 エンジンは `FM_MODULATION_INDEX_SCALE=4.0` のため、モジュレーター TL を 254 まで
+/// 通すと変調指数 β が過大（≈24rad）になりノイズ化する。OPQ→38x6 でも同じ補正が要る。
+/// PSR-70 ROM 音色は feedback=252・モジュレーター TL>200 が多く、天井なしだとノイズが乗る
+/// （psr2x6 中断の主因）。180 でモジュレーターを圧縮し、キャリア（音量）は触らない。
+pub const DEFAULT_MOD_TL_CAP: u8 = 180;
+
+/// 変換の味付けオプション。
+#[derive(Clone, Copy, Debug)]
+pub struct PsrConvOptions {
+    /// モジュレーター TL 天井（既定 [`DEFAULT_MOD_TL_CAP`]=180）。
+    /// モジュレーターの実効 TL を `tl×cap/254` に圧縮して変調過多＝ノイズを抑える。
+    /// キャリア（音量）には適用しない。254 でほぼ無効（実機 TL そのまま）。
+    pub mod_tl_cap: u8,
+    /// キャリアのサステイン延長（0.0=実機準拠 .. 1.0=最大延長）。opz2x6 と同一ロジック。
+    /// キャリアのみ D1L を満レベル方向へ持ち上げ、D1R/D2R を減速する。
+    pub carrier_sustain: f32,
+    /// ローパスフィルターのカットオフ上書き（`None`=全開255=20kHz）。
+    /// 倍音過多/耳障りな高域を抑える味付け。変調は保つので基音を失わず明るさだけ落とせる。
+    pub filter_cutoff: Option<u8>,
+}
+
+impl Default for PsrConvOptions {
+    fn default() -> Self {
+        Self { mod_tl_cap: DEFAULT_MOD_TL_CAP, carrier_sustain: 0.0, filter_cutoff: None }
+    }
+}
+
+/// キャリアのサステイン延長を 38x6 `OperatorParams` に適用する（opz2x6 conv.rs と同一係数）。
+fn apply_carrier_sustain(p: &mut OperatorParams, sustain: f32) {
+    let k = sustain.clamp(0.0, 1.0);
+    if k <= 0.0 {
+        return;
+    }
+    let d1l = p.d1l as f32;
+    p.d1l = (d1l + (255.0 - d1l) * 0.7 * k).round().clamp(0.0, 255.0) as u8;
+    p.d1r = (p.d1r as f32 * (1.0 - 0.60 * k)).round().clamp(0.0, 255.0) as u8;
+    p.d2r = (p.d2r as f32 * (1.0 - 0.85 * k)).round().clamp(0.0, 255.0) as u8;
+}
+
+// ---------------------------------------------------------------------------
 // 構造体変換
 // ---------------------------------------------------------------------------
 
@@ -189,19 +247,33 @@ impl OpqOperator {
 }
 
 impl OpqVoice {
-    /// OPQボイス → ym38x6 `Ym38x6Patch`。
-    /// チャンネルのフィルター/音色LFO等、OPQに無い項目は`ChannelParams::default()`に従う。
+    /// OPQボイス → ym38x6 `Ym38x6Patch`（実機準拠・従来挙動）。テスト/外部利用向けの既定ラッパー。
+    #[allow(dead_code)]
     pub fn to_ym38x6_patch(self) -> Ym38x6Patch {
+        self.to_ym38x6_patch_opts(PsrConvOptions::default())
+    }
+
+    /// OPQボイス → ym38x6 `Ym38x6Patch`（味付けオプション指定）。
+    /// チャンネルのフィルター/音色LFO等、OPQに無い項目は`ChannelParams::default()`に従う。
+    pub fn to_ym38x6_patch_opts(self, opts: PsrConvOptions) -> Ym38x6Patch {
+        let alg = self.algorithm.min(7);
+        let carriers = CARRIERS[alg as usize];
+        let operators = std::array::from_fn(|i| {
+            let mut p = self.operators[i].to_operator_params();
+            if carriers.contains(&i) {
+                apply_carrier_sustain(&mut p, opts.carrier_sustain);
+            } else {
+                // モジュレーターのみ TL を天井で圧縮（変調過多＝ノイズ対策）。
+                p.tl = (p.tl as f32 * opts.mod_tl_cap as f32 / 254.0).round().clamp(0.0, 255.0) as u8;
+            }
+            p
+        });
         Ym38x6Patch {
-            operators: [
-                self.operators[0].to_operator_params(),
-                self.operators[1].to_operator_params(),
-                self.operators[2].to_operator_params(),
-                self.operators[3].to_operator_params(),
-            ],
+            operators,
             channel: ChannelParams {
-                algorithm: self.algorithm.min(7),
+                algorithm: alg,
                 feedback: scale_3bit(self.feedback),
+                filter_cutoff: opts.filter_cutoff.unwrap_or(255),
                 ..ChannelParams::default()
             },
         }
@@ -223,9 +295,19 @@ pub fn preset_count(file: &PresetFile) -> usize {
     }
 }
 
-/// ボイス列を `.38x6` プリセットファイル群へ変換する。
-/// Programは0〜127のため、128件ごとに連番バンクへ分割する（`start_bank`, `start_bank+1`, ...）。
+/// ボイス列を `.38x6` プリセットファイル群へ変換する（実機準拠・従来挙動）。テスト/外部利用向けの既定ラッパー。
+#[allow(dead_code)]
 pub fn voices_to_preset_files(start_bank: u16, voices: &[NamedVoice]) -> Vec<PresetFile> {
+    voices_to_preset_files_opts(start_bank, voices, PsrConvOptions::default())
+}
+
+/// ボイス列を `.38x6` プリセットファイル群へ変換する（味付けオプション指定）。
+/// Programは0〜127のため、128件ごとに連番バンクへ分割する（`start_bank`, `start_bank+1`, ...）。
+pub fn voices_to_preset_files_opts(
+    start_bank: u16,
+    voices: &[NamedVoice],
+    opts: PsrConvOptions,
+) -> Vec<PresetFile> {
     voices
         .chunks(128)
         .enumerate()
@@ -237,7 +319,7 @@ pub fn voices_to_preset_files(start_bank: u16, voices: &[NamedVoice]) -> Vec<Pre
                 .map(|(program, nv)| PresetEntry {
                     program: program as u8,
                     name: nv.name.clone(),
-                    patch: nv.voice.to_ym38x6_patch(),
+                    patch: nv.voice.to_ym38x6_patch_opts(opts),
                 })
                 .collect();
             PresetFile::Presets { bank, presets }

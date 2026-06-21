@@ -3,12 +3,18 @@
 //! 使い方:
 //! ```text
 //! psr2x6 <ROM2.bin> <output_dir> [--bank <N>] [--voices panel|extended|all] [--wav]
+//!        [--mod-cap <0-255>] [--sustain <0.0-1.0>] [--cutoff <0-255>]
 //! ```
 //! - 入力は PSR-70 サウンドROM（`ROM2.bin`、32KB）。出力ともに本クレートには同梱しない（パスは引数指定）。
 //! - `--bank` の既定は `WAVEFORM_MEMORY_BANK + 1`（Bank 0はML自動生成用に空けておく）。
 //! - `--voices` の既定は `all`（全68音色）。`panel`=voice0-31（32パネル音色）、
 //!   `extended`=voice0-31+52-67（48音色、2op複製テーブルvoice32-51を除外）。
 //! - 出力は `<output_dir>/b<bank>.38x6`（128件超は連番バンクへ分割）。
+//! - `--mod-cap <0-255>` モジュレーターTL天井（既定180）。低いほど変調を抑えノイズが減る。
+//!   PSR-70 ROM音色はfeedback/モジュレーターTLが高くノイズが乗りやすいため既定で圧縮する。opz2x6 と同一。
+//! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機準拠）。opz2x6 と同一。
+//! - `--cutoff <0-255>` ローパスカットオフ（味付け、既定=全開255=20kHz）。低いほど倍音過多を抑える
+//!   （180≈2.8kHz/200≈4.5kHz）。変調は保つので基音を失わず明るさだけ落とせる。opz2x6 と同一。
 //!
 //! ROM2内の音色テーブル（`0x0660`から68音色×64バイト）の抽出は [`rom2`]、
 //! OPQ→38x6の変換は [`conv`]（spec-sound.mdの規約準拠）。
@@ -19,7 +25,7 @@ mod rom2;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use conv::{bank_of, preset_count, voices_to_preset_files, NamedVoice};
+use conv::{bank_of, preset_count, voices_to_preset_files_opts, NamedVoice, PsrConvOptions};
 
 /// 出力対象の音色範囲。
 ///
@@ -71,7 +77,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (input, output_dir, start_bank, voice_mode) = parse_args(args)?;
+    let (input, output_dir, start_bank, voice_mode, opts) = parse_args(args)?;
 
     let rom = std::fs::read(&input)
         .map_err(|e| format!("ROM2の読み込みに失敗: {}: {e}", input.display()))?;
@@ -86,10 +92,10 @@ fn run(args: &[String]) -> Result<(), String> {
 
     // 試聴検証用: --wav 指定時は各音色を WAV(<output_dir>/wav/voiceNN.wav)へレンダリングする。
     if args.iter().any(|a| a == "--wav") {
-        render_wavs(&voices, &output_dir)?;
+        render_wavs(&voices, &output_dir, opts)?;
     }
 
-    let files = voices_to_preset_files(start_bank, &voices);
+    let files = voices_to_preset_files_opts(start_bank, &voices, opts);
 
     for file in &files {
         let path = output_dir.join(format!("b{}.38x6", bank_of(file)));
@@ -104,11 +110,12 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode), String> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode, PsrConvOptions), String> {
     let mut positional: Vec<&String> = Vec::new();
     // 既定: 波形メモリ音源バンクの直後(WAVEFORM_MEMORY_BANK+1)。Bank 0はML自動生成用に空けておく
     let mut start_bank: u16 = ym38x6_core::WAVEFORM_MEMORY_BANK + 1;
     let mut voice_mode = VoiceMode::default();
+    let mut opts = PsrConvOptions::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -125,6 +132,24 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode), Str
                     "all" => VoiceMode::All,
                     _ => return Err(format!("--voices の値が不正: {v}（panel / extended / all）")),
                 };
+                i += 2;
+            }
+            "--mod-cap" => {
+                let v = args.get(i + 1).ok_or("--mod-cap に値がありません")?;
+                opts.mod_tl_cap = v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?;
+                i += 2;
+            }
+            "--sustain" => {
+                let v = args.get(i + 1).ok_or("--sustain に値がありません")?;
+                opts.carrier_sustain = v.parse::<f32>().map_err(|_| format!("--sustain の値が不正(0.0-1.0): {v}"))?;
+                if !(0.0..=1.0).contains(&opts.carrier_sustain) {
+                    return Err(format!("--sustain は 0.0〜1.0 で指定してください: {v}"));
+                }
+                i += 2;
+            }
+            "--cutoff" => {
+                let v = args.get(i + 1).ok_or("--cutoff に値がありません")?;
+                opts.filter_cutoff = Some(v.parse::<u8>().map_err(|_| format!("--cutoff の値が不正(0-255): {v}"))?);
                 i += 2;
             }
             "--wav" => {
@@ -145,6 +170,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode), Str
         PathBuf::from(positional[1]),
         start_bank,
         voice_mode,
+        opts,
     ))
 }
 
@@ -152,7 +178,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode), Str
 /// C4(261.63Hz)を1.2秒キーオン後、3秒リリース。
 /// リリースレートが遅い音色（RR=0で約284.9秒相当）でも減衰の様子を確認できるよう、
 /// 通常より長めのテールを確保している。
-fn render_wavs(voices: &[NamedVoice], output_dir: &std::path::Path) -> Result<(), String> {
+fn render_wavs(voices: &[NamedVoice], output_dir: &std::path::Path, opts: PsrConvOptions) -> Result<(), String> {
     use ym38x6_core::{SoundEngine, Ym38x6Engine};
     const SR: f32 = 44_100.0;
     let wav_dir = output_dir.join("wav");
@@ -160,7 +186,7 @@ fn render_wavs(voices: &[NamedVoice], output_dir: &std::path::Path) -> Result<()
         .map_err(|e| format!("wavディレクトリ作成に失敗: {e}"))?;
 
     for (i, nv) in voices.iter().enumerate() {
-        let patch = nv.voice.to_ym38x6_patch();
+        let patch = nv.voice.to_ym38x6_patch_opts(opts);
         let mut engine = Ym38x6Engine::new(SR);
         engine.note_on_with_velocity(0, 261.63, 110, patch);
 
