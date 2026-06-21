@@ -33,19 +33,33 @@ fn out_to_tl(out: u8) -> u8 {
 ///
 /// エンジンの `modulation` は位相サイクル単位（1.0=1周=2πrad）で、変調深度は
 /// β[rad] = tl_to_gain(tl) × FM_MODULATION_INDEX_SCALE(4.0) × 2π。
-/// TL=254 → β≈24rad（ノイズ）、TL=200 → β≈2.4rad（音楽的）。
+/// TL=254 → β≈24rad（ノイズ）、TL=200 → β≈2.4rad。
+/// 200 だと弱打でも明るすぎ（ブラス寄り）になり、180 の方が聴感が良いと確認したため 180 を既定とする。
+/// 180 を基準にしても velocity_sensitivity(KVS) が強打時にモジュレーター実効 TL を ~190 まで
+/// 押し上げるため、弱打=穏やか／強打=明るい のグラデーションになる。
 /// キャリアは音量に直結するため天井を設けず out_to_tl を使う。
-pub const DEFAULT_MOD_TL_CAP: u8 = 200;
+pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
 /// OUT → 38x6 TL（モジュレーター用、上限 `cap`）。
 fn out_to_tl_mod(out: u8, cap: u8) -> u8 {
     (out.min(99) as f32 / 99.0 * cap as f32).round() as u8
 }
 
-/// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L（opm2x6 と同実装）。
-fn sl_to_x6(reg: u8) -> u8 {
+/// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L。
+///
+/// reg はサスティンレベルの減衰量（reg=0で0dB=減衰なし、reg=15で-93dB≈無音、reg<15は3dB/step）。
+/// **キャリア**は 38x6 オペレーターの sustain_level(=`d1l/255` リニア振幅, operator.rs) に合わせて
+/// dB をリニア振幅 10^(db/20) に変換する。旧実装は dB を線形に 0-255 へ写していたため、中間 reg
+/// （例 reg=13=-39dB）が 0.58(≈-4.7dB) の高い保持レベルになり、撥弦/打鍵系のキャリアが減衰せず
+/// 静的化していた（撥弦が「鳴りっぱなし」になる）。
+/// **モジュレーター**は音色（明るさ）維持のため従来の dB 線形写像のまま。端点(reg=0→255, reg=15→0)は両者一致。
+fn sl_to_x6(reg: u8, is_carrier: bool) -> u8 {
     let db: f32 = if reg >= 15 { -93.0 } else { -(3.0 * reg as f32) };
-    (255.0 * (1.0 + db / 93.0)).round() as u8
+    if is_carrier {
+        (10f32.powf(db / 20.0) * 255.0).round() as u8
+    } else {
+        (255.0 * (1.0 + db / 93.0)).round() as u8
+    }
 }
 
 /// TX81Z DET (0-6, 3=中心) → 38x6 dt1（中心128）。
@@ -92,29 +106,41 @@ pub fn freq_to_mul_fine(freq: u8) -> (u8, u8) {
     (best_mul, oft)
 }
 
-/// OPM型5-bitレート（AR/D1R/D2R, 0-31）+ RS → 38x6 rate（opm2x6 と同実装）。
-fn opm_rate_to_x6(rate: u8, rs: u8) -> u8 {
-    if rate == 0 { return 0; }
-    const KEY_CODE_A4: u16 = 19;
+/// A4 相当のキーコード（KSR rate scaling の焼き込み量基準）。
+const KEY_CODE_A4: u16 = 19;
+
+/// rs(0-3) に応じた KSR(rate key scaling)の加算量。
+fn ksr_add(rs: u8) -> u16 {
     let ksr_shift = 3u16.saturating_sub(rs.min(3) as u16);
-    let ksr_add = KEY_CODE_A4 >> ksr_shift;
-    let eg_rate = (2 * rate as u16 + ksr_add).min(62);
+    KEY_CODE_A4 >> ksr_shift
+}
+
+/// OPM型5-bitレート（AR/D1R/D2R, 0-31）→ 38x6 rate。
+///
+/// **キャリア**は KSR(A4キーコード)の焼き込みを廃止する。38x6エンジンは実行時に
+/// `ksr_rate_multiplier(rs, note)` でノート依存KSRを別途適用するため、A4(実行時倍率1.0)では
+/// 焼き込み分(rs=3で+19)が二重適用ぎみに効き、減衰が速すぎて撥弦/打鍵キャリアが一瞬で
+/// 持続レベルに落ちて静的化していた。KSRは実行時に一元適用とし、レートは基準値とする。
+/// **モジュレーター**は音色（明るさの時間変化）維持のため従来どおり KSR を焼き込む。
+fn opm_rate_to_x6(rate: u8, rs: u8, is_carrier: bool) -> u8 {
+    if rate == 0 { return 0; }
+    let add = if is_carrier { 0 } else { ksr_add(rs) };
+    let eg_rate = (2 * rate as u16 + add).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
 const ATTACK_ONSET_BIAS: u16 = 30;
 
-fn ar_to_x6(ar: u8, rs: u8) -> u8 {
+fn ar_to_x6(ar: u8, rs: u8, is_carrier: bool) -> u8 {
     if ar == 0 { return 0; }
-    (opm_rate_to_x6(ar, rs) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
+    (opm_rate_to_x6(ar, rs, is_carrier) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
 }
 
-/// OPM型4-bitリリースレート（RR, 0-15）+ RS → 38x6 rr（opm2x6 と同実装）。
-fn rr_to_x6(rr: u8, rs: u8) -> u8 {
-    const KEY_CODE_A4: u16 = 19;
-    let ksr_shift = 3u16.saturating_sub(rs.min(3) as u16);
-    let ksr_add = KEY_CODE_A4 >> ksr_shift;
-    let eg_rate = (4 * rr as u16 + 2 + ksr_add).min(62);
+/// OPM型4-bitリリースレート（RR, 0-15）→ 38x6 rr。
+/// KSR焼き込みの扱いは [opm_rate_to_x6] と同様（キャリアは廃止、モジュレーターは従来どおり）。
+fn rr_to_x6(rr: u8, rs: u8, is_carrier: bool) -> u8 {
+    let add = if is_carrier { 0 } else { ksr_add(rs) };
+    let eg_rate = (4 * rr as u16 + 2 + add).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
@@ -154,11 +180,11 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions)
 
     OperatorParams {
         tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out, mod_tl_cap) },
-        ar: ar_to_x6(op.ar, op.rs),
-        d1r: opm_rate_to_x6(op.d1r, op.rs),
-        d2r: opm_rate_to_x6(d2r, op.rs),
-        d1l: sl_to_x6(op.d1l),
-        rr: rr_to_x6(op.rr, op.rs),
+        ar: ar_to_x6(op.ar, op.rs, is_carrier),
+        d1r: opm_rate_to_x6(op.d1r, op.rs, is_carrier),
+        d2r: opm_rate_to_x6(d2r, op.rs, is_carrier),
+        d1l: sl_to_x6(op.d1l, is_carrier),
+        rr: rr_to_x6(op.rr, op.rs, is_carrier),
         mul,
         dt1: det_to_x6(op.det),
         ksr: opts.ksr_override.unwrap_or(op.rs.min(3) * 85),
@@ -296,6 +322,28 @@ mod tests {
         let (m, oft) = freq_to_mul_fine(0); // 0.5x
         assert_eq!(m, 0);
         assert_eq!(oft, 128);
+    }
+
+    #[test]
+    fn sl_to_x6_carrier_linear_amplitude() {
+        // キャリア: 端点は不変
+        assert_eq!(sl_to_x6(0, true), 255); // 0dB=減衰なし=フル保持
+        assert_eq!(sl_to_x6(15, true), 0);  // -93dB≈無音
+        // reg=13(-39dB)はリニア振幅 0.0112 → 約3（撥弦キャリアが静的化していた回帰テスト）
+        assert_eq!(sl_to_x6(13, true), 3);
+        // モジュレーターは従来の dB 線形写像（音色維持）: reg=13 は 148 のまま
+        assert_eq!(sl_to_x6(13, false), 148);
+        // 端点はキャリア/モジュレーターで一致
+        assert_eq!(sl_to_x6(0, false), 255);
+        assert_eq!(sl_to_x6(15, false), 0);
+    }
+
+    #[test]
+    fn rate_ksr_carrier_vs_modulator() {
+        // D1R=16, rs=3: モジュレーターは KSR 焼き込みで速い、キャリアは KSR なしで遅い
+        let carr = opm_rate_to_x6(16, 3, true);
+        let modu = opm_rate_to_x6(16, 3, false);
+        assert!(carr < modu, "キャリアは KSR 無しで遅い(値が小さい): carr={carr} mod={modu}");
     }
 
     #[test]
