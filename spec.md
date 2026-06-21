@@ -16,6 +16,7 @@
 本ドキュメントは設計仕様の全体像（実装ロードマップ・技術スタック・参照資料）を扱う。
 詳細仕様は以下の文書に分割されている。
 
+- [spec-roadmap.md](spec-roadmap.md)：実装フェーズ一覧と現在地
 - [spec-sound.md](spec-sound.md)：38x6音源エンジンの仕様（パラメーター・MIDI実装・OPQコンバーター・波形メモリ専用音色バンク等）
 - [spec-app.md](spec-app.md)：作曲支援アプリのUI設計仕様
 
@@ -23,43 +24,8 @@
 
 ## 実装ロードマップ
 
-```
-フェーズ1: 波形メモリ音源とTauriデスクトップアプリの基盤（完了）
-  → プロトタイプとしてWMS-1（波形メモリ音源 + ADSR）をwms1-coreに実装
-    （フェーズ5以降に38x6へ統合し、wms1-core/wms1-vstは廃止。
-     役割はym38x6の「波形メモリ専用音色バンク」＝Algorithm 7・OP1のみ有効が引き継ぐ）
-  → 内部波形フォーマット（1024サンプル対数）と変換パイプラインを実装
-  → cpalで音声出力
-  → マウスによる2Dジェスチャー入力UIの実装
-  → キャリブレーション（C-F-G基準点）の実装
-
-フェーズ2: パフォーマンスLFO・マスターエフェクト実装
-  → PerformanceLfo / PerformanceLfoTarget をsound-coreに実装
-  → MasterEffects（Reverb/Chorus）をsound-coreに実装
-
-フェーズ3: 38x6 FMエンジン導入、波形選択・デチューン拡張（完了）
-  → OPZ系の音色表現を取り込む
-
-フェーズ4: OP単位F-Number・独立キーオンを実装（完了）
-  → OPQ由来の音楽的表現を一般化して活用
-
-フェーズ5: パラメーターUI・音色保存・プリセットライブラリ・GM2 Bank0
-  → ym38x6-ml: 目標音声 → FMパラメーター逆算（インバース合成）
-  → 38x6エンジンのPythonバインディング（PyO3 + maturin）
-  → ランダムサンプリングによる合成データ生成・学習
-  → GM2プログラムマップ準拠のBank 0音色セットをMLで自動生成（Bank 0には実機プリセットを直接流用しない）
-  → OPQ/PSR-70実機音色はtools/psr2x6で別バンク（WAVEFORM_MEMORY_BANK+1以降）へ変換し、ym38x6-mlのシード/教師として用いる
-  → Bank Select / Program Change 実装
-  → 同一リポジトリ内の ym38x6-ml/ に収録
-
-フェーズ6: スケール判定・アボイド挙動の検証
-
-フェーズ7: タブレット対応（Tauri v2 iOS/Android）
-  → マルチタッチ入力の実装（UIロジックは共通）
-
-フェーズ8: アルゴリズム拡張モード（オプション）
-  → SY77スタイルのルーティングレジスタ公開
-```
+フェーズ一覧と現在地は [spec-roadmap.md](spec-roadmap.md) に分離した。
+現在は **フェーズ5：実機音色資産の取り込みと音作り基盤**（進行中）。
 
 ---
 
@@ -115,6 +81,39 @@ ym38x6/                  ← ワークスペースルート
 VSTプラグイン:  nice-plug（ym38x6-vstに実装済み）
 ターゲット:     Windowsデスクトップ → タブレット（iOS/Android）→ VST
 ```
+
+### 設計方針：VCO抽象とモジュレーション層
+
+層の役割を「発振源（VCO）」と「モジュレーション/処理層」に分離し、発振源を差し替え可能にする。
+
+```
+sound-core（モジュレーション/処理層 + VCO抽象）
+  VCO抽象トレイト        ← 「ピッチ付き発振源」のインターフェース
+  モジュレーション層      ← LFO・EG（Pitch/Filter/TVA）・VCF・VCA・表情コントローラー・ルーティング
+  MasterEffects          ← Reverb/Chorus（出力後段）
+        ▲ implements VCO
+        │
+ym38x6-core（VCO実装の一つ＝FM発振源）
+  Ym38x6Engine           ← 4opFM合成（差し替え対象。将来はPCM/減算/物理モデル等に置換可能）
+```
+
+- **現状（未実現・要注意）**: VCO抽象はまだ"目標"であって実装されていない。`SoundEngine` トレイトは
+  存在するが形骸化しており、実質的に機能している契約は `render()`（音声プル）のみ。
+  `note_on(wave_slot, AdsrParams)` は旧WMS-1由来の語彙で、ym38x6では未使用
+  （`Ym38x6Engine::note_on` 内コメント参照）。消費側（ym38x6-vst・gesture-app）は具象 `Ym38x6Engine` と
+  `Ym38x6Patch` に直接結合しており、トレイト越しのポリモーフィズムは使っていない。
+  sound-core に `PerformanceLfo`/`MasterEffects` がある点だけは土台として有効。
+- **WMS-1同居時代の実態（参考）**: かつて gesture-app は `enum EngineHandle { Wms1, Ym38x6 }` で
+  2エンジンを切り替えたが、共有できたのは `render()` のみ。発音はエンジン別の並行コマンド群
+  （`note_on系` と `ym38x6_note_on系`）で、フロントが `engine_type` で分岐していた。
+  ＝当時もVCOポリモーフィズムは無く、WMS-1廃止で具象1本へ収束した。
+- **フェーズ7（MC-505風モジュレーション拡張）の方針**: 新しいモジュレーション層（LFO拡張・EG・VCF/VCA・
+  表情ルーティング）を **sound-core 側に実装**し、発振源（VCO）を差し替え可能な抽象として
+  **このフェーズで初めて確立する**。ym38x6-core のFMエンジンは「VCO実装の一つ」として扱う。
+- **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
+  UI・MIDI実装を再利用できる状態を目指す。
+- **留意（実装時に確定）**: 現状フィルター（VCF）相当は ym38x6-core 側（`filter.rs`）にある。
+  フェーズ7でVCFをモジュレーション層へ移す/共有する設計は、VCO抽象の切り出しと併せて実装時に決める。
 
 ---
 

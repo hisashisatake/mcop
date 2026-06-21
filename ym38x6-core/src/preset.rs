@@ -105,8 +105,8 @@ pub fn presets_dir() -> PathBuf {
 }
 
 /// Bank Select（CC0×128+CC32）とProgram Change（0〜127）から決定的にパッチを生成する
-/// 暫定プレースホルダー。GM2準拠のBank0音色はym38x6-ml（フェーズ5、インバース合成）で、
-/// Bank1以降のユーザープリセットはプリセットライブラリ（フェーズ5）で生成・管理する予定。
+/// 暫定プレースホルダー。GM2準拠のBank0音色はym38x6-ml（フェーズ6、インバース合成）で、
+/// Bank1以降のユーザープリセットはプリセットライブラリ（フェーズ8）で生成・管理する予定。
 /// 実データができるまでの間、Bank/Programの値域を一通り確認できるダミーパッチを返す
 /// （bank/programの値はseedとして使うのみで、bankによる音色の区別は未実装）。
 pub fn placeholder_patch(bank: u16, program: u8) -> Ym38x6Patch {
@@ -141,7 +141,7 @@ pub fn placeholder_patch(bank: u16, program: u8) -> Ym38x6Patch {
 }
 
 /// GM2 Bank0の一部音色について、手動チューニングしたパッチを返す。
-/// ym38x6-mlによるML自動生成（フェーズ5「音色作成方針」）が完成するまでの間、
+/// ym38x6-mlによるML自動生成（フェーズ6「音色作成方針」）が完成するまでの間、
 /// 動作確認用に少数の代表音色のみ手動で作成したもの。該当しないprogram番号は
 /// Noneを返し、呼び出し側で`placeholder_patch`へフォールバックする。
 pub fn gm2_bank0_patch(program: u8) -> Option<Ym38x6Patch> {

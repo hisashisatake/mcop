@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 このファイルはClaude Codeがym38x6リポジトリで作業する際のガイドです。
-設計の詳細は [spec.md](spec.md)（全体像）/ [spec-sound.md](spec-sound.md)（音源エンジン）/ [spec-app.md](spec-app.md)（作曲支援アプリUI）を参照。
+設計の詳細は [spec.md](spec.md)（全体像）/ [spec-roadmap.md](spec-roadmap.md)（実装フェーズ）/ [spec-sound.md](spec-sound.md)（音源エンジン）/ [spec-app.md](spec-app.md)（作曲支援アプリUI）を参照。
 
 ## 設計経緯
 詳細な議論の経緯は `docs/session_history.txt` を参照。
@@ -143,7 +143,7 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 - キャリブレーションベース（C-F-Gの3点で座標系を定義）
 - グリッドなし
 - マウス版: 縦軸=ルート音、横軸=コード種類
-- タッチ版（フェーズ8）: 指の間隔=インターバル、指の移動=ルート音シフト
+- タッチ版（フェーズ10・タブレット対応）: 指の間隔=インターバル、指の移動=ルート音シフト
 - ∞ジェスチャー: 軌跡がそのままF-Numberに追従（ビブラート・装飾音）
 
 ---
