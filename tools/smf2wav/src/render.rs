@@ -21,11 +21,13 @@ fn render_chunk(engine: &mut Ym38x6Engine, out: &mut Vec<f32>, rendered: &mut us
 
 /// SMF を `bank` を音色として再生し、mono f32 サンプル列を返す。
 /// `tail_secs` はノートオフ後の残響を伸ばす秒数。
+/// `max_secs` が `Some(s)` のとき、出力を `s` 秒（テール込み）で打ち切る（試聴の時短用）。
 pub fn render_smf(
     data: &[u8],
     bank: &PatchBank,
     sample_rate: f32,
     tail_secs: f32,
+    max_secs: Option<f32>,
 ) -> Result<Vec<f32>, String> {
     let (division, events) = parse_smf(data)?;
 
@@ -39,11 +41,20 @@ pub fn render_smf(
     let mut sample_pos: f64 = 0.0;
     let mut rendered: usize = 0;
 
+    let max_samples = max_secs.map(|s| (s * sample_rate).max(0.0) as usize);
+
     for e in &events {
         let dt = e.tick - cur_tick;
         sample_pos += dt as f64 * spt;
         cur_tick = e.tick;
         let target = sample_pos.floor() as usize;
+        // 時短打ち切り: 上限に達したらそこまでレンダリングして以降のイベントは無視する。
+        if let Some(maxs) = max_samples {
+            if target >= maxs {
+                render_chunk(&mut engine, &mut out, &mut rendered, maxs);
+                return Ok(out);
+            }
+        }
         render_chunk(&mut engine, &mut out, &mut rendered, target);
 
         match e.kind {
@@ -67,8 +78,11 @@ pub fn render_smf(
         }
     }
 
-    // 残響テール
-    let tail_target = rendered + (sample_rate * tail_secs) as usize;
+    // 残響テール（max_secs 指定時は上限でクランプ）
+    let mut tail_target = rendered + (sample_rate * tail_secs) as usize;
+    if let Some(maxs) = max_samples {
+        tail_target = tail_target.min(maxs);
+    }
     render_chunk(&mut engine, &mut out, &mut rendered, tail_target);
     Ok(out)
 }

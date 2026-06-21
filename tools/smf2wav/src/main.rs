@@ -11,6 +11,7 @@
 //! - `--sr` 出力サンプルレート（既定 44100）。
 //! - `--tail` ノートオフ後の残響を伸ばす秒数（既定 2.0）。
 //! - `--no-normalize` ピーク正規化（-6dBFS）を無効化する。
+//! - `--max-secs <秒>` 出力をこの秒数（テール込み）で打ち切る（試聴の時短用）。
 //! - `--reverb-send <N>` マスターリバーブセンド（0-255、既定 0=ドライ）。DAW で
 //!   全chに掛けていたリバーブ（CC91 相当）を再現する診断用。0 のとき従来どおり完全ドライ。
 //! - `--reverb-type <0-7>` リバーブタイプ（既定 3=Hall1。0:Room1〜5:Plate,6:Delay,7:PanningDelay）。
@@ -49,6 +50,8 @@ struct Args {
     feedback_two_sample: bool,
     /// EXPERIMENT(fb-2sample): feedback_to_scale 最大値 override（None=既定1.8）。
     feedback_scale_max: Option<f32>,
+    /// 試聴の時短用: 出力をこの秒数（テール込み）で打ち切る（None=全長）。
+    max_secs: Option<f32>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -59,6 +62,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut reverb = ReverbConfig::default();
     let mut feedback_two_sample = false;
     let mut feedback_scale_max: Option<f32> = None;
+    let mut max_secs: Option<f32> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -101,6 +105,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 normalize = false;
                 i += 1;
             }
+            "--max-secs" => {
+                let v = args.get(i + 1).ok_or("--max-secs に値がありません")?;
+                let s = v.parse::<f32>().map_err(|_| format!("--max-secs の値が不正: {v}"))?;
+                if s <= 0.0 {
+                    return Err(format!("--max-secs は正の値を指定してください: {v}"));
+                }
+                max_secs = Some(s);
+                i += 2;
+            }
             // EXPERIMENT(fb-2sample): feedback 帰還方式の測定用フラグ。
             "--fb-two-sample" => {
                 feedback_two_sample = true;
@@ -142,6 +155,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         reverb,
         feedback_two_sample,
         feedback_scale_max,
+        max_secs,
     })
 }
 
@@ -161,7 +175,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let smf_data = std::fs::read(&args.song)
         .map_err(|e| format!("{}: {e}", args.song.display()))?;
 
-    let mut buf = render_smf(&smf_data, &bank, args.sample_rate, args.tail_secs)?;
+    let mut buf = render_smf(&smf_data, &bank, args.sample_rate, args.tail_secs, args.max_secs)?;
     // マスターリバーブ（send>0 のときのみ）。DAW での聴感を再現する後段適用。
     apply_reverb(&mut buf, 1, args.sample_rate, &args.reverb);
     if args.normalize {
