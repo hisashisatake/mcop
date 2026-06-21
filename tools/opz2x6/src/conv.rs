@@ -178,7 +178,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions)
     // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
-    OperatorParams {
+    let mut params = OperatorParams {
         tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out, mod_tl_cap) },
         ar: ar_to_x6(op.ar, op.rs, is_carrier),
         d1r: opm_rate_to_x6(op.d1r, op.rs, is_carrier),
@@ -195,7 +195,20 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions)
         velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 10 },
         waveform: op.ow.min(7),
         op_fine_tune,
+    };
+
+    // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
+    if is_carrier && opts.carrier_sustain > 0.0 {
+        let k = opts.carrier_sustain.clamp(0.0, 1.0);
+        // D1L を満レベル方向へ持ち上げる（最大で残差の 70% まで）。
+        let d1l = params.d1l as f32;
+        params.d1l = (d1l + (255.0 - d1l) * 0.7 * k).round().clamp(0.0, 255.0) as u8;
+        // 減衰レートを遅くする（値が小さいほど遅い）。D2R は鳴りの伸びに直結するため強めに。
+        params.d1r = (params.d1r as f32 * (1.0 - 0.60 * k)).round().clamp(0.0, 255.0) as u8;
+        params.d2r = (params.d2r as f32 * (1.0 - 0.85 * k)).round().clamp(0.0, 255.0) as u8;
     }
+
+    params
 }
 
 // ---------------------------------------------------------------------------
@@ -213,11 +226,23 @@ pub struct ConvOptions {
     /// 全オペレーターの KSR（鍵盤レート追従）上書き（`None` で .syx 由来）。
     /// 切り分け診断用：`Some(0)` で高音のエンベロープ加速を弱められる。
     pub ksr_override: Option<u8>,
+    /// キャリアのサステイン延長（味付け用、0.0=実機忠実 .. 1.0=最大延長）。
+    ///
+    /// TX81Z のファクトリー音色（特にエレピ/ピアノ）は実機からして打鍵的で減衰が速く、
+    /// 「楽器として伸びが欲しい」場合に実機から意図的に離して鳴りを伸ばす。
+    /// キャリアのみ D1L（サステインレベル）を満レベル方向へ持ち上げ、D1R/D2R（減衰レート）を
+    /// 遅くする。モジュレーターには触れず音色の明るさ変化は保つ。
+    pub carrier_sustain: f32,
 }
 
 impl Default for ConvOptions {
     fn default() -> Self {
-        Self { mod_tl_cap: DEFAULT_MOD_TL_CAP, fb_override: None, ksr_override: None }
+        Self {
+            mod_tl_cap: DEFAULT_MOD_TL_CAP,
+            fb_override: None,
+            ksr_override: None,
+            carrier_sustain: 0.0,
+        }
     }
 }
 

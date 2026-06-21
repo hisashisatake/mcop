@@ -20,6 +20,8 @@
 //!   省略時は .syx 由来。切り分け診断用（`--fb 0` でフィードバック無効）。
 //! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
 //!   省略時は .syx 由来。`--ksr 0` で高音のエンベロープ加速を弱める。
+//! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機忠実）。
+//!   大きいほどエレピ/ピアノの鳴りが伸びる（実機の打鍵的な減衰から意図的に離す）。
 //! - `--smf <song.mid>` を指定すると、変換した音色バンクで SMF を ym38x6-core 再生し、
 //!   `<output_dir>/smf/<midistem>.wav` へ出力する（プログラム番号＝ボイス番号）。
 
@@ -96,6 +98,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut mod_cap: u8 = opz2x6::conv::DEFAULT_MOD_TL_CAP;
     let mut fb_override: Option<u8> = None;
     let mut ksr_override: Option<u8> = None;
+    let mut carrier_sustain: f32 = 0.0;
     let mut smf: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
@@ -144,6 +147,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 ksr_override = Some(v.parse::<u8>().map_err(|_| format!("--ksr の値が不正(0-255): {v}"))?);
                 i += 2;
             }
+            "--sustain" => {
+                let v = args.get(i + 1).ok_or("--sustain に値がありません")?;
+                carrier_sustain = v.parse::<f32>().map_err(|_| format!("--sustain の値が不正(0.0-1.0): {v}"))?;
+                if !(0.0..=1.0).contains(&carrier_sustain) {
+                    return Err(format!("--sustain は 0.0〜1.0 で指定してください: {v}"));
+                }
+                i += 2;
+            }
             "--smf" => {
                 let v = args.get(i + 1).ok_or("--smf に値がありません")?;
                 smf = Some(PathBuf::from(v));
@@ -166,7 +177,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         input, output_dir, bank, split, wav,
         wav_cfg: WavConfig { on_secs, off_secs: 1.5, frequency },
         voice_filter,
-        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override },
+        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain },
         smf,
     })
 }
