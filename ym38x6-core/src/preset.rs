@@ -8,9 +8,9 @@ use sound_core::AdsrParams;
 
 /// 波形メモリ音色専用のBank Select番号。このバンクを選ぶと、Program番号(0〜127)から
 /// `waveform_memory_params_for_program`で(波形, ADSR)を決定し、`waveform_memory_patch`で
-/// 1オペレーター音色を生成する（0〜7=ビルトイン波形+ピアノ風ADSR、8〜15=ビルトイン波形+
-/// リード風ADSR、16〜127=ユーザー波形スロット+デフォルトADSR）。GM2 Bank0(=0)や暫定
-/// プレースホルダーと衝突しないよう、十分大きな予約値を用いる。
+/// 1オペレーター音色を生成する（基本4波形 sine/saw/square/triangle × ピアノ/リードADSR の
+/// 8通りを Program 0〜7 に配置、8以降は繰り返し）。GM2 Bank0(=0)や暫定プレースホルダーと
+/// 衝突しないよう、十分大きな予約値を用いる。
 pub const WAVEFORM_MEMORY_BANK: u16 = 16383;
 
 /// 旧WMS-1相当の「波形メモリ音色」を生成する。Algorithm 7(全並列・変調なし)で
@@ -61,17 +61,26 @@ fn waveform_memory_lead_adsr() -> AdsrParams {
     AdsrParams { attack: 255, decay: 0, sustain: 255, release: 130 }
 }
 
+/// 波形メモリ専用バンクが提供する基本4波形のスロット番号。
+/// 各基本波の variant0（フル）: サイン=0 / ノコギリ=8 / 矩形=16 / 三角=24。
+/// 波形メモリ音色（1オペレーター）は素直なオシレーターとして使うため、OPZ8変換や
+/// PWMバリエーションは含めず、この4波形だけを並べる（ユーザー方針2026-06-21）。
+const WAVEFORM_MEMORY_BASE_WAVEFORMS: [u8; 4] = [0, 8, 16, 24];
+
 /// 波形メモリ専用バンクのProgram番号から`waveform_memory_patch`への
-/// (waveform, ADSR)を決定する。
-/// - 0〜7: ビルトイン波形(Program) + ピアノ風ADSR
-/// - 8〜15: ビルトイン波形(Program-8) + リード風ADSR
-/// - 16〜127: ユーザー波形スロット(Program) + デフォルトADSR
+/// (waveform, ADSR)を決定する。基本4波形(sine/saw/square/triangle) × ピアノ/リードADSR の
+/// 8通りを Program 0〜7 に並べ、8以降は同じ並びを繰り返す(program % 8)。
+/// - Program 0〜3: sine/saw/square/triangle + ピアノ風ADSR
+/// - Program 4〜7: sine/saw/square/triangle + リード風ADSR
 fn waveform_memory_params_for_program(program: u8) -> (u8, AdsrParams) {
-    match program {
-        0..=7 => (program, waveform_memory_piano_adsr()),
-        8..=15 => (program - 8, waveform_memory_lead_adsr()),
-        _ => (program, AdsrParams::default()),
-    }
+    let slot = program % 8; // 0〜7 の枠で扱う（8以降は繰り返し）
+    let waveform = WAVEFORM_MEMORY_BASE_WAVEFORMS[(slot % 4) as usize];
+    let adsr = if slot < 4 {
+        waveform_memory_piano_adsr()
+    } else {
+        waveform_memory_lead_adsr()
+    };
+    (waveform, adsr)
 }
 
 /// ユーザープリセットの読み込み元ディレクトリ（暫定）。
@@ -513,7 +522,9 @@ mod tests {
 
     #[test]
     fn waveform_memory_patch_is_audible_and_finite() {
-        for waveform in 0u8..8 {
+        // 基本4波形(sine=0/saw=8/square=16/triangle=24)＋いくつかの拡張バリエーションが
+        // エンジンで可聴・有限であることを確認する。
+        for waveform in [0u8, 8, 16, 24, 12, 20, 28] {
             let mut engine = Ym38x6Engine::new(44100.0);
             engine.note_on_with_velocity(0, 440.0, 127, waveform_memory_patch(waveform, AdsrParams::default()));
             let mut buf = vec![0.0f32; 512];
@@ -527,20 +538,26 @@ mod tests {
     fn patch_for_program_resolves_waveform_memory_bank() {
         let bank = PresetBank::default();
 
-        // Program 0〜7: ビルトイン波形(Program) + ピアノ風ADSR（減衰してサスティンへ落ち着く）
-        let piano = bank.patch_for_program(WAVEFORM_MEMORY_BANK, 2);
-        assert_eq!(piano, waveform_memory_patch(2, waveform_memory_piano_adsr()));
+        // Program 0〜3: 基本4波形(sine/saw/square/triangle) + ピアノ風ADSR
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 0), waveform_memory_patch(0, waveform_memory_piano_adsr()));   // sine
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 1), waveform_memory_patch(8, waveform_memory_piano_adsr()));   // saw
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 2), waveform_memory_patch(16, waveform_memory_piano_adsr()));  // square
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 3), waveform_memory_patch(24, waveform_memory_piano_adsr()));  // triangle
+        let piano = bank.patch_for_program(WAVEFORM_MEMORY_BANK, 0);
         assert!(piano.operators[0].d1r > 0, "piano ADSR should decay");
 
-        // Program 8〜15: ビルトイン波形(Program-8) + リード風ADSR（減衰なしの無限サスティン）
-        let lead = bank.patch_for_program(WAVEFORM_MEMORY_BANK, 10);
-        assert_eq!(lead, waveform_memory_patch(2, waveform_memory_lead_adsr()));
+        // Program 4〜7: 基本4波形 + リード風ADSR（減衰なしの無限サスティン）
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 4), waveform_memory_patch(0, waveform_memory_lead_adsr()));    // sine
+        assert_eq!(bank.patch_for_program(WAVEFORM_MEMORY_BANK, 7), waveform_memory_patch(24, waveform_memory_lead_adsr()));   // triangle
+        let lead = bank.patch_for_program(WAVEFORM_MEMORY_BANK, 4);
         assert_eq!(lead.operators[0].d1r, 0, "lead ADSR should not decay");
         assert_eq!(lead.operators[0].d1l, 255, "lead ADSR sustains at max level");
 
-        // Program 16〜127: ユーザー波形スロット(Program) + デフォルトADSR
-        let user_slot = bank.patch_for_program(WAVEFORM_MEMORY_BANK, 20);
-        assert_eq!(user_slot, waveform_memory_patch(20, AdsrParams::default()));
+        // Program 8以降は同じ並びを繰り返す（program % 8）
+        assert_eq!(
+            bank.patch_for_program(WAVEFORM_MEMORY_BANK, 8),
+            bank.patch_for_program(WAVEFORM_MEMORY_BANK, 0)
+        );
     }
 
     #[test]

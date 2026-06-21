@@ -471,7 +471,7 @@ pub struct Ym38x6Engine {
 impl Ym38x6Engine {
     pub fn new(sample_rate: f32) -> Self {
         let mut wave_tables: Vec<Option<WaveTable>> = (0..TOTAL_SLOTS).map(|_| None).collect();
-        for i in 0..8u8 {
+        for i in 0..waveform::BUILTIN_WAVEFORM_COUNT {
             wave_tables[i as usize] = Some(gen_builtin_waveform(i));
         }
         Self {

@@ -83,7 +83,7 @@ ym38x6/                  ← ワークスペースルート
     src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + 音色LFO + チャンネル管理）
     src/operator.rs        ← Operator（オシレーター + EG + パラメーター）
     src/algorithm.rs       ← アルゴリズム結線テーブル（ymfm由来）
-    src/waveform.rs        ← OPZ系8波形生成
+    src/waveform.rs        ← ビルトイン32波形生成（OPZ由来サイン8 + ノコギリ/矩形/三角の独自拡張）
     src/mapping.rs         ← パラメーターマッピング関数群
     src/tone_lfo.rs        ← 音色LFO
     src/filter.rs          ← SVF + Filter EG

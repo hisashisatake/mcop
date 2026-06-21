@@ -35,8 +35,8 @@ This bank succeeds **WMS-1**, the Phase-1 prototype: a standalone waveform-oscil
 - Internal wave format: 1024 × u16, log encoding (ymfm-compatible)
   - `bit14~0`: −log₂|amplitude| in 4.8 fixed point
   - `bit15`: sign flag
-- Built-in waveforms: 38x6's native 8 waveforms (slots 0–7)
-- User waveforms: 32 × i8 linear input → auto-converted to internal format (slots 8–255)
+- Built-in waveforms: 32 waveforms (slots 0–31) — the OPZ-derived sine set (0–7) plus saw/square/triangle extensions (8–31, not present on OPN/OPM/OPZ)
+- User waveforms: 32 × i8 linear input → auto-converted to internal format (slots 32–255)
 - Unlimited polyphony via `HashMap`-based stable channel IDs
 
 ### 38x6 FM Engine (Phase 3+)

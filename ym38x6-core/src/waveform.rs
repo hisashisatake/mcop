@@ -89,9 +89,95 @@ pub fn gen_op_half_pos_sin2_2x() -> WaveTable {
     })
 }
 
-/// 波形番号0〜7に対応する波形テーブルを生成する。
+// ---------------------------------------------------------------------------
+// 基本波 × OPZ8変換 の汎用展開（waveform 8〜31）
+//
+// OPZの8変換（full / squared / half / half-squared / 2x-half / 2x-squared-half /
+// 2x-abs-half / 2x-pos-squared-half）を、サイン以外の基本波（ノコギリ/矩形/三角）にも
+// 同じ規則で適用する。波形番号 = 基本波index×8 + 変換index:
+//   0–7  : サイン系（gen_op_* に委譲＝OPZ忠実、完全不変）
+//   8–15 : ノコギリ系
+//   16–23: 矩形系
+//   24–31: 三角系
+//   32以降: ユーザー定義波形（set_user_wave）
+// ---------------------------------------------------------------------------
+
+/// ビルトイン波形の総数（4基本波 × 8変換）。スロット0〜31を占有。
+pub const BUILTIN_WAVEFORM_COUNT: u8 = 32;
+
+/// ノコギリ波（1周期 [0,1) を -1→+1 の上昇ランプ）。
+fn base_saw(p: f32) -> f32 {
+    2.0 * p - 1.0
+}
+
+/// バイポーラパルス（duty デューティ比で +1、残りは -1）。duty=0.5 で矩形波。
+fn bipolar_pulse(duty: f32, p: f32) -> f32 {
+    if p < duty { 1.0 } else { -1.0 }
+}
+
+/// 矩形系ファミリー（波形16〜23、variant 0〜7）。
+///
+/// 矩形波は b=±1 のため OPZ の2乗/絶対値変換が縮退して重複する。代わりに
+/// **パルス幅変調（PWM）の duty スイープ ＋ OPZ由来の half / 2x 形**で8種すべて別物にする
+/// （ユーザー方針2026-06-21「矩形波はB」）。
+/// - 0–5: バイポーラPWM デューティ 50/33/25/16.7/12.5/6.25%（太い→細い＝倍音が増える）
+/// - 6  : ハーフ矩形（前半+1/後半0、ユニポーラ）
+/// - 7  : 2倍速矩形の前半（+1,-1 を前半に収め後半無音）
+fn gen_square_family(variant: u8) -> WaveTable {
+    gen_from_fn(move |p| match variant {
+        0 => bipolar_pulse(0.5, p),
+        1 => bipolar_pulse(1.0 / 3.0, p),
+        2 => bipolar_pulse(0.25, p),
+        3 => bipolar_pulse(1.0 / 6.0, p),
+        4 => bipolar_pulse(0.125, p),
+        5 => bipolar_pulse(0.0625, p),
+        6 => if p < 0.5 { 1.0 } else { 0.0 },
+        _ => {
+            if p < 0.25 {
+                1.0
+            } else if p < 0.5 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+    })
+}
+
+/// 三角波（サイン位相に揃える: 0→+1→0→-1→0、p=0.25で+1ピーク）。
+fn base_triangle(p: f32) -> f32 {
+    if p < 0.25 {
+        4.0 * p
+    } else if p < 0.75 {
+        2.0 - 4.0 * p
+    } else {
+        4.0 * p - 4.0
+    }
+}
+
+/// 基本波 `base`（1周期 [0,1)→[-1,1]）に OPZ8変換の `variant`（0〜7）を適用した瞬時値。
+///
+/// サイン基本波で評価すると `gen_op_*`（0〜7）と数式的に一致する（half区間で sin≥0 のため
+/// `sq(x)=x·|x|` が x² と一致する点まで含めて等価）。
+fn opz_variant(base: fn(f32) -> f32, variant: u8, p: f32) -> f32 {
+    // 符号付き2乗（OPZ wf1/wf3/wf5 系: x·|x|）。
+    let sq = |x: f32| x * x.abs();
+    match variant {
+        0 => base(p),                                       // full
+        1 => sq(base(p)),                                   // squared（符号付き）
+        2 => if p < 0.5 { base(p) } else { 0.0 },           // half
+        3 => if p < 0.5 { sq(base(p)) } else { 0.0 },       // half-squared
+        4 => if p < 0.5 { base(2.0 * p) } else { 0.0 },     // 2x-half
+        5 => if p < 0.5 { sq(base(2.0 * p)) } else { 0.0 }, // 2x-squared-half（符号付き）
+        6 => if p < 0.5 { base(2.0 * p).abs() } else { 0.0 }, // 2x-abs-half
+        _ => if p < 0.5 { let v = base(2.0 * p); v * v } else { 0.0 }, // 2x-pos-squared-half（常に正）
+    }
+}
+
+/// 波形番号 0〜31 に対応する波形テーブルを生成する（範囲外は0=サインへフォールバック）。
 pub fn gen_builtin_waveform(index: u8) -> WaveTable {
     match index {
+        // 0–7: サイン系は既存実装に委譲（OPZ忠実、完全不変）
         0 => gen_op_sine(),
         1 => gen_op_sin2(),
         2 => gen_op_half_sine(),
@@ -99,7 +185,20 @@ pub fn gen_builtin_waveform(index: u8) -> WaveTable {
         4 => gen_op_half_sine_2x(),
         5 => gen_op_half_sin2_2x(),
         6 => gen_op_half_abs_sine_2x(),
-        _ => gen_op_half_pos_sin2_2x(),
+        7 => gen_op_half_pos_sin2_2x(),
+        // 8–15: ノコギリ系（基本波 saw × OPZ8変換、独自拡張）
+        8..=15 => {
+            let variant = index - 8;
+            gen_from_fn(move |p| opz_variant(base_saw, variant, p))
+        }
+        // 16–23: 矩形系（PWMファミリー、独自拡張。OPZ縮退回避のため専用セット）
+        16..=23 => gen_square_family(index - 16),
+        // 24–31: 三角系（基本波 triangle × OPZ8変換、独自拡張）
+        24..=31 => {
+            let variant = index - 24;
+            gen_from_fn(move |p| opz_variant(base_triangle, variant, p))
+        }
+        _ => gen_op_sine(),
     }
 }
 
@@ -115,10 +214,73 @@ mod tests {
 
     #[test]
     fn all_waveforms_have_correct_length() {
-        for i in 0..8u8 {
+        for i in 0..BUILTIN_WAVEFORM_COUNT {
             let t = gen_builtin_waveform(i);
             assert_eq!(t.len(), WAVE_LEN, "waveform {i}");
         }
+    }
+
+    #[test]
+    fn sine_block_unchanged_vs_gen_op_functions() {
+        // 0–7 のサイン系は既存 gen_op_* に委譲＝OPZ忠実・完全不変であることを担保。
+        let ops: [fn() -> WaveTable; 8] = [
+            gen_op_sine, gen_op_sin2, gen_op_half_sine, gen_op_half_sin2,
+            gen_op_half_sine_2x, gen_op_half_sin2_2x, gen_op_half_abs_sine_2x, gen_op_half_pos_sin2_2x,
+        ];
+        for (i, f) in ops.iter().enumerate() {
+            let a = gen_builtin_waveform(i as u8);
+            let b = f();
+            for k in 0..WAVE_LEN {
+                assert!((a.sample_at(k) - b.sample_at(k)).abs() < 1e-6, "wf{i} idx{k}");
+            }
+        }
+    }
+
+    #[test]
+    fn opz_variant_matches_sine_base() {
+        // 汎用トランスフォームをサイン基本波で評価すると gen_op_* と一致する。
+        fn base_sine(p: f32) -> f32 { (2.0 * PI * p).sin() }
+        let ops: [fn() -> WaveTable; 8] = [
+            gen_op_sine, gen_op_sin2, gen_op_half_sine, gen_op_half_sin2,
+            gen_op_half_sine_2x, gen_op_half_sin2_2x, gen_op_half_abs_sine_2x, gen_op_half_pos_sin2_2x,
+        ];
+        for v in 0..8u8 {
+            let generic = gen_from_fn(move |p| opz_variant(base_sine, v, p));
+            let expected = ops[v as usize]();
+            for k in 0..WAVE_LEN {
+                assert!((generic.sample_at(k) - expected.sample_at(k)).abs() < 1e-6, "variant{v} idx{k}");
+            }
+        }
+    }
+
+    #[test]
+    fn saw_full_is_rising_ramp() {
+        let t = gen_builtin_waveform(8); // saw v0
+        assert!((t.sample_at(0) - (-1.0)).abs() < 0.02);          // 始点 ≈ -1
+        assert!(t.sample_at(WAVE_LEN / 2).abs() < 0.02);          // 中点 ≈ 0
+        assert!((t.sample_at(WAVE_LEN * 3 / 4) - 0.5).abs() < 0.02); // 3/4 ≈ +0.5
+    }
+
+    #[test]
+    fn square_family_duty_narrows() {
+        // 16=50%, 18=25%, 20=12.5%: +1区間が狭まる（立ち下がり位置で確認）。
+        let sq50 = gen_builtin_waveform(16);
+        let sq25 = gen_builtin_waveform(18);
+        let sq12 = gen_builtin_waveform(20);
+        assert!(sq50.sample_at(WAVE_LEN * 3 / 8) > 0.0); // 0.375 < 0.5 → +1
+        assert!(sq25.sample_at(WAVE_LEN * 3 / 8) < 0.0); // 0.375 > 0.25 → -1
+        assert!(sq12.sample_at(WAVE_LEN / 4) < 0.0);     // 0.25 > 0.125 → -1
+        // 6=ハーフ矩形は後半が無音
+        assert!(gen_builtin_waveform(22).sample_at(WAVE_LEN * 3 / 4).abs() < 1e-3);
+    }
+
+    #[test]
+    fn triangle_full_peaks_at_quarter() {
+        let t = gen_builtin_waveform(24); // triangle v0
+        assert!(t.sample_at(0).abs() < 0.02);                       // 0 ≈ 0
+        assert!((t.sample_at(WAVE_LEN / 4) - 1.0).abs() < 0.02);    // 1/4 ≈ +1
+        assert!(t.sample_at(WAVE_LEN / 2).abs() < 0.02);            // 1/2 ≈ 0
+        assert!((t.sample_at(WAVE_LEN * 3 / 4) - (-1.0)).abs() < 0.02); // 3/4 ≈ -1
     }
 
     #[test]
