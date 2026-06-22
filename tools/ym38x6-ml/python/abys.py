@@ -56,18 +56,21 @@ def render(vec, freq, on, release, sr):
     return ym38x6_ml.render_patch(ps.vector_to_patch_json(v), freq, on, release, 115, sr)
 
 
-def mel_of(samples, sr, n_mels, n_frames):
-    return ft.log_mel(samples, sr=sr, n_mels=n_mels, n_frames=n_frames)
+def feats_of(samples, sr, n_mels, n_frames):
+    return ft.abys_features(samples, sr=sr, n_mels=n_mels, n_frames=n_frames)
 
 
-def fit_one(target_mel, freq, on, release, sr, n_mels, n_frames, sigma0, maxfevals, seed):
+def fit_one(target_feats, freq, on, release, sr, n_mels, n_frames,
+            w_env, w_centroid, sigma0, maxfevals, seed):
     """1ターゲットを A-by-S で復元。(xbest, best_dist, evals) を返す。"""
 
     def f(vec):
         s = render(vec, freq, on, release, sr)
         if ft.is_silent(s):
             return _SILENT_PENALTY
-        return float(np.abs(mel_of(s, sr, n_mels, n_frames) - target_mel).mean())
+        total, _ = ft.abys_distance(
+            target_feats, feats_of(s, sr, n_mels, n_frames), w_env, w_centroid)
+        return total
 
     x0 = np.full(ps.DIM, 0.5)
     es = cma.CMAEvolutionStrategy(
@@ -96,6 +99,10 @@ def main() -> int:
     ap.add_argument("--sr", type=float, default=44100.0)
     ap.add_argument("--n-mels", type=int, default=64)
     ap.add_argument("--n-frames", type=int, default=64)
+    ap.add_argument("--w-env", type=float, default=2.0,
+                    help="ラウドネス曲線項の重み(アタック/ディケイ整形)")
+    ap.add_argument("--w-centroid", type=float, default=4.0,
+                    help="スペクトル重心項の重み(明るさ・音程)")
     args = ap.parse_args()
 
     base = Path(__file__).resolve().parent.parent / "private"
@@ -104,12 +111,13 @@ def main() -> int:
         wav_dir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    # 0.5固定の無情報ベースライン音/mel（比較用）。
+    # 0.5固定の無情報ベースライン音/特徴（比較用）。
     base_vec = np.full(ps.DIM, 0.5)
-    base_mel = mel_of(render(base_vec, args.freq, args.on, args.release, args.sr),
-                      args.sr, args.n_mels, args.n_frames)
+    base_feats = feats_of(render(base_vec, args.freq, args.on, args.release, args.sr),
+                          args.sr, args.n_mels, args.n_frames)
 
-    init_dists, best_dists, base_dists, param_mse = [], [], [], []
+    init_dists, best_dists, param_mse = [], [], []
+    best_terms = []  # 各target の (d_mel, d_env, d_centroid)
     done = 0
     tries = 0
     t0 = time.time()
@@ -119,25 +127,31 @@ def main() -> int:
         target = render(true_vec, args.freq, args.on, args.release, args.sr)
         if ft.is_silent(target):
             continue
-        target_mel = mel_of(target, args.sr, args.n_mels, args.n_frames)
+        target_feats = feats_of(target, args.sr, args.n_mels, args.n_frames)
 
-        # 初期(0.5固定)の目標距離。
-        init_d = float(np.abs(base_mel - target_mel).mean())
+        # 初期(0.5固定)の目標距離（多項合算）。
+        init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
         xbest, best_d, evals = fit_one(
-            target_mel, args.freq, args.on, args.release, args.sr,
-            args.n_mels, args.n_frames, args.sigma0, args.maxfevals, args.cma_seed,
+            target_feats, args.freq, args.on, args.release, args.sr,
+            args.n_mels, args.n_frames, args.w_env, args.w_centroid,
+            args.sigma0, args.maxfevals, args.cma_seed,
         )
+        recon = render(xbest, args.freq, args.on, args.release, args.sr)
+        _, terms = ft.abys_distance(
+            target_feats, feats_of(recon, args.sr, args.n_mels, args.n_frames),
+            args.w_env, args.w_centroid)
         init_dists.append(init_d)
         best_dists.append(best_d)
-        base_dists.append(init_d)  # base=0.5固定なのでinitと同値（明示用）
+        best_terms.append(terms)
         param_mse.append(float(np.mean((xbest - true_vec) ** 2)))
 
         if done < args.wav:
             write_wav(wav_dir / f"{done:02d}_target.wav", target, args.sr)
-            write_wav(wav_dir / f"{done:02d}_recon.wav",
-                      render(xbest, args.freq, args.on, args.release, args.sr), args.sr)
+            write_wav(wav_dir / f"{done:02d}_recon.wav", recon, args.sr)
+        d_mel, d_env, d_cen = terms
         print(f"  target {done}: init={init_d:.4f} -> best={best_d:.4f} "
-              f"(改善率={(1 - best_d / init_d) * 100:.1f}%, evals={evals})")
+              f"(改善率={(1 - best_d / init_d) * 100:.1f}%, evals={evals}) "
+              f"[mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}]")
         done += 1
 
     if not best_dists:
@@ -147,8 +161,10 @@ def main() -> int:
     dt = time.time() - t0
     init_m = float(np.mean(init_dists))
     best_m = float(np.mean(best_dists))
-    print(f"\nA-by-S 自己再構成 {done}件 (所要={dt:.1f}s)")
-    print(f"  mel距離(L1)  初期0.5固定={init_m:.4f}  A-by-S後={best_m:.4f}  改善率={(1 - best_m / init_m) * 100:.1f}%")
+    terms_m = np.mean(best_terms, axis=0)  # (d_mel, d_env, d_centroid)
+    print(f"\nA-by-S 自己再構成 {done}件 (所要={dt:.1f}s, w_env={args.w_env} w_centroid={args.w_centroid})")
+    print(f"  合算距離     初期0.5固定={init_m:.4f}  A-by-S後={best_m:.4f}  改善率={(1 - best_m / init_m) * 100:.1f}%")
+    print(f"  項別(A-by-S後) mel={terms_m[0]:.4f}  env={terms_m[1]:.4f}  centroid={terms_m[2]:.4f}")
     print(f"  paramMSE     復元={float(np.mean(param_mse)):.4f}")
     if args.wav > 0:
         print(f"  WAV書き出し: {wav_dir}（{min(done, args.wav)}ペア, *_target / *_recon）")
