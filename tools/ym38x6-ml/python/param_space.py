@@ -12,10 +12,16 @@ import json
 
 import numpy as np
 
-SPEC_VERSION = "mvp-1"
+SPEC_VERSION = "mvp-2"
 
 # 固定するアルゴリズム: (O1→O2)+(O3→O4)。FM変調を含む代表的な結線。
 FIXED_ALGORITHM = 4
+
+# algorithm=4 のキャリア（出力に直接合算されるop）= O2/O4。モジュレーターは O1/O3。
+CARRIERS_ALGO4 = (1, 3)
+# キャリアTLの下限。0だとキャリアが小さく出て無音が頻発し採用率が落ちるため、
+# 高め（可聴域）にバイアスする。モジュレーターTLは0〜255のまま（FM変調量＝音色を広く振る）。
+CARRIER_TL_MIN = 160
 
 # 振る連続パラメーター: オペレーター側 (field, max_value)
 _OP_FIELDS = [
@@ -36,13 +42,23 @@ _CH_FIELDS = [
 ]
 
 # ベクトルの並び(35): op0の8項目 → op1の8 → op2の8 → op3の8 → channelの3項目。
-# 各要素 = (label, target, field, max)。target は 0..3(オペ index) または "ch"。
+# 各要素 = (label, target, field, vmin, vmax)。target は 0..3(オペ index) または "ch"。
+# op別レンジ対応: キャリアのTLのみ下限を上げ、他は 0〜max。
+
+
+def _op_field_range(op_i: int, field: str, default_max: int) -> tuple[int, int]:
+    if field == "tl" and op_i in CARRIERS_ALGO4:
+        return (CARRIER_TL_MIN, 255)
+    return (0, default_max)
+
+
 PARAM_SPEC = []
 for _op_i in range(4):
     for _name, _mx in _OP_FIELDS:
-        PARAM_SPEC.append((f"op{_op_i}.{_name}", _op_i, _name, _mx))
+        _vmin, _vmax = _op_field_range(_op_i, _name, _mx)
+        PARAM_SPEC.append((f"op{_op_i}.{_name}", _op_i, _name, _vmin, _vmax))
 for _name, _mx in _CH_FIELDS:
-    PARAM_SPEC.append((f"ch.{_name}", "ch", _name, _mx))
+    PARAM_SPEC.append((f"ch.{_name}", "ch", _name, 0, _mx))
 
 DIM = len(PARAM_SPEC)  # 35
 
@@ -86,9 +102,9 @@ def vector_to_patch(vec: np.ndarray) -> dict:
         raise ValueError(f"expected {DIM}-dim vector, got {vec.shape[0]}")
     ops = [_fixed_operator() for _ in range(4)]
     ch = _fixed_channel()
-    for i, (_label, target, field, mx) in enumerate(PARAM_SPEC):
-        val = int(round(float(vec[i]) * mx))
-        val = max(0, min(mx, val))
+    for i, (_label, target, field, vmin, vmax) in enumerate(PARAM_SPEC):
+        val = int(round(vmin + float(vec[i]) * (vmax - vmin)))
+        val = max(vmin, min(vmax, val))
         if target == "ch":
             ch[field] = val
         else:
