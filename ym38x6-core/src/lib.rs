@@ -564,6 +564,9 @@ impl Ym38x6Engine {
     }
 
     /// スロット8〜255にユーザー定義波形をロードする。
+    /// 注意: 波形番号32〜63はノイズ生成器の予約レンジ。そこへロードしても
+    /// オシレーターはノイズ分岐を優先するため、ここで設定したテーブルは無視される
+    /// （実用的なユーザー定義波形スロットは64〜255）。
     pub fn set_user_wave(&mut self, slot: u8, input: &[i8; 32]) {
         assert!(slot >= 8, "slots 0-7 are reserved for builtin waves");
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));

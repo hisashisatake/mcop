@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 use crate::mapping::*;
+use crate::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
 use serde::{Deserialize, Serialize};
 use sound_core::WaveTable;
 
@@ -88,6 +89,12 @@ pub struct Operator {
     /// 現在のアルゴリズムでこのOPがキャリア（出力に直接合算される）かどうか。
     /// Velocity Sensitivity（明るさ専用）はモジュレーターにのみ効かせるため、キャリアでは無視する。
     is_carrier: bool,
+    /// ノイズ波形（32〜63）用の17bit LFSR状態（AY-3-8910互換）。初期1。
+    noise_lfsr: u32,
+    /// サンプル&ホールドの更新蓄積（クロックレート / sample_rate を毎サンプル加算）。
+    noise_accum: f32,
+    /// サンプル&ホールドの現在保持値（±1）。
+    noise_hold: f32,
 }
 
 impl Operator {
@@ -104,6 +111,9 @@ impl Operator {
             perf_lfo_pitch_mod_cents: 0.0,
             f_number_ratio: 1.0,
             is_carrier: false,
+            noise_lfsr: 1,
+            noise_accum: 0.0,
+            noise_hold: 0.0,
         }
     }
 
@@ -119,6 +129,9 @@ impl Operator {
         self.env_phase = EnvPhase::Attack;
         self.env_level = 0.0;
         self.f_number_ratio = 1.0;
+        self.noise_lfsr = 1;
+        self.noise_accum = 0.0;
+        self.noise_hold = 0.0;
     }
 
     /// 残響レベルを保持したまま Attack 相位へ再突入する（実機 OPM の Key-On 挙動の再現）。
@@ -133,6 +146,9 @@ impl Operator {
         self.env_phase = EnvPhase::Attack;
         // env_level は保持（残響から再アタック）
         self.f_number_ratio = 1.0;
+        self.noise_lfsr = 1;
+        self.noise_accum = 0.0;
+        self.noise_hold = 0.0;
     }
 
     pub fn note_off(&mut self) {
@@ -205,6 +221,23 @@ impl Operator {
         }
     }
 
+    /// ノイズ波形（32〜63）の1サンプルを生成する。17bit LFSR（AY-3-8910互換）を
+    /// 色(=NP)に応じたクロックレートでサンプル&ホールド更新する。NP小=高レート（広帯域/白）、
+    /// NP大=低レート（同値が連続=低域寄り）。ピッチレスのため note 周波数には依存しない。
+    fn next_noise_sample(&mut self, wf: u8, sample_rate: f32) -> f32 {
+        let rate = noise_clock_rate(noise_color(wf));
+        self.noise_accum += rate / sample_rate;
+        // 1サンプルでrate>sample_rate（NP小）の場合は複数回更新＝広帯域ノイズ
+        while self.noise_accum >= 1.0 {
+            self.noise_accum -= 1.0;
+            // 17bit LFSR: bit = lfsr[0] XOR lfsr[3]、17段右シフト
+            let bit = (self.noise_lfsr ^ (self.noise_lfsr >> 3)) & 1;
+            self.noise_lfsr = (self.noise_lfsr >> 1) | (bit << 16);
+            self.noise_hold = if bit != 0 { 1.0 } else { -1.0 };
+        }
+        self.noise_hold
+    }
+
     /// `modulation`: FM変調入力（位相オフセット、0.0〜1.0スケール）
     pub fn tick(&mut self, sample_rate: f32, wave: &WaveTable, modulation: f32, note: u8) -> f32 {
         if self.env_phase == EnvPhase::Idle {
@@ -214,8 +247,15 @@ impl Operator {
 
         let freq = self.effective_frequency();
         self.phase = (self.phase + freq / sample_rate).fract();
-        let modulated_phase = (self.phase + modulation).rem_euclid(1.0);
-        let idx = (modulated_phase * wave.len() as f32) as usize;
+
+        // ノイズ波形はテーブル参照せずLFSRでランタイム生成（ピッチレス、modulation無視）。
+        let sample = if is_noise_waveform(self.params.waveform) {
+            self.next_noise_sample(self.params.waveform, sample_rate)
+        } else {
+            let modulated_phase = (self.phase + modulation).rem_euclid(1.0);
+            let idx = (modulated_phase * wave.len() as f32) as usize;
+            wave.sample_at(idx)
+        };
 
         // Velocity Sensitivityは明るさ専用：モジュレーターのTL（=変調量）にのみ効かせる。
         // キャリアでは無視し、音量はチャンネル側のvelocity_to_volume_gainに一本化する。
@@ -225,7 +265,7 @@ impl Operator {
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
         // 4.8 = 96.0 / 20.0
         let env_amp = 10f32.powf(-(1.0 - self.env_level) * 4.8);
-        wave.sample_at(idx) * env_amp * tl_to_gain(eff_tl) * amp_factor
+        sample * env_amp * tl_to_gain(eff_tl) * amp_factor
     }
 }
 
@@ -254,6 +294,47 @@ mod tests {
             waveform: 0,
             op_fine_tune: 128,
         }
+    }
+
+    /// サスティンを満レベルで保持するノイズ用パラメーター（音量を一定にして解析する）。
+    fn noise_params(wf: u8) -> OperatorParams {
+        OperatorParams { d1l: 255, d2r: 0, rr: 0, waveform: wf, ..fast_params() }
+    }
+
+    /// アタック整定後の `n` サンプルを収集する（ノイズはテーブル参照しないので wave はダミー）。
+    fn collect_noise(wf: u8, n: usize) -> Vec<f32> {
+        let sr = 44100.0;
+        let wave = gen_op_sine();
+        let mut op = Operator::new(noise_params(wf));
+        op.note_on(440.0, 127);
+        for _ in 0..16 {
+            op.tick(sr, &wave, 0.0, 69);
+        }
+        (0..n).map(|_| op.tick(sr, &wave, 0.0, 69)).collect()
+    }
+
+    #[test]
+    fn white_noise_is_aperiodic_and_bipolar() {
+        let out = collect_noise(32, 2000); // color=NP=0 ≒ 最広帯域（白）
+        let zc = out.windows(2).filter(|w| w[0] * w[1] < 0.0).count();
+        // 白は高レート更新で頻繁に符号反転（ピッチレス）。32サンプルループのような周期性は出ない。
+        assert!(zc > 400, "white zero-crossings too low: {zc}");
+        // 正負両方に振れる
+        assert!(out.iter().cloned().fold(f32::MAX, f32::min) < 0.0);
+        assert!(out.iter().cloned().fold(f32::MIN, f32::max) > 0.0);
+    }
+
+    #[test]
+    fn darker_color_reduces_high_frequency_content() {
+        // 隣接サンプル差の平均: 白(NP=0) > 低域(NP=31)。NP大は低レート更新で同値が連続し滑らか。
+        let white = collect_noise(32, 4000);
+        let dark = collect_noise(63, 4000);
+        let mean_abs_diff = |v: &[f32]| {
+            v.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (v.len() - 1) as f32
+        };
+        let dw = mean_abs_diff(&white);
+        let dd = mean_abs_diff(&dark);
+        assert!(dw > dd * 2.0, "white diff {dw} should far exceed dark diff {dd}");
     }
 
     #[test]

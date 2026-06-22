@@ -105,6 +105,47 @@ pub fn gen_op_half_pos_sin2_2x() -> WaveTable {
 /// ビルトイン波形の総数（4基本波 × 8変換）。スロット0〜31を占有。
 pub const BUILTIN_WAVEFORM_COUNT: u8 = 32;
 
+// ---------------------------------------------------------------------------
+// ノイズ波形（波形番号 32〜63、実機SSG準拠32段階）
+//
+// テーブルルックアップ方式では32サンプルループの周期性でピッチが出てしまい
+// ノイズにならない。そのため Operator::tick がこの番号レンジを検出すると、
+// テーブル参照の代わりに17bit LFSR（AY-3-8910互換）でランタイム生成する。
+//
+// 実機SSGのノイズは「1種類の白色LFSRのクロックレートをノイズ周期NP(0〜31)で変える」もの。
+// 色 = waveform - 32 = NP。LFSRのシフトレート（サンプル&ホールドの更新頻度）を
+// noise_clock_rate(color) で決める：NP小=高速更新=広帯域（白）、NP大=低速更新=低域寄り。
+// ---------------------------------------------------------------------------
+
+/// ノイズ波形の開始番号。32〜63 がノイズ（color=NP 0〜31）。
+pub const NOISE_WAVEFORM_BASE: u8 = 32;
+/// ノイズの段階数（実機SSGのノイズ周期 NP 0〜31 に対応）。
+pub const NOISE_LEVELS: u8 = 32;
+
+/// ノイズ更新クロックの基準周波数（Hz）。YM2203/YM2608 の内部SSG標準クロック2MHz相当。
+/// 実機ノイズ周波数 f = ssg_clock/(16×NP) を、エンジンが知らないチップ固有クロックに依存せず
+/// 再現するための固定基準（spec-sound.md 参照）。
+pub const NOISE_BASE_CLOCK: f32 = 2_000_000.0;
+
+/// 波形番号がノイズレンジ（32〜63）かどうか。
+#[inline]
+pub fn is_noise_waveform(wf: u8) -> bool {
+    wf >= NOISE_WAVEFORM_BASE && wf < NOISE_WAVEFORM_BASE + NOISE_LEVELS
+}
+
+/// ノイズ波形番号 → 色インデックス（=NP、0〜31）。レンジ外でも飽和して安全な値を返す。
+#[inline]
+pub fn noise_color(wf: u8) -> u8 {
+    wf.saturating_sub(NOISE_WAVEFORM_BASE).min(NOISE_LEVELS - 1)
+}
+
+/// 色(=NP) → LFSR更新レート（Hz）。`NOISE_BASE_CLOCK / (16 × max(NP,1))`。
+/// NP=0 は実機同様 1 扱い。NP小=高レート（広帯域/白）、NP大=低レート（低域寄り）。
+#[inline]
+pub fn noise_clock_rate(color: u8) -> f32 {
+    NOISE_BASE_CLOCK / (16.0 * color.max(1) as f32)
+}
+
 /// ノコギリ波（1周期 [0,1) を -1→+1 の上昇ランプ）。
 fn base_saw(p: f32) -> f32 {
     2.0 * p - 1.0
@@ -211,6 +252,29 @@ mod tests {
     use super::*;
 
     const WAVE_LEN: usize = 1024;
+
+    #[test]
+    fn noise_range_detection_and_color() {
+        // ビルトイン(0-31)はノイズではない
+        assert!(!is_noise_waveform(0));
+        assert!(!is_noise_waveform(31));
+        // 32〜63 がノイズ（color=NP 0〜31）
+        assert!(is_noise_waveform(32));
+        assert!(is_noise_waveform(63));
+        assert!(!is_noise_waveform(64)); // 64以降はユーザー定義
+        assert_eq!(noise_color(32), 0);
+        assert_eq!(noise_color(63), 31);
+    }
+
+    #[test]
+    fn noise_clock_rate_decreases_with_np() {
+        // NP小=高レート（広帯域）、NP大=低レート（低域）。単調減少。
+        assert!(noise_clock_rate(1) > noise_clock_rate(31));
+        // NP=0 は 1 扱い（実機準拠）
+        assert_eq!(noise_clock_rate(0), noise_clock_rate(1));
+        // 基準2MHz, NP=1 → 125kHz
+        assert!((noise_clock_rate(1) - 125_000.0).abs() < 1.0);
+    }
 
     #[test]
     fn all_waveforms_have_correct_length() {
