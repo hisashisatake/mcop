@@ -61,8 +61,13 @@ def feats_of(samples, sr, n_mels, n_frames):
 
 
 def fit_one(target_feats, freq, on, release, sr, n_mels, n_frames,
-            w_env, w_centroid, sigma0, maxfevals, seed):
-    """1ターゲットを A-by-S で復元。(xbest, best_dist, evals) を返す。"""
+            w_env, w_centroid, sigma0, maxfevals, restarts, seed):
+    """1ターゲットを A-by-S で復元。(xbest, best_dist, evals) を返す。
+
+    restarts>0 で IPOP-CMA-ES（停滞時に集団サイズを倍増して再スタート）。
+    「重心は合うが倍音が鈍い」局所解から抜け、金属感など高次倍音の復元を助ける。
+    maxfevals は再スタート群を含む総評価予算。
+    """
 
     def f(vec):
         s = render(vec, freq, on, release, sr)
@@ -73,21 +78,18 @@ def fit_one(target_feats, freq, on, release, sr, n_mels, n_frames,
         return total
 
     x0 = np.full(ps.DIM, 0.5)
-    es = cma.CMAEvolutionStrategy(
-        x0, sigma0,
-        {"bounds": [0.0, 1.0], "maxfevals": maxfevals, "seed": seed, "verbose": -9},
-    )
-    while not es.stop():
-        sols = es.ask()
-        es.tell(sols, [f(x) for x in sols])
-    xbest = np.clip(np.asarray(es.result.xbest, dtype=np.float64), 0.0, 1.0)
+    opts = {"bounds": [0.0, 1.0], "maxfevals": maxfevals, "seed": seed, "verbose": -9}
+    xbest, es = cma.fmin2(f, x0, sigma0, options=opts,
+                          restarts=restarts, incpopsize=2)
+    xbest = np.clip(np.asarray(xbest, dtype=np.float64), 0.0, 1.0)
     return xbest, float(es.result.fbest), int(es.result.evaluations)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="38x6 Analysis-by-Synthesis 自己再構成テスト (3b)")
     ap.add_argument("--n-targets", type=int, default=5, help="復元を試すターゲット数")
-    ap.add_argument("--maxfevals", type=int, default=800, help="1ターゲットあたりのrender評価回数上限")
+    ap.add_argument("--maxfevals", type=int, default=2400, help="1ターゲットあたりのrender評価回数上限(再スタート群を含む総予算)")
+    ap.add_argument("--restarts", type=int, default=2, help="IPOP再スタート回数(停滞時に集団を倍増。0で無効)")
     ap.add_argument("--sigma0", type=float, default=0.25, help="CMA-ES初期ステップ(0..1空間)")
     ap.add_argument("--seed", type=int, default=12345, help="ターゲット生成seed(学習seedと変える)")
     ap.add_argument("--cma-seed", type=int, default=1, help="CMA-ES内部seed")
@@ -134,7 +136,7 @@ def main() -> int:
         xbest, best_d, evals = fit_one(
             target_feats, args.freq, args.on, args.release, args.sr,
             args.n_mels, args.n_frames, args.w_env, args.w_centroid,
-            args.sigma0, args.maxfevals, args.cma_seed,
+            args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
         )
         recon = render(xbest, args.freq, args.on, args.release, args.sr)
         _, terms = ft.abys_distance(
