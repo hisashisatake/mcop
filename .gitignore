@@ -5,3 +5,5 @@ gesture-app/src-tauri/gen/
 docs/
 # 変換ツールの入出力データ置き場（コミット対象外）
 tools/*/private/
+# Claude Codeの個人設定（権限allowリスト等。共有しない）
+.claude/settings.local.json
