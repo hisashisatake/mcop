@@ -73,9 +73,14 @@ def log_mel(
     return pooled.T.astype(np.float32)  # [n_mels, n_frames]
 
 
-def is_silent(samples, thresh: float = 1e-4) -> bool:
-    """ピーク振幅が閾値未満なら無音とみなす。"""
+def is_silent(samples, thresh: float = 1e-3) -> bool:
+    """RMS(実効値)が閾値未満なら無音(低情報)とみなす。
+
+    ピークだと単発スパイクで誤判定しやすいためRMSで判定する。ランダムパッチは大半が
+    極小音(peak中央値≈1e-3)なので、低情報サンプルを弾いてデータ品質を保つ閾値にする。
+    """
     x = np.asarray(samples, dtype=np.float64)
     if x.size == 0:
         return True
-    return float(np.max(np.abs(x))) < thresh
+    rms = float(np.sqrt(np.mean(x ** 2)))
+    return rms < thresh
