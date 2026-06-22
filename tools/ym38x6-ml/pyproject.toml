@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ym38x6-ml"
+version = "0.1.0"
+description = "38x6 FM engine Python binding for ML inverse synthesis (phase 6)"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+# Cargo.toml の [lib] name = ym38x6_ml が import 名になる。abi3-py312 ビルド。
+features = ["pyo3/extension-module"]
