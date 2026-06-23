@@ -164,17 +164,6 @@ pub fn pb_to_semitones(pb: i16) -> f32 {
     (pb as f32 / 16383.0 - 0.5) * 2.0 * PB_SENSITIVITY as f32
 }
 
-/// 浮動小数MIDIノート番号 → 音名（例: 69.0 → "A4"）。
-pub fn midi_note_name(midi: f32) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let r = midi.round() as i32;
-    let name = NAMES[r.rem_euclid(12) as usize];
-    let oct = r / 12 - 1;
-    format!("{name}{oct}")
-}
-
 // ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------

@@ -22,7 +22,11 @@
 //! - `--fm-gain <factor>` / `--ssg-gain <factor>`: 【OPN系専用】FM/SSG各パートの音量倍率
 //!   （既定1.0）。FMとSSGの音量バランス調整用。0.5で半分、>1は上げ（velocity頭打ちで約1.27倍が上限）。
 //!   WAV/SMF両出力に反映する。
-//! - `--dump-pitch`: ピッチ二重変換の比較CSVを標準出力へ出す（音程デバッグ用）
+//! - `--dump-pitch`: ピッチ診断CSVを標準出力へ出す（OPM/OPN共通スキーマ。音程デバッグ用）。
+//!   freq_hz/midi_f/note/pb_cents/alg/carrier_muls を両チップ共通で出し、OPMは kc/kf/ref_midi/error_cents、
+//!   OPNは fnum/block を追加列として埋める。
+//! - `--fb-max <f>`【実験用】: feedback_to_scale の上限を上書き（既定1.8）。高FB音色の音程破綻検証用。
+//! - `--only-ch <n>`【実験用】: 指定エンジンチャンネルのみ発音（FM 0..fm、SSG fm..fm+3）。音程ズレの単一ch分離用。
 
 mod opm;
 mod opn;
@@ -35,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use opm::{
-    compute_pitch_bend, kc_kf_to_ref_midi, kc_to_midi_note, midi_note_name, pb_to_semitones,
+    compute_pitch_bend, kc_kf_to_ref_midi, kc_to_midi_note, pb_to_semitones,
     OpmState, PB_SENSITIVITY,
 };
 use opn::OpnState;
@@ -43,7 +47,7 @@ use patch::PatchBank;
 use smf::SmfBuilder;
 use ssg::SsgState;
 use vgm::{VgmCmd, VgmIter};
-use ym38x6_core::{SoundEngine, Ym38x6Patch};
+use ym38x6_core::{algorithm, SoundEngine, Ym38x6Patch};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -53,7 +57,7 @@ fn main() -> ExitCode {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
                 "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
-                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>]"
+                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>] [--fb-max <f>] [--only-ch <n>]"
             );
             ExitCode::FAILURE
         }
@@ -72,6 +76,11 @@ struct Args {
     fm_gain: f32,
     /// SSGパートの音量ゲイン（線形、1.0=従来）。OPNのFM/SSGバランス調整用。
     ssg_gain: f32,
+    /// 【実験用】feedback_to_scale の最大値を上書き（None=既定1.8）。高FB音色の音程破綻検証用。
+    fb_max: Option<f32>,
+    /// 【実験用】指定したエンジンチャンネルのみ発音する（FM 0..fm、SSG fm..fm+3）。
+    /// 音程ズレを単一チャンネルに分離して測定するためのデバッグフラグ。
+    only_ch: Option<usize>,
 }
 
 /// 音量ゲイン係数(線形)を基準velocity 100 に適用する。0.5→50、2.0→127(頭打ち)。
@@ -168,12 +177,24 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut out_wav: Option<PathBuf> = None;
     let mut wav_flag = false;
     let mut gain: f32 = 1.0;
+    let mut fb_max: Option<f32> = None;
+    let mut only_ch: Option<usize> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--dump-pitch" => {
                 dump_pitch = true;
                 i += 1;
+            }
+            "--fb-max" => {
+                let v = args.get(i + 1).ok_or("--fb-max に値がありません")?;
+                fb_max = Some(v.parse().map_err(|_| format!("--fb-max の値が不正: {v}"))?);
+                i += 2;
+            }
+            "--only-ch" => {
+                let v = args.get(i + 1).ok_or("--only-ch に値がありません")?;
+                only_ch = Some(v.parse().map_err(|_| format!("--only-ch の値が不正: {v}"))?);
+                i += 2;
             }
             "--out-wav" => {
                 out_wav = Some(PathBuf::from(
@@ -241,50 +262,137 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         wav_flag.then(|| base_dir.join(format!("{stem}.wav")))
     });
 
-    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain })
+    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain, fb_max, only_ch })
 }
 
-/// ピッチ二重変換ダンプ（--dump-pitch）。
+/// `--dump-pitch` の1行分。OPM/OPN共通スキーマ。
 ///
-/// VGMを走査し、音程イベント（ノートオン・KC変更・KF変更）ごとに、
-/// 現パイプライン（kc_to_midi_note + ピッチベンド）が実際にエンジンへ送る再現ピッチと、
-/// 実機YM2151 canonical変換による真値を比較し、CSVを標準出力へ出す。
-///
-/// 列: time_s, ch, event, kc, kf, base_kc, pb, repro_midi, repro_note, ref_midi, ref_note, error_cents
-/// - repro_* : 現パイプラインがエンジンに鳴らさせるピッチ（音痴の実体）
-/// - ref_*   : 実機YM2151が鳴らすはずの真値
-/// - error_cents : (repro - ref) をセント換算。±100の倍数で並べばノート表の欠番ズレが原因
-fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
-    const SAMPLE_RATE: f64 = 44_100.0;
+/// チップ非依存の「実際に鳴るピッチ」列（freq_hz/midi_f/note/pb_cents/alg/carrier_muls）を
+/// 主役に、OPM固有（kc/kf/ref_midi/error_cents）とOPN固有（fnum/block）を Option で持つ。
+/// 空欄はCSVで空文字になる（pandas等でそのまま読める superset スキーマ）。
+struct PitchRow {
+    t: f64,
+    chip: &'static str,
+    ch: usize,
+    event: &'static str,
+    /// OPM: KCレジスタ値（0-127）。OPNでは None。
+    kc: Option<u8>,
+    /// OPM: KF（0-63、上位6bit）。OPNでは None。
+    kf: Option<u8>,
+    /// OPN: F-Number（11bit）。OPMでは None。
+    fnum: Option<u16>,
+    /// OPN: Block（0-7）。OPMでは None。
+    block: Option<u8>,
+    /// 実際に鳴る周波数（Hz）。両チップ共通。
+    freq_hz: f32,
+    /// 浮動小数MIDIノート（A4=69.0）。両チップ共通。
+    midi_f: f32,
+    /// エンジンへ送るMIDIノート番号（整数）。両チップ共通。
+    note: u8,
+    /// エンジンへ送るピッチベンド量（セント）。両チップ共通。
+    pb_cents: f32,
+    /// 変換後パッチのアルゴリズム（0-7）。両チップ共通。
+    alg: u8,
+    /// 変換後パッチのキャリアMULを "+" 連結（残差ピッチ/オクターブ知覚の診断用）。両チップ共通。
+    carrier_muls: String,
+    /// OPM: 実機YM2151 canonical変換による真値MIDI。OPNでは None（直接式のため比較対象なし）。
+    ref_midi: Option<f32>,
+    /// OPM: (実際に鳴るmidi_f - ref_midi) のセント差。±100の倍数ならノート表欠番ズレ。OPNでは None。
+    error_cents: Option<f32>,
+}
 
+impl PitchRow {
+    fn header() -> &'static str {
+        "time_s,chip,ch,event,kc,kf,fnum,block,freq_hz,midi_f,note,pb_cents,alg,carrier_muls,ref_midi,error_cents"
+    }
+    fn print(&self) {
+        fn os<T: std::fmt::Display>(v: &Option<T>) -> String {
+            v.as_ref().map(|x| x.to_string()).unwrap_or_default()
+        }
+        fn of3(v: &Option<f32>) -> String {
+            v.map(|x| format!("{x:.3}")).unwrap_or_default()
+        }
+        fn of1(v: &Option<f32>) -> String {
+            v.map(|x| format!("{x:.1}")).unwrap_or_default()
+        }
+        println!(
+            "{:.4},{},{},{},{},{},{},{},{:.3},{:.3},{},{:.1},{},{},{},{}",
+            self.t, self.chip, self.ch, self.event,
+            os(&self.kc), os(&self.kf), os(&self.fnum), os(&self.block),
+            self.freq_hz, self.midi_f, self.note, self.pb_cents,
+            self.alg, self.carrier_muls,
+            of3(&self.ref_midi), of1(&self.error_cents),
+        );
+    }
+}
+
+/// 変換後パッチからアルゴリズムとキャリアMUL列（"2+1"等）を取り出す。OPM/OPN共通。
+/// 残差ピッチ・オクターブ知覚（キャリアMUL≠1で基音が省略され得る）の診断に使う。
+fn alg_carrier_muls(patch: &Ym38x6Patch) -> (u8, String) {
+    let alg = patch.channel.algorithm.min(7);
+    let carriers = algorithm::ALGORITHMS[alg as usize].carriers;
+    let s = carriers
+        .iter()
+        .map(|&i| patch.operators[i].mul.to_string())
+        .collect::<Vec<_>>()
+        .join("+");
+    (alg, s)
+}
+
+#[inline]
+fn midi_to_freq_hz(midi: f32) -> f32 {
+    440.0 * 2f32.powf((midi - 69.0) / 12.0)
+}
+
+/// ピッチ診断ダンプ（--dump-pitch、OPM/OPN共通）。
+///
+/// VGMを走査し、音程イベントごとに「変換器＋エンジンが実際に鳴らすピッチ」を
+/// [PitchRow] の共通スキーマでCSV出力する。チップ判定は呼び出し側（[run]）で済んでいる。
+fn dump_pitch(data: &[u8], data_start: usize, chip: &SourceChip) -> Result<(), String> {
+    println!("{}", PitchRow::header());
+    match chip {
+        SourceChip::Opm => dump_pitch_opm(data, data_start),
+        SourceChip::Opn(info) => dump_pitch_opn(data, data_start, *info),
+    }
+    Ok(())
+}
+
+/// OPM（YM2151）のピッチイベントを [PitchRow] 共通スキーマで出力する。
+fn dump_pitch_opm(data: &[u8], data_start: usize) {
+    const SAMPLE_RATE: f64 = 44_100.0;
     let mut opm = OpmState::new();
     let mut samples: u64 = 0;
+    let mut active: [bool; 8] = [false; 8];
+    let mut base_kc: [u8; 8] = [0; 8];
 
-    let mut active:   [bool; 8] = [false; 8];
-    let mut base_kc:  [u8;   8] = [0;     8];
-
-    println!("time_s,ch,event,kc,kf,base_kc,pb,repro_midi,repro_note,ref_midi,ref_note,error_cents");
-
-    // 1行出力するクロージャ的処理（borrow制約のためマクロ風に手書き）
-    let emit = |samples: u64, ch: usize, event: &str, kc: u8, kf: u8, base: u8, pb: i16| {
-        let repro = kc_to_midi_note(base) as f32 + pb_to_semitones(pb);
+    // 1イベント分の PitchRow を組み立てて出力する。
+    // `slot_byte` は carrier_muls 用（algorithm/MUL のみ参照、スロットマスクには非依存）。
+    let emit = |opm: &OpmState, samples: u64, ch: usize, event: &'static str, kc: u8, kf: u8, base: u8, pb: i16| {
+        let midi_f = kc_to_midi_note(base) as f32 + pb_to_semitones(pb);
         let refm = kc_kf_to_ref_midi(kc, kf);
-        let err = (repro - refm) * 100.0;
-        println!(
-            "{:.4},{},{},0x{:02X},{},0x{:02X},{},{:.3},{},{:.3},{},{:.1}",
-            samples as f64 / SAMPLE_RATE,
+        let (alg, cmuls) = alg_carrier_muls(&opm2x6::conv::voice_to_patch(
+            &opm.build_voice(ch, 0x78),
+            opm2x6::parse::OperatorOrder::Direct,
+        ));
+        PitchRow {
+            t: samples as f64 / SAMPLE_RATE,
+            chip: "OPM",
             ch,
             event,
-            kc,
-            (kf >> 2) & 0x3F,
-            base,
-            pb,
-            repro,
-            midi_note_name(repro),
-            refm,
-            midi_note_name(refm),
-            err,
-        );
+            kc: Some(kc),
+            kf: Some((kf >> 2) & 0x3F),
+            fnum: None,
+            block: None,
+            freq_hz: midi_to_freq_hz(midi_f),
+            midi_f,
+            note: kc_to_midi_note(base),
+            pb_cents: pb_to_semitones(pb) * 100.0,
+            alg,
+            carrier_muls: cmuls,
+            ref_midi: Some(refm),
+            error_cents: Some((midi_f - refm) * 100.0),
+        }
+        .print();
     };
 
     for cmd in VgmIter::new(data, data_start) {
@@ -301,7 +409,7 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
                         base_kc[ch] = kc;
                         let (pb, _) = compute_pitch_bend(kc, kc, kf);
                         active[ch] = true;
-                        emit(samples, ch, "on", kc, kf, kc, pb);
+                        emit(&opm, samples, ch, "on", kc, kf, kc, pb);
                     } else {
                         active[ch] = false;
                         opm.write(reg, val);
@@ -316,9 +424,9 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
                         if oor {
                             base_kc[ch] = val;
                             let (pb2, _) = compute_pitch_bend(val, val, kf);
-                            emit(samples, ch, "kc-reon", val, kf, val, pb2);
+                            emit(&opm, samples, ch, "kc-reon", val, kf, val, pb2);
                         } else {
-                            emit(samples, ch, "kc", val, kf, base_kc[ch], pb);
+                            emit(&opm, samples, ch, "kc", val, kf, base_kc[ch], pb);
                         }
                     }
                 }
@@ -328,7 +436,7 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
                     if active[ch] {
                         let kc = opm.kc(ch);
                         let (pb, _) = compute_pitch_bend(kc, base_kc[ch], val);
-                        emit(samples, ch, "kf", kc, val, base_kc[ch], pb);
+                        emit(&opm, samples, ch, "kf", kc, val, base_kc[ch], pb);
                     }
                 }
                 _ => opm.write(reg, val),
@@ -338,8 +446,96 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
             _ => {}
         }
     }
+}
 
-    Ok(())
+/// OPN系（YM2612/YM2203/YM2608）のピッチイベントを [PitchRow] 共通スキーマで出力する。
+fn dump_pitch_opn(data: &[u8], data_start: usize, info: OpnInfo) {
+    const SAMPLE_RATE: f64 = 44_100.0;
+    let mut opn = OpnState::new();
+    let mut samples: u64 = 0;
+    let fm = info.fm_channels;
+
+    let mut fm_note: Vec<Option<u8>> = vec![None; fm];
+    let mut fm_base: Vec<f32> = vec![0.0; fm];
+
+    for cmd in VgmIter::new(data, data_start) {
+        let (port, reg, val) = match cmd {
+            VgmCmd::Wait(n) => { samples += n as u64; continue; }
+            VgmCmd::End => break,
+            VgmCmd::Ym2612Write { port, reg, val } if info.write_kind == OpnWriteKind::Ym2612 => (port as usize, reg, val),
+            VgmCmd::Ym2203Write { reg, val } if info.write_kind == OpnWriteKind::Ym2203 => (0, reg, val),
+            VgmCmd::Ym2608Write { port, reg, val } if info.write_kind == OpnWriteKind::Ym2608 => (port as usize, reg, val),
+            _ => continue,
+        };
+
+        opn.write(port, reg, val);
+        let t = samples as f64 / SAMPLE_RATE;
+
+        // 共通スキーマの PitchRow を組み立てて出力するヘルパー。
+        let row = |ch: usize, event: &'static str, fnum: u16, block: u8, freq: f32, midi_f: f32, note: u8, pb_cents: f32, patch: &Ym38x6Patch| {
+            let (alg, cmuls) = alg_carrier_muls(patch);
+            PitchRow {
+                t, chip: info.label_short(), ch, event,
+                kc: None, kf: None, fnum: Some(fnum), block: Some(block),
+                freq_hz: freq, midi_f, note, pb_cents, alg, carrier_muls: cmuls,
+                ref_midi: None, error_cents: None,
+            }
+            .print();
+        };
+
+        match reg {
+            0x28 if port == 0 => {
+                if let Some((ch, slots)) = opn::decode_keyon(val) {
+                    if ch < fm {
+                        if slots != 0 {
+                            let patch = opn.build_voice(ch).to_ym38x6_patch();
+                            let (fnum, block) = opn.fnum_block(ch);
+                            let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
+                            let midi_f = opn::freq_to_midi(freq);
+                            let note = midi_f.round().clamp(0.0, 127.0) as u8;
+                            let (pb, _) = freq_pitch_bend(midi_f, note as f32);
+                            let pb_cents = (pb as f32 - 8192.0) / 8192.0 * (PB_SENSITIVITY as f32) * 100.0;
+                            row(ch, "on", fnum, block, freq, midi_f, note, pb_cents, &patch);
+                            fm_note[ch] = Some(note);
+                            fm_base[ch] = note as f32;
+                        } else if fm_note[ch].take().is_some() {
+                            // ノートオフは共通スキーマで note=直前値・freq情報なしを表現できないため、
+                            // event="off" の行を最小限（pitch列は0埋め）で出す。
+                            PitchRow {
+                                t, chip: info.label_short(), ch, event: "off",
+                                kc: None, kf: None, fnum: None, block: None,
+                                freq_hz: 0.0, midi_f: 0.0, note: 0, pb_cents: 0.0,
+                                alg: 0, carrier_muls: String::new(),
+                                ref_midi: None, error_cents: None,
+                            }
+                            .print();
+                        }
+                    }
+                }
+            }
+            // 0xA0 のみ（shadow register仕様）: ピッチ確定イベントとして出力。
+            0xA0..=0xA2 => {
+                let cip = (reg - 0xA0) as usize;
+                let ch = port * 3 + cip;
+                if ch < fm && fm_note[ch].is_some() {
+                    let patch = opn.build_voice(ch).to_ym38x6_patch();
+                    let (fnum, block) = opn.fnum_block(ch);
+                    let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
+                    let midi_f = opn::freq_to_midi(freq);
+                    let (pb, oor) = freq_pitch_bend(midi_f, fm_base[ch]);
+                    let pb_cents = (pb as f32 - 8192.0) / 8192.0 * (PB_SENSITIVITY as f32) * 100.0;
+                    let event = if oor { "retrig" } else { "pitch" };
+                    row(ch, event, fnum, block, freq, midi_f, fm_note[ch].unwrap(), pb_cents, &patch);
+                    if oor {
+                        let note = midi_f.round().clamp(0.0, 127.0) as u8;
+                        fm_base[ch] = note as f32;
+                        fm_note[ch] = Some(note);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// 直接WAVレンダリング（--wav）。
@@ -512,9 +708,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 "YM2151 clock: {} Hz, {} samples",
                 header.ym2151_clock, header.total_samples
             );
-            // --dump-pitch: SMF/バンクを書かず、ピッチ二重変換の比較CSVを標準出力へ出す
+            // --dump-pitch: SMF/バンクを書かず、ピッチ診断CSV（OPM/OPN共通スキーマ）を標準出力へ出す
             if args.dump_pitch {
-                return dump_pitch(&data, header.data_start);
+                return dump_pitch(&data, header.data_start, &SourceChip::Opm);
             }
             // --wav/--out-wav: WAVのみを排他出力する（.mid/.38x6は出さない）。
             if let Some(wav_path) = &args.wav {
@@ -529,7 +725,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 if info.has_ssg { " + SSG 3ch" } else { "" },
             );
             if args.dump_pitch {
-                eprintln!("注: --dump-pitch は YM2151 専用です。OPN系では無視します。");
+                return dump_pitch(&data, header.data_start, &SourceChip::Opn(info));
             }
             run_opn(&data, header.data_start, info, &args)
         }
@@ -720,6 +916,17 @@ struct OpnInfo {
     fm_divisor: u32,
     /// SSG(PSG) を内蔵するか（YM2203/YM2608=true、YM2612=false）。
     has_ssg: bool,
+}
+
+impl OpnInfo {
+    /// CSV出力用の短いチップ名（OPM/OPN2/OPN/OPNA）。
+    fn label_short(&self) -> &'static str {
+        match self.write_kind {
+            OpnWriteKind::Ym2612 => "OPN2",
+            OpnWriteKind::Ym2203 => "OPN",
+            OpnWriteKind::Ym2608 => "OPNA",
+        }
+    }
 }
 
 /// VGMヘッダーのクロック欄から音源チップを判定する。YM2151を最優先、次にOPN系。
@@ -924,10 +1131,13 @@ fn process_opn(
     sink: &mut dyn OpnSink,
     fm_vel: u8,
     ssg_vel: u8,
+    only_ch: Option<usize>,
 ) {
     let fm = info.fm_channels;
     let total_ch = fm + if info.has_ssg { 3 } else { 0 };
     let ssg_clock = info.clock / ssg::SSG_CLOCK_DIVISOR;
+    // 単一チャンネル分離（--only-ch）用フィルター。Noneなら全チャンネル発音。
+    let keep = |ech: usize| only_ch.map_or(true, |k| k == ech);
 
     for ch in 0..total_ch {
         sink.set_pitch_bend_sensitivity(ch, PB_SENSITIVITY);
@@ -984,6 +1194,9 @@ fn process_opn(
                 _ => &[],
             };
             for &sc in chans {
+                if !keep(fm + sc) {
+                    continue;
+                }
                 eval_ssg_channel(
                     sc, fm, &ssg, ssg_clock, bank, tick, sink, ssg_vel,
                     &mut ssg_note[sc], &mut ssg_base[sc], &mut ssg_pb[sc], &mut ssg_vol[sc],
@@ -998,7 +1211,7 @@ fn process_opn(
             // キーオン/オフ（port0のグローバルレジスタ）
             0x28 if port == 0 => {
                 if let Some((ch, slots)) = opn::decode_keyon(val) {
-                    if ch < fm {
+                    if ch < fm && keep(ch) {
                         if slots != 0 {
                             // 既存ノートを解放してから新規キーオン
                             if let Some(prev) = fm_note[ch].take() {
@@ -1024,15 +1237,17 @@ fn process_opn(
                     }
                 }
             }
-            // F-Number / Block 変更 → ピッチベンド更新
-            0xA0..=0xA2 | 0xA4..=0xA6 => {
-                let cip = if (0xA0..=0xA2).contains(&reg) {
-                    (reg - 0xA0) as usize
-                } else {
-                    (reg - 0xA4) as usize
-                };
+            // F-Number ロウバイト（0xA0）書き込み → ピッチ確定・ベンド更新。
+            //
+            // OPN実機では 0xA4（Block + FNUM高3bit）はシャドウレジスタに格納されるだけで
+            // チャンネル周波数は変化しない。0xA0（FNUM低8bit）を書いた瞬間に両方が同時
+            // 適用されて周波数が確定する。
+            // 0xA4書き込み時にピッチ計算すると「新hiバイト + 旧loバイト」の不正周波数で
+            // 誤ピッチベンドや誤OORリトリガーが発生するため、0xA0のみで更新する。
+            0xA0..=0xA2 => {
+                let cip = (reg - 0xA0) as usize;
                 let ch = port * 3 + cip;
-                if ch < fm && fm_note[ch].is_some() {
+                if ch < fm && keep(ch) && fm_note[ch].is_some() {
                     let (fnum, block) = opn.fnum_block(ch);
                     let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
                     let midi_f = opn::freq_to_midi(freq);
@@ -1054,6 +1269,9 @@ fn process_opn(
                     }
                 }
             }
+            // 0xA4（Block + FNUM高3bit）書き込み: レジスタ状態の更新のみ（opn.write()済み）。
+            // ピッチ更新は次の 0xA0 書き込み時に行う（OPN shadow register仕様準拠）。
+            0xA4..=0xA6 => {}
             _ => {}
         }
     }
@@ -1184,14 +1402,23 @@ fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result
     let fm_vel = scaled_velocity(args.fm_gain);
     let ssg_vel = scaled_velocity(args.ssg_gain);
 
+    // 【実験用】feedback上限の上書き（--fb-max）。WAVレンダリング前にプロセスグローバルへ設定。
+    if let Some(m) = args.fb_max {
+        ym38x6_core::set_feedback_scale_max(Some(m));
+        eprintln!("実験: feedback_to_scale 最大値を {m} に上書き（既定1.8）");
+    }
+    if let Some(c) = args.only_ch {
+        eprintln!("実験: エンジンチャンネル {c} のみ発音");
+    }
+
     if let Some(wav_path) = &args.wav {
         let mut sink = WavSink::new(44_100.0, total_ch);
-        process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel);
+        process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel, args.only_ch);
         return sink.finish_and_write(wav_path, args.gain);
     }
 
     let mut sink = SmfSink::new(total_ch);
-    process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel);
+    process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel, args.only_ch);
 
     bank.write(&args.out_bank, args.bank)?;
     println!("音色バンク: {} ({} 音色)", args.out_bank.display(), bank.len());
