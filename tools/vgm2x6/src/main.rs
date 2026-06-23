@@ -1,9 +1,16 @@
-//! vgm2x6 — YM2151 VGM/VGZ から音色（.38x6）と SMF（.mid）を抽出する。
+//! vgm2x6 — YM2151(OPM) / OPN系(YM2612/YM2203/YM2608) の VGM/VGZ から
+//! 音色（.38x6）と SMF（.mid）または WAV を抽出する。
+//!
+//! 対応チップは入力VGMヘッダーのクロック欄から自動判定する（YM2151を最優先）。
+//! OPN系では FM チャンネルに加え、YM2203/YM2608 内蔵の SSG(PSG) 3ch を矩形波音色で
+//! 常に出力する（SSGの音量レジスタはSMFではCC11、WAVではキャリアTLへ反映）。
+//! OPN音色→38x6変換は mucom2x6 の OPN変換を再利用する。
 //!
 //! 使い方:
 //! ```text
 //! vgm2x6 <input.vgz|.vgm> [--out <dir>] [--out-bank <file>] [--out-midi <file>] [--bank N]
-//!        [--out-wav <file>] [--wav] [--gain <factor>] [--dump-pitch]
+//!        [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>]
+//!        [--dump-pitch]
 //! ```
 //! - `--out <dir>`: 出力ディレクトリを指定（ファイル名は入力ステム名を使用）
 //! - `--out-bank` / `--out-midi` / `--out-wav`: 個別ファイルパスを明示指定（--out より優先）
@@ -12,11 +19,16 @@
 //!   DAW/VST/SMFを経由せず ym38x6-core で直接レンダリング）
 //! - `--out-wav <file>`: WAV出力パスを明示指定（同じく.wavのみ排他出力）
 //! - `--gain <factor>`: WAV書き出し前の出力レベル倍率（クリップ対策、既定1.0）
+//! - `--fm-gain <factor>` / `--ssg-gain <factor>`: 【OPN系専用】FM/SSG各パートの音量倍率
+//!   （既定1.0）。FMとSSGの音量バランス調整用。0.5で半分、>1は上げ（velocity頭打ちで約1.27倍が上限）。
+//!   WAV/SMF両出力に反映する。
 //! - `--dump-pitch`: ピッチ二重変換の比較CSVを標準出力へ出す（音程デバッグ用）
 
 mod opm;
+mod opn;
 mod patch;
 mod smf;
+mod ssg;
 mod vgm;
 
 use std::path::{Path, PathBuf};
@@ -26,9 +38,12 @@ use opm::{
     compute_pitch_bend, kc_kf_to_ref_midi, kc_to_midi_note, midi_note_name, pb_to_semitones,
     OpmState, PB_SENSITIVITY,
 };
+use opn::OpnState;
 use patch::PatchBank;
 use smf::SmfBuilder;
+use ssg::SsgState;
 use vgm::{VgmCmd, VgmIter};
+use ym38x6_core::{SoundEngine, Ym38x6Patch};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,7 +53,7 @@ fn main() -> ExitCode {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
                 "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
-                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>]"
+                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>]"
             );
             ExitCode::FAILURE
         }
@@ -53,6 +68,92 @@ struct Args {
     dump_pitch: bool,
     wav: Option<PathBuf>,
     gain: f32,
+    /// FMパートの音量ゲイン（線形、1.0=従来）。OPNのFM/SSGバランス調整用。
+    fm_gain: f32,
+    /// SSGパートの音量ゲイン（線形、1.0=従来）。OPNのFM/SSGバランス調整用。
+    ssg_gain: f32,
+}
+
+/// 音量ゲイン係数(線形)を基準velocity 100 に適用する。0.5→50、2.0→127(頭打ち)。
+/// FM音色は velocity_sensitivity=0 のため、velocityスケールは明るさを変えず音量のみに効く。
+fn scaled_velocity(gain: f32) -> u8 {
+    (100.0 * gain).round().clamp(1.0, 127.0) as u8
+}
+
+/// PSG風パッチ。波形メモリ音色の矩形波(waveform=16)を、アタック最速・減衰なし・
+/// 最大サスティン・リリースなしのADSRで鳴らす。キーオン中は一定音量の矩形波、
+/// キーオフで即停止という、PSG(SSG/SN76489系)のトーン1チャンネルに近い挙動になる。
+fn psg_patch() -> ym38x6_core::Ym38x6Patch {
+    // 波形番号: sine=0 / saw=8 / square=16 / triangle=24（preset.rs の基本4波形に準拠）
+    ym38x6_core::waveform_memory_patch(
+        16,
+        ym38x6_core::AdsrParams { attack: 255, decay: 0, sustain: 255, release: 0 },
+    )
+}
+
+/// ノイズ専用OperatorParams（波形番号32+NP）。アタック最速・減衰なし・最大サスティン。
+/// エンジンが17bit LFSRをNP由来クロックレートでサンプル&ホールドしてノイズを生成する。
+fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
+    ym38x6_core::OperatorParams {
+        tl: 255,
+        ar: 255,
+        d1r: 0,
+        d2r: 0,
+        d1l: 255,
+        rr: 0,
+        mul: 1,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 32 + np.min(31), // 32〜63 = ノイズ（color=NP）
+        op_fine_tune: 128,
+    }
+}
+
+/// SSGノイズのみ用パッチ。ノイズOPを OP1 で鳴らす（Algorithm 7・OP2〜4ミュート）。
+/// ノイズはピッチレスなので note 周波数には依存せず、NPで帯域（白〜低域）が決まる。
+fn noise_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
+    use ym38x6_core::Ym38x6Patch;
+    let mut patch = Ym38x6Patch::default();
+    patch.channel.algorithm = 7;
+    let op1 = noise_op(np);
+    patch.operators[0] = op1;
+    let muted = ym38x6_core::OperatorParams { tl: 0, ..op1 };
+    patch.operators[1] = muted;
+    patch.operators[2] = muted;
+    patch.operators[3] = muted;
+    patch
+}
+
+/// トーン+ノイズ混合パッチ（実機SSGのトーン・ノイズ同時出力）。
+/// Algorithm 7 で OP1=矩形波（トーン、note周波数で鳴る）+ OP3=ノイズ（NPの帯域）の加算混合。
+/// 実機の「トーンANDノイズ（ゲート）」ではなく加算近似だが、両方が同時に聞こえる。
+fn mix_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
+    use ym38x6_core::{OperatorParams, Ym38x6Patch};
+    let mut patch = Ym38x6Patch::default();
+    patch.channel.algorithm = 7;
+    // OP1: 矩形波（トーン）。psg_patch と同じ素直な矩形オシレーター。
+    let tone = OperatorParams {
+        tl: 255,
+        ar: 255,
+        d1r: 0,
+        d2r: 0,
+        d1l: 255,
+        rr: 0,
+        mul: 1,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 16, // 矩形波（square variant0）
+        op_fine_tune: 128,
+    };
+    patch.operators[0] = tone;
+    patch.operators[1] = OperatorParams { tl: 0, ..tone };
+    patch.operators[2] = noise_op(np); // OP3: ノイズ
+    patch.operators[3] = OperatorParams { tl: 0, ..tone };
+    patch
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -62,6 +163,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut out_midi: Option<PathBuf> = None;
     let mut bank: u16 = 0;
     let mut dump_pitch = false;
+    let mut fm_gain: f32 = 1.0;
+    let mut ssg_gain: f32 = 1.0;
     let mut out_wav: Option<PathBuf> = None;
     let mut wav_flag = false;
     let mut gain: f32 = 1.0;
@@ -85,6 +188,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--gain" => {
                 let v = args.get(i + 1).ok_or("--gain に値がありません")?;
                 gain = v.parse().map_err(|_| format!("--gain の値が不正: {v}"))?;
+                i += 2;
+            }
+            "--fm-gain" => {
+                let v = args.get(i + 1).ok_or("--fm-gain に値がありません")?;
+                fm_gain = v.parse().map_err(|_| format!("--fm-gain の値が不正: {v}"))?;
+                i += 2;
+            }
+            "--ssg-gain" => {
+                let v = args.get(i + 1).ok_or("--ssg-gain に値がありません")?;
+                ssg_gain = v.parse().map_err(|_| format!("--ssg-gain の値が不正: {v}"))?;
                 i += 2;
             }
             "--out" => {
@@ -128,7 +241,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         wav_flag.then(|| base_dir.join(format!("{stem}.wav")))
     });
 
-    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain })
+    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain })
 }
 
 /// ピッチ二重変換ダンプ（--dump-pitch）。
@@ -221,6 +334,8 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
                 _ => opm.write(reg, val),
             },
             VgmCmd::End => break,
+            // OPN系コマンドはOPMパスでは発生しない（チップ判定で分岐済み）
+            _ => {}
         }
     }
 
@@ -236,7 +351,6 @@ fn dump_pitch(data: &[u8], data_start: usize) -> Result<(), String> {
 ///
 /// `gain`は書き出し前に全サンプルへ掛ける出力レベル倍率（クリップ対策。1.0で素通し）。
 fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(), String> {
-    use ym38x6_core::SoundEngine;
     const SR: f32 = 44_100.0;
 
     let mut opm = OpmState::new();
@@ -246,7 +360,9 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
 
     let mut active:   [bool; 8] = [false; 8];
     let mut base_kc:  [u8;   8] = [0;     8];
-    let mut patch_idx: [Option<usize>; 8] = [None; 8];
+    // 各チャンネルが現在鳴らしているパッチ（kc-reon時の再キーオンに再利用）。
+    // PSGモードの後ろ3chは矩形波の固定パッチ、それ以外はOPM抽出音色。
+    let mut cur_patch: [ym38x6_core::Ym38x6Patch; 8] = [Default::default(); 8];
 
     // pb(0-16383) → セント。VSTが感度±PB_SENSITIVITY半音で行う変換と同一
     // （pb_to_semitones は PB_SENSITIVITY を使う）。RPNが正しく効いた理想状態を再現する。
@@ -268,8 +384,8 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
                         opm.write(reg, val);
                         let voice = opm.build_voice(ch, slots);
                         let idx = bank.find_or_insert(voice);
-                        patch_idx[ch] = Some(idx);
                         let patch = bank.patch_at(idx);
+                        cur_patch[ch] = patch;
                         let kc = opm.kc(ch);
                         let kf = opm.kf(ch);
                         base_kc[ch] = kc;
@@ -297,8 +413,7 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
                             base_kc[ch] = val;
                             let note = kc_to_midi_note(val);
                             let (pb2, _) = compute_pitch_bend(val, val, kf);
-                            let patch = patch_idx[ch].map(|i| bank.patch_at(i)).unwrap_or_default();
-                            engine.note_on_with_velocity(ch, midi_to_freq(note), 100, patch);
+                            engine.note_on_with_velocity(ch, midi_to_freq(note), 100, cur_patch[ch]);
                             engine.set_pitch_bend(ch, pb_cents(pb2));
                         } else {
                             engine.set_pitch_bend(ch, pb_cents(pb));
@@ -317,6 +432,8 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
                 _ => opm.write(reg, val),
             },
             VgmCmd::End => break,
+            // OPN系コマンドはOPMパスでは発生しない（チップ判定で分岐済み）
+            _ => {}
         }
     }
 
@@ -384,25 +501,43 @@ fn run(args: &[String]) -> Result<(), String> {
     let data = vgm::load(&args.input)?;
     let header = vgm::parse_header(&data)?;
 
-    if header.ym2151_clock == 0 {
-        return Err("YM2151 が見つかりません（YM2151 以外のVGMです）".into());
-    }
-    eprintln!(
-        "YM2151 clock: {} Hz, {} samples",
-        header.ym2151_clock, header.total_samples
-    );
+    // 2. 音源チップ判定（YM2151=従来パス / OPN系=新パス）
+    let chip = detect_chip(&header).ok_or(
+        "YM2151 も OPN系(YM2612/YM2203/YM2608) も見つかりません（対応外のVGMです）",
+    )?;
 
-    // --dump-pitch: SMF/バンクを書かず、ピッチ二重変換の比較CSVを標準出力へ出す
-    if args.dump_pitch {
-        return dump_pitch(&data, header.data_start);
+    match chip {
+        SourceChip::Opm => {
+            eprintln!(
+                "YM2151 clock: {} Hz, {} samples",
+                header.ym2151_clock, header.total_samples
+            );
+            // --dump-pitch: SMF/バンクを書かず、ピッチ二重変換の比較CSVを標準出力へ出す
+            if args.dump_pitch {
+                return dump_pitch(&data, header.data_start);
+            }
+            // --wav/--out-wav: WAVのみを排他出力する（.mid/.38x6は出さない）。
+            if let Some(wav_path) = &args.wav {
+                return render_wav(&data, header.data_start, wav_path, args.gain);
+            }
+            run_opm_smf(&data, &header, &args)
+        }
+        SourceChip::Opn(info) => {
+            eprintln!(
+                "{} clock: {} Hz, {} samples (FM {}ch{})",
+                info.label, info.clock, header.total_samples, info.fm_channels,
+                if info.has_ssg { " + SSG 3ch" } else { "" },
+            );
+            if args.dump_pitch {
+                eprintln!("注: --dump-pitch は YM2151 専用です。OPN系では無視します。");
+            }
+            run_opn(&data, header.data_start, info, &args)
+        }
     }
+}
 
-    // --wav/--out-wav: WAVのみを排他出力する（.mid/.38x6は出さない）。
-    // DAW/VST/SMFを経由せず ym38x6-core で直接レンダリングし、原曲VGZとの聴き比べに使う。
-    if let Some(wav_path) = &args.wav {
-        return render_wav(&data, header.data_start, wav_path, args.gain);
-    }
-
+/// YM2151(OPM) の SMF + 音色バンクを出力する（従来パス）。
+fn run_opm_smf(data: &[u8], header: &vgm::VgmHeader, args: &Args) -> Result<(), String> {
     // 2. 状態初期化
     let mut opm = OpmState::new();
     let mut bank = PatchBank::new();
@@ -422,7 +557,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 
     // 3. VGM コマンドループ
-    for cmd in VgmIter::new(&data, header.data_start) {
+    for cmd in VgmIter::new(data, header.data_start) {
         match cmd {
             VgmCmd::Wait(n) => {
                 samples += n as u64;
@@ -530,6 +665,9 @@ fn run(args: &[String]) -> Result<(), String> {
             }
 
             VgmCmd::End => break,
+
+            // OPN系コマンドはOPMパスでは発生しない（チップ判定で分岐済み）
+            _ => {}
         }
     }
 
@@ -549,4 +687,555 @@ fn run(args: &[String]) -> Result<(), String> {
     println!("MIDI: {}", args.out_midi.display());
 
     Ok(())
+}
+
+// ===========================================================================
+// OPN系（YM2612 / YM2203 / YM2608）パス
+// ===========================================================================
+
+/// 入力VGMの音源チップ種別。
+enum SourceChip {
+    Opm,
+    Opn(OpnInfo),
+}
+
+/// OPN書き込みコマンドの種類（どのVGMコマンドを横取りするか）。
+#[derive(Clone, Copy, PartialEq)]
+enum OpnWriteKind {
+    Ym2612,
+    Ym2203,
+    Ym2608,
+}
+
+/// 検出したOPN系チップの構成。
+#[derive(Clone, Copy)]
+struct OpnInfo {
+    label: &'static str,
+    write_kind: OpnWriteKind,
+    /// チップ入力クロック（Hz）。dual-chipビットはマスク済み。
+    clock: u32,
+    /// FMチャンネル数（YM2203=3、YM2612/YM2608=6）。
+    fm_channels: usize,
+    /// F-Number→周波数式の分母 factor（[opn::FM_DIVISOR_6CH] / [opn::FM_DIVISOR_3CH]）。
+    fm_divisor: u32,
+    /// SSG(PSG) を内蔵するか（YM2203/YM2608=true、YM2612=false）。
+    has_ssg: bool,
+}
+
+/// VGMヘッダーのクロック欄から音源チップを判定する。YM2151を最優先、次にOPN系。
+fn detect_chip(h: &vgm::VgmHeader) -> Option<SourceChip> {
+    // dual-chipビット(bit30/31)を落としてクロック値だけ取り出す。
+    let clk = |v: u32| v & 0x3FFF_FFFF;
+    if h.ym2151_clock != 0 {
+        return Some(SourceChip::Opm);
+    }
+    if h.ym2608_clock != 0 {
+        return Some(SourceChip::Opn(OpnInfo {
+            label: "YM2608(OPNA)",
+            write_kind: OpnWriteKind::Ym2608,
+            clock: clk(h.ym2608_clock),
+            fm_channels: 6,
+            fm_divisor: opn::FM_DIVISOR_6CH,
+            has_ssg: true,
+        }));
+    }
+    if h.ym2203_clock != 0 {
+        return Some(SourceChip::Opn(OpnInfo {
+            label: "YM2203(OPN)",
+            write_kind: OpnWriteKind::Ym2203,
+            clock: clk(h.ym2203_clock),
+            fm_channels: 3,
+            fm_divisor: opn::FM_DIVISOR_6CH,
+            has_ssg: true,
+        }));
+    }
+    if h.ym2612_clock != 0 {
+        return Some(SourceChip::Opn(OpnInfo {
+            label: "YM2612(OPN2)",
+            write_kind: OpnWriteKind::Ym2612,
+            clock: clk(h.ym2612_clock),
+            fm_channels: 6,
+            fm_divisor: opn::FM_DIVISOR_6CH,
+            has_ssg: false,
+        }));
+    }
+    None
+}
+
+/// 現在ピッチ(浮動MIDI) と基準ノートから MIDI ピッチベンド(0-16383) と範囲外フラグを求める。
+/// 感度は [PB_SENSITIVITY] 半音（OPMパスと共通）。
+fn freq_pitch_bend(cur_midi: f32, base_midi: f32) -> (i16, bool) {
+    let delta = cur_midi - base_midi;
+    let oor = delta.abs() > PB_SENSITIVITY as f32;
+    let bend = (8192.0 + delta / PB_SENSITIVITY as f32 * 8192.0)
+        .round()
+        .clamp(0.0, 16383.0) as i16;
+    (bend, oor)
+}
+
+/// OPN変換の出力先抽象。FM/SSGの楽音イベントを SMF（[SmfSink]）または
+/// WAV直描画（[WavSink]）へ振り分ける。`tick` はSMF用（WAVは無視）。
+trait OpnSink {
+    fn set_pitch_bend_sensitivity(&mut self, ch: usize, semitones: u8);
+    /// ノートオン前に呼ぶ。SMFはPC+CC102、WAVはチャンネルのパッチを記憶。
+    fn program_change(&mut self, tick: u64, ch: usize, program: u8, patch: Ym38x6Patch);
+    fn note_on(&mut self, tick: u64, ch: usize, note: u8, freq: f32, vel: u8);
+    fn note_off(&mut self, tick: u64, ch: usize, note: u8);
+    /// `pb`=SMF用ベンド値, `cents`=WAV用セント。
+    fn pitch_bend(&mut self, tick: u64, ch: usize, pb: i16, cents: f32);
+    /// SSG音量(0-15)。SMFはCC11、WAVはキャリアOP1のTLへ反映。
+    fn expression(&mut self, tick: u64, ch: usize, vol: u8);
+    fn wait(&mut self, samples: u32);
+}
+
+/// SMF + 音色バンク出力用のシンク。
+struct SmfSink {
+    smf: SmfBuilder,
+    last_program: Vec<Option<u8>>,
+    last_cc11: Vec<i16>,
+}
+
+impl SmfSink {
+    fn new(total_ch: usize) -> Self {
+        Self {
+            smf: SmfBuilder::new(),
+            last_program: vec![None; total_ch],
+            last_cc11: vec![-1; total_ch],
+        }
+    }
+}
+
+impl OpnSink for SmfSink {
+    fn set_pitch_bend_sensitivity(&mut self, ch: usize, semitones: u8) {
+        self.smf.set_pitch_bend_sensitivity(ch + 1, ch as u8, semitones);
+    }
+    fn program_change(&mut self, tick: u64, ch: usize, program: u8, _patch: Ym38x6Patch) {
+        if self.last_program[ch] != Some(program) {
+            self.smf.add_program_change(ch + 1, tick, ch as u8, program);
+            self.smf.add_cc(ch + 1, tick, ch as u8, 102, program);
+            self.last_program[ch] = Some(program);
+        }
+    }
+    fn note_on(&mut self, tick: u64, ch: usize, note: u8, _freq: f32, vel: u8) {
+        self.smf.add_note_on(ch + 1, tick, ch as u8, note, vel);
+    }
+    fn note_off(&mut self, tick: u64, ch: usize, note: u8) {
+        self.smf.add_note_off(ch + 1, tick, ch as u8, note);
+    }
+    fn pitch_bend(&mut self, tick: u64, ch: usize, pb: i16, _cents: f32) {
+        self.smf.add_pitch_bend(ch + 1, tick, ch as u8, pb);
+    }
+    fn expression(&mut self, tick: u64, ch: usize, vol: u8) {
+        let cc = ssg::volume_to_cc11(vol) as i16;
+        if cc != self.last_cc11[ch] {
+            self.smf.add_cc(ch + 1, tick, ch as u8, 11, cc as u8);
+            self.last_cc11[ch] = cc;
+        }
+    }
+    fn wait(&mut self, _samples: u32) {}
+}
+
+/// WAV直描画用のシンク。`tick`は無視し、エンジンを直接駆動する。
+struct WavSink {
+    engine: ym38x6_core::Ym38x6Engine,
+    audio: Vec<f32>,
+    patches: Vec<Ym38x6Patch>,
+    sr: f32,
+}
+
+impl WavSink {
+    fn new(sr: f32, total_ch: usize) -> Self {
+        Self {
+            engine: ym38x6_core::Ym38x6Engine::new(sr),
+            audio: Vec::new(),
+            patches: vec![Ym38x6Patch::default(); total_ch],
+            sr,
+        }
+    }
+
+    /// リリースの尾を1秒分レンダリングし、gain適用＋クリップ報告してWAVを書き出す。
+    fn finish_and_write(mut self, out: &Path, gain: f32) -> Result<(), String> {
+        let mut tail = vec![0.0f32; self.sr as usize];
+        self.engine.render(&mut tail, 1);
+        self.audio.extend_from_slice(&tail);
+
+        let raw_peak = self.audio.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        if gain != 1.0 {
+            for s in self.audio.iter_mut() {
+                *s *= gain;
+            }
+        }
+        let out_peak = raw_peak * gain;
+        let clipped = self.audio.iter().filter(|&&s| s.abs() > 1.0).count();
+        write_wav_mono16(out, &self.audio, self.sr as u32)
+            .map_err(|e| format!("WAV書き込み失敗: {}: {e}", out.display()))?;
+        println!(
+            "WAV: {} ({:.1}秒, gain={:.2}, 素ピーク={:.3}, 出力ピーク={:.3}{})",
+            out.display(),
+            self.audio.len() as f32 / self.sr,
+            gain,
+            raw_peak,
+            out_peak,
+            if clipped > 0 {
+                format!(", クリップ{clipped}サンプル→--gain {:.2}推奨", 1.0 / raw_peak.max(1e-6))
+            } else {
+                String::new()
+            },
+        );
+        Ok(())
+    }
+}
+
+impl OpnSink for WavSink {
+    fn set_pitch_bend_sensitivity(&mut self, _ch: usize, _semitones: u8) {}
+    fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: Ym38x6Patch) {
+        self.patches[ch] = patch;
+    }
+    fn note_on(&mut self, _tick: u64, ch: usize, _note: u8, freq: f32, vel: u8) {
+        self.engine.note_on_with_velocity(ch, freq, vel, self.patches[ch]);
+    }
+    fn note_off(&mut self, _tick: u64, ch: usize, _note: u8) {
+        self.engine.note_off(ch);
+    }
+    fn pitch_bend(&mut self, _tick: u64, ch: usize, _pb: i16, cents: f32) {
+        self.engine.set_pitch_bend(ch, cents);
+    }
+    fn expression(&mut self, _tick: u64, ch: usize, vol: u8) {
+        // 矩形波キャリアOP1のTLを音量に応じてスケールする。
+        let mut op = self.patches[ch].operators[0];
+        op.tl = ssg::volume_to_tl(vol);
+        self.patches[ch].operators[0] = op;
+        self.engine.set_operator_params(ch, 0, op);
+    }
+    fn wait(&mut self, samples: u32) {
+        let mut buf = vec![0.0f32; samples as usize];
+        self.engine.render(&mut buf, 1);
+        self.audio.extend_from_slice(&buf);
+    }
+}
+
+/// OPN系VGMを走査し、FM + SSG の楽音イベントを `sink` へ送る共通処理。
+/// バンク（音色重複排除）は `bank` が保持する。
+fn process_opn(
+    data: &[u8],
+    data_start: usize,
+    info: OpnInfo,
+    bank: &mut PatchBank,
+    sink: &mut dyn OpnSink,
+    fm_vel: u8,
+    ssg_vel: u8,
+) {
+    let fm = info.fm_channels;
+    let total_ch = fm + if info.has_ssg { 3 } else { 0 };
+    let ssg_clock = info.clock / ssg::SSG_CLOCK_DIVISOR;
+
+    for ch in 0..total_ch {
+        sink.set_pitch_bend_sensitivity(ch, PB_SENSITIVITY);
+    }
+
+    let mut opn = OpnState::new();
+    let mut ssg = SsgState::new();
+    let mut samples: u64 = 0;
+
+    // FM演奏状態
+    let mut fm_note: Vec<Option<u8>> = vec![None; fm];
+    let mut fm_base: Vec<f32> = vec![0.0; fm];
+    let mut fm_pb: Vec<i16> = vec![8192; fm];
+
+    // SSG演奏状態（3ch）
+    let mut ssg_note: [Option<u8>; 3] = [None; 3];
+    let mut ssg_base: [f32; 3] = [0.0; 3];
+    let mut ssg_pb: [i16; 3] = [8192; 3];
+    let mut ssg_vol: [u8; 3] = [255; 3]; // 直前のexpression音量（初期値は無効値）
+
+    for cmd in VgmIter::new(data, data_start) {
+        let (port, reg, val) = match cmd {
+            VgmCmd::Wait(n) => {
+                samples += n as u64;
+                sink.wait(n);
+                continue;
+            }
+            VgmCmd::End => break,
+            VgmCmd::Ym2612Write { port, reg, val } if info.write_kind == OpnWriteKind::Ym2612 => {
+                (port as usize, reg, val)
+            }
+            VgmCmd::Ym2203Write { reg, val } if info.write_kind == OpnWriteKind::Ym2203 => {
+                (0usize, reg, val)
+            }
+            VgmCmd::Ym2608Write { port, reg, val } if info.write_kind == OpnWriteKind::Ym2608 => {
+                (port as usize, reg, val)
+            }
+            _ => continue,
+        };
+
+        let tick = SmfBuilder::samples_to_ticks(samples);
+
+        // --- SSG（port0 の 0x00-0x0F） ---
+        if info.has_ssg && port == 0 && reg < 0x10 {
+            ssg.write(reg, val);
+            let chans: &[usize] = match reg {
+                0x00 | 0x01 => &[0],
+                0x02 | 0x03 => &[1],
+                0x04 | 0x05 => &[2],
+                0x06 | 0x07 | 0x0B | 0x0C | 0x0D => &[0, 1, 2], // noise period/mixer/envelope は全chへ影響
+                0x08 => &[0],
+                0x09 => &[1],
+                0x0A => &[2],
+                _ => &[],
+            };
+            for &sc in chans {
+                eval_ssg_channel(
+                    sc, fm, &ssg, ssg_clock, bank, tick, sink, ssg_vel,
+                    &mut ssg_note[sc], &mut ssg_base[sc], &mut ssg_pb[sc], &mut ssg_vol[sc],
+                );
+            }
+            continue;
+        }
+
+        // --- FM ---
+        opn.write(port, reg, val);
+        match reg {
+            // キーオン/オフ（port0のグローバルレジスタ）
+            0x28 if port == 0 => {
+                if let Some((ch, slots)) = opn::decode_keyon(val) {
+                    if ch < fm {
+                        if slots != 0 {
+                            // 既存ノートを解放してから新規キーオン
+                            if let Some(prev) = fm_note[ch].take() {
+                                sink.note_off(tick, ch, prev);
+                            }
+                            let voice = opn.build_voice(ch);
+                            let patch = voice.to_ym38x6_patch();
+                            let idx = bank.find_or_insert_fixed(patch, "opn_voice");
+                            let (fnum, block) = opn.fnum_block(ch);
+                            let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
+                            let midi_f = opn::freq_to_midi(freq);
+                            let note = midi_f.round().clamp(0.0, 127.0) as u8;
+                            fm_base[ch] = note as f32;
+                            let (pb, _) = freq_pitch_bend(midi_f, note as f32);
+                            sink.program_change(tick, ch, (idx % 128) as u8, patch);
+                            sink.pitch_bend(tick, ch, pb, (midi_f - note as f32) * 100.0);
+                            sink.note_on(tick, ch, note, freq, fm_vel);
+                            fm_note[ch] = Some(note);
+                            fm_pb[ch] = pb;
+                        } else if let Some(prev) = fm_note[ch].take() {
+                            sink.note_off(tick, ch, prev);
+                        }
+                    }
+                }
+            }
+            // F-Number / Block 変更 → ピッチベンド更新
+            0xA0..=0xA2 | 0xA4..=0xA6 => {
+                let cip = if (0xA0..=0xA2).contains(&reg) {
+                    (reg - 0xA0) as usize
+                } else {
+                    (reg - 0xA4) as usize
+                };
+                let ch = port * 3 + cip;
+                if ch < fm && fm_note[ch].is_some() {
+                    let (fnum, block) = opn.fnum_block(ch);
+                    let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
+                    let midi_f = opn::freq_to_midi(freq);
+                    let (pb, oor) = freq_pitch_bend(midi_f, fm_base[ch]);
+                    if oor {
+                        if let Some(prev) = fm_note[ch].take() {
+                            sink.note_off(tick, ch, prev);
+                        }
+                        let note = midi_f.round().clamp(0.0, 127.0) as u8;
+                        fm_base[ch] = note as f32;
+                        let (pb2, _) = freq_pitch_bend(midi_f, note as f32);
+                        sink.pitch_bend(tick, ch, pb2, (midi_f - note as f32) * 100.0);
+                        sink.note_on(tick, ch, note, freq, fm_vel);
+                        fm_note[ch] = Some(note);
+                        fm_pb[ch] = pb2;
+                    } else if pb != fm_pb[ch] {
+                        sink.pitch_bend(tick, ch, pb, (midi_f - fm_base[ch]) * 100.0);
+                        fm_pb[ch] = pb;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 残ノートをすべて解放
+    let end_tick = SmfBuilder::samples_to_ticks(samples);
+    for ch in 0..fm {
+        if let Some(note) = fm_note[ch].take() {
+            sink.note_off(end_tick, ch, note);
+        }
+    }
+    if info.has_ssg {
+        for sc in 0..3 {
+            if let Some(note) = ssg_note[sc].take() {
+                sink.note_off(end_tick, fm + sc, note);
+            }
+        }
+    }
+}
+
+/// SSG 1チャンネル分の発音状態を再評価し、必要なイベントを `sink` へ送る。
+/// `ech = fm + sc` がエンジン/トラック上のチャンネル番号。
+/// トーン有効時は [psg_patch]（矩形波）、ノイズのみ有効時は [noise_patch]（高帰還FM）を使う。
+/// OOR retrigger 時もパッチを更新するため、ノイズ周期変化に追随できる。
+#[allow(clippy::too_many_arguments)]
+fn eval_ssg_channel(
+    sc: usize,
+    fm: usize,
+    ssg: &SsgState,
+    ssg_clock: u32,
+    bank: &mut PatchBank,
+    tick: u64,
+    sink: &mut dyn OpnSink,
+    vel: u8,
+    note: &mut Option<u8>,
+    base: &mut f32,
+    pb: &mut i16,
+    vol: &mut u8,
+) {
+    let ech = fm + sc;
+    let tone_on   = ssg.tone_enabled(sc);
+    let noise_on  = ssg.noise_enabled(sc);
+    let period    = ssg.tone_period(sc);
+    let noise_per = ssg.noise_period();
+    let evol      = ssg.effective_volume(sc);
+    // トーンは period>0 が必須。ノイズはNP=0も1扱いで鳴るため noise_on のみで可。
+    let tone_active = tone_on && period > 0;
+    let should_sound = (tone_active || noise_on) && evol > 0;
+
+    if !should_sound {
+        if let Some(prev) = note.take() {
+            sink.note_off(tick, ech, prev);
+        }
+        return;
+    }
+
+    // 発音周波数: トーンが有効ならトーン周波数（混合時もOP1のトーンに使う）、
+    // ノイズのみならノイズ周波数（ただしノイズはピッチレスでエンジン側はfreq無視）。
+    let freq = if tone_active {
+        ssg::period_to_freq(period, ssg_clock)
+    } else {
+        ssg::period_to_freq(noise_per.max(1) as u16, ssg_clock)
+    };
+    let midi_f = opn::freq_to_midi(freq);
+
+    // 実機SSGミキサーに沿ってパッチを選択（find_or_insert_fixed で重複排除）:
+    //   トーン+ノイズ → mix_patch（OP1矩形+OP3ノイズ加算）
+    //   トーンのみ    → psg_patch（矩形）
+    //   ノイズのみ    → noise_patch（NPの帯域）
+    let (patch, program) = if tone_active && noise_on {
+        let p = mix_patch(noise_per);
+        let prog = (bank.find_or_insert_fixed(p, "ssg_mix") % 128) as u8;
+        (p, prog)
+    } else if tone_active {
+        let p = psg_patch();
+        let prog = (bank.find_or_insert_fixed(p, "psg_square") % 128) as u8;
+        (p, prog)
+    } else {
+        let p = noise_patch(noise_per);
+        let prog = (bank.find_or_insert_fixed(p, "ssg_noise") % 128) as u8;
+        (p, prog)
+    };
+
+    if note.is_none() {
+        // 新規キーオン
+        let n = midi_f.round().clamp(0.0, 127.0) as u8;
+        *base = n as f32;
+        let (b, _) = freq_pitch_bend(midi_f, n as f32);
+        sink.program_change(tick, ech, program, patch);
+        sink.pitch_bend(tick, ech, b, (midi_f - n as f32) * 100.0);
+        sink.note_on(tick, ech, n, freq, vel);
+        sink.expression(tick, ech, evol);
+        *note = Some(n);
+        *pb = b;
+        *vol = evol;
+    } else {
+        // 継続中: ピッチ更新（範囲外なら再キー）と音量更新
+        let (b, oor) = freq_pitch_bend(midi_f, *base);
+        if oor {
+            if let Some(prev) = note.take() {
+                sink.note_off(tick, ech, prev);
+            }
+            let n = midi_f.round().clamp(0.0, 127.0) as u8;
+            *base = n as f32;
+            let (b2, _) = freq_pitch_bend(midi_f, n as f32);
+            // OOR retrigger 時もパッチを更新（ノイズ周期変化への追随）
+            sink.program_change(tick, ech, program, patch);
+            sink.pitch_bend(tick, ech, b2, (midi_f - n as f32) * 100.0);
+            sink.note_on(tick, ech, n, freq, vel);
+            *note = Some(n);
+            *pb = b2;
+        } else if b != *pb {
+            sink.pitch_bend(tick, ech, b, (midi_f - *base) * 100.0);
+            *pb = b;
+        }
+        if evol != *vol {
+            sink.expression(tick, ech, evol);
+            *vol = evol;
+        }
+    }
+}
+
+/// OPN系の出力（SMF+バンク または WAV）。
+fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result<(), String> {
+    let total_ch = info.fm_channels + if info.has_ssg { 3 } else { 0 };
+    let mut bank = PatchBank::new();
+
+    let fm_vel = scaled_velocity(args.fm_gain);
+    let ssg_vel = scaled_velocity(args.ssg_gain);
+
+    if let Some(wav_path) = &args.wav {
+        let mut sink = WavSink::new(44_100.0, total_ch);
+        process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel);
+        return sink.finish_and_write(wav_path, args.gain);
+    }
+
+    let mut sink = SmfSink::new(total_ch);
+    process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel);
+
+    bank.write(&args.out_bank, args.bank)?;
+    println!("音色バンク: {} ({} 音色)", args.out_bank.display(), bank.len());
+    sink.smf
+        .write(&args.out_midi)
+        .map_err(|e| format!("MIDI書き出し失敗: {e}"))?;
+    println!("MIDI: {}", args.out_midi.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_patch_combines_tone_and_noise() {
+        // Algorithm 7、OP1=矩形(16)=トーン、OP3=ノイズ(32+NP)、OP2/4=ミュート。
+        let p = mix_patch(5);
+        assert_eq!(p.channel.algorithm, 7);
+        assert_eq!(p.operators[0].waveform, 16);
+        assert_eq!(p.operators[0].tl, 255);
+        assert_eq!(p.operators[1].tl, 0);
+        assert_eq!(p.operators[2].waveform, 37); // 32+5
+        assert_eq!(p.operators[2].tl, 255);
+        assert_eq!(p.operators[3].tl, 0);
+    }
+
+    #[test]
+    fn scaled_velocity_maps_gain_to_velocity() {
+        assert_eq!(scaled_velocity(1.0), 100); // 従来どおり
+        assert_eq!(scaled_velocity(0.5), 50); // 半分
+        assert_eq!(scaled_velocity(0.0), 1); // 下限クランプ（0ではなく1）
+        assert_eq!(scaled_velocity(2.0), 127); // 上限クランプ（velocity頭打ち）
+    }
+
+    #[test]
+    fn noise_patch_maps_np_directly_to_waveform() {
+        // OP1の波形番号 = 32 + NP（実機NP直対応、32〜63）。
+        let p0 = noise_patch(0);
+        let p31 = noise_patch(31);
+        assert_eq!(p0.operators[0].waveform, 32);
+        assert_eq!(p31.operators[0].waveform, 63);
+        assert_eq!(p0.channel.algorithm, 7);
+        // OP2〜4はミュート(TL=0)
+        assert_eq!(p0.operators[1].tl, 0);
+    }
 }

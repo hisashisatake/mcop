@@ -38,16 +38,26 @@ impl SmfBuilder {
 
     // --- イベント追加 ---
 
+    /// 指定トラックが存在するようトラック配列を伸長する（OPN系の9ch等、9トラックを超える場合に対応）。
+    fn ensure_track(&mut self, track: usize) {
+        while self.tracks.len() <= track {
+            self.tracks.push(Vec::new());
+        }
+    }
+
     pub fn add_note_on(&mut self, track: usize, tick: u64, ch: u8, note: u8, vel: u8) {
+        self.ensure_track(track);
         self.tracks[track].push((tick, vec![0x90 | ch, note, vel]));
     }
 
     pub fn add_note_off(&mut self, track: usize, tick: u64, ch: u8, note: u8) {
+        self.ensure_track(track);
         self.tracks[track].push((tick, vec![0x80 | ch, note, 0]));
     }
 
     /// MIDI ピッチベンドを送出する（value: 0-16383, center=8192）。
     pub fn add_pitch_bend(&mut self, track: usize, tick: u64, ch: u8, value: i16) {
+        self.ensure_track(track);
         let v = value as u16;
         let lsb = (v & 0x7F) as u8;
         let msb = ((v >> 7) & 0x7F) as u8;
@@ -55,10 +65,12 @@ impl SmfBuilder {
     }
 
     pub fn add_program_change(&mut self, track: usize, tick: u64, ch: u8, program: u8) {
+        self.ensure_track(track);
         self.tracks[track].push((tick, vec![0xC0 | ch, program & 0x7F]));
     }
 
     pub fn add_cc(&mut self, track: usize, tick: u64, ch: u8, cc: u8, val: u8) {
+        self.ensure_track(track);
         self.tracks[track].push((tick, vec![0xB0 | ch, cc, val]));
     }
 
@@ -72,6 +84,7 @@ impl SmfBuilder {
     }
 
     fn add_meta(&mut self, track: usize, tick: u64, meta_type: u8, data: &[u8]) {
+        self.ensure_track(track);
         let mut ev = vec![0xFF, meta_type];
         write_vlq_to_vec(&mut ev, data.len() as u64);
         ev.extend_from_slice(data);
@@ -95,19 +108,19 @@ impl SmfBuilder {
         self.add_meta(0, 0, 0x58, &[4, 2, 24, 8]);
 
         // 全トラックに End of Track を追加
-        for i in 0..9 {
-            let end_tick = if i == 0 { total_ticks } else { total_ticks };
-            self.add_meta(i, end_tick, 0x2F, &[]);
+        let num_tracks = self.tracks.len();
+        for i in 0..num_tracks {
+            self.add_meta(i, total_ticks, 0x2F, &[]);
         }
 
         let mut buf = Vec::new();
 
         // MThd ヘッダー
         buf.extend_from_slice(b"MThd");
-        buf.extend_from_slice(&6u32.to_be_bytes());   // chunk length
-        buf.extend_from_slice(&1u16.to_be_bytes());   // format 1
-        buf.extend_from_slice(&9u16.to_be_bytes());   // 9 tracks
-        buf.extend_from_slice(&PPQ.to_be_bytes());    // PPQ
+        buf.extend_from_slice(&6u32.to_be_bytes());                  // chunk length
+        buf.extend_from_slice(&1u16.to_be_bytes());                  // format 1
+        buf.extend_from_slice(&(num_tracks as u16).to_be_bytes());   // トラック数
+        buf.extend_from_slice(&PPQ.to_be_bytes());                   // PPQ
 
         // 各トラック
         for track_events in &mut self.tracks {

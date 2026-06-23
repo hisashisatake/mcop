@@ -5117,6 +5117,7 @@ name = "vgm2x6"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "mucom2x6",
  "opm2x6",
  "ym38x6-core",
 ]

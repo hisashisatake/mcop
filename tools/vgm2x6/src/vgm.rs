@@ -8,6 +8,9 @@ use std::io::Read;
 
 pub struct VgmHeader {
     pub ym2151_clock: u32,
+    pub ym2612_clock: u32,
+    pub ym2203_clock: u32,
+    pub ym2608_clock: u32,
     pub data_start: usize,
     pub total_samples: u32,
 }
@@ -40,6 +43,13 @@ pub fn parse_header(data: &[u8]) -> Result<VgmHeader, String> {
     let ym2151_clock = u32_le(data, 0x30);
     let total_samples = u32_le(data, 0x18);
 
+    // OPN系チップのクロック。YM2612は @0x2C（VGM≥1.10）、YM2203は @0x44 / YM2608は @0x48
+    // （VGM≥1.51）。古いVGMにはこれらの欄が無いため、長さを確認してから読む（無ければ0）。
+    let clock_at = |off: usize| if data.len() >= off + 4 { u32_le(data, off) } else { 0 };
+    let ym2612_clock = clock_at(0x2C);
+    let ym2203_clock = clock_at(0x44);
+    let ym2608_clock = clock_at(0x48);
+
     // データ開始オフセット: v1.50以降は 0x34 の相対値、それ以前は固定 0x40
     let version = u32_le(data, 0x08);
     let data_start = if version >= 0x150 {
@@ -53,7 +63,14 @@ pub fn parse_header(data: &[u8]) -> Result<VgmHeader, String> {
         return Err("データ開始オフセットがファイルサイズを超えています".into());
     }
 
-    Ok(VgmHeader { ym2151_clock, data_start, total_samples })
+    Ok(VgmHeader {
+        ym2151_clock,
+        ym2612_clock,
+        ym2203_clock,
+        ym2608_clock,
+        data_start,
+        total_samples,
+    })
 }
 
 #[inline]
@@ -67,6 +84,12 @@ fn u32_le(data: &[u8], offset: usize) -> u32 {
 
 pub enum VgmCmd {
     Ym2151Write { reg: u8, val: u8 },
+    /// YM2612(OPN2) 書き込み。port=0(0x52) / port=1(0x53)。
+    Ym2612Write { port: u8, reg: u8, val: u8 },
+    /// YM2203(OPN) 書き込み（単一ポート、0x55）。
+    Ym2203Write { reg: u8, val: u8 },
+    /// YM2608(OPNA) 書き込み。port=0(0x56) / port=1(0x57)。
+    Ym2608Write { port: u8, reg: u8, val: u8 },
     Wait(u32),
     End,
 }
@@ -116,6 +139,29 @@ impl<'a> Iterator for VgmIter<'a> {
                     let reg = self.byte()?;
                     let val = self.byte()?;
                     return Some(VgmCmd::Ym2151Write { reg, val });
+                }
+
+                // YM2612(OPN2) port0 / port1 書き込み
+                0x52 | 0x53 => {
+                    let port = cmd - 0x52;
+                    let reg = self.byte()?;
+                    let val = self.byte()?;
+                    return Some(VgmCmd::Ym2612Write { port, reg, val });
+                }
+
+                // YM2203(OPN) 書き込み
+                0x55 => {
+                    let reg = self.byte()?;
+                    let val = self.byte()?;
+                    return Some(VgmCmd::Ym2203Write { reg, val });
+                }
+
+                // YM2608(OPNA) port0 / port1 書き込み
+                0x56 | 0x57 => {
+                    let port = cmd - 0x56;
+                    let reg = self.byte()?;
+                    let val = self.byte()?;
+                    return Some(VgmCmd::Ym2608Write { port, reg, val });
                 }
 
                 // N サンプル待つ (16-bit LE)
@@ -181,5 +227,40 @@ impl<'a> Iterator for VgmIter<'a> {
                 _ => {} // 不明コマンドはスキップ
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_opn_write_commands() {
+        // 各OPN系コマンドと、無視されるYM2612 DAC(0x80-0x8F)・終端を並べる。
+        let data = [
+            0x52, 0x30, 0x71, // YM2612 port0
+            0x53, 0xA4, 0x22, // YM2612 port1
+            0x55, 0xA0, 0x12, // YM2203
+            0x56, 0x07, 0x38, // YM2608 port0
+            0x57, 0x40, 0x10, // YM2608 port1
+            0x8A, // YM2612 DAC+wait → 無視（コマンド自体は消費される）
+            0x66, // End
+        ];
+        let cmds: Vec<VgmCmd> = VgmIter::new(&data, 0).collect();
+        assert!(matches!(cmds[0], VgmCmd::Ym2612Write { port: 0, reg: 0x30, val: 0x71 }));
+        assert!(matches!(cmds[1], VgmCmd::Ym2612Write { port: 1, reg: 0xA4, val: 0x22 }));
+        assert!(matches!(cmds[2], VgmCmd::Ym2203Write { reg: 0xA0, val: 0x12 }));
+        assert!(matches!(cmds[3], VgmCmd::Ym2608Write { port: 0, reg: 0x07, val: 0x38 }));
+        assert!(matches!(cmds[4], VgmCmd::Ym2608Write { port: 1, reg: 0x40, val: 0x10 }));
+        // DACは値を生まず、次がEnd
+        assert!(matches!(cmds[5], VgmCmd::End));
+    }
+
+    #[test]
+    fn ym2151_write_still_parsed() {
+        let data = [0x54, 0x20, 0xC0, 0x66];
+        let cmds: Vec<VgmCmd> = VgmIter::new(&data, 0).collect();
+        assert!(matches!(cmds[0], VgmCmd::Ym2151Write { reg: 0x20, val: 0xC0 }));
+        assert!(matches!(cmds[1], VgmCmd::End));
     }
 }

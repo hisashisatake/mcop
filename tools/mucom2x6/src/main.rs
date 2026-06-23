@@ -14,13 +14,11 @@
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
 //! - `--slot <N>` を指定すると WAV 出力をその音色番号（MUCOM88 の @N）1件のみに絞る。
 
-mod conv;
-mod mucom88;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use conv::{bank_of, preset_count, voices_to_preset_files};
+use mucom2x6::{conv, mucom88};
+use mucom2x6::conv::{bank_of, preset_count, voices_to_preset_files};
 
 /// WAV 試聴レンダリングの設定。
 struct WavConfig {

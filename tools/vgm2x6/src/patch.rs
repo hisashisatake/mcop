@@ -3,10 +3,12 @@
 use std::path::Path;
 
 use opm2x6::{conv, parse::{OpmVoice, OperatorOrder}};
-use ym38x6_core::{PresetEntry, PresetFile};
+use ym38x6_core::{PresetEntry, PresetFile, Ym38x6Patch};
 
 pub struct PatchBank {
-    voices: Vec<OpmVoice>,
+    /// 各エントリーの由来。OPM音色は `Some(voice)`、PSG等の固定パッチは `None`。
+    /// `entries` と長さ・インデックスを常に一致させる。
+    voices: Vec<Option<OpmVoice>>,
     entries: Vec<PresetEntry>,
 }
 
@@ -29,8 +31,10 @@ impl PatchBank {
     /// 音色同一性の判定: 音色パラメーター（KC/KF以外）が全て一致するか。
     pub fn find_or_insert(&mut self, voice: OpmVoice) -> usize {
         for (i, v) in self.voices.iter().enumerate() {
-            if timbre_eq(v, &voice) {
-                return i;
+            if let Some(v) = v {
+                if timbre_eq(v, &voice) {
+                    return i;
+                }
             }
         }
         let idx = self.voices.len();
@@ -38,7 +42,25 @@ impl PatchBank {
         entry.program = (idx % 128) as u8;
         entry.name = format!("patch{idx:03}");
         self.entries.push(entry);
-        self.voices.push(voice);
+        self.voices.push(Some(voice));
+        idx
+    }
+
+    /// OPM由来でない固定パッチ（PSG矩形波など）を登録/再利用してインデックスを返す。
+    /// 同一パッチが既に登録済みなら（`find_or_insert` の音色重複判定とは別に）そのまま再利用する。
+    pub fn find_or_insert_fixed(&mut self, patch: Ym38x6Patch, name: &str) -> usize {
+        for (i, v) in self.voices.iter().enumerate() {
+            if v.is_none() && self.entries[i].patch == patch {
+                return i;
+            }
+        }
+        let idx = self.voices.len();
+        self.entries.push(PresetEntry {
+            program: (idx % 128) as u8,
+            name: name.to_string(),
+            patch,
+        });
+        self.voices.push(None);
         idx
     }
 

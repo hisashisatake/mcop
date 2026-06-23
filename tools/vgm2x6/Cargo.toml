@@ -9,5 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 opm2x6 = { path = "../opm2x6" }
+mucom2x6 = { path = "../mucom2x6" }
 ym38x6-core = { path = "../../ym38x6-core" }
 flate2 = "1"
