@@ -1460,8 +1460,14 @@ fn eval_ssg_channel(
             sink.program_change(tick, ech, program, patch);
             sink.pitch_bend(tick, ech, b2, (midi_f - n as f32) * 100.0);
             sink.note_on(tick, ech, n, freq, vel);
+            // program_changeでパッチが満レベル(tl=255)へリセットされるため、現在の音量を
+            // 必ず再適用する。これを怠ると、音量一定のまま大きくピッチが動く音色
+            // （ドラムのピッチ降下スイープ等、evol==*volでOOR）が再キーオン直後に
+            // フル音量で「ブッ」と鳴る。新規キーオン側(note.is_none())と同じ扱いに揃える。
+            sink.expression(tick, ech, evol);
             *note = Some(n);
             *pb = b2;
+            *vol = evol;
         } else if b != *pb {
             sink.pitch_bend(tick, ech, b, (midi_f - *base) * 100.0);
             *pb = b;
