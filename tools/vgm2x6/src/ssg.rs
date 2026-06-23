@@ -9,20 +9,161 @@
 // 実際の値は OpnInfo::ssg_clock_div（[crate::detect_chip]）が保持する。
 // トーン周波数 `f = ssg_clock / (16 * period)` の絶対音程に効く。
 
+// ---------------------------------------------------------------------------
+// AY-3-8910互換 ハードウェアエンベロープ発生器
+// ---------------------------------------------------------------------------
+
+/// AY-3-8910互換ハードウェアエンベロープ発生器。
+///
+/// 音量レジスタ(0x08-0x0A)のbit4=1(envelope_mode)のチャンネルは、
+/// 直接音量ではなくここが出力する0〜15のレベルで発音する。
+///
+/// 0x0D書き込みで再スタートする（書き込まれた時点でのshapeとperiodが有効）。
+///
+/// # 10種類のエンベロープ形状（0x0Dの下位4bit）
+/// bits[3:2:1:0] = CONT/ATT/ALT/HOLD
+/// - 0x00-0x07 (CONT=0): ワンショット後にレベル0で停止
+/// - 0x08: \\\\  鋸歯下降繰り返し (CONT=1 ATT=0 ALT=0 HOLD=0)
+/// - 0x09: \\_  鋸歯下降後レベル0で停止 (CONT=1 ATT=0 ALT=0 HOLD=1)
+/// - 0x0A: \\/\\ 三角波(下降→上昇繰り返し) (CONT=1 ATT=0 ALT=1 HOLD=0)
+/// - 0x0B: \\‾  下降後レベル15で停止 (CONT=1 ATT=0 ALT=1 HOLD=1)
+/// - 0x0C: ////  鋸歯上昇繰り返し (CONT=1 ATT=1 ALT=0 HOLD=0)
+/// - 0x0D: /‾   上昇後レベル15で停止 (CONT=1 ATT=1 ALT=0 HOLD=1)
+/// - 0x0E: /\\/  三角波(上昇→下降繰り返し) (CONT=1 ATT=1 ALT=1 HOLD=0)
+/// - 0x0F: /_   上昇後レベル0で停止 (CONT=1 ATT=1 ALT=1 HOLD=1)
+pub struct EnvGen {
+    /// エンベロープ周期（0x0C*256 + 0x0B）。0は65536として扱う。
+    period: u32,
+    /// エンベロープ形状（0x0Dの下位4bit）。
+    shape: u8,
+    /// prescalerカウンタ蓄積値（単位: ssg_clock ticks）。
+    accum: f32,
+    /// 現在の出力レベル（0〜15）。
+    level: u8,
+    /// 現在の進行方向（true=上昇 0→15、false=下降 15→0）。
+    ascending: bool,
+    /// エンベロープ停止中（CONT=0の1サイクル完了後、またはHOLD=1の第1セグメント完了後）。
+    holding: bool,
+    /// 第2セグメント以降かどうか（HOLD判定に使用）。
+    second_seg: bool,
+}
+
+impl EnvGen {
+    pub fn new() -> Self {
+        Self { period: 0, shape: 0, accum: 0.0, level: 0, ascending: false, holding: true, second_seg: false }
+    }
+
+    /// 0x0D書き込み時にエンベロープを再スタートする。
+    pub fn trigger(&mut self, shape: u8) {
+        self.shape = shape & 0x0F;
+        self.accum = 0.0;
+        self.second_seg = false;
+        self.holding = false;
+        let att = (self.shape >> 2) & 1 != 0;
+        self.ascending = att;
+        self.level = if att { 0 } else { 15 };
+    }
+
+    /// エンベロープ周期を更新する（0x0Bまたは0x0C書き込み時に SsgState から呼ぶ）。
+    pub fn set_period_lo(&mut self, val: u8) {
+        self.period = (self.period & 0xFF00) | val as u32;
+    }
+
+    pub fn set_period_hi(&mut self, val: u8) {
+        self.period = (self.period & 0x00FF) | ((val as u32) << 8);
+    }
+
+    /// 現在の出力レベル（0〜15）を返す。
+    pub fn current_level(&self) -> u8 {
+        self.level
+    }
+
+    /// `samples` サンプル分だけエンベロープを進める。
+    /// prescalerは ssg_clock/16 Hz で動く。
+    pub fn tick(&mut self, samples: u32, ssg_clock: u32, sample_rate: u32) {
+        if self.holding { return; }
+        let p = if self.period == 0 { 65536u32 } else { self.period };
+        // prescalerは ssg_clock/16 Hz。samplesサンプルで進む prescaler ticks 数。
+        self.accum += samples as f32 * (ssg_clock as f32 / (16.0 * sample_rate as f32));
+        let steps = (self.accum / p as f32) as u32;
+        if steps > 0 {
+            self.accum -= steps as f32 * p as f32;
+            self.advance_steps(steps);
+        }
+    }
+
+    /// `steps` エンベロープステップを適用する（1ステップ=1レベル変化）。
+    fn advance_steps(&mut self, steps: u32) {
+        let cont = (self.shape >> 3) & 1 != 0;
+        let alt  = (self.shape >> 1) & 1 != 0;
+        let hold = self.shape & 1 != 0;
+        let mut rem = steps;
+
+        while rem > 0 && !self.holding {
+            // 現セグメントで残れるステップ数
+            let steps_in_seg = if self.ascending {
+                15u32.saturating_sub(self.level as u32)
+            } else {
+                self.level as u32
+            };
+
+            if rem <= steps_in_seg {
+                if self.ascending { self.level += rem as u8; }
+                else { self.level -= rem as u8; }
+                rem = 0;
+            } else {
+                // セグメント境界に達した
+                rem -= steps_in_seg + 1; // +1 for the boundary step
+                self.level = if self.ascending { 15 } else { 0 };
+
+                if !cont {
+                    // CONT=0: ワンショット後レベル0で停止
+                    self.holding = true;
+                    self.level = 0;
+                } else if hold && !self.second_seg {
+                    // HOLD=1かつ第1セグメント完了: 現レベルで停止
+                    self.holding = true;
+                } else {
+                    // 次セグメントへ
+                    self.second_seg = true;
+                    if alt {
+                        self.ascending = !self.ascending;
+                        self.level = if self.ascending { 0 } else { 15 };
+                    } else {
+                        // ALT=0: 同方向で巻き戻し（鋸歯）
+                        self.level = if self.ascending { 0 } else { 15 };
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// SSG レジスタ状態（0x00-0x0F）。
 pub struct SsgState {
     pub regs: [u8; 16],
+    /// AY-3-8910互換ハードウェアエンベロープ発生器（全チャンネル共有、1基）。
+    pub env: EnvGen,
 }
 
 impl SsgState {
     pub fn new() -> Self {
-        Self { regs: [0u8; 16] }
+        Self { regs: [0u8; 16], env: EnvGen::new() }
     }
 
     pub fn write(&mut self, reg: u8, val: u8) {
         let r = reg as usize;
         if r < 16 {
             self.regs[r] = val;
+        }
+        // エンベロープ関連レジスタの書き込みを EnvGen へ連携する。
+        // 0x0B/0x0C: 周期更新（エンベロープは再スタートしない）。
+        // 0x0D: 形状書き込みで即座にエンベロープを再スタートする（AY-3-8910仕様）。
+        match reg {
+            0x0B => self.env.set_period_lo(val),
+            0x0C => self.env.set_period_hi(val),
+            0x0D => self.env.trigger(val),
+            _ => {}
         }
     }
 
@@ -58,14 +199,21 @@ impl SsgState {
         (self.regs[0x08 + ch] >> 4) & 1 != 0
     }
 
-    /// 発音上の実効音量(0-15)。エンベロープモード時は最大(15)とみなす（v1簡易対応）。
+    /// 発音上の実効音量(0-15)。エンベロープモード時はハードウェアエンベロープ発生器の
+    /// 現在レベルを返す（全チャンネル共有の1基が出力する値）。
     pub fn effective_volume(&self, ch: usize) -> u8 {
         if self.envelope_mode(ch) {
-            15
+            self.env.current_level()
         } else {
             self.volume(ch)
         }
     }
+
+    /// `samples` サンプル分エンベロープを進める（Waitイベント時に呼ぶ）。
+    pub fn tick_envelope(&mut self, samples: u32, ssg_clock: u32, sample_rate: u32) {
+        self.env.tick(samples, ssg_clock, sample_rate);
+    }
+
 }
 
 /// SSG周期 → 周波数(Hz)。`f = ssg_clock / (16 * period)`。
@@ -136,9 +284,17 @@ mod tests {
         assert_eq!(s.volume(0), 10);
         assert!(!s.envelope_mode(0));
         assert_eq!(s.effective_volume(0), 10);
-        s.write(0x09, 0x1F); // bit4=env mode
+        s.write(0x09, 0x1F); // bit4=env mode, ch1
         assert!(s.envelope_mode(1));
-        assert_eq!(s.effective_volume(1), 15);
+        // エンベロープはトリガー(0x0D書き込み)前は初期状態（保持中、レベル0）。
+        // effective_volume は env.current_level() を返す。
+        assert_eq!(s.effective_volume(1), s.env.current_level());
+        // 0x0D 書き込みでトリガー: ATT=1(shape=0x0C)なら 0→15 上昇、初期level=0。
+        s.write(0x0D, 0x0C); // shape 0x0C: 上昇鋸歯繰り返し(ATT=1)
+        assert_eq!(s.effective_volume(1), 0); // triggered → level=0(上昇開始)
+        // 0x0D=0x08(ATT=0 下降): trigger後 level=15
+        s.write(0x0D, 0x08);
+        assert_eq!(s.effective_volume(1), 15); // triggered → level=15(下降開始)
     }
 
     #[test]

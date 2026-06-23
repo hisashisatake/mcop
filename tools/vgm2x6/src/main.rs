@@ -1096,6 +1096,11 @@ struct WavSink {
     /// SMFパスと同様に「整数ノート周波数 + ベンド」で発音するための土台
     /// （note_onに正確な周波数を渡すとベンド基準が二重計上され2音目以降がズレる）。
     bend_cents: Vec<f32>,
+    /// チャンネルごとの「音量制御対象OPインデックス」ビットマスク。
+    /// program_change時にパッチのwaveform>=16かつtl>0のOPを記録し、
+    /// expression()でノイズOP等も含む全アクティブSSG-OPを音量制御するために使う。
+    /// FMパッチ（waveform=0）は影響しない。
+    ssg_active_ops: Vec<[bool; 4]>,
 }
 
 impl WavSink {
@@ -1106,6 +1111,7 @@ impl WavSink {
             patches: vec![Ym38x6Patch::default(); total_ch],
             sr,
             bend_cents: vec![0.0; total_ch],
+            ssg_active_ops: vec![[false; 4]; total_ch],
         }
     }
 
@@ -1145,6 +1151,12 @@ impl WavSink {
 impl OpnSink for WavSink {
     fn set_pitch_bend_sensitivity(&mut self, _ch: usize, _semitones: u8) {}
     fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: Ym38x6Patch) {
+        // SSGパッチはwaveform>=16のOPが音源OP。その中でtl>0(非ミュート)のものを記録する。
+        // これにより expression() でノイズOP(mix_patchのOP3等)も含む全SSG-OPを音量制御できる。
+        for i in 0..4 {
+            self.ssg_active_ops[ch][i] =
+                patch.operators[i].waveform >= 16 && patch.operators[i].tl > 0;
+        }
         self.patches[ch] = patch;
     }
     fn note_on(&mut self, _tick: u64, ch: usize, note: u8, _freq: f32, vel: u8) {
@@ -1164,11 +1176,18 @@ impl OpnSink for WavSink {
         self.engine.set_pitch_bend(ch, cents);
     }
     fn expression(&mut self, _tick: u64, ch: usize, vol: u8) {
-        // 矩形波キャリアOP1のTLを音量に応じてスケールする。
-        let mut op = self.patches[ch].operators[0];
-        op.tl = ssg::volume_to_tl(vol);
-        self.patches[ch].operators[0] = op;
-        self.engine.set_operator_params(ch, 0, op);
+        // ssg_active_ops に記録した全アクティブSSG-OP(トーン・ノイズ両方)のTLを更新する。
+        // 従来OP1(operators[0])のみ更新していたため、mix_patchのノイズOP(operators[2])が
+        // TL=255(フル音量)のまま鳴り続け「ザー」となっていたバグを修正。
+        let scaled_tl = ssg::volume_to_tl(vol);
+        for i in 0..4 {
+            if self.ssg_active_ops[ch][i] {
+                let mut op = self.patches[ch].operators[i];
+                op.tl = scaled_tl;
+                self.patches[ch].operators[i] = op;
+                self.engine.set_operator_params(ch, i, op);
+            }
+        }
     }
     fn wait(&mut self, samples: u32) {
         let mut buf = vec![0.0f32; samples as usize];
@@ -1223,6 +1242,14 @@ fn process_opn(
         let (port, reg, val) = match cmd {
             VgmCmd::Wait(n) => {
                 // Wait（=オーディオ描画）直前に、溜まったSSG書き込みを最終状態で確定する。
+                // ハードウェアエンベロープを n サンプル進め、エンベロープモード中のチャンネルを
+                // dirty にして最新レベルを確実に反映させる（エンベロープは毎フレーム変化しうる）。
+                ssg.tick_envelope(n, ssg_clock, 44_100);
+                for sc in 0..3 {
+                    if ssg.envelope_mode(sc) {
+                        ssg_dirty[sc] = true;
+                    }
+                }
                 let tick = SmfBuilder::samples_to_ticks(samples);
                 for sc in 0..3 {
                     if ssg_dirty[sc] {
