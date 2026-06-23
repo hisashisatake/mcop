@@ -4,10 +4,10 @@
 //! 矩形波音色（[crate] の `psg_patch()`）で鳴らし、音量レジスタ(0x08-0x0A)の
 //! ソフトエンベロープは SMF では CC11、WAV ではキャリアTLへ反映する。
 
-/// SSGクロックの分周値（`ssg_clock = chip_clock / SSG_CLOCK_DIVISOR`）。
-/// YM2203/YM2608内蔵SSGはマスタークロックを/2した周波数でAY-3-8910互換回路を駆動する。
-/// トーン周波数 `f = ssg_clock / (16 * period)` の絶対音程に効く。
-pub const SSG_CLOCK_DIVISOR: u32 = 2;
+// SSGクロックの分周値はチップ依存（`ssg_clock = chip_clock / ssg_clock_div`）。
+// YM2203(OPN)=master/2、YM2608(OPNA)=master/4。6ch系は3ch系比でプリスケーラが2倍。
+// 実際の値は OpnInfo::ssg_clock_div（[crate::detect_chip]）が保持する。
+// トーン周波数 `f = ssg_clock / (16 * period)` の絶対音程に効く。
 
 /// SSG レジスタ状態（0x00-0x0F）。
 pub struct SsgState {

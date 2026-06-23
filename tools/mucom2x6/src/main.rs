@@ -44,7 +44,7 @@ fn main() -> ExitCode {
             eprintln!("mucom2x6: {msg}");
             eprintln!(
                 "usage: mucom2x6 <voice.dat> <output_dir> [--bank <N>] [--wav] \
-                 [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>] [--slot <N>]"
+                 [--on <秒>] [--octave <N>] [--note <C/D/E/F/G/A/B>] [--slot <N>] [--fb-max <f>] [--fb-2sample]"
             );
             ExitCode::FAILURE
         }
@@ -52,21 +52,34 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let (input, output_dir, start_bank, wav_cfg, slot_filter) = parse_args(args)?;
+    let cli = parse_args(args)?;
 
-    let dat = std::fs::read(&input)
-        .map_err(|e| format!("voice.dat の読み込みに失敗: {}: {e}", input.display()))?;
+    let dat = std::fs::read(&cli.input)
+        .map_err(|e| format!("voice.dat の読み込みに失敗: {}: {e}", cli.input.display()))?;
     let voices = mucom88::parse_voice_dat(&dat)?;
     if voices.is_empty() {
         return Err("有効なボイスが 0 件でした".to_string());
     }
 
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|e| format!("出力ディレクトリ作成に失敗: {}: {e}", output_dir.display()))?;
+    std::fs::create_dir_all(&cli.output_dir)
+        .map_err(|e| format!("出力ディレクトリ作成に失敗: {}: {e}", cli.output_dir.display()))?;
+
+    // 【実験用】フィードバック帰還方式の上書き（音色のFB調査用）。WAVレンダリング前に
+    // プロセスグローバルへ設定する。production既定は1サンプル帰還・max=1.8。
+    if cli.fb_2sample {
+        ym38x6_core::set_feedback_two_sample(true);
+        eprintln!("実験: feedback帰還を2サンプル平均 (out[n-1]+out[n-2])/2 に切替");
+    }
+    if let Some(m) = cli.fb_max {
+        ym38x6_core::set_feedback_scale_max(Some(m));
+        eprintln!("実験: feedback_to_scale 最大値を {m} に上書き（既定1.8）");
+    }
 
     if args.iter().any(|a| a == "--wav") {
-        render_wavs(&voices, &output_dir, &wav_cfg, slot_filter)?;
+        render_wavs(&voices, &cli.output_dir, &cli.wav_cfg, cli.slot_filter)?;
     }
+
+    let (output_dir, start_bank) = (cli.output_dir, cli.start_bank);
 
     let files = voices_to_preset_files(start_bank, &voices);
     for file in &files {
@@ -103,16 +116,40 @@ fn note_to_freq(octave: i32, note: &str) -> Result<f32, String> {
     Ok(440.0 * 2f32.powf((midi - 69) as f32 / 12.0))
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig, Option<u16>), String> {
+/// コマンドライン解析結果。
+struct Cli {
+    input: PathBuf,
+    output_dir: PathBuf,
+    start_bank: u16,
+    wav_cfg: WavConfig,
+    slot_filter: Option<u16>,
+    /// 【実験用】feedback_to_scale 上限の上書き（None=既定1.8）。
+    fb_max: Option<f32>,
+    /// 【実験用】2サンプル平均帰還に切替えるか。
+    fb_2sample: bool,
+}
+
+fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut start_bank: u16 = ym38x6_core::WAVEFORM_MEMORY_BANK + 1;
     let mut on_secs: f32 = 4.0;
     let mut octave: i32 = 4;
     let mut note: String = "C".to_string();
     let mut slot_filter: Option<u16> = None;
+    let mut fb_max: Option<f32> = None;
+    let mut fb_2sample = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--fb-max" => {
+                let v = args.get(i + 1).ok_or("--fb-max に値がありません")?;
+                fb_max = Some(v.parse().map_err(|_| format!("--fb-max の値が不正: {v}"))?);
+                i += 2;
+            }
+            "--fb-2sample" => {
+                fb_2sample = true;
+                i += 1;
+            }
             "--bank" => {
                 let v = args.get(i + 1).ok_or("--bank に値がありません")?;
                 start_bank = v.parse().map_err(|_| format!("--bank の値が不正: {v}"))?;
@@ -160,7 +197,15 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, WavConfig, Opti
     }
     let frequency = note_to_freq(octave, &note)?;
     let wav_cfg = WavConfig { on_secs, off_secs: 1.5, frequency };
-    Ok((PathBuf::from(positional[0]), PathBuf::from(positional[1]), start_bank, wav_cfg, slot_filter))
+    Ok(Cli {
+        input: PathBuf::from(positional[0]),
+        output_dir: PathBuf::from(positional[1]),
+        start_bank,
+        wav_cfg,
+        slot_filter,
+        fb_max,
+        fb_2sample,
+    })
 }
 
 /// 各音色を WAV（mono 44.1kHz 16bit）へレンダリングする（試聴検証用）。

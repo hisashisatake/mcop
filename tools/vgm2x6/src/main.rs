@@ -26,6 +26,7 @@
 //!   freq_hz/midi_f/note/pb_cents/alg/carrier_muls を両チップ共通で出し、OPMは kc/kf/ref_midi/error_cents、
 //!   OPNは fnum/block を追加列として埋める。
 //! - `--fb-max <f>`【実験用】: feedback_to_scale の上限を上書き（既定1.8）。高FB音色の音程破綻検証用。
+//! - `--fb-2sample`【実験用】: feedback帰還を2サンプル平均に切替（既定は1サンプル帰還）。
 //! - `--only-ch <n>`【実験用】: 指定エンジンチャンネルのみ発音（FM 0..fm、SSG fm..fm+3）。音程ズレの単一ch分離用。
 
 mod opm;
@@ -57,7 +58,7 @@ fn main() -> ExitCode {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
                 "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
-                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>] [--fb-max <f>] [--only-ch <n>]"
+                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>] [--fb-max <f>] [--fb-2sample] [--only-ch <n>]"
             );
             ExitCode::FAILURE
         }
@@ -78,6 +79,8 @@ struct Args {
     ssg_gain: f32,
     /// 【実験用】feedback_to_scale の最大値を上書き（None=既定1.8）。高FB音色の音程破綻検証用。
     fb_max: Option<f32>,
+    /// 【実験用】2サンプル平均帰還に切替えるか（既定false=1サンプル帰還）。
+    fb_2sample: bool,
     /// 【実験用】指定したエンジンチャンネルのみ発音する（FM 0..fm、SSG fm..fm+3）。
     /// 音程ズレを単一チャンネルに分離して測定するためのデバッグフラグ。
     only_ch: Option<usize>,
@@ -178,6 +181,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut wav_flag = false;
     let mut gain: f32 = 1.0;
     let mut fb_max: Option<f32> = None;
+    let mut fb_2sample = false;
     let mut only_ch: Option<usize> = None;
     let mut i = 0;
     while i < args.len() {
@@ -190,6 +194,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 let v = args.get(i + 1).ok_or("--fb-max に値がありません")?;
                 fb_max = Some(v.parse().map_err(|_| format!("--fb-max の値が不正: {v}"))?);
                 i += 2;
+            }
+            "--fb-2sample" => {
+                fb_2sample = true;
+                i += 1;
             }
             "--only-ch" => {
                 let v = args.get(i + 1).ok_or("--only-ch に値がありません")?;
@@ -262,7 +270,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         wav_flag.then(|| base_dir.join(format!("{stem}.wav")))
     });
 
-    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain, fb_max, only_ch })
+    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain, fb_max, fb_2sample, only_ch })
 }
 
 /// `--dump-pitch` の1行分。OPM/OPN共通スキーマ。
@@ -452,6 +460,8 @@ fn dump_pitch_opm(data: &[u8], data_start: usize) {
 fn dump_pitch_opn(data: &[u8], data_start: usize, info: OpnInfo) {
     const SAMPLE_RATE: f64 = 44_100.0;
     let mut opn = OpnState::new();
+    let mut ssg = SsgState::new();
+    let ssg_clock = info.clock / info.ssg_clock_div;
     let mut samples: u64 = 0;
     let fm = info.fm_channels;
 
@@ -468,8 +478,35 @@ fn dump_pitch_opn(data: &[u8], data_start: usize, info: OpnInfo) {
             _ => continue,
         };
 
-        opn.write(port, reg, val);
         let t = samples as f64 / SAMPLE_RATE;
+
+        // --- SSG トーンピッチ（port0 の 0x00-0x05 = トーン周期lo/hi書き込み） ---
+        // SSGはハードウェアPMSを持たないため、ピッチ変動は全てドライバのソフトビブラート
+        // （周期レジスタの逐次書き換え）。各周期書き込み時の絶対ピッチを出力し、
+        // 周期トラジェクトリが滑らかなビブラートかアーティファクトかを判別できるようにする。
+        // chip="SSG", fnum列=トーン周期, note/pb_cents=絶対ピッチ(round+小数セント)。
+        if info.has_ssg && port == 0 && reg < 0x06 {
+            ssg.write(reg, val);
+            let sc = (reg / 2) as usize;
+            let period = ssg.tone_period(sc);
+            let freq = ssg::period_to_freq(period, ssg_clock);
+            if freq > 0.0 {
+                let midi_f = opn::freq_to_midi(freq);
+                let note = midi_f.round().clamp(0.0, 127.0) as u8;
+                let pb_cents = (midi_f - note as f32) * 100.0;
+                PitchRow {
+                    t, chip: "SSG", ch: fm + sc, event: "ssg",
+                    kc: None, kf: None, fnum: Some(period), block: None,
+                    freq_hz: freq, midi_f, note, pb_cents,
+                    alg: 0, carrier_muls: "psg".to_string(),
+                    ref_midi: None, error_cents: None,
+                }
+                .print();
+            }
+            continue;
+        }
+
+        opn.write(port, reg, val);
 
         // 共通スキーマの PitchRow を組み立てて出力するヘルパー。
         let row = |ch: usize, event: &'static str, fnum: u16, block: u8, freq: f32, midi_f: f32, note: u8, pb_cents: f32, patch: &Ym38x6Patch| {
@@ -914,6 +951,10 @@ struct OpnInfo {
     fm_channels: usize,
     /// F-Number→周波数式の分母 factor（[opn::FM_DIVISOR_6CH] / [opn::FM_DIVISOR_3CH]）。
     fm_divisor: u32,
+    /// SSGクロックの分周値（`ssg_clock = clock / ssg_clock_div`）。
+    /// 6ch系(YM2608)はSSGプリスケーラも3ch系(YM2203)の2倍（YM2203=2 / YM2608=4）。
+    /// この差を無視すると6ch系のSSGが1オクターブ高く変換される。
+    ssg_clock_div: u32,
     /// SSG(PSG) を内蔵するか（YM2203/YM2608=true、YM2612=false）。
     has_ssg: bool,
 }
@@ -942,7 +983,8 @@ fn detect_chip(h: &vgm::VgmHeader) -> Option<SourceChip> {
             write_kind: OpnWriteKind::Ym2608,
             clock: clk(h.ym2608_clock),
             fm_channels: 6,
-            fm_divisor: opn::FM_DIVISOR_6CH,
+            fm_divisor: opn::FM_DIVISOR_6CH, // 6ch系=288
+            ssg_clock_div: 4,                // OPNA SSG = master/4
             has_ssg: true,
         }));
     }
@@ -952,7 +994,8 @@ fn detect_chip(h: &vgm::VgmHeader) -> Option<SourceChip> {
             write_kind: OpnWriteKind::Ym2203,
             clock: clk(h.ym2203_clock),
             fm_channels: 3,
-            fm_divisor: opn::FM_DIVISOR_6CH,
+            fm_divisor: opn::FM_DIVISOR_3CH, // 3ch系=144（A=440実機検証済み）
+            ssg_clock_div: 2,                // OPN SSG = master/2
             has_ssg: true,
         }));
     }
@@ -962,7 +1005,8 @@ fn detect_chip(h: &vgm::VgmHeader) -> Option<SourceChip> {
             write_kind: OpnWriteKind::Ym2612,
             clock: clk(h.ym2612_clock),
             fm_channels: 6,
-            fm_divisor: opn::FM_DIVISOR_6CH,
+            fm_divisor: opn::FM_DIVISOR_6CH, // 6ch系=288（YM2608類推、Genesis曲での実機検証は未実施）
+            ssg_clock_div: 2,                // YM2612はSSG非搭載のため未使用
             has_ssg: false,
         }));
     }
@@ -1048,6 +1092,10 @@ struct WavSink {
     audio: Vec<f32>,
     patches: Vec<Ym38x6Patch>,
     sr: f32,
+    /// 各チャンネルの現在のピッチベンド量（セント）。note_on後に再適用するため保持する。
+    /// SMFパスと同様に「整数ノート周波数 + ベンド」で発音するための土台
+    /// （note_onに正確な周波数を渡すとベンド基準が二重計上され2音目以降がズレる）。
+    bend_cents: Vec<f32>,
 }
 
 impl WavSink {
@@ -1057,6 +1105,7 @@ impl WavSink {
             audio: Vec::new(),
             patches: vec![Ym38x6Patch::default(); total_ch],
             sr,
+            bend_cents: vec![0.0; total_ch],
         }
     }
 
@@ -1098,13 +1147,20 @@ impl OpnSink for WavSink {
     fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: Ym38x6Patch) {
         self.patches[ch] = patch;
     }
-    fn note_on(&mut self, _tick: u64, ch: usize, _note: u8, freq: f32, vel: u8) {
-        self.engine.note_on_with_velocity(ch, freq, vel, self.patches[ch]);
+    fn note_on(&mut self, _tick: u64, ch: usize, note: u8, _freq: f32, vel: u8) {
+        // SMFパスと同じく「整数ノート周波数」で発音し、端数はベンドで乗せる。
+        // 正確な周波数(freq)を渡すと、その後のベンド(整数ノート基準のセント)が
+        // 二重計上され、2音目以降が初音の端数ぶんズレる（ノイズはピッチ無視のため影響なし）。
+        let f = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+        self.engine.note_on_with_velocity(ch, f, vel, self.patches[ch]);
+        // note_onで生成/再キーされたボイスへ現在のベンドを再適用する。
+        self.engine.set_pitch_bend(ch, self.bend_cents[ch]);
     }
     fn note_off(&mut self, _tick: u64, ch: usize, _note: u8) {
         self.engine.note_off(ch);
     }
     fn pitch_bend(&mut self, _tick: u64, ch: usize, _pb: i16, cents: f32) {
+        self.bend_cents[ch] = cents;
         self.engine.set_pitch_bend(ch, cents);
     }
     fn expression(&mut self, _tick: u64, ch: usize, vol: u8) {
@@ -1135,7 +1191,7 @@ fn process_opn(
 ) {
     let fm = info.fm_channels;
     let total_ch = fm + if info.has_ssg { 3 } else { 0 };
-    let ssg_clock = info.clock / ssg::SSG_CLOCK_DIVISOR;
+    let ssg_clock = info.clock / info.ssg_clock_div;
     // 単一チャンネル分離（--only-ch）用フィルター。Noneなら全チャンネル発音。
     let keep = |ech: usize| only_ch.map_or(true, |k| k == ech);
 
@@ -1157,10 +1213,28 @@ fn process_opn(
     let mut ssg_base: [f32; 3] = [0.0; 3];
     let mut ssg_pb: [i16; 3] = [8192; 3];
     let mut ssg_vol: [u8; 3] = [255; 3]; // 直前のexpression音量（初期値は無効値）
+    // 同一タイムステップで溜まったSSGレジスタ書き込みのうち、まだエンジンへ確定していない
+    // チャンネルのdirtyフラグ。Wait直前にまとめてeval（確定）することで、トーン周期の
+    // lo/hi分割書き込みが生む中間周期（旧hi<<8|新lo 等の幽霊ピッチ）がエンジンに届くのを防ぐ。
+    // AY/SSGは0xA0のような確定ラッチを持たないため、FMの0xA4シャドウ方式は使えずコアレスで対応する。
+    let mut ssg_dirty: [bool; 3] = [false; 3];
 
     for cmd in VgmIter::new(data, data_start) {
         let (port, reg, val) = match cmd {
             VgmCmd::Wait(n) => {
+                // Wait（=オーディオ描画）直前に、溜まったSSG書き込みを最終状態で確定する。
+                let tick = SmfBuilder::samples_to_ticks(samples);
+                for sc in 0..3 {
+                    if ssg_dirty[sc] {
+                        ssg_dirty[sc] = false;
+                        if keep(fm + sc) {
+                            eval_ssg_channel(
+                                sc, fm, &ssg, ssg_clock, bank, tick, sink, ssg_vel,
+                                &mut ssg_note[sc], &mut ssg_base[sc], &mut ssg_pb[sc], &mut ssg_vol[sc],
+                            );
+                        }
+                    }
+                }
                 samples += n as u64;
                 sink.wait(n);
                 continue;
@@ -1181,26 +1255,20 @@ fn process_opn(
         let tick = SmfBuilder::samples_to_ticks(samples);
 
         // --- SSG（port0 の 0x00-0x0F） ---
+        // レジスタ状態だけ更新し、影響chをdirtyにする。実際のeval（エンジンへの確定）は
+        // 次のWait直前にまとめて行う（中間周期の幽霊ピッチを排除＝コアレス）。
         if info.has_ssg && port == 0 && reg < 0x10 {
             ssg.write(reg, val);
-            let chans: &[usize] = match reg {
-                0x00 | 0x01 => &[0],
-                0x02 | 0x03 => &[1],
-                0x04 | 0x05 => &[2],
-                0x06 | 0x07 | 0x0B | 0x0C | 0x0D => &[0, 1, 2], // noise period/mixer/envelope は全chへ影響
-                0x08 => &[0],
-                0x09 => &[1],
-                0x0A => &[2],
-                _ => &[],
-            };
-            for &sc in chans {
-                if !keep(fm + sc) {
-                    continue;
-                }
-                eval_ssg_channel(
-                    sc, fm, &ssg, ssg_clock, bank, tick, sink, ssg_vel,
-                    &mut ssg_note[sc], &mut ssg_base[sc], &mut ssg_pb[sc], &mut ssg_vol[sc],
-                );
+            match reg {
+                0x00 | 0x01 => ssg_dirty[0] = true,
+                0x02 | 0x03 => ssg_dirty[1] = true,
+                0x04 | 0x05 => ssg_dirty[2] = true,
+                // noise period/mixer/envelope は全chへ影響
+                0x06 | 0x07 | 0x0B | 0x0C | 0x0D => ssg_dirty = [true; 3],
+                0x08 => ssg_dirty[0] = true,
+                0x09 => ssg_dirty[1] = true,
+                0x0A => ssg_dirty[2] = true,
+                _ => {}
             }
             continue;
         }
@@ -1278,6 +1346,17 @@ fn process_opn(
 
     // 残ノートをすべて解放
     let end_tick = SmfBuilder::samples_to_ticks(samples);
+    // 末尾に溜まったSSG書き込みを確定してから解放する（最後の音の状態を取りこぼさない）。
+    if info.has_ssg {
+        for sc in 0..3 {
+            if ssg_dirty[sc] && keep(fm + sc) {
+                eval_ssg_channel(
+                    sc, fm, &ssg, ssg_clock, bank, end_tick, sink, ssg_vel,
+                    &mut ssg_note[sc], &mut ssg_base[sc], &mut ssg_pb[sc], &mut ssg_vol[sc],
+                );
+            }
+        }
+    }
     for ch in 0..fm {
         if let Some(note) = fm_note[ch].take() {
             sink.note_off(end_tick, ch, note);
@@ -1402,7 +1481,11 @@ fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result
     let fm_vel = scaled_velocity(args.fm_gain);
     let ssg_vel = scaled_velocity(args.ssg_gain);
 
-    // 【実験用】feedback上限の上書き（--fb-max）。WAVレンダリング前にプロセスグローバルへ設定。
+    // 【実験用】フィードバック帰還方式の上書き。WAVレンダリング前にプロセスグローバルへ設定。
+    if args.fb_2sample {
+        ym38x6_core::set_feedback_two_sample(true);
+        eprintln!("実験: feedback帰還を2サンプル平均 (out[n-1]+out[n-2])/2 に切替");
+    }
     if let Some(m) = args.fb_max {
         ym38x6_core::set_feedback_scale_max(Some(m));
         eprintln!("実験: feedback_to_scale 最大値を {m} に上書き（既定1.8）");
