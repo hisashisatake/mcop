@@ -107,6 +107,12 @@ struct Ym38x6Plugin {
     // 全MIDIチャンネル共通。vgm2x6 SMFは全chに同値を送る。
     pitch_bend_range: f32,
 
+    // CC7/CC11 チャンネル音量（GM2準拠）。
+    // 実効ゲイン = (cc7/127)^2 × (cc11/127)^2（GM2の40·log10カーブ ⇔ 二乗）。
+    // note-on 毎に新ボイスへ set_channel_volume で再適用する。
+    cc7:  [u8; 16], // Channel Volume（既定127=フル）
+    cc11: [u8; 16], // Expression（既定127=フル）
+
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
 
@@ -117,6 +123,16 @@ struct Ym38x6Plugin {
 
     // GUIエディターのウィンドウサイズ状態（editor()で使い回す）
     egui_state: Arc<EguiState>,
+}
+
+/// CC7(Channel Volume) と CC11(Expression) の値（0〜127）から GM2 準拠のゲインを計算する。
+/// GM2 の実効音量カーブは 40·log10(cc/127) dB ⇔ リニアゲイン = (cc/127)^2。
+/// CC7 と CC11 はそれぞれ二乗して積を取る。
+#[inline]
+fn channel_gain(cc7: u8, cc11: u8) -> f32 {
+    let v7  = cc7  as f32 / 127.0;
+    let v11 = cc11 as f32 / 127.0;
+    v7 * v7 * v11 * v11
 }
 
 /// MIDIチャンネル(0〜15)とノート番号(0〜127)からエンジンのボイスIDを符号化する。
@@ -176,6 +192,8 @@ impl Default for Ym38x6Plugin {
             program_patch: [None; 16],
             channel_bend_cents: [0.0; 16],
             pitch_bend_range: 2.0,
+            cc7:  [127; 16],
+            cc11: [127; 16],
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
             egui_state: EguiState::from_size(800, 680),
@@ -607,8 +625,9 @@ impl Plugin for Ym38x6Plugin {
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければGUI値。
                     let note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
                     self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, note_on_patch);
-                    // このMIDIチャンネルの現在のベンド量を新ボイスへ反映する
+                    // このMIDIチャンネルの現在のベンド量と音量ゲインを新ボイスへ反映する
                     self.engine.set_pitch_bend(ch_id, self.channel_bend_cents[channel as usize]);
+                    self.engine.set_channel_volume(ch_id, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));
                     self.apply_performance_lfo(ch_id);
                     for (op_index, &f_number) in self.operator_f_number_override.iter().enumerate() {
                         self.engine.set_operator_f_number(ch_id, op_index, f_number);
@@ -644,6 +663,16 @@ impl Plugin for Ym38x6Plugin {
                 // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN Destination/Waveform）・
                 // マスターエフェクトセンドレベル（CC91/93）
                 NoteEvent::MidiCC { cc, value, channel, .. } => match cc {
+                    // CC7/CC11: GM2準拠のチャンネル音量（set_pitch_bend_groupと同パターン）。
+                    // 実効ゲイン = (cc7/127)^2 × (cc11/127)^2（GM2の40·log10カーブ）。
+                    7 => {
+                        self.cc7[channel as usize] = cc_to_u7(value);
+                        self.engine.set_channel_volume_group(channel as usize, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));
+                    }
+                    11 => {
+                        self.cc11[channel as usize] = cc_to_u7(value);
+                        self.engine.set_channel_volume_group(channel as usize, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));
+                    }
                     1 => {
                         self.lfo_cc1 = cc_to_u8(value);
                         self.apply_performance_lfo_to_active();

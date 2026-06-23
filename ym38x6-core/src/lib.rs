@@ -194,6 +194,9 @@ struct Channel {
     volume_mod_delta: f32,
     /// 拡張Destination=TlCarrier用：キャリア出力にかかる乗算ゲインのオフセット。
     tl_carrier_mod_delta: f32,
+    /// CC7/CC11（Channel Volume × Expression）の積ゲイン（0.0〜1.0、GM2二乗カーブ適用済み）。
+    /// VST/smf2wav が `set_channel_volume` で書き込み、LFO音量変調（volume_mod_delta）とは独立。
+    channel_gain: f32,
     /// 音色LFO本体（PMS/AMS×PMD/AMD、spec.md「音色LFO」セクション参照）。
     tone_lfo: ToneLfo,
     /// 4op合成後に適用するSVFフィルター（spec.md「フィルター」セクション参照）。
@@ -235,6 +238,7 @@ impl Channel {
             bend_cents: 0.0,
             volume_mod_delta: 0.0,
             tl_carrier_mod_delta: 0.0,
+            channel_gain: 1.0,
             tone_lfo: ToneLfo::new(),
             svf: Svf::new(),
             filter_eg,
@@ -388,7 +392,7 @@ impl Channel {
         let volume_gain = (1.0 + self.volume_mod_delta).max(0.0);
         // ベロシティは音量のみに作用（通常のMIDI楽器と同じ常時ONの挙動）。音色は変えない。
         let velocity_gain = velocity_to_volume_gain(self.velocity);
-        let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain;
+        let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain * self.channel_gain;
 
         // SVFフィルター + Filter EG（4op合成後）
         let filter_eg_level = self.filter_eg.tick(
@@ -524,6 +528,24 @@ impl Ym38x6Engine {
         for (id, ch) in self.channels.iter_mut() {
             if id >> 7 == group {
                 ch.bend_cents = cents;
+            }
+        }
+    }
+
+    /// 指定ボイスのチャンネル音量ゲインを設定する（CC7/CC11 のGM2積ゲイン、0.0〜1.0）。
+    /// note-on 直後に呼んで、新ボイスへ現在のCC7/CC11を即時反映させる用途にも使う。
+    pub fn set_channel_volume(&mut self, channel: usize, gain: f32) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.channel_gain = gain.max(0.0);
+        }
+    }
+
+    /// 指定グループ（`channel >> 7`が一致する全チャンネル）の音量ゲインを一括設定する。
+    /// `set_pitch_bend_group` と同じIDパターン（`midi_ch*128+note`）でMIDIチャンネル単位に作用する。
+    pub fn set_channel_volume_group(&mut self, group: usize, gain: f32) {
+        for (id, ch) in self.channels.iter_mut() {
+            if id >> 7 == group {
+                ch.channel_gain = gain.max(0.0);
             }
         }
     }
@@ -959,5 +981,58 @@ mod tests {
 
         assert!(max_peak > 0.5, "expected a loud window: max_peak={max_peak}");
         assert!(min_peak < max_peak * 0.6, "expected amplitude to vary with LFO: min={min_peak} max={max_peak}");
+    }
+
+    #[test]
+    fn channel_gain_scales_output() {
+        // gain=0.5 で出力が半分、gain=0.0 で無音になることを確認。
+        let make = || {
+            let mut e = Ym38x6Engine::new(44100.0);
+            e.note_on_with_velocity(0, 440.0, 127, loud_patch(0));
+            e
+        };
+
+        // gain=1.0（既定）
+        let mut e1 = make();
+        let mut buf1 = vec![0.0f32; 256];
+        e1.render(&mut buf1, 1);
+        let peak1 = buf1.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+
+        // gain=0.5
+        let mut e5 = make();
+        e5.set_channel_volume(0, 0.5);
+        let mut buf5 = vec![0.0f32; 256];
+        e5.render(&mut buf5, 1);
+        let peak5 = buf5.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+
+        // gain=0.0（無音）
+        let mut e0 = make();
+        e0.set_channel_volume(0, 0.0);
+        let mut buf0 = vec![0.0f32; 256];
+        e0.render(&mut buf0, 1);
+        let peak0 = buf0.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+
+        assert!(peak1 > 0.0, "gain=1.0 should produce sound");
+        assert!((peak5 / peak1 - 0.5).abs() < 0.01, "gain=0.5 should halve output: {peak5}/{peak1}");
+        assert_eq!(peak0, 0.0, "gain=0.0 should be silent");
+    }
+
+    #[test]
+    fn channel_volume_group_applies_to_midi_channel() {
+        // set_channel_volume_group はグループ（id>>7）が一致する全ボイスにのみ適用される。
+        let mut engine = Ym38x6Engine::new(44100.0);
+        // ch0 (MIDI ch0, note0): id=0
+        // ch1 (MIDI ch1, note0): id=128
+        engine.note_on_with_velocity(0,   440.0, 127, loud_patch(0));
+        engine.note_on_with_velocity(128, 440.0, 127, loud_patch(0));
+
+        // MIDI ch0 を無音化
+        engine.set_channel_volume_group(0, 0.0);
+
+        let mut buf = vec![0.0f32; 256];
+        engine.render(&mut buf, 1);
+        let peak = buf.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        // MIDI ch1（id=128）は gain=1.0 のまま → 出力が残る
+        assert!(peak > 0.0, "MIDI ch1 should still produce sound after silencing ch0");
     }
 }
