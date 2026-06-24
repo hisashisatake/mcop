@@ -399,11 +399,13 @@ def fit_one(
     field_ranges: dict | None = None,
     model=None,
     ckpt=None,
+    w_harmonic: float = 0.0,
 ) -> tuple[np.ndarray, float, int, str, list[tuple[str, float]]]:
     """マルチアルゴリズム × マルチ波形 × マルチスタートで A-by-S を実行。
 
     algorithms × wf_pairs の全組み合わせに予算を均等分配し、全体ベストを返す。
     field_ranges: envelope パラメーターの範囲制約（GM2_PROG_FIELD_RANGES から渡す）。
+    w_harmonic: 高調波損失の重み（0 で無効）。
 
     戻り値:
         (xbest, best_dist, total_evals, winner, combo_summary)
@@ -414,6 +416,11 @@ def fit_one(
         algorithms = [ps.FIXED_ALGORITHM]
     if wf_pairs is None:
         wf_pairs = [_WF_SINE]
+
+    target_harms: np.ndarray | None = None
+    if w_harmonic > 0.0:
+        target_harms = ft.harmonic_features(
+            np.asarray(target_samples, dtype=np.float64), freq, sr)
 
     candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt)
     n_combos = len(algorithms) * len(wf_pairs)
@@ -434,6 +441,10 @@ def fit_one(
                     return _SILENT_PENALTY
                 total, _ = ft.abys_distance(
                     target_feats, feats_of(s, sr, n_mels, n_frames), w_env, w_centroid)
+                if target_harms is not None:
+                    rh = ft.harmonic_features(
+                        np.asarray(s, dtype=np.float64), freq, sr)
+                    total += w_harmonic * ft.harmonic_distance(target_harms, rh)
                 return total
 
             for name, x0 in candidates:
@@ -507,6 +518,8 @@ def main() -> int:
     ap.add_argument("--n-frames", type=int, default=64)
     ap.add_argument("--w-env", type=float, default=2.0)
     ap.add_argument("--w-centroid", type=float, default=4.0)
+    ap.add_argument("--w-harmonic", type=float, default=2.0,
+                    help="高調波損失の重み（0で無効）。16高調波の相対振幅比をL1比較")
     ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--no-model", action="store_true")
     # ── バッチ推論モード ──
@@ -631,6 +644,7 @@ def main() -> int:
                     args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
                     algorithms=algos, wf_pairs=wf_prs, field_ranges=fr,
                     model=model, ckpt=ckpt,
+                    w_harmonic=args.w_harmonic,
                 )
                 # winner から algo/wf を取り出してパッチを生成
                 tag = winner.split("/")[0]          # "alg4_w30"
@@ -680,6 +694,7 @@ def main() -> int:
 
     init_dists, best_dists, param_mse = [], [], []
     best_terms = []
+    harm_dists: list[float] = []
     done = 0
     tries = 0
     t0 = time.time()
@@ -700,6 +715,7 @@ def main() -> int:
             args.w_env, args.w_centroid,
             args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
             algorithms=test_algos, wf_pairs=test_wf, model=model, ckpt=ckpt,
+            w_harmonic=args.w_harmonic,
         )
 
         tag = winner.split("/")[0]
@@ -714,6 +730,15 @@ def main() -> int:
             feats_of(recon, args.sr, args.n_mels, args.n_frames),
             args.w_env, args.w_centroid)
 
+        d_harm = 0.0
+        if args.w_harmonic > 0:
+            t_harms = ft.harmonic_features(
+                np.asarray(target, dtype=np.float64), args.freq, args.sr)
+            r_harms = ft.harmonic_features(
+                np.asarray(recon, dtype=np.float64), args.freq, args.sr)
+            d_harm = ft.harmonic_distance(t_harms, r_harms)
+        harm_dists.append(d_harm)
+
         init_dists.append(init_d)
         best_dists.append(best_d)
         best_terms.append(terms)
@@ -727,7 +752,8 @@ def main() -> int:
         impr = (1 - best_d / init_d) * 100
         print(f"  target {done}: init={init_d:.4f} -> best={best_d:.4f} "
               f"(改善率={impr:.1f}%, evals={evals}, winner={winner})")
-        print(f"    [mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}]")
+        harm_str = f" harm={d_harm:.4f}" if args.w_harmonic > 0 else ""
+        print(f"    [mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}{harm_str}]")
         combo_str = "  ".join(f"{k}={v:.4f}" for k, v in combo_summary)
         print(f"    {combo_str}")
         done += 1
@@ -740,12 +766,15 @@ def main() -> int:
     init_m = float(np.mean(init_dists))
     best_m = float(np.mean(best_dists))
     terms_m = np.mean(best_terms, axis=0)
+    w_harm_str = f" w_harmonic={args.w_harmonic}" if args.w_harmonic > 0 else ""
     print(f"\nA-by-S 自己再構成 {done}件 "
-          f"(所要={dt:.1f}s, w_env={args.w_env} w_centroid={args.w_centroid})")
+          f"(所要={dt:.1f}s, w_env={args.w_env} w_centroid={args.w_centroid}{w_harm_str})")
     print(f"  合算距離     初期0.5固定={init_m:.4f}  A-by-S後={best_m:.4f}"
           f"  改善率={(1 - best_m / init_m) * 100:.1f}%")
+    harm_avg_str = (f"  harmonic={float(np.mean(harm_dists)):.4f}"
+                    if args.w_harmonic > 0 else "")
     print(f"  項別(A-by-S後) mel={terms_m[0]:.4f}  env={terms_m[1]:.4f}"
-          f"  centroid={terms_m[2]:.4f}")
+          f"  centroid={terms_m[2]:.4f}{harm_avg_str}")
     print(f"  paramMSE     復元={float(np.mean(param_mse)):.4f}")
     if args.wav > 0:
         print(f"  WAV書き出し: {wav_out_dir}（{min(done, args.wav)}ペア）")

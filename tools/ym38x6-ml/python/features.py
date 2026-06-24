@@ -140,6 +140,53 @@ def abys_distance(
     return total, (d_mel, d_env, d_cen)
 
 
+def harmonic_features(
+    samples,
+    freq: float,
+    sr: float = 44100.0,
+    n_fft: int = 4096,
+    n_harmonics: int = 16,
+    width_bins: int = 3,
+) -> np.ndarray:
+    """基音 freq の高調波振幅ベクトル [n_harmonics] を返す（最大1正規化）。
+
+    全フレームの平均 magnitude を使い、各高調波周波数周辺 ±width_bins ビンの
+    最大値を取り出すことで、小数ビンずれや軽微な音程揺れにロバストにする。
+    n_fft=4096（周波数分解能 ≈ 10.8 Hz/bin @44100 Hz）で倍音構造を精細に比較する。
+    """
+    x = np.asarray(samples, dtype=np.float64)
+    if len(x) < n_fft:
+        x = np.pad(x, (0, n_fft - len(x)))
+    win = np.hanning(n_fft)
+    hop = n_fft // 2
+    n_fr = 1 + (len(x) - n_fft) // hop
+    mags = [np.abs(np.fft.rfft(x[i * hop:i * hop + n_fft] * win))
+            for i in range(n_fr)]
+    mag = np.stack(mags).mean(axis=0)  # [n_fft//2+1]
+
+    n_bins = len(mag)
+    amps = np.zeros(n_harmonics, dtype=np.float64)
+    for k in range(1, n_harmonics + 1):
+        hz = k * freq
+        if hz >= sr / 2:
+            break
+        bin_i = int(round(hz * n_fft / sr))
+        lo = max(0, bin_i - width_bins)
+        hi = min(n_bins, bin_i + width_bins + 1)
+        if lo < hi:
+            amps[k - 1] = mag[lo:hi].max()
+
+    peak = amps.max()
+    if peak > 1e-12:
+        amps /= peak
+    return amps.astype(np.float32)
+
+
+def harmonic_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """高調波振幅ベクトルのL1距離（最大1正規化済み前提、0..1 スケール）。"""
+    return float(np.abs(a - b).mean())
+
+
 def is_silent(samples, thresh: float = 1e-3) -> bool:
     """RMS(実効値)が閾値未満なら無音(低情報)とみなす。
 
