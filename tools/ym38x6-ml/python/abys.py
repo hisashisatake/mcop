@@ -185,8 +185,10 @@ _FR_ORGAN   = {"ar": (200, 255), "d1r": (0,  30),   "d1l": (220, 255),"d2r": (0,
 _FR_GUITAR  = {"ar": (200, 255), "d1r": (100, 255), "d1l": (0,  80),  "rr": (80, 255)}
 _FR_BASS    = {"ar": (180, 255), "d1r": (50, 200),  "d1l": (0, 100),  "rr": (80, 255)}
 _FR_STRINGS = {"ar": (40, 120),  "d1r": (0,  80),   "d1l": (150, 255),"d2r": (0,  60),  "rr": (80, 150)}
-_FR_BRASS   = {"ar": (100, 255), "d1r": (30, 150),  "d1l": (80, 200), "rr": (80, 180)}
-_FR_REED    = {"ar": (100, 255), "d1r": (20, 120),  "d1l": (80, 200), "rr": (80, 160)}
+_FR_BRASS_LEAD    = {"ar": (150, 230), "d1r": (40, 180),  "d1l": (80, 200), "rr": (100, 200)}  # Trumpet/MutedTrumpet
+_FR_BRASS_BACKING = {"ar": (60,  130), "d1r": (20, 100),  "d1l": (120, 240),"rr": (80,  150)}  # Trombone/Horn/Tuba/Section
+_FR_SAX     = {"ar": (120, 210), "d1r": (30, 150),  "d1l": (80, 200), "rr": (80, 170)}  # 64-67 Saxophone
+_FR_REED    = {"ar": (100, 200), "d1r": (20, 120),  "d1l": (80, 200), "rr": (80, 160)}  # 68-71 Oboe/Bassoon/Clarinet
 _FR_PIPE    = {"ar": (50, 200),  "d1r": (20, 100),  "d1l": (150, 255),"d2r": (0,  40),  "rr": (80, 150)}
 _FR_LEAD    = {"ar": (100, 255)}
 _FR_PAD     = {"ar": (80, 150),  "d1r": (0,  60),   "d1l": (180, 255),"d2r": (0,  30),  "rr": (100, 160)}
@@ -202,8 +204,14 @@ GM2_PROG_FIELD_RANGES: dict[int, dict] = {
     **{p: _FR_GUITAR for p in range(24, 32)},   # 24-31 Guitar
     **{p: _FR_BASS   for p in range(32, 40)},   # 32-39 Bass
     **{p: _FR_STRINGS for p in range(40, 56)},  # 40-55 Strings / Ensemble
-    **{p: _FR_BRASS  for p in range(56, 64)},   # 56-63 Brass
-    **{p: _FR_REED   for p in range(64, 72)},   # 64-71 Reed
+    56: _FR_BRASS_LEAD,                            # 56 Trumpet
+    57: _FR_BRASS_BACKING,                         # 57 Trombone
+    58: _FR_BRASS_BACKING,                         # 58 Tuba
+    59: _FR_BRASS_LEAD,                            # 59 Muted Trumpet
+    60: _FR_BRASS_BACKING,                         # 60 French Horn
+    **{p: _FR_BRASS_BACKING for p in range(61, 64)},  # 61-63 Brass Section / Synth Brass
+    **{p: _FR_SAX  for p in range(64, 68)},       # 64-67 Saxophone
+    **{p: _FR_REED for p in range(68, 72)},        # 68-71 Oboe / Bassoon / Clarinet
     **{p: _FR_PIPE   for p in range(72, 80)},   # 72-79 Pipe
     **{p: _FR_LEAD   for p in range(80, 88)},   # 80-87 Synth Lead
     **{p: _FR_PAD    for p in range(88, 96)},   # 88-95 Synth Pad
@@ -518,8 +526,10 @@ def main() -> int:
     ap.add_argument("--n-frames", type=int, default=64)
     ap.add_argument("--w-env", type=float, default=2.0)
     ap.add_argument("--w-centroid", type=float, default=4.0)
-    ap.add_argument("--w-harmonic", type=float, default=2.0,
-                    help="高調波損失の重み（0で無効）。16高調波の相対振幅比をL1比較")
+    ap.add_argument("--w-harmonic", type=float, default=0.0,
+                    help="高調波損失の重み（既定0=無効）。"
+                         "FM合成ではキャリアMULが音高を決めるため、"
+                         "ターゲットの倍音強度を誤ってMUL値に写像し音痴を引き起こす恐れあり")
     ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--no-model", action="store_true")
     # ── バッチ推論モード ──
