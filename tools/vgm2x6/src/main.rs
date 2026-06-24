@@ -93,17 +93,19 @@ fn scaled_velocity(gain: f32) -> u8 {
 }
 
 /// PSG風パッチ。波形メモリ音色の矩形波(waveform=16)を、アタック最速・減衰なし・
-/// 最大サスティン・リリースなしのADSRで鳴らす。キーオン中は一定音量の矩形波、
+/// 最大サスティン・最速リリースのADSRで鳴らす。キーオン中は一定音量の矩形波、
 /// キーオフで即停止という、PSG(SSG/SN76489系)のトーン1チャンネルに近い挙動になる。
+/// release=255(最速≒8.71ms)はエンジンの最短値。release=0だとrr_to_delta(0)=284.9秒となり
+/// SMFパス(異note=別VoiceID)では note_off後も延々と鳴り続けてしまう。
 fn psg_patch() -> ym38x6_core::Ym38x6Patch {
     // 波形番号: sine=0 / saw=8 / square=16 / triangle=24（preset.rs の基本4波形に準拠）
     ym38x6_core::waveform_memory_patch(
         16,
-        ym38x6_core::AdsrParams { attack: 255, decay: 0, sustain: 255, release: 0 },
+        ym38x6_core::AdsrParams { attack: 255, decay: 0, sustain: 255, release: 255 },
     )
 }
 
-/// ノイズ専用OperatorParams（波形番号32+NP）。アタック最速・減衰なし・最大サスティン。
+/// ノイズ専用OperatorParams（波形番号32+NP）。アタック最速・減衰なし・最大サスティン・最速リリース。
 /// エンジンが17bit LFSRをNP由来クロックレートでサンプル&ホールドしてノイズを生成する。
 fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
     ym38x6_core::OperatorParams {
@@ -112,7 +114,7 @@ fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
         d1r: 0,
         d2r: 0,
         d1l: 255,
-        rr: 0,
+        rr: 255, // rr=0は284.9秒リリースになるためSMFパスで鳴りっぱなしになる。最速(≒8.71ms)を使う。
         mul: 1,
         dt1: 128,
         ksr: 0,
