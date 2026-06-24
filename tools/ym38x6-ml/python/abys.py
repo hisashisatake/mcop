@@ -1,15 +1,26 @@
-"""フェーズ6 マイルストーン3b: Analysis-by-Synthesis（A-by-S）。
+"""フェーズ6 マイルストーン3b+: Analysis-by-Synthesis（A-by-S）改善版。
 
 3a で「特徴→params のフィードフォワード回帰(params MSE)」は一対多のため音指標で
 ベースライン以下と確定した。3b は実エンジンを直接ループに入れ、目標 log_mel との距離を
 勾配なし最適化(CMA-ES)で最小化して params を求める（per-target・遅いが原理的に正しい）。
 
-まずは自己再構成テスト: ランダム真値params → render → 目標音。その目標音だけを与え、
-A-by-S で params を復元できるか（pred音 が目標音に十分近づくか）を測る。FM射程内・単音の
-音なら復元できる、という設計仮説の検証。初期値は 0.5 固定（3aの予測は使わない）。
+3b+: 初期化戦略として以下を統合。さらにマルチアルゴリズム・マルチ波形探索を追加。
+  A. ML warm start    : model_f64.pt の推論結果を x0 に使う
+  B. マルチスタート  : neutral/metallic/soft/percussive の4アーキタイプから並行探索
+  C. 重心ヒューリスティック: ターゲットの明るさ/金属感で FB・MUL を初期化
+  D. マルチアルゴリズム: GM2プログラム番号で推奨 Algorithm を自動選択（OPN/OPM語感準拠）
+  E. マルチ波形    : GM2音種別に OPZ波形（W2=sin²…W8=sin²2倍速）を選択。
+                     Algorithm ごとのキャリア/モジュレーター役割に応じて展開する。
+  全組み合わせ(algo × waveform)に予算を均等分配し、全体ベストを採用。
 
-実行例（.venvのpythonで）:
-    python abys.py --n-targets 5 --maxfevals 800 --wav 5
+実行モード:
+  [1] 自己再構成テスト（--input-dir なし）:
+      python abys.py --n-targets 5 --maxfevals 2400 --wav 5
+
+  [2] バッチ推論（GM2 WAV → .38x6）:
+      python abys.py --input-dir private/gm2_wav --out private/bank0_abys.38x6
+      python abys.py --input-dir private/gm2_wav --prog-range 0-7,16,56-63
+      python abys.py --input-dir private/gm2_wav --algorithms 4,6 --waveforms 0-0,2-0
 """
 
 from __future__ import annotations
@@ -29,13 +40,210 @@ import features as ft  # noqa: E402
 import param_space as ps  # noqa: E402
 import ym38x6_ml  # noqa: E402
 
-_SILENT_PENALTY = 10.0  # 無音解は探索から強く排除する
+_SILENT_PENALTY = 10.0
 
+_DEFAULT_MODEL = Path(__file__).resolve().parent.parent / "private" / "model_f64.pt"
+
+# ── GM2 プログラム番号 → 推奨アルゴリズムリスト（OPN/OPM語感準拠） ────────
+GM2_PROG_ALGORITHMS: dict[int, list[int]] = {
+    **{p: [4]    for p in range(0,   8)},   # 0-7   Piano
+    **{p: [0, 2] for p in range(8,  16)},   # 8-15  Chromatic Perc（鉄琴・ベル）
+    **{p: [7, 6] for p in range(16, 24)},   # 16-23 Organ
+    **{p: [4, 0] for p in range(24, 32)},   # 24-31 Guitar
+    **{p: [4, 0] for p in range(32, 40)},   # 32-39 Bass
+    **{p: [5, 4] for p in range(40, 48)},   # 40-47 Strings
+    **{p: [5, 6] for p in range(48, 56)},   # 48-55 Ensemble
+    **{p: [6, 5] for p in range(56, 64)},   # 56-63 Brass
+    **{p: [6, 5] for p in range(64, 72)},   # 64-71 Reed
+    **{p: [7, 5] for p in range(72, 80)},   # 72-79 Pipe
+    **{p: [0, 7] for p in range(80, 88)},   # 80-87 Synth Lead
+    **{p: [5, 6] for p in range(88, 96)},   # 88-95 Synth Pad
+    **{p: [0, 5] for p in range(96, 104)},  # 96-103 Synth Effects
+    **{p: [4, 0] for p in range(104, 112)}, # 104-111 Ethnic
+    **{p: [0, 1] for p in range(112, 120)}, # 112-119 Percussive
+    **{p: [0, 1] for p in range(120, 128)}, # 120-127 Sound Effects
+}
+
+# ── GM2 プログラム番号 → 試す波形ペアリスト (mod_wf, car_wf) ─────────────
+# waveform.rs の番号体系（4グループ × 8変換 = 32波形）:
+#
+# Sine group (0-7)   : W1=0(sine)～W8=7(sin²2倍速常正)  ← OPZ準拠
+# Saw group  (8-15)  : Sine と同じ8変換をノコギリ基本波に適用
+#                       8=full, 9=saw², 10=half, 11=half², 12=2x-half,
+#                       13=2x-saw²-half, 14=2x-|saw|-half, 15=2x-pos-saw²-half
+# Square group(16-23): OPZ変換が縮退するためPWMデューティスイープに差し替え
+#                       16=50%(矩形), 17=33%, 18=25%, 19=16.7%, 20=12.5%,
+#                       21=6.25%(超細), 22=ハーフ矩形, 23=2倍速矩形前半
+# Triangle group(24-31): Sine と同じ8変換を三角波基本波に適用
+#                       24=full, 25=tri², 26=half, 27=half², 28=2x-half, ...
+#
+# (mod_wf, car_wf) は Algorithm のキャリア定義に従い expand_waveforms() で4-tupleに展開する。
+
+# Sine 系（OPZ W2-W8）
+_WF_SINE    = (0, 0)   # 全 sine
+_WF_STRINGS = (0, 2)   # carrier=half-sine(W3)  → 弦 carrier
+_WF_PLUCKED = (3, 0)   # mod=half-sin²(W4)      → 撥弦 mod（ギター・ハープ・クラビ）
+_WF_PLUCK5  = (4, 0)   # mod=2x-sine-half(W5)   → ギター・ハーモニカ mod
+_WF_WOODWIN = (0, 1)   # carrier=sin²(W2)        → 木管 carrier
+_WF_REED    = (0, 5)   # carrier=2x-sin²-half(W6)→ リード系 carrier
+_WF_BRIGHT7 = (0, 6)   # carrier=W7 |sin|2倍速   → 高域強調++
+_WF_BRIGHT8 = (0, 7)   # carrier=W8 sin²2倍速    → 高域強調+
+
+# Saw 系（Sine と同じ変換体系、より倍音豊富）
+_WF_SAW     = (0, 8)   # carrier=full-saw        → ブラス・シンセリード
+_WF_SAW_HC  = (0, 10)  # carrier=half-saw        → 明るい弦（W3のsaw版）
+_WF_SAW_HM  = (10, 0)  # mod=half-saw            → 芯の強いギター（W4のsaw版）
+_WF_SAW_BM  = (8, 0)   # mod=full-saw            → 攻撃的FM（歪み系）
+
+# Triangle 系（Sine と同じ変換体系、よりまろやか）
+_WF_TRI     = (0, 24)  # carrier=full-tri        → フルート・ジェントルパッド
+_WF_TRI_HC  = (0, 26)  # carrier=half-tri        → 穏やかな弦（W3のtri版）
+
+# Square/PWM 系（独自 PWM スイープ、他3グループとは別体系）
+_WF_SQ50    = (0, 16)  # carrier=50%矩形          → クラリネット（古典FM）
+_WF_SQ25M   = (18, 0)  # mod=25%デューティ         → ハープシコード・薄いアタック
+_WF_CLAVI_M = (21, 0)  # mod=6.25%デューティ(超細)  → クラビ・極細パルスアタック
+
+GM2_PROG_WAVEFORM_PAIRS: dict[int, list[tuple[int, int]]] = {
+    # Piano 0-5: sine のみ（古典FM ピアノはサイン波で十分）
+    **{p: [_WF_SINE]                           for p in range(0, 6)},
+    # Harpsichord(6): 25%デューティ mod → 薄くクリックするアタック
+    6:  [_WF_SINE, _WF_SQ25M],
+    # Clavi(7): 6.25%デューティ mod → 極細パルスで打鍵感
+    7:  [_WF_SINE, _WF_CLAVI_M],
+
+    # Chromatic Perc 8-14: sine + saw/bright で倍音豊かなベル
+    **{p: [_WF_SINE, _WF_BRIGHT8, _WF_SAW]     for p in range(8, 15)},
+    # Dulcimer(15): 33%デューティ mod → 撥弦的な薄いアタック
+    15: [_WF_SINE, _WF_PLUCKED, (17, 0)],
+
+    # Organ 16-23: sine + saw でドローバー的な倍音
+    **{p: [_WF_SINE, _WF_SAW]                  for p in range(16, 24)},
+
+    # Guitar 24-31: W4/W5 撥弦 mod + half-saw mod で幅広くカバー
+    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_SAW_HM] for p in range(24, 32)},
+
+    # Bass 32-39: sine + saw carrier（エレキベースの倍音）
+    **{p: [_WF_SINE, _WF_SAW]                  for p in range(32, 40)},
+
+    # Strings 40-47: W3/half-saw/half-tri で明暗幅を確保
+    **{p: [_WF_SINE, _WF_STRINGS, _WF_SAW_HC, _WF_TRI_HC] for p in range(40, 48)},
+
+    # Ensemble 48-55: Strings と同系統
+    **{p: [_WF_SINE, _WF_STRINGS, _WF_SAW_HC, _WF_TRI_HC] for p in range(48, 56)},
+
+    # Brass 56-63: sine + full-saw carrier（ノコギリ波ブラス = 古典FMブラス）
+    **{p: [_WF_SINE, _WF_SAW]                  for p in range(56, 64)},
+
+    # Reed 64-70: W2/W6 + saw で明暗カバー
+    **{p: [_WF_SINE, _WF_WOODWIN, _WF_REED, _WF_SAW] for p in range(64, 71)},
+    # Clarinet(71): 50%矩形 carrier が古典FM クラリネット
+    71: [_WF_SINE, _WF_SQ50, _WF_WOODWIN],
+
+    # Pipe 72-79: W2 + tri carrier でフルートの柔らかさを表現
+    **{p: [_WF_SINE, _WF_WOODWIN, _WF_TRI]     for p in range(72, 80)},
+
+    # Synth Lead 80-87: saw + bright でシンセらしさ全開
+    **{p: [_WF_SINE, _WF_SAW, _WF_BRIGHT8, _WF_BRIGHT7] for p in range(80, 88)},
+
+    # Synth Pad 88-95: sine/tri/saw/W3 で明暗・柔硬バリエーション
+    **{p: [_WF_SINE, _WF_STRINGS, _WF_TRI_HC, _WF_SAW_HC] for p in range(88, 96)},
+
+    # Synth Effects 96-103: sine + saw で複雑なFX
+    **{p: [_WF_SINE, _WF_SAW]                  for p in range(96, 104)},
+
+    # Ethnic 104-111: 撥弦 + SQ25M(ハープ・琴系の薄いアタック)
+    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_SQ25M] for p in range(104, 112)},
+
+    # Percussive 112-119: sine のみ（変調はAlgorithm側で担う）
+    **{p: [_WF_SINE]                            for p in range(112, 120)},
+
+    # Sound Effects 120-127: sine のみ
+    **{p: [_WF_SINE]                            for p in range(120, 128)},
+}
+
+
+# ── GM2 プログラム番号 → エンベロープ制約 field_ranges ─────────────────────
+# 楽器カテゴリ毎に「この範囲に収まるべき」envelope パラメーターを制約し、
+# CMA-ES が音楽的に意味のない领域（ピアノなのにAR=30等）を探索しないようにする。
+# キャリアTLは param_space.CARRIER_TL_MIN で別途制約済み。モジュレーターTLは音色の核心なので制約しない。
+# 値は [vmin, vmax]（0-255 スケール）。辞書にないフィールドは [0, 255] フリー。
+
+# D1L の向き（operator.rs 準拠）:
+#   d1l=255 → D1R が即 D2R へ移行（ピーク音量から D2R 開始） → サステイン大 → パッド/オルガン/弦向き
+#   d1l=0   → D1R が無音まで全域減衰してから D2R へ           → サステイン小 → ピアノ/撥弦/打楽器向き
+#
+# AR/RR の目安（mapping.rs の指数カーブより）:
+#   AR=80→830ms  AR=100→365ms  AR=150→48ms  AR=200→6ms  AR=255→0.68ms（瞬時）
+#   RR=80→12s    RR=100→5.2s   RR=128→1.6s  RR=150→660ms  RR=180→190ms  RR=255→8.7ms
+#   AR=0はフリーズ（無音）、RR=0は285秒で減衰（フリーズではない）
+
+_FR_PIANO   = {"ar": (200, 255), "d1r": (80, 255),  "d1l": (0,  80),  "rr": (80, 255)}
+_FR_HARPSI  = {"ar": (220, 255), "d1r": (180, 255), "d1l": (0,  40),  "rr": (180, 255)}
+_FR_MALLET  = {"ar": (220, 255), "d1r": (50, 200),  "d1l": (30, 150), "d2r": (20, 150), "rr": (80, 200)}
+_FR_ORGAN   = {"ar": (200, 255), "d1r": (0,  30),   "d1l": (220, 255),"d2r": (0,  20),  "rr": (80, 150)}
+_FR_GUITAR  = {"ar": (200, 255), "d1r": (100, 255), "d1l": (0,  80),  "rr": (80, 255)}
+_FR_BASS    = {"ar": (180, 255), "d1r": (50, 200),  "d1l": (0, 100),  "rr": (80, 255)}
+_FR_STRINGS = {"ar": (40, 120),  "d1r": (0,  80),   "d1l": (150, 255),"d2r": (0,  60),  "rr": (80, 150)}
+_FR_BRASS   = {"ar": (100, 255), "d1r": (30, 150),  "d1l": (80, 200), "rr": (80, 180)}
+_FR_REED    = {"ar": (100, 255), "d1r": (20, 120),  "d1l": (80, 200), "rr": (80, 160)}
+_FR_PIPE    = {"ar": (50, 200),  "d1r": (20, 100),  "d1l": (150, 255),"d2r": (0,  40),  "rr": (80, 150)}
+_FR_LEAD    = {"ar": (100, 255)}
+_FR_PAD     = {"ar": (80, 150),  "d1r": (0,  60),   "d1l": (180, 255),"d2r": (0,  30),  "rr": (100, 160)}
+_FR_ETHNIC  = {"ar": (150, 255), "d1r": (50, 200),  "d1l": (0, 120),  "rr": (80, 200)}
+_FR_PERC    = {"ar": (220, 255), "d1r": (100, 255), "d1l": (0,  60),  "d2r": (50, 255), "rr": (100, 255)}
+
+GM2_PROG_FIELD_RANGES: dict[int, dict] = {
+    **{p: _FR_PIANO  for p in range(0, 6)},    # 0-5  Piano
+    6:  _FR_HARPSI,                              # 6    Harpsichord
+    7:  _FR_HARPSI,                              # 7    Clavi
+    **{p: _FR_MALLET for p in range(8, 16)},    # 8-15 Chromatic Perc
+    **{p: _FR_ORGAN  for p in range(16, 24)},   # 16-23 Organ
+    **{p: _FR_GUITAR for p in range(24, 32)},   # 24-31 Guitar
+    **{p: _FR_BASS   for p in range(32, 40)},   # 32-39 Bass
+    **{p: _FR_STRINGS for p in range(40, 56)},  # 40-55 Strings / Ensemble
+    **{p: _FR_BRASS  for p in range(56, 64)},   # 56-63 Brass
+    **{p: _FR_REED   for p in range(64, 72)},   # 64-71 Reed
+    **{p: _FR_PIPE   for p in range(72, 80)},   # 72-79 Pipe
+    **{p: _FR_LEAD   for p in range(80, 88)},   # 80-87 Synth Lead
+    **{p: _FR_PAD    for p in range(88, 96)},   # 88-95 Synth Pad
+    **{p: _FR_ETHNIC for p in range(104, 112)}, # 104-111 Ethnic
+    **{p: _FR_PERC   for p in range(112, 120)}, # 112-119 Percussive
+}
+
+
+# ── ユーティリティ ─────────────────────────────────────────────────────────
 
 def note_freq(name: str = "C", octave: int = 4) -> float:
     semis = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
     midi = (octave + 1) * 12 + semis[name]
     return 440.0 * 2 ** ((midi - 69) / 12)
+
+
+def _midi_to_freq(note: int) -> float:
+    return 440.0 * 2 ** ((note - 69) / 12.0)
+
+
+def _parse_prog_set(s: str) -> set[int]:
+    """'0-7,16,56-63' → {0..7, 16, 56..63}。カンマと範囲を混在可能。"""
+    result: set[int] = set()
+    for part in s.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-", 1)
+            result.update(range(int(a), int(b) + 1))
+        else:
+            result.add(int(part))
+    return result
+
+
+def _parse_wf_pairs(s: str) -> list[tuple[int, int]]:
+    """'0-0,2-0,0-2' → [(0,0),(2,0),(0,2)]。--waveforms オプション用。"""
+    pairs = []
+    for part in s.split(","):
+        m, c = part.strip().split("-", 1)
+        pairs.append((int(m), int(c)))
+    return pairs
 
 
 def write_wav(path: Path, samples, sr: float) -> None:
@@ -51,109 +259,477 @@ def write_wav(path: Path, samples, sr: float) -> None:
         w.writeframes(pcm.tobytes())
 
 
-def render(vec, freq, on, release, sr):
+def render(vec, freq, on, release, sr,
+           algorithm: int = ps.FIXED_ALGORITHM,
+           waveforms: tuple[int, ...] = (0, 0, 0, 0),
+           field_ranges: dict | None = None):
     v = np.clip(np.asarray(vec, dtype=np.float64), 0.0, 1.0)
-    return ym38x6_ml.render_patch(ps.vector_to_patch_json(v), freq, on, release, 115, sr)
+    return ym38x6_ml.render_patch(
+        ps.vector_to_patch_json(v, algorithm, waveforms, field_ranges), freq, on, release, 115, sr)
 
 
 def feats_of(samples, sr, n_mels, n_frames):
     return ft.abys_features(samples, sr=sr, n_mels=n_mels, n_frames=n_frames)
 
 
-def fit_one(target_feats, freq, on, release, sr, n_mels, n_frames,
-            w_env, w_centroid, sigma0, maxfevals, restarts, seed):
-    """1ターゲットを A-by-S で復元。(xbest, best_dist, evals) を返す。
+# ── 初期化戦略 A: ML warm start ────────────────────────────────────────────
 
-    restarts>0 で IPOP-CMA-ES（停滞時に集団サイズを倍増して再スタート）。
-    「重心は合うが倍音が鈍い」局所解から抜け、金属感など高次倍音の復元を助ける。
-    maxfevals は再スタート群を含む総評価予算。
-    """
+def _ml_x0(target_samples, sr: float, model, ckpt) -> np.ndarray:
+    """MLモデル推論から x0 を生成する（Algorithm=4・全 W1 で学習済み）。"""
+    import torch
 
-    def f(vec):
-        s = render(vec, freq, on, release, sr)
-        if ft.is_silent(s):
-            return _SILENT_PENALTY
-        total, _ = ft.abys_distance(
-            target_feats, feats_of(s, sr, n_mels, n_frames), w_env, w_centroid)
-        return total
+    n_mels = int(ckpt["n_mels"])
+    n_frames = int(ckpt["n_frames"])
+    mean = ckpt["mean"]
+    std = ckpt["std"]
 
-    x0 = np.full(ps.DIM, 0.5)
+    mel = ft.log_mel(target_samples, sr=sr, n_mels=n_mels, n_frames=n_frames)
+    x_norm = ((mel - mean) / std)[None, None, :, :]
+    with torch.no_grad():
+        vec = model(torch.from_numpy(x_norm.astype(np.float32)))[0].numpy()
+    return np.clip(vec.astype(np.float64), 0.0, 1.0)
+
+
+# ── 初期化戦略 B: アーキタイプ ────────────────────────────────────────────
+
+def _make_archetypes() -> list[tuple[str, np.ndarray]]:
+    """4種のアーキタイプ x0 を (name, vector) で返す（[0,1] 空間）。"""
+    lab = ps.LABELS
+
+    fc_idx = lab.index("ch.filter_cutoff")
+
+    neutral = np.full(ps.DIM, 0.5)
+    neutral[fc_idx] = 1.0
+
+    metallic = np.full(ps.DIM, 0.5)
+    metallic[lab.index("ch.feedback")] = 0.93
+    metallic[lab.index("op0.mul")] = 7 / 15
+    metallic[lab.index("op1.mul")] = 13 / 15
+    metallic[lab.index("op2.mul")] = 7 / 15
+    metallic[lab.index("op3.mul")] = 7 / 15
+    metallic[lab.index("op0.ar")] = 0.9
+    metallic[lab.index("op1.ar")] = 0.9
+    metallic[lab.index("op0.dt1")] = 0.35
+    metallic[lab.index("op2.dt1")] = 0.65
+    metallic[fc_idx] = 1.0
+
+    soft = np.full(ps.DIM, 0.45)
+    soft[lab.index("ch.feedback")] = 0.05
+    for op in range(4):
+        soft[lab.index(f"op{op}.mul")] = 1 / 15
+        soft[lab.index(f"op{op}.ar")] = 0.6
+        soft[lab.index(f"op{op}.d1r")] = 0.08
+        soft[lab.index(f"op{op}.d1l")] = 0.8
+    soft[fc_idx] = 1.0
+
+    percussive = np.full(ps.DIM, 0.5)
+    for op in range(4):
+        percussive[lab.index(f"op{op}.ar")] = 0.95
+        percussive[lab.index(f"op{op}.d1r")] = 0.65
+        percussive[lab.index(f"op{op}.d1l")] = 0.05
+        percussive[lab.index(f"op{op}.rr")] = 0.75
+    percussive[lab.index("ch.feedback")] = 0.25
+    percussive[fc_idx] = 1.0
+
+    return [("neutral", neutral), ("metallic", metallic),
+            ("soft", soft), ("percussive", percussive)]
+
+
+# ── 初期化戦略 C: 重心ヒューリスティック ─────────────────────────────────
+
+def _heuristic_x0(target_feats: tuple) -> np.ndarray:
+    """mean_centroid→MUL、centroid CV→feedback、env峰位置→AR のヒューリスティック。"""
+    lab = ps.LABELS
+    _, env, centroid = target_feats
+
+    mean_cen = float(np.mean(centroid))
+    cv_cen = float(np.std(centroid) / (mean_cen + 1e-9))
+
+    x = np.full(ps.DIM, 0.5)
+    mul_val = float(np.clip(0.15 + mean_cen * 0.85, 0.0, 1.0))
+    for op in range(4):
+        x[lab.index(f"op{op}.mul")] = mul_val
+    x[lab.index("ch.feedback")] = float(np.clip(cv_cen * 1.5, 0.0, 1.0))
+    peak_pos = float(np.argmax(env)) / max(len(env) - 1, 1)
+    ar_val = float(np.clip(1.0 - peak_pos * 0.6, 0.2, 1.0))
+    for op in range(4):
+        x[lab.index(f"op{op}.ar")] = ar_val
+    x[lab.index("ch.filter_cutoff")] = 1.0   # フィルターは基本的に全開
+    return x
+
+
+# ── 候補リスト構築 ────────────────────────────────────────────────────────
+
+def _build_candidates(target_feats, target_samples, sr, model, ckpt):
+    candidates: list[tuple[str, np.ndarray]] = []
+    if model is not None:
+        try:
+            x0_ml = _ml_x0(np.asarray(target_samples, dtype=np.float64), sr, model, ckpt)
+            candidates.append(("ml", x0_ml))
+        except Exception as e:
+            print(f"    [ML warm start スキップ: {e}]")
+    candidates.extend(_make_archetypes())
+    candidates.append(("heuristic", _heuristic_x0(target_feats)))
+    return candidates
+
+
+# ── CMA-ES ランナー ────────────────────────────────────────────────────────
+
+def _run_cma(f, x0: np.ndarray, sigma0: float, maxfevals: int,
+             restarts: int, seed: int) -> tuple[np.ndarray, float, int]:
     opts = {"bounds": [0.0, 1.0], "maxfevals": maxfevals, "seed": seed, "verbose": -9}
-    xbest, es = cma.fmin2(f, x0, sigma0, options=opts,
+    xbest, es = cma.fmin2(f, x0.copy(), sigma0, options=opts,
                           restarts=restarts, incpopsize=2)
-    xbest = np.clip(np.asarray(xbest, dtype=np.float64), 0.0, 1.0)
-    return xbest, float(es.result.fbest), int(es.result.evaluations)
+    return (np.clip(np.asarray(xbest, dtype=np.float64), 0.0, 1.0),
+            float(es.result.fbest),
+            int(es.result.evaluations))
 
+
+# ── fit_one: マルチアルゴリズム × マルチ波形 × マルチスタート ─────────────
+
+def fit_one(
+    target_feats: tuple,
+    target_samples,
+    freq: float, on: float, release: float, sr: float,
+    n_mels: int, n_frames: int,
+    w_env: float, w_centroid: float,
+    sigma0: float, maxfevals: int, restarts: int, seed: int,
+    algorithms: list[int] | None = None,
+    wf_pairs: list[tuple[int, int]] | None = None,
+    field_ranges: dict | None = None,
+    model=None,
+    ckpt=None,
+) -> tuple[np.ndarray, float, int, str, list[tuple[str, float]]]:
+    """マルチアルゴリズム × マルチ波形 × マルチスタートで A-by-S を実行。
+
+    algorithms × wf_pairs の全組み合わせに予算を均等分配し、全体ベストを返す。
+    field_ranges: envelope パラメーターの範囲制約（GM2_PROG_FIELD_RANGES から渡す）。
+
+    戻り値:
+        (xbest, best_dist, total_evals, winner, combo_summary)
+        winner       : "alg4_w30/soft" のような "algN_wMC/候補名" 形式
+        combo_summary: [(f"alg{N}_w{M}{C}", best_dist), ...] 組み合わせ毎のベスト
+    """
+    if algorithms is None:
+        algorithms = [ps.FIXED_ALGORITHM]
+    if wf_pairs is None:
+        wf_pairs = [_WF_SINE]
+
+    candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt)
+    n_combos = len(algorithms) * len(wf_pairs)
+    n_cands = len(candidates)
+    budget_per_combo = max(100 * n_cands, maxfevals // n_combos)
+    budget_each = max(100, budget_per_combo // n_cands)
+
+    # (algo, mod_wf, car_wf, cand_name, xbest, fbest, evals)
+    all_results: list[tuple[int, int, int, str, np.ndarray, float, int]] = []
+
+    for algo in algorithms:
+        for mod_wf, car_wf in wf_pairs:
+            wf_config = ps.expand_waveforms(mod_wf, car_wf, algo)
+
+            def f(vec, _algo=algo, _wf=wf_config, _fr=field_ranges):
+                s = render(vec, freq, on, release, sr, _algo, _wf, _fr)
+                if ft.is_silent(s):
+                    return _SILENT_PENALTY
+                total, _ = ft.abys_distance(
+                    target_feats, feats_of(s, sr, n_mels, n_frames), w_env, w_centroid)
+                return total
+
+            for name, x0 in candidates:
+                xb, fb, ev = _run_cma(f, x0, sigma0, budget_each, restarts, seed)
+                all_results.append((algo, mod_wf, car_wf, name, xb, fb, ev))
+
+    best = min(all_results, key=lambda r: r[5])
+    b_algo, b_mod, b_car, b_cand, xbest, fbest, _ = best
+    total_evals = sum(r[6] for r in all_results)
+    winner = f"alg{b_algo}_w{b_mod}{b_car}/{b_cand}"
+
+    combo_summary: list[tuple[str, float]] = []
+    for algo in algorithms:
+        for mod_wf, car_wf in wf_pairs:
+            key = f"alg{algo}_w{mod_wf}{car_wf}"
+            best_for = min(
+                (r[5] for r in all_results if r[0] == algo and r[1] == mod_wf and r[2] == car_wf),
+                default=np.inf)
+            combo_summary.append((key, best_for))
+
+    return xbest, fbest, total_evals, winner, combo_summary
+
+
+# ── バッチ推論用ヘルパー ─────────────────────────────────────────────────
+
+def _prog_from_filename(fname: str) -> int | None:
+    stem = Path(fname).stem
+    if len(stem) >= 3 and stem[:3].isdigit():
+        return int(stem[:3])
+    return None
+
+
+def load_wav_mono(path: Path) -> tuple[np.ndarray, int]:
+    import wave as _wave
+    with _wave.open(str(path)) as w:
+        sr = w.getframerate()
+        raw = w.readframes(w.getnframes())
+        ch = w.getnchannels()
+        sw = w.getsampwidth()
+    if sw == 2:
+        x = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    elif sw == 4:
+        x = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"未対応サンプル幅: {sw}")
+    if ch == 2:
+        x = x.reshape(-1, 2).mean(axis=1)
+    return x, sr
+
+
+def _make_bank_json(entries: list[dict], bank: int = 0) -> str:
+    import json
+    presets = [{"program": e["program"], "name": e["name"], "patch": e["patch"]}
+               for e in entries]
+    return json.dumps({"bank": bank, "presets": presets}, indent=2)
+
+
+# ── main ──────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="38x6 Analysis-by-Synthesis 自己再構成テスト (3b)")
-    ap.add_argument("--n-targets", type=int, default=5, help="復元を試すターゲット数")
-    ap.add_argument("--maxfevals", type=int, default=2400, help="1ターゲットあたりのrender評価回数上限(再スタート群を含む総予算)")
-    ap.add_argument("--restarts", type=int, default=2, help="IPOP再スタート回数(停滞時に集団を倍増。0で無効)")
-    ap.add_argument("--sigma0", type=float, default=0.25, help="CMA-ES初期ステップ(0..1空間)")
-    ap.add_argument("--seed", type=int, default=12345, help="ターゲット生成seed(学習seedと変える)")
-    ap.add_argument("--cma-seed", type=int, default=1, help="CMA-ES内部seed")
-    ap.add_argument("--wav", type=int, default=5, help="WAV書き出しするペア数")
-    ap.add_argument("--wav-dir", type=str, default=None, help="WAV出力先(既定 ../private/abys_wav)")
-    ap.add_argument("--freq", type=float, default=note_freq("C", 4))
-    ap.add_argument("--on", type=float, default=0.6)
-    ap.add_argument("--release", type=float, default=0.3)
+    ap = argparse.ArgumentParser(
+        description="38x6 A-by-S: 自己再構成テスト(3b+) / バッチWAV推論(--input-dir)")
+    # ── 共通 ──
+    ap.add_argument("--maxfevals", type=int, default=2400,
+                    help="1ターゲットあたりの総eval予算（algo×波形×候補数で均等分配）")
+    ap.add_argument("--restarts", type=int, default=1)
+    ap.add_argument("--sigma0", type=float, default=0.25)
+    ap.add_argument("--cma-seed", type=int, default=1)
     ap.add_argument("--sr", type=float, default=44100.0)
     ap.add_argument("--n-mels", type=int, default=64)
     ap.add_argument("--n-frames", type=int, default=64)
-    ap.add_argument("--w-env", type=float, default=2.0,
-                    help="ラウドネス曲線項の重み(アタック/ディケイ整形)")
-    ap.add_argument("--w-centroid", type=float, default=4.0,
-                    help="スペクトル重心項の重み(明るさ・音程)")
+    ap.add_argument("--w-env", type=float, default=2.0)
+    ap.add_argument("--w-centroid", type=float, default=4.0)
+    ap.add_argument("--model", type=str, default=None)
+    ap.add_argument("--no-model", action="store_true")
+    # ── バッチ推論モード ──
+    ap.add_argument("--input-dir", type=str, default=None,
+                    help="[バッチ] WAV ディレクトリ（000_Name.wav 形式）")
+    ap.add_argument("--out", type=str, default=None,
+                    help="[バッチ] 出力 .38x6 パス")
+    ap.add_argument("--note", type=int, default=60)
+    ap.add_argument("--on", type=float, default=2.5)
+    ap.add_argument("--release", type=float, default=1.5)
+    ap.add_argument("--pre-delay", type=float, default=0.3)
+    ap.add_argument("--prog-range", type=str, default=None,
+                    help="[バッチ] 処理するプログラム番号（例: 0-7,16,56-63）。カンマ・範囲混在可")
+    ap.add_argument("--algorithms", type=str, default=None,
+                    help="[バッチ] アルゴリズム固定（例: 4,6）。省略時はGM2テーブルから自動選択")
+    ap.add_argument("--waveforms", type=str, default=None,
+                    help="[バッチ] 試す波形ペア mod-car のカンマ区切り（例: 0-0,3-0,0-2）。"
+                         "省略時はGM2テーブルから自動選択")
+    ap.add_argument("--bank", type=int, default=0)
+    # ── 自己再構成テストモード ──
+    ap.add_argument("--n-targets", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=12345)
+    ap.add_argument("--wav", type=int, default=5)
+    ap.add_argument("--wav-dir", type=str, default=None)
+    ap.add_argument("--freq", type=float, default=note_freq("C", 4))
+    ap.add_argument("--test-on", type=float, default=0.6)
+    ap.add_argument("--test-release", type=float, default=0.3)
+    ap.add_argument("--test-algorithms", type=str, default=None,
+                    help="[テスト] 試すアルゴリズム（例: 4,6）。省略時は 4 のみ")
+    ap.add_argument("--test-waveforms", type=str, default=None,
+                    help="[テスト] 試す波形ペア（例: 0-0,3-0）。省略時は 0-0 のみ")
     args = ap.parse_args()
 
+    # ── ML モデル読み込み ──
+    model, ckpt = None, None
+    if not args.no_model:
+        model_path = Path(args.model) if args.model else _DEFAULT_MODEL
+        if model_path.exists():
+            try:
+                import torch
+                from model import InverseNet
+                ckpt_raw = torch.load(str(model_path), map_location="cpu", weights_only=False)
+                m = InverseNet(out_dim=ckpt_raw["out_dim"],
+                               n_mels=ckpt_raw["n_mels"],
+                               n_frames=ckpt_raw["n_frames"])
+                m.load_state_dict(ckpt_raw["model_state"])
+                m.eval()
+                model, ckpt = m, ckpt_raw
+                print(f"MLモデル: {model_path.name} (warm start 有効)")
+            except Exception as e:
+                print(f"WARNING: MLモデル読み込み失敗 ({e})", file=sys.stderr)
+        else:
+            print(f"  (MLモデル未検出: {model_path.name} → warm start なし)")
+
+    # ── バッチ推論モード ──────────────────────────────────────────────────
+    if args.input_dir:
+        wav_dir = Path(args.input_dir)
+        if not wav_dir.is_dir():
+            print(f"ERROR: {wav_dir} が見つかりません", file=sys.stderr)
+            return 1
+
+        prog_set = _parse_prog_set(args.prog_range) if args.prog_range else None
+        fixed_algos = ([int(a) for a in args.algorithms.split(",")]
+                       if args.algorithms else None)
+        fixed_wf_pairs = _parse_wf_pairs(args.waveforms) if args.waveforms else None
+
+        wavs = [p for p in sorted(wav_dir.glob("*.wav"))
+                if (prog_set is None or _prog_from_filename(p.name) in prog_set)
+                and _prog_from_filename(p.name) is not None]
+
+        if not wavs:
+            print("ERROR: 条件に一致する WAV が見つかりません", file=sys.stderr)
+            return 1
+
+        default_out = wav_dir.parent / "bank0_abys.38x6"
+        out_path = Path(args.out) if args.out else default_out
+        freq = _midi_to_freq(args.note)
+
+        print(f"バッチ A-by-S: {wav_dir} ({len(wavs)} 件) → {out_path}")
+        print(f"  note={args.note}(freq={freq:.2f}Hz)  on={args.on}s  "
+              f"release={args.release}s  pre_delay={args.pre_delay}s")
+        src_algo = f"固定: {fixed_algos}" if fixed_algos else "GM2テーブルから自動選択"
+        src_wf   = f"固定: {fixed_wf_pairs}" if fixed_wf_pairs else "GM2テーブルから自動選択"
+        print(f"  アルゴリズム: {src_algo}")
+        print(f"  波形ペア    : {src_wf}")
+        print(f"  maxfevals={args.maxfevals}  restarts={args.restarts}")
+
+        entries: list[dict] = []
+        failed: list[str] = []
+        t0 = time.time()
+
+        for wav_path in wavs:
+            prog = _prog_from_filename(wav_path.name)
+            name = wav_path.stem[4:] if len(wav_path.stem) > 4 else wav_path.stem
+
+            algos   = fixed_algos    or GM2_PROG_ALGORITHMS.get(prog, [ps.FIXED_ALGORITHM])
+            wf_prs  = fixed_wf_pairs or GM2_PROG_WAVEFORM_PAIRS.get(prog, [_WF_SINE])
+            fr      = GM2_PROG_FIELD_RANGES.get(prog)
+            print(f"  [{prog:3d}] {name:<28} alg={algos} wf={wf_prs} ", end="", flush=True)
+
+            try:
+                samples, src_sr = load_wav_mono(wav_path)
+                if src_sr != int(args.sr):
+                    n_new = int(len(samples) * args.sr / src_sr)
+                    samples = np.interp(
+                        np.linspace(0, len(samples) - 1, n_new),
+                        np.arange(len(samples)), samples,
+                    ).astype(np.float32)
+                trim = int(args.pre_delay * args.sr)
+                samples = samples[trim:] if trim < len(samples) else samples
+                if ft.is_silent(samples):
+                    print("無音スキップ")
+                    continue
+
+                target_feats = feats_of(samples, args.sr, args.n_mels, args.n_frames)
+                t1 = time.time()
+                xbest, best_d, evals, winner, combo_summary = fit_one(
+                    target_feats, samples,
+                    freq, args.on, args.release, args.sr,
+                    args.n_mels, args.n_frames,
+                    args.w_env, args.w_centroid,
+                    args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
+                    algorithms=algos, wf_pairs=wf_prs, field_ranges=fr,
+                    model=model, ckpt=ckpt,
+                )
+                # winner から algo/wf を取り出してパッチを生成
+                tag = winner.split("/")[0]          # "alg4_w30"
+                best_algo = int(tag.split("_")[0].replace("alg", ""))
+                wf_tag = tag.split("_")[1]          # "w30"
+                b_mod, b_car = int(wf_tag[1]), int(wf_tag[2])
+                best_wf = ps.expand_waveforms(b_mod, b_car, best_algo)
+                patch = ps.vector_to_patch(xbest, best_algo, best_wf, fr)
+                entries.append({"program": prog, "name": name, "patch": patch})
+
+                combo_str = "  ".join(f"{k}={v:.3f}" for k, v in combo_summary)
+                print(f"loss={best_d:.4f} winner={winner} evals={evals} "
+                      f"{time.time()-t1:.1f}s")
+                print(f"      {combo_str}")
+
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"FAIL: {e}")
+                failed.append(wav_path.name)
+
+        if not entries:
+            print("ERROR: 有効なエントリーが0件です", file=sys.stderr)
+            return 1
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(_make_bank_json(entries, bank=args.bank), encoding="utf-8")
+        print(f"\n{len(entries)} パッチ → {out_path}  (合計 {time.time()-t0:.1f}s)")
+        if failed:
+            print(f"失敗: {failed}")
+        return 0 if not failed else 1
+
+    # ── 自己再構成テストモード ────────────────────────────────────────────
+    test_algos = ([int(a) for a in args.test_algorithms.split(",")]
+                  if args.test_algorithms else [ps.FIXED_ALGORITHM])
+    test_wf = _parse_wf_pairs(args.test_waveforms) if args.test_waveforms else [_WF_SINE]
+
     base = Path(__file__).resolve().parent.parent / "private"
-    wav_dir = Path(args.wav_dir) if args.wav_dir else base / "abys_wav"
+    wav_out_dir = Path(args.wav_dir) if args.wav_dir else base / "abys_wav"
     if args.wav > 0:
-        wav_dir.mkdir(parents=True, exist_ok=True)
+        wav_out_dir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    # 0.5固定の無情報ベースライン音/特徴（比較用）。
     base_vec = np.full(ps.DIM, 0.5)
-    base_feats = feats_of(render(base_vec, args.freq, args.on, args.release, args.sr),
-                          args.sr, args.n_mels, args.n_frames)
+    base_feats = feats_of(
+        render(base_vec, args.freq, args.test_on, args.test_release, args.sr),
+        args.sr, args.n_mels, args.n_frames)
 
     init_dists, best_dists, param_mse = [], [], []
-    best_terms = []  # 各target の (d_mel, d_env, d_centroid)
+    best_terms = []
     done = 0
     tries = 0
     t0 = time.time()
+
     while done < args.n_targets and tries < args.n_targets * 8:
         tries += 1
         true_vec = rng.random(ps.DIM)
-        target = render(true_vec, args.freq, args.on, args.release, args.sr)
+        target = render(true_vec, args.freq, args.test_on, args.test_release, args.sr)
         if ft.is_silent(target):
             continue
         target_feats = feats_of(target, args.sr, args.n_mels, args.n_frames)
-
-        # 初期(0.5固定)の目標距離（多項合算）。
         init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
-        xbest, best_d, evals = fit_one(
-            target_feats, args.freq, args.on, args.release, args.sr,
-            args.n_mels, args.n_frames, args.w_env, args.w_centroid,
+
+        xbest, best_d, evals, winner, combo_summary = fit_one(
+            target_feats, target,
+            args.freq, args.test_on, args.test_release, args.sr,
+            args.n_mels, args.n_frames,
+            args.w_env, args.w_centroid,
             args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
+            algorithms=test_algos, wf_pairs=test_wf, model=model, ckpt=ckpt,
         )
-        recon = render(xbest, args.freq, args.on, args.release, args.sr)
+
+        tag = winner.split("/")[0]
+        best_algo = int(tag.split("_")[0].replace("alg", ""))
+        wf_tag = tag.split("_")[1]
+        b_mod, b_car = int(wf_tag[1]), int(wf_tag[2])
+        best_wf = ps.expand_waveforms(b_mod, b_car, best_algo)
+        recon = render(xbest, args.freq, args.test_on, args.test_release, args.sr,
+                       algorithm=best_algo, waveforms=best_wf)
         _, terms = ft.abys_distance(
-            target_feats, feats_of(recon, args.sr, args.n_mels, args.n_frames),
+            target_feats,
+            feats_of(recon, args.sr, args.n_mels, args.n_frames),
             args.w_env, args.w_centroid)
+
         init_dists.append(init_d)
         best_dists.append(best_d)
         best_terms.append(terms)
         param_mse.append(float(np.mean((xbest - true_vec) ** 2)))
 
         if done < args.wav:
-            write_wav(wav_dir / f"{done:02d}_target.wav", target, args.sr)
-            write_wav(wav_dir / f"{done:02d}_recon.wav", recon, args.sr)
+            write_wav(wav_out_dir / f"{done:02d}_target.wav", target, args.sr)
+            write_wav(wav_out_dir / f"{done:02d}_recon.wav", recon, args.sr)
+
         d_mel, d_env, d_cen = terms
+        impr = (1 - best_d / init_d) * 100
         print(f"  target {done}: init={init_d:.4f} -> best={best_d:.4f} "
-              f"(改善率={(1 - best_d / init_d) * 100:.1f}%, evals={evals}) "
-              f"[mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}]")
+              f"(改善率={impr:.1f}%, evals={evals}, winner={winner})")
+        print(f"    [mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}]")
+        combo_str = "  ".join(f"{k}={v:.4f}" for k, v in combo_summary)
+        print(f"    {combo_str}")
         done += 1
 
     if not best_dists:
@@ -163,13 +739,16 @@ def main() -> int:
     dt = time.time() - t0
     init_m = float(np.mean(init_dists))
     best_m = float(np.mean(best_dists))
-    terms_m = np.mean(best_terms, axis=0)  # (d_mel, d_env, d_centroid)
-    print(f"\nA-by-S 自己再構成 {done}件 (所要={dt:.1f}s, w_env={args.w_env} w_centroid={args.w_centroid})")
-    print(f"  合算距離     初期0.5固定={init_m:.4f}  A-by-S後={best_m:.4f}  改善率={(1 - best_m / init_m) * 100:.1f}%")
-    print(f"  項別(A-by-S後) mel={terms_m[0]:.4f}  env={terms_m[1]:.4f}  centroid={terms_m[2]:.4f}")
+    terms_m = np.mean(best_terms, axis=0)
+    print(f"\nA-by-S 自己再構成 {done}件 "
+          f"(所要={dt:.1f}s, w_env={args.w_env} w_centroid={args.w_centroid})")
+    print(f"  合算距離     初期0.5固定={init_m:.4f}  A-by-S後={best_m:.4f}"
+          f"  改善率={(1 - best_m / init_m) * 100:.1f}%")
+    print(f"  項別(A-by-S後) mel={terms_m[0]:.4f}  env={terms_m[1]:.4f}"
+          f"  centroid={terms_m[2]:.4f}")
     print(f"  paramMSE     復元={float(np.mean(param_mse)):.4f}")
     if args.wav > 0:
-        print(f"  WAV書き出し: {wav_dir}（{min(done, args.wav)}ペア, *_target / *_recon）")
+        print(f"  WAV書き出し: {wav_out_dir}（{min(done, args.wav)}ペア）")
     return 0
 
 
