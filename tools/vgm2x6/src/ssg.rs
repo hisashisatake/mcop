@@ -229,10 +229,6 @@ pub fn volume_to_cc11(vol: u8) -> u8 {
     (vol.min(15) as u16 * 127 / 15) as u8
 }
 
-/// 実効音量(0-15) → 矩形波キャリアOP1のTL(0-255) 線形マップ（WAV直描画用）。
-pub fn volume_to_tl(vol: u8) -> u8 {
-    (vol.min(15) as u16 * 255 / 15) as u8
-}
 
 #[cfg(test)]
 mod tests {
@@ -310,7 +306,5 @@ mod tests {
     fn volume_maps() {
         assert_eq!(volume_to_cc11(15), 127);
         assert_eq!(volume_to_cc11(0), 0);
-        assert_eq!(volume_to_tl(15), 255);
-        assert_eq!(volume_to_tl(0), 0);
     }
 }

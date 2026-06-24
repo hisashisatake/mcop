@@ -1096,11 +1096,9 @@ struct WavSink {
     /// SMFパスと同様に「整数ノート周波数 + ベンド」で発音するための土台
     /// （note_onに正確な周波数を渡すとベンド基準が二重計上され2音目以降がズレる）。
     bend_cents: Vec<f32>,
-    /// チャンネルごとの「音量制御対象OPインデックス」ビットマスク。
-    /// program_change時にパッチのwaveform>=16かつtl>0のOPを記録し、
-    /// expression()でノイズOP等も含む全アクティブSSG-OPを音量制御するために使う。
-    /// FMパッチ（waveform=0）は影響しない。
-    ssg_active_ops: Vec<[bool; 4]>,
+    /// チャンネルごとの現在のチャンネルゲイン（CC11/expression由来）。
+    /// note_on時に新ボイスへ再適用するため保持する（Channel::newはgain=1.0で初期化するため）。
+    ch_gain: Vec<f32>,
 }
 
 impl WavSink {
@@ -1111,7 +1109,7 @@ impl WavSink {
             patches: vec![Ym38x6Patch::default(); total_ch],
             sr,
             bend_cents: vec![0.0; total_ch],
-            ssg_active_ops: vec![[false; 4]; total_ch],
+            ch_gain: vec![1.0f32; total_ch],
         }
     }
 
@@ -1151,12 +1149,6 @@ impl WavSink {
 impl OpnSink for WavSink {
     fn set_pitch_bend_sensitivity(&mut self, _ch: usize, _semitones: u8) {}
     fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: Ym38x6Patch) {
-        // SSGパッチはwaveform>=16のOPが音源OP。その中でtl>0(非ミュート)のものを記録する。
-        // これにより expression() でノイズOP(mix_patchのOP3等)も含む全SSG-OPを音量制御できる。
-        for i in 0..4 {
-            self.ssg_active_ops[ch][i] =
-                patch.operators[i].waveform >= 16 && patch.operators[i].tl > 0;
-        }
         self.patches[ch] = patch;
     }
     fn note_on(&mut self, _tick: u64, ch: usize, note: u8, _freq: f32, vel: u8) {
@@ -1165,7 +1157,8 @@ impl OpnSink for WavSink {
         // 二重計上され、2音目以降が初音の端数ぶんズレる（ノイズはピッチ無視のため影響なし）。
         let f = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
         self.engine.note_on_with_velocity(ch, f, vel, self.patches[ch]);
-        // note_onで生成/再キーされたボイスへ現在のベンドを再適用する。
+        // Channel::newはgain=1.0で初期化するため、現在のch_gainを再適用する。
+        self.engine.set_channel_volume(ch, self.ch_gain[ch]);
         self.engine.set_pitch_bend(ch, self.bend_cents[ch]);
     }
     fn note_off(&mut self, _tick: u64, ch: usize, _note: u8) {
@@ -1176,18 +1169,12 @@ impl OpnSink for WavSink {
         self.engine.set_pitch_bend(ch, cents);
     }
     fn expression(&mut self, _tick: u64, ch: usize, vol: u8) {
-        // ssg_active_ops に記録した全アクティブSSG-OP(トーン・ノイズ両方)のTLを更新する。
-        // 従来OP1(operators[0])のみ更新していたため、mix_patchのノイズOP(operators[2])が
-        // TL=255(フル音量)のまま鳴り続け「ザー」となっていたバグを修正。
-        let scaled_tl = ssg::volume_to_tl(vol);
-        for i in 0..4 {
-            if self.ssg_active_ops[ch][i] {
-                let mut op = self.patches[ch].operators[i];
-                op.tl = scaled_tl;
-                self.patches[ch].operators[i] = op;
-                self.engine.set_operator_params(ch, i, op);
-            }
-        }
+        // SSG音量(0-15)をチャンネルゲインへ変換してエンジンへ反映する。
+        // VST側CC11と同じ二乗カーブ(vol/15)^2を使うことで、TL直操作より実機AY-3-8910に近い
+        // 音量カーブになり、vol=7で約-13dBとなる（TL線形マッピングでは-51dBだった）。
+        let gain = (vol as f32 / 15.0).powi(2);
+        self.ch_gain[ch] = gain;
+        self.engine.set_channel_volume(ch, gain);
     }
     fn wait(&mut self, samples: u32) {
         let mut buf = vec![0.0f32; samples as usize];

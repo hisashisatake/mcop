@@ -7,30 +7,15 @@
 //! 対応SMFイベント:
 //!   - Note On/Off、Program Change、Tempo
 //!   - Pitch Bend（チャンネル単位、RPN0,0でセンシティビティ設定可）
-//!   - CC11 Expression: SSG音量制御（vgm2x6 SSGパッチのノイズOPを含む全アクティブOP更新）
+//!   - CC11 Expression: チャンネルゲインをVST CC11と同じ(val/127)^2カーブで設定
 //!   - CC64 Sustain Pedal（ホールドフラグ方式）
 //!   - CC100/101/6: RPN選択とData Entry（ピッチベンド感度のみ）
 //!   - CC120/CC123: All Sound Off / All Notes Off
 
-use std::collections::HashMap;
-
-use ym38x6_core::{SoundEngine, Ym38x6Engine, Ym38x6Patch};
+use ym38x6_core::{SoundEngine, Ym38x6Engine};
 
 use crate::bank::PatchBank;
 use crate::smf::{parse_smf, EvKind};
-
-/// CC11（Expression）の値 (0-127) → SSG OP の TL (0-255)。
-/// vgm2x6 が `volume_to_cc11(vol) = vol*127/15` で書いた値の逆変換に相当する。
-#[inline]
-fn cc11_to_tl(cc11: u8) -> u8 {
-    (cc11 as u16 * 255 / 127) as u8
-}
-
-/// パッチの SSG アクティブ OP マスクを返す（waveform≥16 かつ 元TL>0 のOP）。
-/// vgm2x6 の WavSink と同じ判定基準。FM パッチ（waveform=0）は影響しない。
-fn ssg_active_ops(patch: &Ym38x6Patch) -> [bool; 4] {
-    std::array::from_fn(|i| patch.operators[i].waveform >= 16 && patch.operators[i].tl > 0)
-}
 
 fn render_chunk(engine: &mut Ym38x6Engine, out: &mut Vec<f32>, rendered: &mut usize, target: usize) {
     if target > *rendered {
@@ -67,12 +52,9 @@ pub fn render_smf(
     let mut pedal_down = [false; 16];
     let mut pending_release = [0u128; 16]; // bit N = note N が保留中
 
-    // CC11（Expression）対応: SSG OP の TL をノートごとに音量スケールする。
-    // vgm2x6 の SmfSink は CC11 でSSG音量を送るが、エンジンは TL 単位で音量を持つため
-    // ここでノートごとのベースパッチを記憶し、CC11受信時に全発音ボイスのSSG OP TLを更新する。
-    // キー: voice_id (ch*128+note)、値: note_on 時点のベースパッチ（TLはオリジナル値=255等）
-    let mut note_base_patches: HashMap<usize, Ym38x6Patch> = HashMap::new();
-    // チャンネルごとの直近 CC11 値（0-127）。初期値 127 = フル音量（TL=255）。
+    // CC11（Expression）対応: VST CC11と同じ(val/127)^2カーブでチャンネルゲインを設定する。
+    // note_on時に新ボイスへ現在のゲインを再適用するため ch_cc11 を状態として保持する
+    // （Channel::newはchannel_gain=1.0で初期化するため、note_on直後に再設定が必要）。
     let mut ch_cc11 = [127u8; 16];
 
     let mut tempo_us: f64 = 500_000.0; // 既定 120BPM
@@ -106,24 +88,18 @@ pub fn render_smf(
                 programs[ch as usize] = p;
             }
             EvKind::NoteOn(ch, note, vel) => {
-                let base_patch = bank.patch(programs[ch as usize]).clone();
-                let id = ch as usize * 128 + note as usize;
+                let chi = ch as usize;
+                let patch = bank.patch(programs[chi]).clone();
+                let id = chi * 128 + note as usize;
                 let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-                // CC11 が既に届いている場合はベースパッチの SSG OP TL をスケールしてから発音する。
-                let mut patch = base_patch;
-                let tl = cc11_to_tl(ch_cc11[ch as usize]);
-                for i in 0..4 {
-                    if patch.operators[i].waveform >= 16 && patch.operators[i].tl > 0 {
-                        patch.operators[i].tl = tl;
-                    }
-                }
-                note_base_patches.insert(id, base_patch);
                 engine.note_on_with_velocity(id, freq, vel, patch);
+                // Channel::newはchannel_gain=1.0で初期化するため、現在のCC11ゲインを再適用する。
+                let gain = (ch_cc11[chi] as f32 / 127.0).powi(2);
+                engine.set_channel_volume(id, gain);
             }
             EvKind::NoteOff(ch, note) => {
                 let chi = ch as usize;
                 let id = chi * 128 + note as usize;
-                note_base_patches.remove(&id);
                 if pedal_down[chi] {
                     // ペダル保持中: Note Offを保留する
                     pending_release[chi] |= 1u128 << note;
@@ -160,40 +136,23 @@ pub fn render_smf(
                             while mask != 0 {
                                 let note = mask.trailing_zeros() as usize;
                                 let id = chi * 128 + note;
-                                note_base_patches.remove(&id);
                                 engine.note_off(id);
                                 mask &= mask - 1;
                             }
                             pending_release[chi] = 0;
                         }
                     }
-                    // CC11 Expression: SSGパッチの全アクティブOP（トーン・ノイズ両方）の
-                    // TL をスケールする。vgm2x6 が SSG ソフトエンベロープを CC11 で送る際に
-                    // ノイズOP（mix_patchのoperators[2]等）も正しく音量制御されるようにする。
-                    // ベースパッチを記憶した note_base_patches から SSGアクティブOPマスクを
-                    // 引き直し、発音中の全ボイスに set_operator_params を適用する。
+                    // CC11 Expression: VST CC11と同じ(val/127)^2カーブでチャンネルゲインを設定する。
+                    // set_channel_volume_groupで発音中の全ボイスへ即時反映される（group=id>>7=MIDIch）。
                     11 => {
                         ch_cc11[chi] = val;
-                        let tl = cc11_to_tl(val);
-                        for note in 0u8..128 {
-                            let id = chi * 128 + note as usize;
-                            if let Some(base) = note_base_patches.get(&id) {
-                                let mask = ssg_active_ops(base);
-                                for i in 0..4 {
-                                    if mask[i] {
-                                        let mut op = base.operators[i];
-                                        op.tl = tl;
-                                        engine.set_operator_params(id, i, op);
-                                    }
-                                }
-                            }
-                        }
+                        let gain = (val as f32 / 127.0).powi(2);
+                        engine.set_channel_volume_group(chi, gain);
                     }
                     // CC120 All Sound Off / CC123 All Notes Off
                     120 | 123 => {
                         for note in 0usize..128 {
                             let id = chi * 128 + note;
-                            note_base_patches.remove(&id);
                             engine.note_off(id);
                         }
                         pending_release[chi] = 0;
