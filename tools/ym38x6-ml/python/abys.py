@@ -368,7 +368,8 @@ def _heuristic_x0(target_feats: tuple) -> np.ndarray:
 
 # ── 候補リスト構築 ────────────────────────────────────────────────────────
 
-def _build_candidates(target_feats, target_samples, sr, model, ckpt):
+def _build_candidates(target_feats, target_samples, sr, model, ckpt,
+                      ref_patches: list[dict] | None = None):
     candidates: list[tuple[str, np.ndarray]] = []
     if model is not None:
         try:
@@ -378,6 +379,10 @@ def _build_candidates(target_feats, target_samples, sr, model, ckpt):
             print(f"    [ML warm start スキップ: {e}]")
     candidates.extend(_make_archetypes())
     candidates.append(("heuristic", _heuristic_x0(target_feats)))
+    if ref_patches:
+        for preset in ref_patches:
+            vec = ps.patch_json_to_vector(preset["patch"])
+            candidates.append((f"ref:{preset['name']}", vec))
     return candidates
 
 
@@ -408,6 +413,7 @@ def fit_one(
     model=None,
     ckpt=None,
     w_harmonic: float = 0.0,
+    ref_patches: list[dict] | None = None,
 ) -> tuple[np.ndarray, float, int, str, list[tuple[str, float]]]:
     """マルチアルゴリズム × マルチ波形 × マルチスタートで A-by-S を実行。
 
@@ -430,7 +436,7 @@ def fit_one(
         target_harms = ft.harmonic_features(
             np.asarray(target_samples, dtype=np.float64), freq, sr)
 
-    candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt)
+    candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt, ref_patches)
     n_combos = len(algorithms) * len(wf_pairs)
     n_cands = len(candidates)
     budget_per_combo = max(100 * n_cands, maxfevals // n_combos)
@@ -474,6 +480,27 @@ def fit_one(
             combo_summary.append((key, best_for))
 
     return xbest, fbest, total_evals, winner, combo_summary
+
+
+# ── 参照パッチユーティリティ ──────────────────────────────────────────────
+
+def load_ref_patches(path: Path) -> list[dict]:
+    """ref.38x6 ファイルから presets リストを返す。各要素: {program, name, patch}"""
+    import json
+    import re
+    text = path.read_text(encoding="utf-8")
+    # trailing comma before ] or } を除去（JSON5 非互換への対処）
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    data = json.loads(text)
+    return data.get("presets", [])
+
+
+def _filter_ref_patches(presets: list[dict], name_fragments: list[str]) -> list[dict]:
+    """名前部分一致（OR）でフィルタ。fragments が空の場合は全件返す。"""
+    if not name_fragments:
+        return presets
+    return [p for p in presets
+            if any(frag in p["name"] for frag in name_fragments)]
 
 
 # ── バッチ推論用ヘルパー ─────────────────────────────────────────────────
@@ -532,6 +559,12 @@ def main() -> int:
                          "ターゲットの倍音強度を誤ってMUL値に写像し音痴を引き起こす恐れあり")
     ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--no-model", action="store_true")
+    ap.add_argument("--ref-patch", type=str, default=None,
+                    help="参照 .38x6 ファイルパス。マッチしたパッチを CMA-ES 初期値候補に追加する")
+    ap.add_argument("--ref-name", type=str, default=None,
+                    help="参照パッチの音色名部分一致フィルタ（カンマ区切り複数可、OR 論理）。"
+                         "省略時はバッチモードでプログラム番号が一致するパッチを自動選択、"
+                         "テストモードでは全件使用")
     # ── バッチ推論モード ──
     ap.add_argument("--input-dir", type=str, default=None,
                     help="[バッチ] WAV ディレクトリ（000_Name.wav 形式）")
@@ -584,6 +617,22 @@ def main() -> int:
         else:
             print(f"  (MLモデル未検出: {model_path.name} → warm start なし)")
 
+    # ── 参照パッチ読み込み ──
+    all_ref_presets: list[dict] = []
+    ref_name_fragments: list[str] = []
+    if args.ref_patch:
+        ref_path = Path(args.ref_patch)
+        if ref_path.exists():
+            all_ref_presets = load_ref_patches(ref_path)
+            ref_name_fragments = (
+                [f.strip() for f in args.ref_name.split(",") if f.strip()]
+                if args.ref_name else []
+            )
+            name_desc = f"名前フィルタ={ref_name_fragments}" if ref_name_fragments else "プログラム番号自動照合"
+            print(f"参照パッチ: {ref_path.name} ({len(all_ref_presets)} 件) [{name_desc}]")
+        else:
+            print(f"WARNING: 参照パッチ未検出: {ref_path}", file=sys.stderr)
+
     # ── バッチ推論モード ──────────────────────────────────────────────────
     if args.input_dir:
         wav_dir = Path(args.input_dir)
@@ -628,7 +677,15 @@ def main() -> int:
             algos   = fixed_algos    or GM2_PROG_ALGORITHMS.get(prog, [ps.FIXED_ALGORITHM])
             wf_prs  = fixed_wf_pairs or GM2_PROG_WAVEFORM_PAIRS.get(prog, [_WF_SINE])
             fr      = GM2_PROG_FIELD_RANGES.get(prog)
-            print(f"  [{prog:3d}] {name:<28} alg={algos} wf={wf_prs} ", end="", flush=True)
+            if all_ref_presets:
+                if ref_name_fragments:
+                    ref_patches = _filter_ref_patches(all_ref_presets, ref_name_fragments)
+                else:
+                    ref_patches = [p for p in all_ref_presets if p["program"] == prog]
+            else:
+                ref_patches = []
+            ref_str = f" ref={[p['name'] for p in ref_patches]}" if ref_patches else ""
+            print(f"  [{prog:3d}] {name:<28} alg={algos} wf={wf_prs}{ref_str} ", end="", flush=True)
 
             try:
                 samples, src_sr = load_wav_mono(wav_path)
@@ -655,6 +712,7 @@ def main() -> int:
                     algorithms=algos, wf_pairs=wf_prs, field_ranges=fr,
                     model=model, ckpt=ckpt,
                     w_harmonic=args.w_harmonic,
+                    ref_patches=ref_patches or None,
                 )
                 # winner から algo/wf を取り出してパッチを生成
                 tag = winner.split("/")[0]          # "alg4_w30"
@@ -718,6 +776,7 @@ def main() -> int:
         target_feats = feats_of(target, args.sr, args.n_mels, args.n_frames)
         init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
 
+        test_ref = _filter_ref_patches(all_ref_presets, ref_name_fragments) if all_ref_presets else []
         xbest, best_d, evals, winner, combo_summary = fit_one(
             target_feats, target,
             args.freq, args.test_on, args.test_release, args.sr,
@@ -726,6 +785,7 @@ def main() -> int:
             args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
             algorithms=test_algos, wf_pairs=test_wf, model=model, ckpt=ckpt,
             w_harmonic=args.w_harmonic,
+            ref_patches=test_ref or None,
         )
 
         tag = winner.split("/")[0]

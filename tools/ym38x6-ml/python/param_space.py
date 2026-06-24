@@ -157,3 +157,29 @@ def vector_to_patch_json(vec: np.ndarray, algorithm: int = FIXED_ALGORITHM,
                          field_ranges: dict[str, tuple[int, int]] | None = None) -> str:
     """正規化ベクトル(DIM,) → パッチJSON文字列。"""
     return json.dumps(vector_to_patch(vec, algorithm, waveforms, field_ranges))
+
+
+def patch_json_to_vector(
+    patch: dict,
+    algorithm: int | None = None,
+    field_ranges: dict[str, tuple[int, int]] | None = None,
+) -> np.ndarray:
+    """パッチdict → [0,1] 正規化ベクトル(DIM,)。vector_to_patch の逆変換。
+
+    algorithm が None の場合は patch["channel"]["algorithm"] を使う。
+    waveform / ksr / am_enable 等の非連続フィールドはベクトルに含まれないため無視する。
+    """
+    if algorithm is None:
+        algorithm = int(patch["channel"]["algorithm"])
+    spec = build_param_spec(algorithm, field_ranges)
+    ops = patch["operators"]
+    ch = patch["channel"]
+    vec = np.zeros(DIM, dtype=np.float64)
+    for i, (_label, target, field, vmin, vmax) in enumerate(spec):
+        if target == "ch":
+            raw = int(ch.get(field, 0))
+        else:
+            raw = int(ops[target].get(field, 0))
+        span = vmax - vmin
+        vec[i] = float(np.clip((raw - vmin) / span if span > 0 else 0.0, 0.0, 1.0))
+    return vec
