@@ -105,61 +105,63 @@ _WF_SQ25M   = (18, 0)  # mod=25%デューティ         → ハープシコー�
 _WF_CLAVI_M = (21, 0)  # mod=6.25%デューティ(超細)  → クラビ・極細パルスアタック
 
 GM2_PROG_WAVEFORM_PAIRS: dict[int, list[tuple[int, int]]] = {
-    # Piano 0-5: sine のみ（古典FM ピアノはサイン波で十分）
-    **{p: [_WF_SINE]                           for p in range(0, 6)},
-    # Harpsichord(6): 25%デューティ mod → 薄くクリックするアタック
-    6:  [_WF_SINE, _WF_SQ25M],
-    # Clavi(7): 6.25%デューティ mod → 極細パルスで打鍵感
-    7:  [_WF_SINE, _WF_CLAVI_M],
+    # Piano 0-5: square(50%)→中空なウッドピアノ感、triangle→柔らかなアコピ感
+    **{p: [_WF_SINE, _WF_SQ50, _WF_TRI]             for p in range(0, 6)},
+    # Harpsichord(6): 25%デューティ mod + square carrier → 薄いクリック感
+    6:  [_WF_SINE, _WF_SQ25M, _WF_SQ50],
+    # Clavi(7): 極細パルス mod + bright carrier で弾けるエッジ感
+    7:  [_WF_SINE, _WF_CLAVI_M, _WF_BRIGHT8],
 
-    # Chromatic Perc 8-14: sine + saw/bright で倍音豊かなベル
-    **{p: [_WF_SINE, _WF_BRIGHT8, _WF_SAW]     for p in range(8, 15)},
-    # Dulcimer(15): 33%デューティ mod → 撥弦的な薄いアタック
-    15: [_WF_SINE, _WF_PLUCKED, (17, 0)],
+    # Chromatic Perc 8-14: triangle→マリンバ/ビブラフォンの柔らかさ、bright+saw→ベル/シロフォン
+    **{p: [_WF_SINE, _WF_BRIGHT8, _WF_SAW, _WF_TRI] for p in range(8, 15)},
+    # Dulcimer(15): 撥弦 mod + triangle carrier → 温かい撥弦感
+    15: [_WF_SINE, _WF_PLUCKED, (17, 0), _WF_TRI],
 
-    # Organ 16-23: sine + saw でドローバー的な倍音
-    **{p: [_WF_SINE, _WF_SAW]                  for p in range(16, 24)},
+    # Organ 16-23: square(50%)→ドローバー矩形波（オルガンの定番）、saw→リード系
+    **{p: [_WF_SINE, _WF_SAW, _WF_SQ50]             for p in range(16, 24)},
 
-    # Guitar 24-31: W4/W5 撥弦 mod + half-saw mod で幅広くカバー
-    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_SAW_HM] for p in range(24, 32)},
+    # Nylon Guitar(24): square→中空な胴鳴り感、triangle→柔らかな弦
+    24: [_WF_SINE, _WF_PLUCKED, _WF_SQ50, _WF_TRI],
+    # Guitar 25-31: 撥弦 mod + half-saw mod で倍音豊かな弦
+    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_SAW_HM] for p in range(25, 32)},
 
-    # Bass 32-39: sine + saw carrier（エレキベースの倍音）
-    **{p: [_WF_SINE, _WF_SAW]                  for p in range(32, 40)},
+    # Bass 32-39: saw(倍音豊か) + triangle(スムーズなシンセベース)
+    **{p: [_WF_SINE, _WF_SAW, _WF_TRI]              for p in range(32, 40)},
 
-    # Strings 40-47: W3/half-saw/half-tri で明暗幅を確保
+    # Strings 40-47: half-sine/half-saw/half-tri で明暗幅を確保
     **{p: [_WF_SINE, _WF_STRINGS, _WF_SAW_HC, _WF_TRI_HC] for p in range(40, 48)},
 
     # Ensemble 48-55: Strings と同系統
     **{p: [_WF_SINE, _WF_STRINGS, _WF_SAW_HC, _WF_TRI_HC] for p in range(48, 56)},
 
-    # Brass 56-63: sine + full-saw carrier（ノコギリ波ブラス = 古典FMブラス）
-    **{p: [_WF_SINE, _WF_SAW]                  for p in range(56, 64)},
+    # Brass 56-63: saw→古典FMブラス、bright8→明るいトランペット、tri→丸みあるホルン/チューバ
+    **{p: [_WF_SINE, _WF_SAW, _WF_BRIGHT8, _WF_TRI] for p in range(56, 64)},
 
-    # Reed 64-70: W2/W6 + saw で明暗カバー
+    # Reed 64-70: W2/W6/saw で木管〜金属リード幅
     **{p: [_WF_SINE, _WF_WOODWIN, _WF_REED, _WF_SAW] for p in range(64, 71)},
-    # Clarinet(71): 50%矩形 carrier が古典FM クラリネット
-    71: [_WF_SINE, _WF_SQ50, _WF_WOODWIN],
+    # Clarinet(71): square carrier が古典FMクラリネット + tri で柔らかめ
+    71: [_WF_SINE, _WF_SQ50, _WF_WOODWIN, _WF_TRI],
 
-    # Pipe 72-79: W2 + tri carrier でフルートの柔らかさを表現
-    **{p: [_WF_SINE, _WF_WOODWIN, _WF_TRI]     for p in range(72, 80)},
+    # Pipe 72-79: triangle + half-sine(W3) でフルート〜リコーダー幅
+    **{p: [_WF_SINE, _WF_WOODWIN, _WF_TRI, _WF_STRINGS] for p in range(72, 80)},
 
-    # Synth Lead 80-87: saw + bright でシンセらしさ全開
-    **{p: [_WF_SINE, _WF_SAW, _WF_BRIGHT8, _WF_BRIGHT7] for p in range(80, 88)},
+    # Synth Lead 80-87: square(50%)→矩形波リード（必須）、saw+bright でシンセらしさ
+    **{p: [_WF_SINE, _WF_SAW, _WF_SQ50, _WF_BRIGHT8] for p in range(80, 88)},
 
-    # Synth Pad 88-95: sine/tri/saw/W3 で明暗・柔硬バリエーション
+    # Synth Pad 88-95: sine/half-sine/half-tri/half-saw で柔硬バリエーション
     **{p: [_WF_SINE, _WF_STRINGS, _WF_TRI_HC, _WF_SAW_HC] for p in range(88, 96)},
 
-    # Synth Effects 96-103: sine + saw で複雑なFX
-    **{p: [_WF_SINE, _WF_SAW]                  for p in range(96, 104)},
+    # Synth Effects 96-103: bright系 + saw でFX幅
+    **{p: [_WF_SINE, _WF_SAW, _WF_BRIGHT8, _WF_BRIGHT7] for p in range(96, 104)},
 
-    # Ethnic 104-111: 撥弦 + SQ25M(ハープ・琴系の薄いアタック)
-    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_SQ25M] for p in range(104, 112)},
+    # Ethnic 104-111: 撥弦 mod + triangle carrier でシタール・琴系の温かさ
+    **{p: [_WF_SINE, _WF_PLUCKED, _WF_PLUCK5, _WF_TRI] for p in range(104, 112)},
 
-    # Percussive 112-119: sine のみ（変調はAlgorithm側で担う）
-    **{p: [_WF_SINE]                            for p in range(112, 120)},
+    # Percussive 112-119: bright8→金属系ベル(Agogo/Bells/Woodblock)
+    **{p: [_WF_SINE, _WF_BRIGHT8]                    for p in range(112, 120)},
 
-    # Sound Effects 120-127: sine のみ
-    **{p: [_WF_SINE]                            for p in range(120, 128)},
+    # Sound Effects 120-127: sine のみ（多様すぎて汎用化困難）
+    **{p: [_WF_SINE]                                  for p in range(120, 128)},
 }
 
 
@@ -380,9 +382,12 @@ def _build_candidates(target_feats, target_samples, sr, model, ckpt,
     candidates.extend(_make_archetypes())
     candidates.append(("heuristic", _heuristic_x0(target_feats)))
     if ref_patches:
+        seen_names: set[str] = set()
         for preset in ref_patches:
-            vec = ps.patch_json_to_vector(preset["patch"])
-            candidates.append((f"ref:{preset['name']}", vec))
+            if preset["name"] not in seen_names:
+                seen_names.add(preset["name"])
+                vec = ps.patch_json_to_vector(preset["patch"])
+                candidates.append((f"ref:{preset['name']}", vec))
     return candidates
 
 
@@ -684,6 +689,16 @@ def main() -> int:
                     ref_patches = [p for p in all_ref_presets if p["program"] == prog]
             else:
                 ref_patches = []
+            # ref パッチのアルゴリズムを試行リストに自動追加
+            # （--algorithms 未指定 かつ プログラム番号照合時のみ。--ref-name 時は
+            #   複数カテゴリのref が混在しアルゴリズムが爆発するため追加しない）
+            if ref_patches and not fixed_algos and not ref_name_fragments:
+                seen = set(algos)
+                for p in ref_patches:
+                    a = int(p["patch"]["channel"]["algorithm"])
+                    if a not in seen:
+                        algos = algos + [a]
+                        seen.add(a)
             ref_str = f" ref={[p['name'] for p in ref_patches]}" if ref_patches else ""
             print(f"  [{prog:3d}] {name:<28} alg={algos} wf={wf_prs}{ref_str} ", end="", flush=True)
 
@@ -748,6 +763,16 @@ def main() -> int:
     test_algos = ([int(a) for a in args.test_algorithms.split(",")]
                   if args.test_algorithms else [ps.FIXED_ALGORITHM])
     test_wf = _parse_wf_pairs(args.test_waveforms) if args.test_waveforms else [_WF_SINE]
+    test_ref = _filter_ref_patches(all_ref_presets, ref_name_fragments) if all_ref_presets else []
+    # ref パッチのアルゴリズムを試行リストに自動追加
+    # （--test-algorithms 未指定 かつ プログラム番号照合時のみ。--ref-name 時は追加しない）
+    if test_ref and not args.test_algorithms and not ref_name_fragments:
+        seen = set(test_algos)
+        for p in test_ref:
+            a = int(p["patch"]["channel"]["algorithm"])
+            if a not in seen:
+                test_algos = test_algos + [a]
+                seen.add(a)
 
     base = Path(__file__).resolve().parent.parent / "private"
     wav_out_dir = Path(args.wav_dir) if args.wav_dir else base / "abys_wav"
@@ -776,7 +801,6 @@ def main() -> int:
         target_feats = feats_of(target, args.sr, args.n_mels, args.n_frames)
         init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
 
-        test_ref = _filter_ref_patches(all_ref_presets, ref_name_fragments) if all_ref_presets else []
         xbest, best_d, evals, winner, combo_summary = fit_one(
             target_feats, target,
             args.freq, args.test_on, args.test_release, args.sr,
