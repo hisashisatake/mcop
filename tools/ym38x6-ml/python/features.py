@@ -198,3 +198,156 @@ def is_silent(samples, thresh: float = 1e-3) -> bool:
         return True
     rms = float(np.sqrt(np.mean(x ** 2)))
     return rms < thresh
+
+
+def perceptual_descriptors(
+    samples,
+    freq: float,
+    sr: float = 44100.0,
+    n_fft_harm: int = 4096,
+    n_harmonics: int = 16,
+    width_bins: int = 3,
+    n_frames: int = 64,
+    hop: int = 512,
+) -> dict[str, float]:
+    """知覚記述子 10 軸を計算して dict で返す。
+
+    A-by-S の損失項および GM2 音色空間の可視化に共用する。
+    freq: 基音周波数 Hz（倍音解析に使用）
+
+    Keys:
+        brightness       : 平均スペクトル重心（0=暗, 1=明）
+        warmth           : 低次倍音(1-3)エネルギー比（0=冷, 1=暖）
+        metallic         : 非整数倍音エネルギー比（インハーモニシティ）
+        roughness        : 低域帯の倍音間エネルギー比（DT1 ノイズ・不協和）
+        distortion       : 高次倍音(8+)エネルギー比（歪み・倍音密度）
+        odd_even         : 奇数倍音エネルギー比（1=矩形波感）
+        noise            : スペクトル平坦度（0=調性音, 1=白色雑音）
+        attack           : アタック速度（env ピーク位置; 0=遅い, 1=瞬時）
+        decay            : 減衰速度（ピーク後の絶対傾き; 0=持続, 1=急減衰）
+        brightness_decay : 明るさの時間変化（前半重心 - 後半重心）
+    """
+    x = np.asarray(samples, dtype=np.float64)
+
+    # ── 高分解能 FFT（倍音構造解析）───────────────────────────────────────
+    x_h = x if len(x) >= n_fft_harm else np.pad(x, (0, n_fft_harm - len(x)))
+    win_h = np.hanning(n_fft_harm)
+    hop_h = n_fft_harm // 2
+    n_fr_h = max(1, 1 + (len(x_h) - n_fft_harm) // hop_h)
+    mags_h = np.stack([
+        np.abs(np.fft.rfft(x_h[i * hop_h: i * hop_h + n_fft_harm] * win_h))
+        for i in range(n_fr_h)
+    ])
+    mag = mags_h.mean(axis=0)   # [n_bins]
+    pwr = mag ** 2               # [n_bins]
+    n_bins = len(mag)
+    total_energy = float(pwr.sum()) + 1e-12
+
+    # ── 倍音ビン収集 ──────────────────────────────────────────────────────
+    amps = np.zeros(n_harmonics, dtype=np.float64)
+    harm_energy = 0.0
+    for k in range(1, n_harmonics + 1):
+        hz_k = k * freq
+        if hz_k >= sr / 2.0:
+            break
+        bin_c = int(round(hz_k * n_fft_harm / sr))
+        lo = max(0, bin_c - width_bins)
+        hi = min(n_bins, bin_c + width_bins + 1)
+        if lo < hi:
+            amps[k - 1] = float(mag[lo:hi].max())
+            harm_energy += float(pwr[lo:hi].sum())
+
+    amp2 = amps ** 2
+    total_amp2 = float(amp2.sum()) + 1e-12
+
+    # ── 1. 暖かさ（1-3 倍音エネルギー比）────────────────────────────────
+    warmth = float(amp2[:3].sum() / total_amp2)
+
+    # ── 2. 金属度（非整数倍音エネルギー比）──────────────────────────────
+    metallic = float(1.0 - harm_energy / total_energy)
+
+    # ── 3. ラフネス（低域帯の非倍音エネルギー比）─────────────────────────
+    # 1-7 倍音の範囲内で、倍音ピーク以外に残るエネルギー。
+    # FM の DT1 サイドバンドや PCM の不協和成分を捉える。
+    low_max_bin = min(int(7.5 * freq * n_fft_harm / sr) + 1, n_bins)
+    harm_mask = np.zeros(n_bins, dtype=bool)
+    for k in range(1, 9):
+        hz_k = k * freq
+        if hz_k >= sr / 2.0:
+            break
+        bin_c = int(round(hz_k * n_fft_harm / sr))
+        lo = max(0, bin_c - width_bins * 2)
+        hi = min(n_bins, bin_c + width_bins * 2 + 1)
+        harm_mask[lo:hi] = True
+    low_total = float(pwr[:low_max_bin].sum()) + 1e-12
+    between_energy = float(pwr[:low_max_bin][~harm_mask[:low_max_bin]].sum())
+    roughness = float(between_energy / low_total)
+
+    # ── 4. 歪み / 倍音の豊かさ（8 倍音以降エネルギー比）────────────────
+    distortion = float(amp2[7:].sum() / total_amp2)
+
+    # ── 5. 奇偶比（奇数倍音エネルギー比）────────────────────────────────
+    odd_e = float(amp2[0::2].sum())   # index 0,2,4,… = 1,3,5,… 倍音
+    even_e = float(amp2[1::2].sum())  # index 1,3,5,… = 2,4,6,… 倍音
+    odd_even = float(odd_e / (odd_e + even_e + 1e-12))
+
+    # ── 6. ノイズ性（スペクトル平坦度: 幾何平均 / 算術平均）────────────
+    p_pos = pwr[pwr > 0]
+    if len(p_pos) > 1:
+        log_geo = float(np.mean(np.log(p_pos)))
+        arith = float(p_pos.mean())
+        noise = float(np.clip(np.exp(log_geo) / (arith + 1e-30), 0.0, 1.0))
+    else:
+        noise = 0.0
+
+    # ── 7. 時間軸（エンベロープ + 重心）──────────────────────────────────
+    n_fft_env = 1024
+    x_e = x if len(x) >= n_fft_env else np.pad(x, (0, n_fft_env - len(x)))
+    win_e = np.hanning(n_fft_env)
+    n_hop_e = max(1, 1 + (len(x_e) - n_fft_env) // hop)
+    frames_e = np.stack([
+        x_e[i * hop: i * hop + n_fft_env] * win_e
+        for i in range(n_hop_e)
+    ])
+    pwr_e = np.abs(np.fft.rfft(frames_e, axis=1)) ** 2  # [n_hop, n_bins_env]
+
+    e_log = np.log1p(pwr_e.sum(axis=1))
+    env_pooled = _pool_time(e_log[:, None], n_frames)[:, 0]
+    env = env_pooled / (env_pooled.max() + 1e-9)
+
+    f_env = np.fft.rfftfreq(n_fft_env, d=1.0 / sr)
+    p_sum_e = pwr_e.sum(axis=1) + 1e-12
+    cen_hz = (pwr_e @ f_env) / p_sum_e
+    max_mel_v = float(_hz_to_mel(sr / 2.0))
+    cen_norm = _hz_to_mel(cen_hz) / max_mel_v
+    centroid = _pool_time(cen_norm[:, None], n_frames)[:, 0]
+
+    brightness = float(centroid.mean())
+
+    peak_i = int(np.argmax(env))
+    attack = float(1.0 - peak_i / max(n_frames - 1, 1))
+
+    post = env[peak_i:]
+    if len(post) > 2:
+        t_post = np.arange(len(post), dtype=np.float64) / max(n_frames - 1, 1)
+        slope = float(np.polyfit(t_post, post, 1)[0])
+        # tanh で非線形圧縮（|slope|=1→0.76, |slope|=0.5→0.46, |slope|=0→0）
+        decay = float(np.tanh(max(-slope, 0.0)))
+    else:
+        decay = 0.0
+
+    half = n_frames // 2
+    brightness_decay = float(centroid[:half].mean() - centroid[half:].mean())
+
+    return {
+        "brightness":       brightness,
+        "warmth":           warmth,
+        "metallic":         metallic,
+        "roughness":        roughness,
+        "distortion":       distortion,
+        "odd_even":         odd_even,
+        "noise":            noise,
+        "attack":           attack,
+        "decay":            decay,
+        "brightness_decay": brightness_decay,
+    }
