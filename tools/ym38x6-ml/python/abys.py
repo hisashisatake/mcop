@@ -507,12 +507,12 @@ def fit_one(
     best = min(all_results, key=lambda r: r[5])
     b_algo, b_mod, b_car, b_cand, xbest, fbest, _ = best
     total_evals = sum(r[6] for r in all_results)
-    winner = f"alg{b_algo}_w{b_mod}{b_car}/{b_cand}"
+    winner = f"alg{b_algo}_w{b_mod:02d}{b_car:02d}/{b_cand}"
 
     combo_summary: list[tuple[str, float]] = []
     for algo in algorithms:
         for mod_wf, car_wf in wf_pairs:
-            key = f"alg{algo}_w{mod_wf}{car_wf}"
+            key = f"alg{algo}_w{mod_wf:02d}{car_wf:02d}"
             best_for = min(
                 (r[5] for r in all_results if r[0] == algo and r[1] == mod_wf and r[2] == car_wf),
                 default=np.inf)
@@ -522,6 +522,24 @@ def fit_one(
 
 
 # ── 参照パッチユーティリティ ──────────────────────────────────────────────
+
+def _parse_target_desc(s: str) -> dict[str, float]:
+    """'brightness=0.5,distortion=0.4' → dict。不明なキーは無視する。"""
+    from features import DESCRIPTOR_WEIGHTS
+    valid = set(DESCRIPTOR_WEIGHTS.keys())
+    result: dict[str, float] = {}
+    for part in s.split(","):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        if k in valid:
+            result[k] = float(v.strip())
+        else:
+            print(f"WARNING: 不明な記述子キー '{k}' を無視します", file=sys.stderr)
+    return result
+
 
 def load_ref_patches(path: Path) -> list[dict]:
     """ref.38x6 ファイルから presets リストを返す。各要素: {program, name, patch}"""
@@ -596,6 +614,10 @@ def main() -> int:
                     help="高調波損失の重み（既定0=無効）。"
                          "FM合成ではキャリアMULが音高を決めるため、"
                          "ターゲットの倍音強度を誤ってMUL値に写像し音痴を引き起こす恐れあり")
+    ap.add_argument("--target-desc", type=str, default=None,
+                    help="WAV不要モード: 記述子を直接ターゲット指定 "
+                         "(例: 'brightness=0.5,distortion=0.5,odd_even=0.85,warmth=0.3'). "
+                         "--algorithms と --waveforms も必須。")
     ap.add_argument("--loss-mode", choices=["spectral", "descriptor"], default="descriptor",
                     help="損失モード: descriptor=知覚記述子一致(既定), spectral=mel/env/centroid再構成(従来)")
     ap.add_argument("--desc-n-fft", type=int, default=2048,
@@ -675,6 +697,59 @@ def main() -> int:
             print(f"参照パッチ: {ref_path.name} ({len(all_ref_presets)} 件) [{name_desc}]")
         else:
             print(f"WARNING: 参照パッチ未検出: {ref_path}", file=sys.stderr)
+
+    # ── 記述子ターゲットモード（--target-desc）────────────────────────────
+    if args.target_desc:
+        target_desc = _parse_target_desc(args.target_desc)
+        if not target_desc:
+            print("ERROR: --target-desc に有効なキーがありません", file=sys.stderr)
+            return 1
+        algos = ([int(a) for a in args.algorithms.split(",")]
+                 if args.algorithms else [ps.FIXED_ALGORITHM])
+        wf_prs = _parse_wf_pairs(args.waveforms) if args.waveforms else [_WF_SINE]
+        freq = args.freq if args.freq else 440.0 * 2 ** ((args.note - 69) / 12.0)
+        out_path = Path(args.out) if args.out else Path("private/target_desc_out.38x6")
+
+        print(f"記述子ターゲットモード")
+        print(f"  ターゲット: {target_desc}")
+        print(f"  note={args.note}({freq:.1f}Hz)  alg={algos}  wf={wf_prs}")
+        print(f"  maxfevals={args.maxfevals}  restarts={args.restarts}")
+
+        dummy = np.asarray(
+            render(np.full(ps.DIM, 0.5), freq, args.on, args.release, args.sr),
+            dtype=np.float32)
+        target_feats = feats_of(dummy, args.sr, args.n_mels, args.n_frames)
+
+        t0 = time.time()
+        xbest, best_d, evals, winner, combo_summary = fit_one(
+            target_feats, dummy,
+            freq, args.on, args.release, args.sr,
+            args.n_mels, args.n_frames,
+            args.w_env, args.w_centroid,
+            args.sigma0, args.maxfevals, args.restarts, args.cma_seed,
+            algorithms=algos, wf_pairs=wf_prs,
+            model=model, ckpt=ckpt,
+            loss_mode="descriptor",
+            target_desc=target_desc,
+            desc_n_fft=args.desc_n_fft,
+        )
+
+        tag = winner.split("/")[0]
+        best_algo = int(tag.split("_")[0].replace("alg", ""))
+        wf_tag = tag.split("_")[1]
+        b_mod, b_car = int(wf_tag[1:3]), int(wf_tag[3:])
+        best_wf = ps.expand_waveforms(b_mod, b_car, best_algo)
+        patch = ps.vector_to_patch(xbest, best_algo, best_wf, None)
+        entries = [{"program": 0, "name": "desc_target", "patch": patch}]
+
+        combo_str = "  ".join(f"{k}={v:.3f}" for k, v in combo_summary)
+        print(f"loss={best_d:.4f} winner={winner} evals={evals} {time.time()-t0:.1f}s")
+        print(f"  {combo_str}")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(_make_bank_json(entries, bank=0), encoding="utf-8")
+        print(f"\n→ {out_path}")
+        return 0
 
     # ── バッチ推論モード ──────────────────────────────────────────────────
     if args.input_dir:
@@ -777,7 +852,7 @@ def main() -> int:
                 tag = winner.split("/")[0]          # "alg4_w30"
                 best_algo = int(tag.split("_")[0].replace("alg", ""))
                 wf_tag = tag.split("_")[1]          # "w30"
-                b_mod, b_car = int(wf_tag[1]), int(wf_tag[2])
+                b_mod, b_car = int(wf_tag[1:3]), int(wf_tag[3:])
                 best_wf = ps.expand_waveforms(b_mod, b_car, best_algo)
                 patch = ps.vector_to_patch(xbest, best_algo, best_wf, fr)
                 entries.append({"program": prog, "name": name, "patch": patch})
