@@ -200,6 +200,32 @@ def is_silent(samples, thresh: float = 1e-3) -> bool:
     return rms < thresh
 
 
+DESCRIPTOR_WEIGHTS: dict[str, float] = {
+    "brightness":       3.0,
+    "warmth":           2.0,
+    "distortion":       4.0,  # 倍音の豊かさ（ブラス・リード選別に重要）
+    "attack":           0.5,  # 録音依存のため低減（field_rangesで制約）
+    "decay":            0.0,  # 録音の減衰を拾うため除外（同上）
+    "metallic":         1.5,
+    "odd_even":         1.5,
+    "brightness_decay": 1.0,
+    "roughness":        0.5,
+    "noise":            0.3,
+}
+
+
+def descriptor_distance(
+    target: dict[str, float],
+    pred: dict[str, float],
+    weights: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
+    """知覚記述子ベクトル間の重み付きL1距離。(total, per_key_terms) を返す。"""
+    if weights is None:
+        weights = DESCRIPTOR_WEIGHTS
+    terms = {k: w * abs(target.get(k, 0.0) - pred.get(k, 0.0)) for k, w in weights.items()}
+    return float(sum(terms.values())), terms
+
+
 def perceptual_descriptors(
     samples,
     freq: float,

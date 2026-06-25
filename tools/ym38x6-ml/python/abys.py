@@ -368,10 +368,33 @@ def _heuristic_x0(target_feats: tuple) -> np.ndarray:
     return x
 
 
+# ── 初期化戦略 D: 記述子ヒューリスティック ───────────────────────────────
+
+def _heuristic_x0_desc(target_desc: dict) -> np.ndarray:
+    """perceptual_descriptors から x0 を生成する（descriptor 損失モード用）。"""
+    lab = ps.LABELS
+    x = np.full(ps.DIM, 0.5)
+    brightness = target_desc.get("brightness", 0.3)
+    mul_val = float(np.clip(0.1 + brightness * 2.0, 0.0, 1.0))
+    for op in range(4):
+        x[lab.index(f"op{op}.mul")] = mul_val
+    metallic = target_desc.get("metallic", 0.0)
+    x[lab.index("ch.feedback")] = float(np.clip(metallic * 0.8, 0.0, 1.0))
+    attack = target_desc.get("attack", 0.9)
+    for op in range(4):
+        x[lab.index(f"op{op}.ar")] = float(np.clip(attack * 0.8 + 0.1, 0.0, 1.0))
+    decay = target_desc.get("decay", 0.5)
+    for op in range(4):
+        x[lab.index(f"op{op}.d1r")] = float(np.clip(decay * 0.7, 0.0, 1.0))
+    x[lab.index("ch.filter_cutoff")] = 1.0
+    return x
+
+
 # ── 候補リスト構築 ────────────────────────────────────────────────────────
 
 def _build_candidates(target_feats, target_samples, sr, model, ckpt,
-                      ref_patches: list[dict] | None = None):
+                      ref_patches: list[dict] | None = None,
+                      target_desc: dict | None = None):
     candidates: list[tuple[str, np.ndarray]] = []
     if model is not None:
         try:
@@ -380,7 +403,9 @@ def _build_candidates(target_feats, target_samples, sr, model, ckpt,
         except Exception as e:
             print(f"    [ML warm start スキップ: {e}]")
     candidates.extend(_make_archetypes())
-    candidates.append(("heuristic", _heuristic_x0(target_feats)))
+    heur = (_heuristic_x0_desc(target_desc) if target_desc is not None
+            else _heuristic_x0(target_feats))
+    candidates.append(("heuristic", heur))
     if ref_patches:
         seen_names: set[str] = set()
         for preset in ref_patches:
@@ -419,6 +444,9 @@ def fit_one(
     ckpt=None,
     w_harmonic: float = 0.0,
     ref_patches: list[dict] | None = None,
+    loss_mode: str = "descriptor",
+    target_desc: dict | None = None,
+    desc_n_fft: int = 2048,
 ) -> tuple[np.ndarray, float, int, str, list[tuple[str, float]]]:
     """マルチアルゴリズム × マルチ波形 × マルチスタートで A-by-S を実行。
 
@@ -441,7 +469,8 @@ def fit_one(
         target_harms = ft.harmonic_features(
             np.asarray(target_samples, dtype=np.float64), freq, sr)
 
-    candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt, ref_patches)
+    candidates = _build_candidates(target_feats, target_samples, sr, model, ckpt, ref_patches,
+                                   target_desc=target_desc)
     n_combos = len(algorithms) * len(wf_pairs)
     n_cands = len(candidates)
     budget_per_combo = max(100 * n_cands, maxfevals // n_combos)
@@ -458,6 +487,11 @@ def fit_one(
                 s = render(vec, freq, on, release, sr, _algo, _wf, _fr)
                 if ft.is_silent(s):
                     return _SILENT_PENALTY
+                if loss_mode == "descriptor" and target_desc is not None:
+                    pred_desc = ft.perceptual_descriptors(
+                        np.asarray(s, dtype=np.float64), freq, sr, n_fft_harm=desc_n_fft)
+                    total, _ = ft.descriptor_distance(target_desc, pred_desc)
+                    return total
                 total, _ = ft.abys_distance(
                     target_feats, feats_of(s, sr, n_mels, n_frames), w_env, w_centroid)
                 if target_harms is not None:
@@ -562,6 +596,10 @@ def main() -> int:
                     help="高調波損失の重み（既定0=無効）。"
                          "FM合成ではキャリアMULが音高を決めるため、"
                          "ターゲットの倍音強度を誤ってMUL値に写像し音痴を引き起こす恐れあり")
+    ap.add_argument("--loss-mode", choices=["spectral", "descriptor"], default="descriptor",
+                    help="損失モード: descriptor=知覚記述子一致(既定), spectral=mel/env/centroid再構成(従来)")
+    ap.add_argument("--desc-n-fft", type=int, default=2048,
+                    help="descriptor損失の高調波FFTサイズ（速度と精度のトレードオフ、既定2048）")
     ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--no-model", action="store_true")
     ap.add_argument("--ref-patch", type=str, default=None,
@@ -717,6 +755,9 @@ def main() -> int:
                     continue
 
                 target_feats = feats_of(samples, args.sr, args.n_mels, args.n_frames)
+                target_desc = (ft.perceptual_descriptors(
+                                   np.asarray(samples, dtype=np.float64), freq, args.sr)
+                               if args.loss_mode == "descriptor" else None)
                 t1 = time.time()
                 xbest, best_d, evals, winner, combo_summary = fit_one(
                     target_feats, samples,
@@ -728,6 +769,9 @@ def main() -> int:
                     model=model, ckpt=ckpt,
                     w_harmonic=args.w_harmonic,
                     ref_patches=ref_patches or None,
+                    loss_mode=args.loss_mode,
+                    target_desc=target_desc,
+                    desc_n_fft=args.desc_n_fft,
                 )
                 # winner から algo/wf を取り出してパッチを生成
                 tag = winner.split("/")[0]          # "alg4_w30"
@@ -799,7 +843,16 @@ def main() -> int:
         if ft.is_silent(target):
             continue
         target_feats = feats_of(target, args.sr, args.n_mels, args.n_frames)
-        init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
+        target_desc = (ft.perceptual_descriptors(
+                           np.asarray(target, dtype=np.float64), args.freq, args.sr)
+                       if args.loss_mode == "descriptor" else None)
+        if args.loss_mode == "descriptor" and target_desc is not None:
+            base_desc_tmp = ft.perceptual_descriptors(
+                np.asarray(render(base_vec, args.freq, args.test_on, args.test_release, args.sr),
+                           dtype=np.float64), args.freq, args.sr)
+            init_d, _ = ft.descriptor_distance(target_desc, base_desc_tmp)
+        else:
+            init_d, _ = ft.abys_distance(target_feats, base_feats, args.w_env, args.w_centroid)
 
         xbest, best_d, evals, winner, combo_summary = fit_one(
             target_feats, target,
@@ -810,6 +863,9 @@ def main() -> int:
             algorithms=test_algos, wf_pairs=test_wf, model=model, ckpt=ckpt,
             w_harmonic=args.w_harmonic,
             ref_patches=test_ref or None,
+            loss_mode=args.loss_mode,
+            target_desc=target_desc,
+            desc_n_fft=args.desc_n_fft,
         )
 
         tag = winner.split("/")[0]
@@ -819,10 +875,16 @@ def main() -> int:
         best_wf = ps.expand_waveforms(b_mod, b_car, best_algo)
         recon = render(xbest, args.freq, args.test_on, args.test_release, args.sr,
                        algorithm=best_algo, waveforms=best_wf)
-        _, terms = ft.abys_distance(
-            target_feats,
-            feats_of(recon, args.sr, args.n_mels, args.n_frames),
-            args.w_env, args.w_centroid)
+        if args.loss_mode == "descriptor" and target_desc is not None:
+            recon_desc = ft.perceptual_descriptors(
+                np.asarray(recon, dtype=np.float64), args.freq, args.sr)
+            _, desc_terms = ft.descriptor_distance(target_desc, recon_desc)
+            terms = desc_terms  # type: ignore[assignment]
+        else:
+            _, terms = ft.abys_distance(
+                target_feats,
+                feats_of(recon, args.sr, args.n_mels, args.n_frames),
+                args.w_env, args.w_centroid)
 
         d_harm = 0.0
         if args.w_harmonic > 0:
@@ -842,12 +904,16 @@ def main() -> int:
             write_wav(wav_out_dir / f"{done:02d}_target.wav", target, args.sr)
             write_wav(wav_out_dir / f"{done:02d}_recon.wav", recon, args.sr)
 
-        d_mel, d_env, d_cen = terms
         impr = (1 - best_d / init_d) * 100
         print(f"  target {done}: init={init_d:.4f} -> best={best_d:.4f} "
               f"(改善率={impr:.1f}%, evals={evals}, winner={winner})")
-        harm_str = f" harm={d_harm:.4f}" if args.w_harmonic > 0 else ""
-        print(f"    [mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}{harm_str}]")
+        if args.loss_mode == "descriptor" and isinstance(terms, dict):
+            term_str = "  ".join(f"{k[:2]}={v:.3f}" for k, v in terms.items())
+            print(f"    [{term_str}]")
+        else:
+            d_mel, d_env, d_cen = terms  # type: ignore[misc]
+            harm_str = f" harm={d_harm:.4f}" if args.w_harmonic > 0 else ""
+            print(f"    [mel={d_mel:.4f} env={d_env:.4f} cen={d_cen:.4f}{harm_str}]")
         combo_str = "  ".join(f"{k}={v:.4f}" for k, v in combo_summary)
         print(f"    {combo_str}")
         done += 1
