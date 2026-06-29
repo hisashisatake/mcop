@@ -60,6 +60,24 @@ ym38x6/
 
 ---
 
+## 音色試聴スキル（tools/ym38x6-ml）
+
+`.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
+`~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
+
+```powershell
+# 初回セットアップ（スラッシュコマンド化）
+Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
+```
+
+| スキル | 使い方 | 概要 |
+|---|---|---|
+| `/audition` | `/audition 4` または `/audition private/foo.38x6` | 単音 C2-C5 + ストラムアルペジオを生成 |
+| `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
+| `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
+
+---
+
 ## コマンド
 
 ### ビルド・チェック
