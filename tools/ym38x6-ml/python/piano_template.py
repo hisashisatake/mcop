@@ -68,11 +68,39 @@ def make_piano_patch(
     dt1_spread: int = 6,     # DT1 デチューン幅（コーラス感）
     mul_mod1: int = 1,       # OP0 MUL（ペア1モジュレーター）
     mul_mod2: int = 3,       # OP2 MUL（ペア2モジュレーター）
-    mod_wf: int = 0,         # モジュレーター波形（0=sine / 1=sin² / 2=half-sine / 8=saw）
+    mod_wf: int = 0,         # モジュレーター波形（0=sine / 1=sin² / 8=saw / 16=sq50）
     carrier_wf: int = 0,     # キャリア波形（0=sine / 24=tri / 8=saw）
+    algorithm: int = 4,      # 4=2ペア独立（ピアノ系）/ 0=直列チェーン（ギター系）
 ) -> dict:
-    """高レベルノブからピアノパッチ dict を生成する。骨格は固定。"""
+    """高レベルノブからピアノパッチ dict を生成する。"""
 
+    ch = dict(
+        algorithm=algorithm, feedback=feedback,
+        tone_lfo_freq=0, tone_lfo_pmd=0, tone_lfo_amd=0, tone_lfo_delay=0,
+        pms=0, ams=0,
+        filter_cutoff=255, filter_resonance=0, filter_type=0,
+        filter_self_oscillation=False,
+        filter_eg_attack=0, filter_eg_decay=0, filter_eg_sustain=0,
+        filter_eg_release=0, filter_eg_depth=0,
+    )
+
+    if algorithm == 0:
+        # 直列チェーン OP0→OP1→OP2→OP3（ギター系 ref 準拠 TL）
+        # body_d1r/d2r/d1l/rr で全 OP の減衰を共通制御
+        def chain_op(tl: int, mul: int, wf: int) -> dict:
+            return dict(tl=tl, ar=255,
+                        d1r=body_d1r, d2r=body_d2r, d1l=body_d1l, rr=rr,
+                        mul=mul, dt1=128, ksr=car_ksr, am_enable=False,
+                        velocity_sensitivity=0, waveform=wf, op_fine_tune=128)
+        ops = [
+            chain_op(222, 1, mod_wf),     # OP0: entry（feedback対象）
+            chain_op(202, 0, mod_wf),     # OP1
+            chain_op(198, 2, mod_wf),     # OP2
+            chain_op(210, 0, carrier_wf), # OP3: carrier（出力）
+        ]
+        return {"operators": ops, "channel": ch}
+
+    # algorithm 4: 2ペア独立（既存コード）
     def mod_op(mul: int, tl: int, dt1: int) -> dict:
         return dict(tl=tl, ar=255,
                     d1r=mod_d1r, d2r=mod_decay, d1l=mod_d1l, rr=rr,
@@ -85,17 +113,15 @@ def make_piano_patch(
                     mul=1, dt1=dt1, ksr=car_ksr, am_enable=False,
                     velocity_sensitivity=0, waveform=carrier_wf, op_fine_tune=128)
 
-    # ref (mucom_acoustic_piano) に倣ったDT1配置:
-    #   OP0 +spread, OP1 center, OP2 -spread//2, OP3 +spread//2
     dt = dt1_spread
     ops = [
-        mod_op(mul_mod1, brightness,     128 + dt),       # OP0: mod1
-        car_op(234,                      128),             # OP1: car1
-        mod_op(mul_mod2, brightness + 8, 128 - dt // 2),  # OP2: mod2
-        car_op(254,                      128 + dt // 2),  # OP3: car2
+        mod_op(mul_mod1, brightness,     128 + dt),
+        car_op(234,                      128),
+        mod_op(mul_mod2, brightness + 8, 128 - dt // 2),
+        car_op(254,                      128 + dt // 2),
     ]
     ch = dict(
-        algorithm=4, feedback=feedback,
+        algorithm=algorithm, feedback=feedback,
         tone_lfo_freq=0, tone_lfo_pmd=0, tone_lfo_amd=0, tone_lfo_delay=0,
         pms=0, ams=0,
         filter_cutoff=255, filter_resonance=0, filter_type=0,
@@ -141,15 +167,13 @@ PIANO_FAMILY: dict[int, tuple[str, dict]] = {
         feedback=180, rr=144, mod_ksr=0,  car_ksr=85, dt1_spread=8,
         mul_mod1=7,  mul_mod2=1,  mod_wf=19)),
     6: ("Harpsichord", dict(
-        brightness=178, mod_d1r=0,   mod_decay=195, mod_d1l=220,
-        body_d1r=190, body_d2r=185, body_d1l=240,
-        feedback=180, rr=160, mod_ksr=255, car_ksr=255, dt1_spread=4,
-        mul_mod1=1,  mul_mod2=2,  carrier_wf=8)),
+        algorithm=0,
+        body_d1r=70,  body_d2r=40,  body_d1l=150,
+        feedback=40,  rr=130, car_ksr=100, mod_wf=24)),
     7: ("Clavinet", dict(
-        brightness=170, mod_d1r=0,   mod_decay=210, mod_d1l=230,
-        body_d1r=210, body_d2r=200, body_d1l=250,
-        feedback=200, rr=180, mod_ksr=255, car_ksr=255, dt1_spread=3,
-        mul_mod1=1,  mul_mod2=2,  carrier_wf=16)),
+        algorithm=0,
+        body_d1r=70,  body_d2r=40,  body_d1l=150,
+        feedback=40,  rr=230, car_ksr=100, mod_wf=24)),
 }
 
 
@@ -200,11 +224,17 @@ def main() -> int:
         wav_path = out_dir / f"{prog:03d}_{name}.wav"
         _write_wav(wav_path, x)
         presets.append({"program": prog, "name": name, "patch": patch})
-        print(f"  [{prog:3d}] {name:<22}  "
-              f"fb={knobs['feedback']:3d}  br={knobs['brightness']:3d}  "
-              f"mod_d1r={knobs.get('mod_d1r',0):3d}  mod_decay={knobs['mod_decay']:3d}  "
-              f"body({knobs['body_d1r']},{knobs['body_d2r']})  "
-              f"mul={knobs['mul_mod1']}/{knobs['mul_mod2']}")
+        alg = knobs.get('algorithm', 4)
+        if alg == 0:
+            print(f"  [{prog:3d}] {name:<22}  alg=0  "
+                  f"fb={knobs['feedback']:3d}  "
+                  f"body({knobs['body_d1r']},{knobs['body_d2r']})  rr={knobs['rr']}")
+        else:
+            print(f"  [{prog:3d}] {name:<22}  "
+                  f"fb={knobs['feedback']:3d}  br={knobs['brightness']:3d}  "
+                  f"mod_d1r={knobs.get('mod_d1r',0):3d}  mod_decay={knobs.get('mod_decay',0):3d}  "
+                  f"body({knobs['body_d1r']},{knobs['body_d2r']})  "
+                  f"mul={knobs['mul_mod1']}/{knobs['mul_mod2']}")
 
     print(f"\nWAV 出力: {out_dir}")
 
