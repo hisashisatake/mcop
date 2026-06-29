@@ -112,10 +112,45 @@ def render_baroque(patch_json: str) -> np.ndarray:
     return buf
 
 
+# ── タンゴ風フレーズ（Aマイナー・ハバネラリズム） ────────────────────────────
+def render_tango(patch_json: str) -> np.ndarray:
+    BPM = 130.0; S16 = 60.0 / BPM / 4
+
+    # (s16オフセット, midi, 音符長(s16単位), スタッカートか)
+    # A3=57 B3=59 C4=60 D4=62 E3=52 E4=64 F4=65 G3=55
+    PHRASE = [
+        # 小節1: ハバネラ（付点四分=6 + 八分=2 + 四分=4 + 四分=4）
+        ( 0, 57, 6, False), ( 6, 64, 2, True),
+        ( 8, 60, 4, True),  (12, 64, 4, False),
+        # 小節2: 変奏
+        (16, 57, 6, False), (22, 55, 2, True),
+        (24, 52, 7, False),
+        # 小節3: 上昇ライン
+        (32, 57, 2, True),  (34, 59, 2, True),
+        (36, 60, 2, True),  (38, 62, 2, True),
+        (40, 64, 4, True),  (44, 65, 4, False),
+        # 小節4: カデンツ（解決）
+        (48, 64, 6, False), (54, 62, 2, True),
+        (56, 60, 4, True),  (60, 57, 8, False),
+    ]
+
+    REL = 0.01
+    total = int((60 + 24) * S16 * SR)
+    buf = np.zeros(total, dtype=np.float32)
+    for s16, midi, dur, stac in PHRASE:
+        on = max(dur * S16 * (0.25 if stac else 0.85), 0.02)
+        offset = int(s16 * S16 * SR)
+        freq = 440.0 * 2 ** ((midi - 69) / 12.0)
+        x = np.asarray(ym38x6_ml.render_patch(patch_json, freq, on, REL, 100, SR), dtype=np.float32)
+        end = min(offset + len(x), len(buf)); buf[offset:end] += x[:end - offset]
+    return buf
+
+
 PHRASE_TYPES = {
-    "strum":   ("ストラム C2-C5",          render_strum),
-    "funk":    ("ファンク Eマイナー 112BPM", render_funk),
-    "baroque": ("バロック Aマイナー 72BPM",  render_baroque),
+    "strum":   ("ストラム C2-C5",              render_strum),
+    "funk":    ("ファンク Eマイナー 112BPM",    render_funk),
+    "baroque": ("バロック Aマイナー 72BPM",     render_baroque),
+    "tango":   ("タンゴ Aマイナー 130BPM",      render_tango),
 }
 
 
@@ -138,7 +173,7 @@ def main() -> int:
     ap.add_argument("--prog", type=int, default=None)
     ap.add_argument("--bank", type=str, default=None)
     ap.add_argument("--type", type=str, default=None,
-                    help="フレーズ種別（strum / funk / baroque）。省略時は全種")
+                    help="フレーズ種別（strum / funk / baroque / tango）。省略時は全種")
     ap.add_argument("--out-dir", type=str, default=None)
     args = ap.parse_args()
 
@@ -162,19 +197,40 @@ def main() -> int:
                              f"{p['program']:03d}_{p['name']}", types, out_base)
         return 0
 
+    # 全テンプレートを統合した prog → (name, patch_fn) レジストリを構築
+    registry: dict[int, tuple[str, object]] = {}
     try:
-        from piano_template import make_piano_patch, PIANO_FAMILY
+        from piano_template import PIANO_FAMILY, make_piano_patch
+        for p, (n, k) in PIANO_FAMILY.items():
+            registry[p] = (n, lambda k=k: make_piano_patch(**k))
     except ImportError:
-        print("ERROR: piano_template.py が見つかりません", file=sys.stderr)
+        pass
+    try:
+        from brass_template import BRASS_FAMILY, make_brass_patch
+        for p, (n, k) in BRASS_FAMILY.items():
+            registry[p] = (n, lambda k=k: make_brass_patch(**k))
+    except ImportError:
+        pass
+    try:
+        from organ_template import ORGAN_FAMILY, make_organ_patch, make_reed_patch
+        for p, (n, k) in ORGAN_FAMILY.items():
+            kc = dict(k); maker = kc.pop("maker", "organ")
+            fn = make_reed_patch if maker == "reed" else make_organ_patch
+            registry[p] = (n, lambda kc=kc, fn=fn: fn(**kc))
+    except ImportError:
+        pass
+
+    if not registry:
+        print("ERROR: テンプレートが見つかりません", file=sys.stderr)
         return 1
 
-    progs = [args.prog] if args.prog is not None else list(PIANO_FAMILY.keys())
-    print(f"piano_template.py  ({len(progs)} 音色)  types={types}")
+    progs = [args.prog] if args.prog is not None else sorted(registry.keys())
+    print(f"テンプレート統合  ({len(progs)} 音色)  types={types}")
     for prog in progs:
-        if prog not in PIANO_FAMILY:
+        if prog not in registry:
             print(f"  WARNING: prog {prog} 未定義"); continue
-        name, knobs = PIANO_FAMILY[prog]
-        audition_phrases(json.dumps(make_piano_patch(**knobs)),
+        name, patch_fn = registry[prog]
+        audition_phrases(json.dumps(patch_fn()),
                          f"{prog:03d}_{name}", types, out_base)
     return 0
 
