@@ -5,9 +5,11 @@
 mod knob;
 mod panel;
 mod param_handle;
+mod selector;
 mod waveform;
 
 pub use knob::{knob, Knob};
 pub use panel::{draw_param_panel, OperatorPanelParams, PanelParams};
 pub use param_handle::{BoolParamHandle, IntParamHandle};
+pub use selector::{enum_selector, CHORUS_TYPE_NAMES, REVERB_TYPE_NAMES};
 pub use waveform::{waveform_selector, OPZ_VARIANTS, SINE_VARIANTS, SQUARE_VARIANTS, WAVEFORM_CATEGORIES};

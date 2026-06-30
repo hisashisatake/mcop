@@ -6,6 +6,10 @@ pub(crate) const DEFAULT_CHORUS_MOD_DEPTH: u8 = 128;
 pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
 pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
 pub(crate) const DEFAULT_ALGORITHM: u8 = 0;
+/// ReverbType::default()（Hall1）の宣言順インデックス。
+pub(crate) const DEFAULT_REVERB_TYPE: u8 = 3;
+/// ChorusType::default()（Chorus1）の宣言順インデックス。
+pub(crate) const DEFAULT_CHORUS_TYPE: u8 = 0;
 
 /// オペレーター単位パラメーター一式（13個）。`Ym38x6Params`側で`[OperatorVstParams; 4]`として
 /// `#[nested(array, ...)]`展開し、各IDに`_1`〜`_4`が付与される（DAW上は「Operator 1」〜「Operator 4」）。
@@ -113,9 +117,13 @@ pub(crate) struct Ym38x6Params {
     #[nested(array, group = "Operator")]
     pub operators: [OperatorVstParams; 4],
 
-    // ---- マスター単位（5個、MasterEffectsの5パラメーターに対応） ----
+    // ---- マスター単位（7個、MasterEffectsのパラメーター+Reverb/Chorus Typeに対応） ----
+    #[id = "rev_type"]
+    pub reverb_type: IntParam,
     #[id = "rev_time"]
     pub reverb_time: IntParam,
+    #[id = "cho_type"]
+    pub chorus_type: IntParam,
     #[id = "cho_rate"]
     pub chorus_mod_rate: IntParam,
     #[id = "cho_depth"]
@@ -150,7 +158,9 @@ impl Default for Ym38x6Params {
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
             operators: Default::default(),
+            reverb_type: IntParam::new("Reverb Type", DEFAULT_REVERB_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
             reverb_time: IntParam::new("Reverb Time", DEFAULT_REVERB_TIME as i32, IntRange::Linear { min: 0, max: 255 }),
+            chorus_type: IntParam::new("Chorus Type", DEFAULT_CHORUS_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
             chorus_mod_rate: IntParam::new("Chorus Mod Rate", DEFAULT_CHORUS_MOD_RATE as i32, IntRange::Linear { min: 0, max: 255 }),
             chorus_mod_depth: IntParam::new("Chorus Mod Depth", DEFAULT_CHORUS_MOD_DEPTH as i32, IntRange::Linear { min: 0, max: 255 }),
             chorus_feedback: IntParam::new("Chorus Feedback", DEFAULT_CHORUS_FEEDBACK as i32, IntRange::Linear { min: 0, max: 255 }),

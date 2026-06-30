@@ -6,7 +6,8 @@ mod params;
 use midi::{apply_at_modulation, cc_to_u8, cc_to_u7, AtDestination, RpnSelection};
 use params::{
     Ym38x6Params, DEFAULT_ALGORITHM, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH,
-    DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_REVERB_TIME,
+    DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE,
+    DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
 };
 
 use nice_plug::prelude::*;
@@ -73,8 +74,12 @@ struct Ym38x6Plugin {
     // Algorithmの「前回ブロックで適用したnice-plug値」（1シャドウ差分検知方式、下記マスター5パラメーターと同型）
     last_algorithm: u8,
 
-    // マスター単位5パラメーターの「前回ブロックで適用したnice-plug値」（1シャドウ差分検知方式）
+    // マスター単位パラメーターの「前回ブロックで適用したnice-plug値」（1シャドウ差分検知方式）。
+    // Reverb/Chorus TypeはNRPN(0,2)/(0,3)からも直接effectsへ書き込まれるため、
+    // DAW値が変化していない間はNRPN側の設定が上書きされない（last_reverb_time等と同型）。
+    last_reverb_type: u8,
     last_reverb_time: u8,
+    last_chorus_type: u8,
     last_chorus_mod_rate: u8,
     last_chorus_mod_depth: u8,
     last_chorus_feedback: u8,
@@ -175,7 +180,9 @@ impl Default for Ym38x6Plugin {
             nrpn_lsb: 0,
             rpn_selection: RpnSelection::default(),
             last_algorithm: DEFAULT_ALGORITHM,
+            last_reverb_type: DEFAULT_REVERB_TYPE,
             last_reverb_time: DEFAULT_REVERB_TIME,
+            last_chorus_type: DEFAULT_CHORUS_TYPE,
             last_chorus_mod_rate: DEFAULT_CHORUS_MOD_RATE,
             last_chorus_mod_depth: DEFAULT_CHORUS_MOD_DEPTH,
             last_chorus_feedback: DEFAULT_CHORUS_FEEDBACK,
@@ -465,7 +472,9 @@ impl Plugin for Ym38x6Plugin {
         self.nrpn_msb = 0;
         self.nrpn_lsb = 0;
         self.rpn_selection = RpnSelection::default();
+        self.last_reverb_type = DEFAULT_REVERB_TYPE;
         self.last_reverb_time = DEFAULT_REVERB_TIME;
+        self.last_chorus_type = DEFAULT_CHORUS_TYPE;
         self.last_chorus_mod_rate = DEFAULT_CHORUS_MOD_RATE;
         self.last_chorus_mod_depth = DEFAULT_CHORUS_MOD_DEPTH;
         self.last_chorus_feedback = DEFAULT_CHORUS_FEEDBACK;
@@ -585,13 +594,23 @@ impl Plugin for Ym38x6Plugin {
             self.last_cho_send = cho_send;
         }
 
-        // マスター単位5パラメーター：DAWオートメーションで値が変化した場合のみeffectsへ反映する。
-        // NRPN(0,4)〜(0,8)はeffectsへ直接書き込まれ、ここでの値が前回と同じ間は上書きされない
+        // マスター単位パラメーター：DAWオートメーションで値が変化した場合のみeffectsへ反映する。
+        // NRPN(0,2)〜(0,8)はeffectsへ直接書き込まれ、ここでの値が前回と同じ間は上書きされない
         // （差分検知方式。NRPNの変更はnice-plug側のパラメーター表示には反映されない）。
+        let reverb_type = self.params.reverb_type.value() as u8;
+        if reverb_type != self.last_reverb_type {
+            self.effects.set_reverb_type(ReverbType::from_u8(reverb_type));
+            self.last_reverb_type = reverb_type;
+        }
         let reverb_time = self.params.reverb_time.value() as u8;
         if reverb_time != self.last_reverb_time {
             self.effects.set_reverb_time(reverb_time);
             self.last_reverb_time = reverb_time;
+        }
+        let chorus_type = self.params.chorus_type.value() as u8;
+        if chorus_type != self.last_chorus_type {
+            self.effects.set_chorus_type(ChorusType::from_u8(chorus_type));
+            self.last_chorus_type = chorus_type;
         }
         let chorus_mod_rate = self.params.chorus_mod_rate.value() as u8;
         if chorus_mod_rate != self.last_chorus_mod_rate {

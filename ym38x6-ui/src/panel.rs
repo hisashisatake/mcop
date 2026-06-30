@@ -1,5 +1,6 @@
 use crate::knob::knob;
 use crate::param_handle::{BoolParamHandle, IntParamHandle};
+use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, REVERB_TYPE_NAMES};
 use crate::waveform::waveform_selector;
 
 /// オペレーター単位パラメーター一式（VST/gesture-app共通のハンドル束）。
@@ -46,7 +47,9 @@ pub struct PanelParams<'a> {
     pub feg_depth: Box<dyn IntParamHandle + 'a>,
     // MASTER EFFECT
     pub rev_send: Box<dyn IntParamHandle + 'a>,
+    pub reverb_type: Box<dyn IntParamHandle + 'a>,
     pub cho_send: Box<dyn IntParamHandle + 'a>,
+    pub chorus_type: Box<dyn IntParamHandle + 'a>,
     pub reverb_time: Box<dyn IntParamHandle + 'a>,
     pub chorus_mod_rate: Box<dyn IntParamHandle + 'a>,
     pub chorus_mod_depth: Box<dyn IntParamHandle + 'a>,
@@ -126,35 +129,36 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             });
         });
 
-        // ---- フィルター / マスターエフェクト（横一列） ----
-        ui.horizontal(|ui| {
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("FILTER").strong());
-                    ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.cutoff, "CUT");
-                        knob(ui, &*params.resonance, "RES");
-                        knob(ui, &*params.feg_a, "F.A");
-                        knob(ui, &*params.feg_d, "F.D");
-                        knob(ui, &*params.feg_s, "F.S");
-                        knob(ui, &*params.feg_r, "F.R");
-                        knob(ui, &*params.feg_depth, "F.DEP");
-                    });
+        // ---- フィルター ----
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("FILTER").strong());
+                ui.horizontal_wrapped(|ui| {
+                    knob(ui, &*params.cutoff, "CUT");
+                    knob(ui, &*params.resonance, "RES");
+                    knob(ui, &*params.feg_a, "F.A");
+                    knob(ui, &*params.feg_d, "F.D");
+                    knob(ui, &*params.feg_s, "F.S");
+                    knob(ui, &*params.feg_r, "F.R");
+                    knob(ui, &*params.feg_depth, "F.DEP");
                 });
             });
+        });
 
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("MASTER EFFECT").strong());
-                    ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.rev_send, "REV");
-                        knob(ui, &*params.cho_send, "CHO");
-                        knob(ui, &*params.reverb_time, "R.TIME");
-                        knob(ui, &*params.chorus_mod_rate, "C.RATE");
-                        knob(ui, &*params.chorus_mod_depth, "C.DEP");
-                        knob(ui, &*params.chorus_feedback, "C.FB");
-                        knob(ui, &*params.chorus_send_to_reverb, "C>R");
-                    });
+        // ---- マスターエフェクト ----
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("MASTER EFFECT").strong());
+                ui.horizontal_wrapped(|ui| {
+                    enum_selector(ui, &*params.reverb_type, "REV TYPE", &REVERB_TYPE_NAMES, 0);
+                    knob(ui, &*params.rev_send, "REV");
+                    knob(ui, &*params.reverb_time, "R.TIME");
+                    enum_selector(ui, &*params.chorus_type, "CHO TYPE", &CHORUS_TYPE_NAMES, 1);
+                    knob(ui, &*params.cho_send, "CHO");
+                    knob(ui, &*params.chorus_mod_rate, "C.RATE");
+                    knob(ui, &*params.chorus_mod_depth, "C.DEP");
+                    knob(ui, &*params.chorus_feedback, "C.FB");
+                    knob(ui, &*params.chorus_send_to_reverb, "C>R");
                 });
             });
         });
