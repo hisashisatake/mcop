@@ -349,15 +349,16 @@ window.addEventListener('keydown', async (e) => {
 // ─────────────────────────────────────────────
 const editorOverlay = document.getElementById('editor-overlay');
 let editorHandle  = null;
+let editorModule  = null; // import()したモジュール参照。notify_shift呼び出しに使う
 let editorVisible = false;
 
 async function toggleEditor() {
   editorVisible = !editorVisible;
   editorOverlay.style.display = editorVisible ? 'block' : 'none';
   if (editorVisible && !editorHandle) {
-    const mod = await import('./editor-wasm/editor_wasm.js');
-    await mod.default();
-    editorHandle = new mod.EditorHandle();
+    editorModule = await import('./editor-wasm/editor_wasm.js');
+    await editorModule.default();
+    editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
   }
 }
@@ -367,6 +368,26 @@ window.addEventListener('keydown', async (e) => {
     e.stopPropagation();
     e.preventDefault();
     await toggleEditor();
+  }
+}, true);
+
+// 鍵盤UIのオクターブ移動（左Ctrl/右Ctrl）。
+// event.key（'Control'）は左右を区別できないため、物理キーを区別できるevent.code
+// （'ControlLeft'/'ControlRight'）を使う。event.location（1=左/2=右）も合わせてチェックし、
+// どちらか一方しか取れない環境でも動くようにする。
+// egui標準のキー入力経路では左右Ctrlを判別できない（editor-wasm/src/shift_keys.rs参照）ため、
+// ここで直接editor-wasmのnotify_shift()をwasm-bindgen経由で呼び出す。
+window.addEventListener('keydown', (e) => {
+  if (!editorVisible || !editorModule) return;
+  if (e.key !== 'Control') return;
+  const isLeft  = e.code === 'ControlLeft'  || e.location === 1;
+  const isRight = e.code === 'ControlRight' || e.location === 2;
+  if (isLeft) {
+    e.preventDefault();
+    editorModule.notify_shift('left');
+  } else if (isRight) {
+    e.preventDefault();
+    editorModule.notify_shift('right');
   }
 }, true);
 

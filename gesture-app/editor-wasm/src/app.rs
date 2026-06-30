@@ -5,6 +5,7 @@ use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
 
 use crate::handle::{int_field, op_int_field, BoolField, IntField};
 use crate::ipc;
+use crate::keyboard;
 use crate::state::EditorState;
 
 // オペレーターインデックスをconst genericsにしているのは、`IntField`/`BoolField`の
@@ -90,6 +91,8 @@ fn build_panel_params(state: &Rc<RefCell<EditorState>>, dirty: &Rc<Cell<bool>>) 
 pub struct EditorApp {
     state: Rc<RefCell<EditorState>>,
     dirty: Rc<Cell<bool>>,
+    /// ZXCV(白鍵)/ASDF(黒鍵)ミニ鍵盤の表示オクターブ＋押下状態。
+    keyboard: keyboard::KeyboardState,
 }
 
 impl EditorApp {
@@ -97,12 +100,23 @@ impl EditorApp {
         Self {
             state: Rc::new(RefCell::new(EditorState::default())),
             dirty: Rc::new(Cell::new(false)),
+            keyboard: keyboard::KeyboardState::new(),
         }
     }
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        crate::shift_keys::register_context(ui.ctx());
+
+        // 鍵盤は画面下に直接張り付ける（枠なし）。CentralPanelより先に確保することで
+        // 残りの領域がCentralPanel（パラメーターパネル）に割り当たる。
+        egui::Panel::bottom("keyboard_panel")
+            .frame(egui::Frame::NONE)
+            .show_inside(ui, |ui| {
+                keyboard::draw_keyboard(ui, &mut self.keyboard);
+            });
+
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let panel = build_panel_params(&self.state, &self.dirty);
             draw_param_panel(ui, &panel);

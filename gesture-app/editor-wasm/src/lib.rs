@@ -6,7 +6,11 @@
 mod app;
 mod handle;
 mod ipc;
+mod keyboard;
+mod shift_keys;
 mod state;
+
+pub use shift_keys::notify_shift;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;

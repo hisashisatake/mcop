@@ -30,6 +30,32 @@ fn invoke(cmd: &'static str, args: &impl Serialize) {
     });
 }
 
+/// `note_on`/`note_off`コマンドの引数。トップレベル引数名はTauriの規約でcamelCaseへ変換される
+/// （ネストしたDTOのフィールド名とは異なり、ここはコマンドの直接の引数なので対象になる）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteOnArgs {
+    channel: usize,
+    wave_slot: u8,
+    frequency: f32,
+}
+
+#[derive(Serialize)]
+struct NoteOffArgs {
+    channel: usize,
+}
+
+/// `src-tauri/src/main.rs`の`note_on`コマンドを呼ぶ。音色は直前の`send_patch`で
+/// 設定済みのcurrent_patchが使われるため`wave_slot`は常に0（未使用、トレイト互換のためのダミー）。
+pub fn note_on(channel: usize, frequency: f32) {
+    invoke("note_on", &NoteOnArgs { channel, wave_slot: 0, frequency });
+}
+
+/// `src-tauri/src/main.rs`の`note_off`コマンドを呼ぶ。
+pub fn note_off(channel: usize) {
+    invoke("note_off", &NoteOffArgs { channel });
+}
+
 /// `ym38x6_dto::OperatorParamsDto`と同じフィールド名(snake_case)で送る
 /// （Tauriコマンド引数の内部構造体はserdeのデフォルト規則でデシリアライズされ、
 /// コマンド最上位の引数名のみがcamelCaseへ自動変換される点に注意）。
