@@ -44,7 +44,13 @@ impl EditorHandle {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|_cc| Ok(Box::new(app::EditorApp::new()))),
+                Box::new(|cc| {
+                    // eframe(web)はOSのprefers-color-scheme設定に追従して自動でLight/Darkを
+                    // 切り替える。VST(nice-plug-egui、eframe非使用のため自動追従しない)と
+                    // 見た目を揃えるため、システム設定に関わらずDark固定にする。
+                    cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
+                    Ok(Box::new(app::EditorApp::new()))
+                }),
             )
             .await
     }

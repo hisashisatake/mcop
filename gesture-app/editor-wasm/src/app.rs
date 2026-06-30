@@ -109,10 +109,12 @@ impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
 
-        // 鍵盤は画面下に直接張り付ける（枠なし）。CentralPanelより先に確保することで
-        // 残りの領域がCentralPanel（パラメーターパネル）に割り当たる。
+        // 鍵盤は画面下に直接張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
+        // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。
+        // CentralPanelより先に確保することで、残りの領域がCentralPanel（パラメーターパネル）に割り当たる。
+        let panel_fill = ui.visuals().panel_fill;
         egui::Panel::bottom("keyboard_panel")
-            .frame(egui::Frame::NONE)
+            .frame(egui::Frame::NONE.fill(panel_fill))
             .show_inside(ui, |ui| {
                 keyboard::draw_keyboard(ui, &mut self.keyboard);
             });
@@ -131,9 +133,5 @@ impl eframe::App for EditorApp {
     #[cfg(target_arch = "wasm32")]
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(&mut *self)
-    }
-
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.07, 0.07, 0.07, 0.92]
     }
 }
