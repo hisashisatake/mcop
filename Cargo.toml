@@ -2,6 +2,7 @@
 members = [
     "sound-core",
     "ym38x6-core",
+    "ym38x6-ui",
     "ym38x6-vst",
     "gesture-app/src-tauri",
     "tools/psr2x6",

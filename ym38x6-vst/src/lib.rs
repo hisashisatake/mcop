@@ -1,6 +1,6 @@
 mod editor;
-mod knob;
 mod midi;
+mod param_adapter;
 mod params;
 
 use midi::{apply_at_modulation, cc_to_u8, cc_to_u7, AtDestination, RpnSelection};

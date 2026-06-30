@@ -1,0 +1,162 @@
+use crate::knob::knob;
+use crate::param_handle::{BoolParamHandle, IntParamHandle};
+use crate::waveform::waveform_selector;
+
+/// オペレーター単位パラメーター一式（VST/gesture-app共通のハンドル束）。
+pub struct OperatorPanelParams<'a> {
+    pub tl: Box<dyn IntParamHandle + 'a>,
+    pub ar: Box<dyn IntParamHandle + 'a>,
+    pub d1r: Box<dyn IntParamHandle + 'a>,
+    pub d2r: Box<dyn IntParamHandle + 'a>,
+    pub d1l: Box<dyn IntParamHandle + 'a>,
+    pub rr: Box<dyn IntParamHandle + 'a>,
+    pub mul: Box<dyn IntParamHandle + 'a>,
+    pub dt1: Box<dyn IntParamHandle + 'a>,
+    pub ksr: Box<dyn IntParamHandle + 'a>,
+    pub vel_sens: Box<dyn IntParamHandle + 'a>,
+    pub op_fine_tune: Box<dyn IntParamHandle + 'a>,
+    pub ame: Box<dyn BoolParamHandle + 'a>,
+    pub waveform: Box<dyn IntParamHandle + 'a>,
+}
+
+/// `draw_param_panel`に渡すパラメーター一式。
+/// OPERATOR / CHANNEL / PERF LFO / TONE LFO / FILTER / MASTER EFFECTの全グリッドを含む。
+pub struct PanelParams<'a> {
+    // CHANNEL
+    pub algorithm: Box<dyn IntParamHandle + 'a>,
+    pub feedback: Box<dyn IntParamHandle + 'a>,
+    // PERF LFO
+    pub lfo_rate: Box<dyn IntParamHandle + 'a>,
+    pub lfo_depth: Box<dyn IntParamHandle + 'a>,
+    pub lfo_delay: Box<dyn IntParamHandle + 'a>,
+    // TONE LFO
+    pub tone_freq: Box<dyn IntParamHandle + 'a>,
+    pub tone_pmd: Box<dyn IntParamHandle + 'a>,
+    pub tone_amd: Box<dyn IntParamHandle + 'a>,
+    pub tone_delay: Box<dyn IntParamHandle + 'a>,
+    pub pms: Box<dyn IntParamHandle + 'a>,
+    pub ams: Box<dyn IntParamHandle + 'a>,
+    // FILTER
+    pub cutoff: Box<dyn IntParamHandle + 'a>,
+    pub resonance: Box<dyn IntParamHandle + 'a>,
+    pub feg_a: Box<dyn IntParamHandle + 'a>,
+    pub feg_d: Box<dyn IntParamHandle + 'a>,
+    pub feg_s: Box<dyn IntParamHandle + 'a>,
+    pub feg_r: Box<dyn IntParamHandle + 'a>,
+    pub feg_depth: Box<dyn IntParamHandle + 'a>,
+    // MASTER EFFECT
+    pub rev_send: Box<dyn IntParamHandle + 'a>,
+    pub cho_send: Box<dyn IntParamHandle + 'a>,
+    pub reverb_time: Box<dyn IntParamHandle + 'a>,
+    pub chorus_mod_rate: Box<dyn IntParamHandle + 'a>,
+    pub chorus_mod_depth: Box<dyn IntParamHandle + 'a>,
+    pub chorus_feedback: Box<dyn IntParamHandle + 'a>,
+    pub chorus_send_to_reverb: Box<dyn IntParamHandle + 'a>,
+    // OPERATORS
+    pub operators: [OperatorPanelParams<'a>; 4],
+}
+
+/// パラメーターグリッド（OP1〜4 / CHANNEL・PERF LFO・TONE LFO / FILTER・MASTER EFFECT）を描画する。
+/// 縦スクロールエリアを内部に含む。PRESETSサイドバー・ウィンドウ枠（ResizableWindow等）・
+/// 外側のCentralPanelは呼び出し側（ホスト）が用意すること。
+pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む。最優先で上に表示） ----
+        for (i, op) in params.operators.iter().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
+                    knob(ui, &*op.tl, "TL");
+                    knob(ui, &*op.ar, "AR");
+                    knob(ui, &*op.d1r, "D1R");
+                    knob(ui, &*op.d2r, "D2R");
+                    knob(ui, &*op.d1l, "D1L");
+                    knob(ui, &*op.rr, "RR");
+                    knob(ui, &*op.mul, "MUL");
+                    knob(ui, &*op.dt1, "DT1");
+                    knob(ui, &*op.ksr, "KSR");
+                    knob(ui, &*op.vel_sens, "VEL");
+                    knob(ui, &*op.op_fine_tune, "FINE");
+                    let mut am = op.ame.value();
+                    if ui.checkbox(&mut am, "AM").changed() {
+                        op.ame.begin_edit();
+                        op.ame.set(am);
+                        op.ame.end_edit();
+                    }
+                    waveform_selector(ui, &*op.waveform, i);
+                });
+            });
+        }
+
+        // ---- チャンネル固有 / パフォーマンスLFO / トーンLFO（横一列） ----
+        ui.horizontal(|ui| {
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("CHANNEL").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        knob(ui, &*params.algorithm, "ALG");
+                        knob(ui, &*params.feedback, "FB");
+                    });
+                });
+            });
+
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("PERF LFO").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        knob(ui, &*params.lfo_rate, "L.RATE");
+                        knob(ui, &*params.lfo_depth, "L.DEP");
+                        knob(ui, &*params.lfo_delay, "L.DLY");
+                    });
+                });
+            });
+
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("TONE LFO").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        knob(ui, &*params.tone_freq, "T.FRQ");
+                        knob(ui, &*params.tone_pmd, "T.PMD");
+                        knob(ui, &*params.tone_amd, "T.AMD");
+                        knob(ui, &*params.tone_delay, "T.DLY");
+                        knob(ui, &*params.pms, "PMS");
+                        knob(ui, &*params.ams, "AMS");
+                    });
+                });
+            });
+        });
+
+        // ---- フィルター / マスターエフェクト（横一列） ----
+        ui.horizontal(|ui| {
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("FILTER").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        knob(ui, &*params.cutoff, "CUT");
+                        knob(ui, &*params.resonance, "RES");
+                        knob(ui, &*params.feg_a, "F.A");
+                        knob(ui, &*params.feg_d, "F.D");
+                        knob(ui, &*params.feg_s, "F.S");
+                        knob(ui, &*params.feg_r, "F.R");
+                        knob(ui, &*params.feg_depth, "F.DEP");
+                    });
+                });
+            });
+
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("MASTER EFFECT").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        knob(ui, &*params.rev_send, "REV");
+                        knob(ui, &*params.cho_send, "CHO");
+                        knob(ui, &*params.reverb_time, "R.TIME");
+                        knob(ui, &*params.chorus_mod_rate, "C.RATE");
+                        knob(ui, &*params.chorus_mod_depth, "C.DEP");
+                        knob(ui, &*params.chorus_feedback, "C.FB");
+                        knob(ui, &*params.chorus_send_to_reverb, "C>R");
+                    });
+                });
+            });
+        });
+    });
+}

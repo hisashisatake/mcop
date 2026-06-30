@@ -6120,6 +6120,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ym38x6-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "ym38x6-vst"
 version = "0.1.0"
 dependencies = [
@@ -6127,6 +6134,7 @@ dependencies = [
  "nice-plug",
  "nice-plug-egui",
  "ym38x6-core",
+ "ym38x6-ui",
 ]
 
 [[package]]
