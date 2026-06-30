@@ -60,7 +60,38 @@ ym38x6/
 
 ---
 
+## 音色試聴スキル（tools/ym38x6-ml）
+
+`.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
+`~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
+
+```powershell
+# 初回セットアップ（スラッシュコマンド化）
+Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
+```
+
+| スキル | 使い方 | 概要 |
+|---|---|---|
+| `/audition` | `/audition 4` または `/audition private/foo.38x6` | 単音 C2-C5 + ストラムアルペジオを生成 |
+| `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
+| `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
+
+---
+
 ## コマンド
+
+### ML ツール（tools/ym38x6-ml）
+
+```powershell
+# .venv 内の Python を呼び出す共通コマンド（uv で管理）
+cd tools/ym38x6-ml
+uv run python python/<script>.py
+
+# 例: オルガン族テンプレートを生成
+uv run python python/organ_template.py
+uv run python python/organ_template.py --only 16,18
+uv run python python/organ_template.py --bank private/hand_designed/organ_family.38x6
+```
 
 ### ビルド・チェック
 
@@ -145,6 +176,44 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 - マウス版: 縦軸=ルート音、横軸=コード種類
 - タッチ版（フェーズ10・タブレット対応）: 指の間隔=インターバル、指の移動=ルート音シフト
 - ∞ジェスチャー: 軌跡がそのままF-Numberに追従（ビブラート・装飾音）
+
+---
+
+## パラメーターリファレンス（ソース再読不要・ここを参照）
+
+### TL（Total Level）: 0〜255
+- `tl=0` → **消音**（−95.25 dB）/ `tl=255` → **最大出力**（0 dB）
+- キャリア: TL 大 = 出力大
+- モジュレーター: TL 大 = 変調指数大（倍音豊か・明るい）
+
+### EG レート: AR / D1R / D2R（0〜255）
+- `rate=0` → **フリーズ**（OPM/OPN の rate=0 に準拠。AR=0 は発音しない）
+- `rate=1` 最遅 / `rate=255` 最速（AR: 0.68 ms〜20.2 秒 / D1R・D2R: 8.71 ms〜284.9 秒）
+
+### RR（0〜255）
+- D1R と異なり **0 でもフリーズしない**（rate=0 で約 284.9 秒減衰）
+- `rr=255` → 最速（8.71 ms）
+
+### D1L（サステインレベル）: 0〜255
+- `d1l=0` → ほぼ無音（−93 dB）/ `d1l=255` → **完全サステイン**（0 dB）
+- オルガン: d1l=255 / ピアノ: d1l=180〜210 程度
+
+### DT1（0〜255、中心=128）: ±50 セント
+- `dt1=128` → デチューンなし / 両端 ≈ ±50 セント
+- 計算式: `(dt1 - 128) / 128 * 50` セント
+
+### MUL（0〜15）
+- `mul=0` → 0.5 倍（サブ） / `mul=1` → 基音 / `mul=2〜15` → 等倍
+
+### 音色 LFO（tone_lfo_freq / tone_lfo_pmd / pms）
+- `tone_lfo_freq`: 0≈3 Hz〜255≈80 Hz（指数）。Leslie 風なら ≈50（約5 Hz）/ ≈60（約6.5 Hz）
+- `pms=0` → **ビブラート完全オフ**（特殊値）。1=±5 セント、255=±700 セント（指数）
+- 実効ビブラート幅 ≈ `pms_to_cents_range(pms) × (vib_depth / 255)`
+
+### Algorithm 7
+- 全 4 OP が**独立キャリア**（加算合成・FM 変調なし）
+- OP ごとの TL で倍音バランス制御（ドローバー方式）
+- `tl=0` で該当 OP を消音（波形メモリ音色もこれを利用）
 
 ---
 
