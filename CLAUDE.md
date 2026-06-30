@@ -29,6 +29,29 @@ PowerShellのPATHにgitが含まれていないため、上記フルパスで呼
 cargo --version  # rustupでインストール済み前提
 ```
 
+### wasm32（gesture-app音色エディタ用、editor-wasm）
+
+このマシンのデフォルトcargo/rustcはscoop版（rustup未管理、`x86_64-pc-windows-msvc`のみ）。
+`gesture-app/editor-wasm`（egui-wasm音色エディタ）のビルドにはwasm32-unknown-unknownターゲットが必要なため、
+**rustupを追加導入**し、PATHは変更せずrustup配下のcargoをフルパスで使う運用にしている。
+
+```powershell
+# 初回セットアップ（導入済みなら不要）
+# rustup-init.exeはrust-lang公式(https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe)から取得
+# （scoopのrustupマニフェストはハッシュが古く検証に失敗することがある）
+.\rustup-init.exe -y --no-modify-path --default-toolchain stable
+$rustup = "$env:USERPROFILE\.cargo\bin\rustup.exe"
+& $rustup target add wasm32-unknown-unknown
+
+$rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+$env:RUSTFLAGS = "-C debuginfo=0"  # PDBサイズ制限(LNK1140)回避
+& $rustupCargo install wasm-bindgen-cli --version 0.2.126 --force  # editor-wasm/Cargo.tomlのwasm-bindgen固定バージョンと一致させる
+Remove-Item Env:\RUSTFLAGS
+```
+
+`cargo`コマンドは引き続きscoop版が解決される（`--no-modify-path`でPATH変更を避けたため）。
+wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.cargo\bin\cargo.exe`/`wasm-bindgen.exe`をフルパスで呼ぶ。
+
 ---
 
 ## プロジェクト概要
@@ -49,14 +72,18 @@ ym38x6/
   spec.md              ← 設計仕様書
   sound-core/          ← WaveTable・AdsrParams・SoundEngineトレイト（基盤ライブラリ）
   ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存。波形メモリ音色も生成）
+  ym38x6-ui/            ← エディタ共有描画ロジック（egui依存のみ。VST/gesture-app両対応）
   ym38x6-vst/          ← 38x6 VST3/CLAPプラグイン（nice-plug）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
-    src/               ← フロントエンド
+    src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
+    editor-wasm/       ← gesture-app埋め込み音色エディタ（egui-wasm。ワークスペース除外、wasm32専用）
+    scripts/           ← build-editor-wasm.ps1（tauri dev/build時に自動実行）
 ```
 
 `sound-core` と `ym38x6-core` はnice-plugにもTauriにも依存しない純粋なRustライブラリ。
 音源エンジンの変更はこの2クレートに閉じる。
+`ym38x6-ui` はeguiのみに依存し、nice-plug/Tauri/cpalに依存しない（VSTとgesture-app双方の音色エディタが共有する描画ロジック）。
 
 ---
 
@@ -113,6 +140,17 @@ cargo test -p ym38x6-core
 cd gesture-app
 npm run tauri dev
 ```
+
+`tauri dev`/`tauri build`は`beforeDevCommand`/`beforeBuildCommand`で`scripts/build-editor-wasm.ps1`を自動実行し、
+`editor-wasm`（音色エディタ）をwasm32向けにビルドして`src/editor-wasm/`へ出力する（生成物はgitignore対象）。
+手動で単体ビルドしたい場合：
+
+```powershell
+cd gesture-app
+powershell -File scripts/build-editor-wasm.ps1
+```
+
+アプリ内ではEキーで音色エディタのオーバーレイ表示をトグルできる（VSTと同じ`ym38x6-ui`のノブパネル）。
 
 ### ビルド
 
@@ -176,6 +214,13 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 - マウス版: 縦軸=ルート音、横軸=コード種類
 - タッチ版（フェーズ10・タブレット対応）: 指の間隔=インターバル、指の移動=ルート音シフト
 - ∞ジェスチャー: 軌跡がそのままF-Numberに追従（ビブラート・装飾音）
+
+### 音色エディタ（gesture-app/editor-wasm）
+
+- `ym38x6-ui`をeframe(WebRunner)でwasm32コンパイルし、`index.html`の`#editor-canvas`に重ねて描画
+- Eキーでオーバーレイ表示をトグル（`main.js`。keydownリスナーはキャプチャフェーズ登録— エディタにフォーカスがある間はeguiがbubbleフェーズまでイベントを伝播させないため）
+- パラメーター変更は`editor-wasm`内部でローカル状態を更新しつつdirtyフラグを立て、1フレームに1回`ym38x6_set_patch`/`set_master_effects`のTauri IPCへ送る（src-tauriの`Ym38x6Engine`/`MasterEffects`を更新）
+- パフォーマンスLFO（PERF LFO群）はローカル編集のみで、main.js側のホイール/Vキー制御とは未連動（二重書き込みでトレモロ/ビブラートが化けるのを避けるため意図的に未配線）
 
 ---
 

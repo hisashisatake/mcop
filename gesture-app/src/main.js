@@ -336,6 +336,41 @@ window.addEventListener('keydown', async (e) => {
 });
 
 // ─────────────────────────────────────────────
+// 音色エディタ（egui-wasm、editor-wasmクレート）
+// Eキーでオーバーレイ表示/非表示をトグル。初回表示時にwasmモジュールを遅延ロードする。
+// パラメーター変更はeditor-wasm内部でTauri IPC(ym38x6_set_patch/set_master_effects)へ
+// 直接送られ、main.js側のチャンネル発音ロジックとは独立して動く。
+//
+// Eキーのリスナーはキャプチャフェーズで登録する。エディタ表示中はeguiのcanvasに
+// フォーカスが移り、eguiが内部でkeydownを処理してbubbleフェーズまで伝播させない
+// （stopPropagation相当）ため、bubbleフェーズのリスナーだとエディタ起動後に
+// Eキーが届かず閉じられなくなる。キャプチャフェーズはcanvasより先に発火するため、
+// これを回避できる。
+// ─────────────────────────────────────────────
+const editorOverlay = document.getElementById('editor-overlay');
+let editorHandle  = null;
+let editorVisible = false;
+
+async function toggleEditor() {
+  editorVisible = !editorVisible;
+  editorOverlay.style.display = editorVisible ? 'block' : 'none';
+  if (editorVisible && !editorHandle) {
+    const mod = await import('./editor-wasm/editor_wasm.js');
+    await mod.default();
+    editorHandle = new mod.EditorHandle();
+    await editorHandle.start('editor-canvas');
+  }
+}
+
+window.addEventListener('keydown', async (e) => {
+  if (e.key.toLowerCase() === 'e') {
+    e.stopPropagation();
+    e.preventDefault();
+    await toggleEditor();
+  }
+}, true);
+
+// ─────────────────────────────────────────────
 // キャリブレーション
 // ─────────────────────────────────────────────
 function handleCalibClick(x, y) {

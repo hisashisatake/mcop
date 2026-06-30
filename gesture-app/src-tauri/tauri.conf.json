@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "identifier": "com.ym38x6.app",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-editor-wasm.ps1",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-editor-wasm.ps1"
   },
   "app": {
     "withGlobalTauri": true,

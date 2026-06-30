@@ -1,0 +1,25 @@
+[package]
+name = "editor-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+egui = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["glow"] }
+ym38x6-ui = { path = "../../ym38x6-ui" }
+# wasm-bindgen-cli（ビルド時に別途インストールするツール）とクレートのバージョンは完全一致が
+# 必須なため厳密ピン。上げる場合は `cargo install wasm-bindgen-cli --version <同じ値> --force` も必要。
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true

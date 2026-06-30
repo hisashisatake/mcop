@@ -16,7 +16,10 @@ members = [
 # tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
 # 除外して独立クレートとして扱う（ビルドはmaturin専任、ym38x6-coreはpath依存で参照）。
-exclude = ["tools/patchlab"]
+# gesture-app/editor-wasm はwasm32-unknown-unknown専用クレート（eframe/wasm-bindgen依存）。
+# ホストターゲット(x86_64-pc-windows-msvc)ではビルドできずcargo check --workspaceを壊すため除外。
+# ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で個別に行う（ym38x6-uiはpath依存で参照）。
+exclude = ["tools/patchlab", "gesture-app/editor-wasm"]
 resolver = "2"
 
 [profile.release]
