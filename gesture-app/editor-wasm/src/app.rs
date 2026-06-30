@@ -93,14 +93,28 @@ pub struct EditorApp {
     dirty: Rc<Cell<bool>>,
     /// ZXCV(白鍵)/ASDF(黒鍵)ミニ鍵盤の表示オクターブ＋押下状態。
     keyboard: keyboard::KeyboardState,
+    /// `list_presets`で取得したプリセット一覧（取得完了まで空）。非同期タスクと共有する。
+    presets: Rc<RefCell<Vec<ipc::PresetEntry>>>,
+    /// 現在選択中のプリセット（左パネルのハイライト表示用）。
+    selected_preset: Option<(u16, u8)>,
 }
 
 impl EditorApp {
     pub fn new() -> Self {
+        let presets = Rc::new(RefCell::new(Vec::new()));
+        let presets_for_fetch = presets.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let fetched = ipc::fetch_presets().await;
+            *presets_for_fetch.borrow_mut() = fetched;
+            crate::shift_keys::request_repaint();
+        });
+
         Self {
             state: Rc::new(RefCell::new(EditorState::default())),
             dirty: Rc::new(Cell::new(false)),
             keyboard: keyboard::KeyboardState::new(),
+            presets,
+            selected_preset: None,
         }
     }
 }
@@ -109,14 +123,42 @@ impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
 
-        // 鍵盤は画面下に直接張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
+        // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
         // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。
-        // CentralPanelより先に確保することで、残りの領域がCentralPanel（パラメーターパネル）に割り当たる。
+        // 他のパネルより先に確保することで、PRESETSサイドバーより下まで全幅で届く
+        // （Panel::leftを先に確保すると鍵盤がサイドバー分狭くなってしまうため、この順序が重要）。
         let panel_fill = ui.visuals().panel_fill;
         egui::Panel::bottom("keyboard_panel")
             .frame(egui::Frame::NONE.fill(panel_fill))
             .show_inside(ui, |ui| {
                 keyboard::draw_keyboard(ui, &mut self.keyboard);
+            });
+
+        // プリセット一覧（左サイドバー、VSTのPRESETSパネルと同じ並び）。鍵盤の上の領域のみを占める。
+        egui::Panel::left("presets_panel")
+            .resizable(false)
+            .exact_size(180.0)
+            .show_inside(ui, |ui| {
+                ui.label(egui::RichText::new("PRESETS").strong());
+                egui::ScrollArea::vertical().id_salt("presets").show(ui, |ui| {
+                    for preset in self.presets.borrow().iter() {
+                        let label = if preset.bank == 0 {
+                            format!("{:03} {}", preset.program, preset.name)
+                        } else {
+                            format!("[{:04X}:{:03}] {}", preset.bank, preset.program, preset.name)
+                        };
+                        let selected = self.selected_preset == Some((preset.bank, preset.program));
+                        if ui.selectable_label(selected, &label).clicked() {
+                            self.selected_preset = Some((preset.bank, preset.program));
+                            wasm_bindgen_futures::spawn_local(ipc::load_preset(
+                                self.state.clone(),
+                                self.dirty.clone(),
+                                preset.bank,
+                                preset.program,
+                            ));
+                        }
+                    }
+                });
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, AdsrParams, ChorusType,
     LfoWaveform, MasterEffects, PresetBank, ReverbType, SoundEngine, Ym38x6Engine,
     Ym38x6LfoDestination};
-use ym38x6_dto::Ym38x6PatchDto;
+use ym38x6_dto::{PresetEntryDto, Ym38x6PatchDto};
 
 /// 指定チャンネルIDへキーオンする。チャンネルIDは呼び出し側（フロントエンド）が
 /// 安定したスロット番号として供給する。発音中/リリース中のチャンネルが既にあっても、
@@ -66,6 +66,25 @@ fn ym38x6_set_program(
 ) {
     let patch = preset_bank.patch_for_program(bank, program);
     engine.lock().unwrap().set_patch(patch);
+}
+
+/// プリセット一覧を返す（ym38x6-vstのPRESETSサイドバーと同じ`presets_dir()`から
+/// 読み込んだ`PresetBank`をソート済みで返す。フロントエンドの音色エディタが一覧表示に使う）。
+#[tauri::command]
+fn list_presets(preset_bank: tauri::State<'_, PresetBank>) -> Vec<PresetEntryDto> {
+    preset_bank.sorted_entries().into_iter().map(PresetEntryDto::from).collect()
+}
+
+/// (bank, program)のプリセット内容を返す（エンジンへは反映しない読み取り専用）。
+/// 音色エディタがプリセット選択時に自身のローカル状態を同期するために使う
+/// （`ym38x6_set_patch`で送り返すことで結果的にエンジンへも反映される）。
+#[tauri::command]
+fn get_preset_patch(
+    preset_bank: tauri::State<'_, PresetBank>,
+    bank: u16,
+    program: u8,
+) -> Ym38x6PatchDto {
+    preset_bank.patch_for_program(bank, program).into()
 }
 
 /// 38x6エンジンのパフォーマンスLFOを設定する。
@@ -180,6 +199,8 @@ fn main() {
             ym38x6_set_patch,
             ym38x6_set_program,
             ym38x6_set_performance_lfo,
+            list_presets,
+            get_preset_patch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

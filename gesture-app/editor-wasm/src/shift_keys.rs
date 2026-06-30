@@ -26,6 +26,16 @@ pub fn register_context(ctx: &egui::Context) {
     CTX.with(|c| *c.borrow_mut() = Some(ctx.clone()));
 }
 
+/// 保持中の`egui::Context`があれば`request_repaint()`する。非同期タスク（プリセット取得等）の
+/// 完了をUIへ即座に反映させたいときに、`ipc.rs`等の他モジュールからも使う汎用ヘルパー。
+pub fn request_repaint() {
+    CTX.with(|c| {
+        if let Some(ctx) = c.borrow().as_ref() {
+            ctx.request_repaint();
+        }
+    });
+}
+
 /// `main.js`から呼ばれる。`side`は`"left"`/`"right"`。
 #[wasm_bindgen]
 pub fn notify_shift(side: &str) {
@@ -34,11 +44,7 @@ pub fn notify_shift(side: &str) {
         "right" => RIGHT_EDGE.with(|c| c.set(true)),
         _ => return,
     }
-    CTX.with(|c| {
-        if let Some(ctx) = c.borrow().as_ref() {
-            ctx.request_repaint();
-        }
-    });
+    request_repaint();
 }
 
 /// 左Ctrlの押下エッジを消費する（一度読んだらfalseに戻る）。
