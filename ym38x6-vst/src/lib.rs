@@ -196,7 +196,7 @@ impl Default for Ym38x6Plugin {
             cc11: [127; 16],
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
-            egui_state: EguiState::from_size(800, 680),
+            egui_state: EguiState::from_size(1200, 680),
         }
     }
 }
