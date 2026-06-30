@@ -28,9 +28,6 @@ SR = 44100.0
 
 
 def _write_wav(path: Path, x: np.ndarray) -> None:
-    peak = float(np.max(np.abs(x)))
-    if peak > 1e-6:
-        x = x / peak * 0.9
     pcm = np.clip(x * 32767, -32768, 32767).astype("<i2")
     with _wave.open(str(path), "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(int(SR))
@@ -162,8 +159,6 @@ def audition_phrases(patch_json: str, label: str, types: list[str], out_base: Pa
         desc, fn = PHRASE_TYPES[t]
         print(f"    {desc}...")
         audio = fn(patch_json)
-        peak = float(np.max(np.abs(audio)))
-        if peak > 1e-6: audio = audio / peak * 0.9
         _write_wav(out_dir / f"phrase_{t}.wav", audio)
     print(f"    出力: {out_dir}")
 

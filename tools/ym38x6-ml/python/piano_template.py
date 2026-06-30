@@ -96,7 +96,7 @@ def make_piano_patch(
             chain_op(222, 1, mod_wf),     # OP0: entry（feedback対象）
             chain_op(202, 0, mod_wf),     # OP1
             chain_op(198, 2, mod_wf),     # OP2
-            chain_op(210, 0, carrier_wf), # OP3: carrier（出力）
+            chain_op(250, 0, carrier_wf), # OP3: carrier（出力。単一キャリアのためフル出力寄り）
         ]
         return {"operators": ops, "channel": ch}
 
@@ -114,11 +114,12 @@ def make_piano_patch(
                     velocity_sensitivity=0, waveform=carrier_wf, op_fine_tune=128)
 
     dt = dt1_spread
+    # car_op TLは2キャリア合算（クリップ回避のため234/254から-14: 220/240）
     ops = [
         mod_op(mul_mod1, brightness,     128 + dt),
-        car_op(234,                      128),
+        car_op(220,                      128),
         mod_op(mul_mod2, brightness + 8, 128 - dt // 2),
-        car_op(254,                      128 + dt // 2),
+        car_op(240,                      128 + dt // 2),
     ]
     ch = dict(
         algorithm=algorithm, feedback=feedback,
@@ -180,11 +181,7 @@ PIANO_FAMILY: dict[int, tuple[str, dict]] = {
 def _render(patch: dict, note: int, on: float = 2.0, release: float = 3.0) -> np.ndarray:
     freq = 440.0 * 2 ** ((note - 69) / 12.0)
     s = ym38x6_ml.render_patch(json.dumps(patch), freq, on, release, 100, SR)
-    x = np.asarray(s, dtype=np.float32)
-    peak = float(np.max(np.abs(x)))
-    if peak > 1e-6:
-        x = x / peak * 0.9
-    return x
+    return np.asarray(s, dtype=np.float32)
 
 
 def _write_wav(path: Path, x: np.ndarray) -> None:

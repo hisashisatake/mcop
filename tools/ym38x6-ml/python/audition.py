@@ -47,9 +47,6 @@ STRUM_CHORDS = [
 
 
 def _write_wav(path: Path, x: np.ndarray) -> None:
-    peak = float(np.max(np.abs(x)))
-    if peak > 1e-6:
-        x = x / peak * 0.9
     pcm = np.clip(x * 32767, -32768, 32767).astype("<i2")
     with _wave.open(str(path), "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(int(SR))

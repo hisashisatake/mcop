@@ -41,6 +41,7 @@ def make_brass_patch(
     aggression: int = 60,    # feedback
     detune: int = 0,         # モジュレーター DT1 幅（alg6用。alg4では使わない）
     carrier_wf: int = 8,     # キャリア波形（8=saw / 24=tri / 16=sq50）
+    carrier_tl: int = 248,   # キャリア出力レベル（255=最大・大きいほど音量大）
     mul_op2: int = 1,        # OP2 の MUL（alg6用: 3にすると倍音成分が分散）
     algorithm: int = 6,      # FMアルゴリズム（6=直列スタック / 4=2ペア独立）
     car_dt_spread: int = 0,  # alg4専用: キャリア(OP1/OP3)のDT1幅（小=なめらか）
@@ -79,13 +80,15 @@ def make_brass_patch(
         filter_eg_depth=filter_eg_depth,
     )
     if algorithm == 4:
-        # Alg4: (OP0→OP1) + (OP2→OP3) 2ペア独立
+        # Alg4: (OP0→OP1) + (OP2→OP3) 2ペア独立（2キャリア合算のため carrier_tl から減算してクリップ回避）
         # モジュレーターはDT1固定、キャリアのみcar_dt_spreadでデチューン
+        car_tl_lo = max(carrier_tl - 18, 0)
+        car_tl_hi = max(carrier_tl - 16, 0)
         ops = [
             op(0,          brightness,     1, dt1=128),       # OP0: mod1
-            op(carrier_wf, 160,            1, dt1=car_dt_lo), # OP1: car1
+            op(carrier_wf, car_tl_lo,      1, dt1=car_dt_lo), # OP1: car1
             op(0,          brightness - 3, 2, dt1=128),       # OP2: mod2（MUL2）
-            op(carrier_wf, 162,            1, dt1=car_dt_hi), # OP3: car2
+            op(carrier_wf, car_tl_hi,      1, dt1=car_dt_hi), # OP3: car2
         ]
     else:
         # Alg6（既定）: 直列スタック
@@ -93,7 +96,7 @@ def make_brass_patch(
             op(0, brightness,     1, dt1=dt_lo),
             op(0, brightness - 5, 2, dt1=dt_hi),
             op(0, brightness - 8, mul_op2),
-            op(carrier_wf, 160,   1),
+            op(carrier_wf, carrier_tl, 1),
         ]
     return {"operators": ops, "channel": ch}
 
@@ -108,9 +111,11 @@ BRASS_FAMILY: dict[int, tuple[str, dict]] = {
     60: ("French_Horn",    dict(brightness=195, attack=90,  aggression=20,  detune=0,  carrier_wf=24)),
     61: ("Brass_Section",  dict(brightness=172, attack=110, aggression=55,  detune=0,  carrier_wf=8, algorithm=4, car_dt_spread=4)),
     62: ("SynthBrass_1",   dict(brightness=160, attack=140, aggression=90,  detune=0,  carrier_wf=8,
+                                carrier_tl=212,
                                 filter_cutoff=70, filter_resonance=180, filter_type=0, filter_eg_depth=185,
                                 filter_eg_attack=70, filter_eg_decay=90, filter_eg_sustain=130, filter_eg_release=60)),
     63: ("SynthBrass_2",   dict(brightness=160, attack=85,  aggression=70,  detune=0,  carrier_wf=8,
+                                carrier_tl=235,
                                 filter_cutoff=160, filter_resonance=100, filter_type=0)),
 }
 
@@ -118,11 +123,7 @@ BRASS_FAMILY: dict[int, tuple[str, dict]] = {
 def _render(patch: dict, note: int, on: float = 2.0, release: float = 3.0) -> np.ndarray:
     freq = 440.0 * 2 ** ((note - 69) / 12.0)
     s = ym38x6_ml.render_patch(json.dumps(patch), freq, on, release, 100, SR)
-    x = np.asarray(s, dtype=np.float32)
-    peak = float(np.max(np.abs(x)))
-    if peak > 1e-6:
-        x = x / peak * 0.9
-    return x
+    return np.asarray(s, dtype=np.float32)
 
 
 def _write_wav(path: Path, x: np.ndarray) -> None:

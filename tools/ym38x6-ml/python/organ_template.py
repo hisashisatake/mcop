@@ -199,11 +199,7 @@ ORGAN_FAMILY: dict[int, tuple[str, dict]] = {
 def _render(patch: dict, note: int, on: float = 2.0, release: float = 3.0) -> np.ndarray:
     freq = 440.0 * 2 ** ((note - 69) / 12.0)
     s = ym38x6_ml.render_patch(json.dumps(patch), freq, on, release, 100, SR)
-    x = np.asarray(s, dtype=np.float32)
-    peak = float(np.max(np.abs(x)))
-    if peak > 1e-6:
-        x = x / peak * 0.9
-    return x
+    return np.asarray(s, dtype=np.float32)
 
 
 def _write_wav(path: Path, x: np.ndarray) -> None:
