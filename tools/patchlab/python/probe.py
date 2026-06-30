@@ -31,7 +31,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import features as ft   # noqa: E402
-import ym38x6_ml        # noqa: E402
+import patchlab          # noqa: E402
 
 SR = 44100.0
 ON_SECS = 1.5
@@ -189,7 +189,7 @@ def main() -> int:
                 patch_json = _make_patch(
                     mod_wf, car_wf, tl,
                     args.mul_mod, args.mul_car, args.fb)
-                samples = ym38x6_ml.render_patch(
+                samples = patchlab.render_patch(
                     patch_json, freq, ON_SECS, RELEASE_SECS, VELOCITY, SR)
                 samples = np.asarray(samples, dtype=np.float32)
 

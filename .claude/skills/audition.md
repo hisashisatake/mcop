@@ -15,7 +15,7 @@
 
 引数を解析して以下を実行する。
 
-1. `tools/ym38x6-ml` ディレクトリで `.venv\Scripts\python.exe` を使って
+1. `tools/patchlab` ディレクトリで `uv run python` を使って
    `python\audition.py` を実行する。
    - 引数が数字のみ → `--prog <N>`
    - 引数が `.38x6` ファイルパス → `--bank <path>`
@@ -24,9 +24,9 @@
 
 2. 実行コマンド例:
    ```powershell
-   cd "c:\Users\satake\source\repos\ym38x6\tools\ym38x6-ml"
-   .\.venv\Scripts\python.exe python\audition.py --prog 4
-   .\.venv\Scripts\python.exe python\audition.py --bank private/piano_template.38x6
+   cd "c:\Users\satake\source\repos\ym38x6\tools\patchlab"
+   uv run python python\audition.py --prog 4
+   uv run python python\audition.py --bank private/piano_template.38x6
    ```
 
 3. 出力先 `private/audition_wav/<label>/` に生成された WAV ファイルのパスを報告する。

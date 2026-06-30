@@ -27,7 +27,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 
 SR = 44100.0
 BPM = 120.0
@@ -58,7 +58,7 @@ def render_single(patch_json: str, out_dir: Path) -> None:
     frames = []
     for name, midi in SINGLE_NOTES:
         freq = 440.0 * 2 ** ((midi - 69) / 12.0)
-        s = ym38x6_ml.render_patch(patch_json, freq, 2.0, 2.0, 100, SR)
+        s = patchlab.render_patch(patch_json, freq, 2.0, 2.0, 100, SR)
         frames.append(np.asarray(s, dtype=np.float32))
         print(f"    {name}")
     audio = np.concatenate(frames)
@@ -77,7 +77,7 @@ def render_strum(patch_json: str, out_dir: Path) -> None:
         for j, midi in enumerate(midis):
             offset = int(j * STRUM * SR)
             freq = 440.0 * 2 ** ((midi - 69) / 12.0)
-            s = ym38x6_ml.render_patch(patch_json, freq, on_time, rel_time, 100, SR)
+            s = patchlab.render_patch(patch_json, freq, on_time, rel_time, 100, SR)
             x = np.asarray(s, dtype=np.float32)
             end = min(offset + len(x), len(buf))
             buf[offset:end] += x[:end - offset]

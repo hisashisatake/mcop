@@ -20,7 +20,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import features as ft
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 
 SR = 44100.0
 ON_SECS = 2.0
@@ -153,7 +153,7 @@ def main() -> int:
 
         freq = 440.0 * 2 ** ((args.note - 69) / 12.0)
         patch_json = _make_patch(mod_wf, car_wf, mod_tl, mul_mod, mul_car, fb)
-        samples = ym38x6_ml.render_patch(patch_json, freq, ON_SECS, RELEASE_SECS, VELOCITY, SR)
+        samples = patchlab.render_patch(patch_json, freq, ON_SECS, RELEASE_SECS, VELOCITY, SR)
 
         out_dir = Path(args.out_dir) if args.out_dir else base / "lookup_wav"
         out_dir.mkdir(parents=True, exist_ok=True)

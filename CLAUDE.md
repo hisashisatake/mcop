@@ -60,7 +60,7 @@ ym38x6/
 
 ---
 
-## 音色試聴スキル（tools/ym38x6-ml）
+## 音色試聴スキル（tools/patchlab）
 
 `.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
 `~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
@@ -80,11 +80,11 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 
 ## コマンド
 
-### ML ツール（tools/ym38x6-ml）
+### 音色設計ツール（tools/patchlab）
 
 ```powershell
 # .venv 内の Python を呼び出す共通コマンド（uv で管理）
-cd tools/ym38x6-ml
+cd tools/patchlab
 uv run python python/<script>.py
 
 # 例: オルガン族テンプレートを生成

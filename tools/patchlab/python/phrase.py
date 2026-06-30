@@ -22,7 +22,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 
 SR = 44100.0
 
@@ -46,7 +46,7 @@ def render_strum(patch_json: str) -> np.ndarray:
         buf = np.zeros(int((slot + STRUM*(len(midis)-1))*SR), dtype=np.float32)
         for j, midi in enumerate(midis):
             off = int(j*STRUM*SR); freq = 440.0*2**((midi-69)/12)
-            s = ym38x6_ml.render_patch(patch_json, freq, on, rel, 100, SR)
+            s = patchlab.render_patch(patch_json, freq, on, rel, 100, SR)
             x = np.asarray(s, dtype=np.float32)
             end = min(off+len(x), len(buf)); buf[off:end] += x[:end-off]
         buf /= len(midis); frames.append(buf)
@@ -77,7 +77,7 @@ def render_funk(patch_json: str) -> np.ndarray:
         chord = np.zeros(int((on+REL)*SR), dtype=np.float32)
         for n in notes:
             freq = 440.0*2**((n-69)/12)
-            x = np.asarray(ym38x6_ml.render_patch(patch_json, freq, on, REL, vel, SR), dtype=np.float32)
+            x = np.asarray(patchlab.render_patch(patch_json, freq, on, REL, vel, SR), dtype=np.float32)
             l = min(len(chord), len(x)); chord[:l] += x[:l]
         chord /= len(notes)
         if len(chord) > FADE: chord[-FADE:] *= np.linspace(1,0,FADE)
@@ -104,7 +104,7 @@ def render_baroque(patch_json: str) -> np.ndarray:
         on = NOTE_ON*4 if is_final else NOTE_ON
         rel = 1.5 if is_final else NOTE_REL
         offset = int(s16*S16*SR); freq = 440.0*2**((midi-69)/12)
-        x = np.asarray(ym38x6_ml.render_patch(patch_json, freq, on, rel, 100, SR), dtype=np.float32)
+        x = np.asarray(patchlab.render_patch(patch_json, freq, on, rel, 100, SR), dtype=np.float32)
         end = min(offset+len(x), len(buf)); buf[offset:end] += x[:end-offset]
     return buf
 
@@ -138,7 +138,7 @@ def render_tango(patch_json: str) -> np.ndarray:
         on = max(dur * S16 * (0.25 if stac else 0.85), 0.02)
         offset = int(s16 * S16 * SR)
         freq = 440.0 * 2 ** ((midi - 69) / 12.0)
-        x = np.asarray(ym38x6_ml.render_patch(patch_json, freq, on, REL, 100, SR), dtype=np.float32)
+        x = np.asarray(patchlab.render_patch(patch_json, freq, on, REL, 100, SR), dtype=np.float32)
         end = min(offset + len(x), len(buf)); buf[offset:end] += x[:end - offset]
     return buf
 

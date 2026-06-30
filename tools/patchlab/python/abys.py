@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import features as ft  # noqa: E402
 import param_space as ps  # noqa: E402
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 
 _SILENT_PENALTY = 10.0
 
@@ -274,7 +274,7 @@ def render(vec, freq, on, release, sr,
            waveforms: tuple[int, ...] = (0, 0, 0, 0),
            field_ranges: dict | None = None):
     v = np.clip(np.asarray(vec, dtype=np.float64), 0.0, 1.0)
-    return ym38x6_ml.render_patch(
+    return patchlab.render_patch(
         ps.vector_to_patch_json(v, algorithm, waveforms, field_ranges), freq, on, release, 115, sr)
 
 

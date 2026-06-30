@@ -30,7 +30,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 
 SR = 44100.0
 
@@ -122,7 +122,7 @@ BRASS_FAMILY: dict[int, tuple[str, dict]] = {
 
 def _render(patch: dict, note: int, on: float = 2.0, release: float = 3.0) -> np.ndarray:
     freq = 440.0 * 2 ** ((note - 69) / 12.0)
-    s = ym38x6_ml.render_patch(json.dumps(patch), freq, on, release, 100, SR)
+    s = patchlab.render_patch(json.dumps(patch), freq, on, release, 100, SR)
     return np.asarray(s, dtype=np.float32)
 
 

@@ -1,8 +1,8 @@
-//! ym38x6-ml — 38x6 FMエンジンのPythonバインディング（フェーズ6: ML逆算合成）。
+//! patchlab — 38x6 FMエンジンのPythonバインディング。
 //!
-//! まずは forward 方向（パラメーター→音）を Python から呼べるようにする。Python側で
-//! ランダムサンプリングして (パラメーター, 音響特徴) のデータセットを生成し、逆算モデル
-//! （目標音 → FMパラメーター）の学習に使う想定。逆算モデルの方式はデータ生成が回ってから決める。
+//! forward 方向（パラメーター→音）を Python から呼べるようにする。音色設計テンプレート・
+//! 試聴ツール（piano/brass/organ_template, audition, phrase等）と、ML逆算合成系ツール
+//! （abys, probe, lookup等）の両方がこのバインディング経由でエンジンを呼ぶ。
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -46,11 +46,11 @@ fn render_patch(
 /// バインディングが生きているか確認する簡易関数（スモークテスト用）。
 #[pyfunction]
 fn engine_info() -> String {
-    "ym38x6-ml: 38x6 FM engine binding (phase 6, forward render)".to_string()
+    "patchlab: 38x6 FM engine binding (forward render)".to_string()
 }
 
 #[pymodule]
-fn ym38x6_ml(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn patchlab(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_patch, m)?)?;
     m.add_function(wrap_pyfunction!(engine_info, m)?)?;
     Ok(())

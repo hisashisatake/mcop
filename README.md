@@ -83,7 +83,7 @@ Selectable handling for notes outside the current scale:
 | 2 | Performance LFO + master effects (Reverb/Chorus) |
 | 3 | 38x6 FM engine, waveform selection, detune |
 | 4 | Per-operator F-Number, per-operator key-on |
-| 5 | Parameter UI, preset save/load, GM2 Bank 0 program set via ML-based tone generation (`ym38x6-ml`) |
+| 5 | Parameter UI, preset save/load, GM2 Bank 0 program set via descriptor-guided + hand-tuned patch design (`patchlab`) |
 | 6 | VST3/CLAP plugin via nice-plug (optional) |
 | 7 | Scale detection / avoid note handling |
 | 8 | Tablet support (Tauri v2 iOS/Android) |

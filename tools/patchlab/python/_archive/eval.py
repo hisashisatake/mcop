@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import features as ft  # noqa: E402
 import param_space as ps  # noqa: E402
-import ym38x6_ml  # noqa: E402
+import patchlab  # noqa: E402
 from model import InverseNet  # noqa: E402
 
 
@@ -77,7 +77,7 @@ def main() -> int:
 
     def render(vec):
         pj = ps.vector_to_patch_json(vec)
-        return ym38x6_ml.render_patch(pj, freq, on, release, 115, sr)
+        return patchlab.render_patch(pj, freq, on, release, 115, sr)
 
     def feat(samples):
         return ft.log_mel(samples, sr=sr, n_mels=n_mels, n_frames=n_frames)

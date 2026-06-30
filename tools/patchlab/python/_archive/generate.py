@@ -1,6 +1,6 @@
 """フェーズ6 MVP: 自己教師ありデータセット生成CLI。
 
-ランダムな制限サブセットparams → 38x6で音(ym38x6_ml) → 無音はリジェクト → 対数メル特徴 → npz保存。
+ランダムな制限サブセットparams → 38x6で音(patchlab) → 無音はリジェクト → 対数メル特徴 → npz保存。
 学習データ「(音響特徴, 正解params)」を作る。エンジン自身が正解ラベラー。
 
 実行例（.venvのpythonで）:
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import features as ft  # noqa: E402
 import param_space as ps  # noqa: E402
-import ym38x6_ml  # noqa: E402  (maturin developで.venvにインストール済み)
+import patchlab  # noqa: E402  (maturin developで.venvにインストール済み)
 
 _SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
@@ -62,7 +62,7 @@ def main() -> int:
         tries += 1
         vec = ps.random_vectors(1, rng)[0]
         patch_json = ps.vector_to_patch_json(vec)
-        samples = ym38x6_ml.render_patch(patch_json, args.freq, args.on, args.release, 115, args.sr)
+        samples = patchlab.render_patch(patch_json, args.freq, args.on, args.release, 115, args.sr)
         if ft.is_silent(samples):
             rejected += 1
             continue
