@@ -349,36 +349,7 @@ pub(crate) fn create_editor(
                     // ---- 残りのパラメーター（右側・縦スクロール） ----
                     egui::CentralPanel::default().show_inside(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            // ---- Channel ----
-                            ui.group(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("CHANNEL").strong());
-                                    ui.horizontal_wrapped(|ui| {
-                                        knob(ui, setter, &params.algorithm, "ALG");
-                                        knob(ui, setter, &params.feedback, "FB");
-                                        knob(ui, setter, &params.lfo_rate, "L.RATE");
-                                        knob(ui, setter, &params.lfo_depth, "L.DEP");
-                                        knob(ui, setter, &params.lfo_delay, "L.DLY");
-                                        knob(ui, setter, &params.tone_freq, "T.FRQ");
-                                        knob(ui, setter, &params.tone_pmd, "T.PMD");
-                                        knob(ui, setter, &params.tone_amd, "T.AMD");
-                                        knob(ui, setter, &params.tone_delay, "T.DLY");
-                                        knob(ui, setter, &params.pms, "PMS");
-                                        knob(ui, setter, &params.ams, "AMS");
-                                        knob(ui, setter, &params.cutoff, "CUT");
-                                        knob(ui, setter, &params.resonance, "RES");
-                                        knob(ui, setter, &params.feg_a, "F.A");
-                                        knob(ui, setter, &params.feg_d, "F.D");
-                                        knob(ui, setter, &params.feg_s, "F.S");
-                                        knob(ui, setter, &params.feg_r, "F.R");
-                                        knob(ui, setter, &params.feg_depth, "F.DEP");
-                                        knob(ui, setter, &params.rev_send, "REV");
-                                        knob(ui, setter, &params.cho_send, "CHO");
-                                    });
-                                });
-                            });
-
-                            // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む） ----
+                            // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む。最優先で上に表示） ----
                             for i in 0..4 {
                                 let op = &params.operators[i];
                                 ui.group(|ui| {
@@ -406,16 +377,73 @@ pub(crate) fn create_editor(
                                 });
                             }
 
-                            // ---- Effects（マスター） ----
-                            ui.group(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("EFFECTS").strong());
-                                    ui.horizontal_wrapped(|ui| {
-                                        knob(ui, setter, &params.reverb_time, "R.TIME");
-                                        knob(ui, setter, &params.chorus_mod_rate, "C.RATE");
-                                        knob(ui, setter, &params.chorus_mod_depth, "C.DEP");
-                                        knob(ui, setter, &params.chorus_feedback, "C.FB");
-                                        knob(ui, setter, &params.chorus_send_to_reverb, "C>R");
+                            // ---- チャンネル固有 / パフォーマンスLFO / トーンLFO（横一列） ----
+                            ui.horizontal(|ui| {
+                                ui.group(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new("CHANNEL").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            knob(ui, setter, &params.algorithm, "ALG");
+                                            knob(ui, setter, &params.feedback, "FB");
+                                        });
+                                    });
+                                });
+
+                                ui.group(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new("PERF LFO").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            knob(ui, setter, &params.lfo_rate, "L.RATE");
+                                            knob(ui, setter, &params.lfo_depth, "L.DEP");
+                                            knob(ui, setter, &params.lfo_delay, "L.DLY");
+                                        });
+                                    });
+                                });
+
+                                ui.group(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new("TONE LFO").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            knob(ui, setter, &params.tone_freq, "T.FRQ");
+                                            knob(ui, setter, &params.tone_pmd, "T.PMD");
+                                            knob(ui, setter, &params.tone_amd, "T.AMD");
+                                            knob(ui, setter, &params.tone_delay, "T.DLY");
+                                            knob(ui, setter, &params.pms, "PMS");
+                                            knob(ui, setter, &params.ams, "AMS");
+                                        });
+                                    });
+                                });
+                            });
+
+                            // ---- フィルター / マスターエフェクト（横一列） ----
+                            ui.horizontal(|ui| {
+                                ui.group(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new("FILTER").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            knob(ui, setter, &params.cutoff, "CUT");
+                                            knob(ui, setter, &params.resonance, "RES");
+                                            knob(ui, setter, &params.feg_a, "F.A");
+                                            knob(ui, setter, &params.feg_d, "F.D");
+                                            knob(ui, setter, &params.feg_s, "F.S");
+                                            knob(ui, setter, &params.feg_r, "F.R");
+                                            knob(ui, setter, &params.feg_depth, "F.DEP");
+                                        });
+                                    });
+                                });
+
+                                ui.group(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new("MASTER EFFECT").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            knob(ui, setter, &params.rev_send, "REV");
+                                            knob(ui, setter, &params.cho_send, "CHO");
+                                            knob(ui, setter, &params.reverb_time, "R.TIME");
+                                            knob(ui, setter, &params.chorus_mod_rate, "C.RATE");
+                                            knob(ui, setter, &params.chorus_mod_depth, "C.DEP");
+                                            knob(ui, setter, &params.chorus_feedback, "C.FB");
+                                            knob(ui, setter, &params.chorus_send_to_reverb, "C>R");
+                                        });
                                     });
                                 });
                             });
