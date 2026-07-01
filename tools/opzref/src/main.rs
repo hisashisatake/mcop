@@ -4,7 +4,7 @@
 //! opz2x6＋38x6 の変換忠実度を、実機録音の交絡なしに突き合わせるための参照を作る。
 //!
 //! 使い方:
-//!   opzref --selftest [out.wav]
+//!   opzref --selftest [out.wav] [kc(hex)]
 //!   opzref render <bank.syx> <voice_index> [out.wav]
 //!                 [--note <midi>] [--dur <sec>] [--gate <sec>]
 //!                 [--kc <hex>] [--slots a,b,c,d]
@@ -89,6 +89,12 @@ fn out_to_tl_reg(out: u8) -> u8 {
 }
 
 fn midi_to_kc(midi: u8) -> u8 {
+    // ymfm実測で判明: KCのオクターブ境界はC/C#間ではなくC#/D間よりさらにずれており、
+    // 「オクターブブロックはC#(N)〜C(N+1)の12音」という区切りになっている
+    // （selftestで--kcを0x40〜0x4Eまで掃引した実測: nibble0=C#4, nibble14=C5を確認）。
+    // NOTECODE/オクターブ式自体は(midi-1)に対しては正しく一致するため、
+    // 引数を1つずらすことでこの境界のズレを吸収する。
+    let midi = midi.saturating_sub(1);
     let oct = (midi / 12).saturating_sub(1) & 0x07;
     let note = NOTECODE[(midi % 12) as usize];
     (oct << 4) | note
@@ -223,7 +229,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn selftest(out_path: &Path) -> Result<(), String> {
+fn selftest(out_path: &Path, kc: u8) -> Result<(), String> {
     let opz = Opz::new();
     let sr = opz.sample_rate();
     eprintln!("ymfm OPZ native sample_rate = {sr} Hz");
@@ -237,7 +243,7 @@ fn selftest(out_path: &Path) -> Result<(), String> {
     for slot in 1..4 {
         opz.write(op_reg(0x60, slot), 0x7f);
     }
-    opz.write(0x28, 0x4a);
+    opz.write(0x28, kc);
     opz.write(0x30, 0x00);
     opz.write(0x20, 0x80 | 0x40 | 0x07);
     let n = (sr as f32 * 1.5) as usize;
@@ -277,7 +283,10 @@ fn main() -> std::process::ExitCode {
     let res = match args.first().map(|s| s.as_str()) {
         Some("--selftest") => {
             let out = args.get(1).cloned().unwrap_or_else(|| "opzref_selftest.wav".into());
-            selftest(Path::new(&out))
+            let kc = args.get(2)
+                .and_then(|s| u8::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(0x4a);
+            selftest(Path::new(&out), kc)
         }
         Some("render") => cmd_render(&args[1..]),
         _ => Err("usage: opzref render <bank.syx> <voice> [out.wav] | --selftest".into()),
