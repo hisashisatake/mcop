@@ -10,7 +10,9 @@
 //!                 [--kc <hex>] [--slots a,b,c,d]
 //!
 //! ops[] は [OP4,OP3,OP2,OP1]。--slots は ops[0..3] を割り当てる
-//! レジスタ slot (0..3)。既定 [3,1,2,0] は opz2x6/38x6 と同じ写像。
+//! レジスタ slot (0..3)。既定 [0,2,1,3] は VMEM のバイト配置（OP4@0,OP2@10,OP3@20,OP1@30、
+//! parse.rs参照）がそのまま物理slot順を反映しているという前提に基づく
+//! （TX81Z公式ドキュメント・NOZ氏の解説・本ツールでの実測波形で妥当性を確認済み）。
 
 use std::os::raw::{c_uint, c_void};
 use std::path::Path;
@@ -63,19 +65,15 @@ fn op_reg(base: u32, slot: u32) -> u32 {
 // TX81Z DET (0-6, 3=中心) → OPM DT1 register (0-7)。
 const DT1_FROM_DET: [u8; 7] = [7, 6, 5, 0, 1, 2, 3];
 
-// midi semitone(0=C) → OPM KC note nibble。
-// C は下位オクターブ側(14)に食い込むため近似だが、本ツールの対象音域では実害なし。
-const NOTECODE: [u8; 12] = [14, 0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13];
+// midi semitone(0=C) → OPM KC note nibble（3,7,11,15は未使用、標準のOPM/OPZ表）。
+const NOTECODE: [u8; 12] = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14];
 
 // TX81Z FREQ coarse(0-63) → OPZ register (MUL 0-15, fine 0-15)。
-// ratio = BASE[f/4]*SCALE[f%4]（opz2x6 と同じ基数）を MUL+fine/16 に符号化する。
+// ratio(opz2x6::conv::coarse_to_ratio、実測テーブルに基づく。opz2x6::conv::freq_to_mul_fine の
+// コメント参照)を MUL+fine/16 に符号化する（floor→MUL、端数×16→fine。ymfmの
+// cache.multiple=(MUL<<4)|FINEと同じx.4固定小数点表現）。
 fn freq_to_reg_mul_fine(freq: u8) -> (u8, u8) {
-    const SCALE: [f32; 4] = [1.0, 1.414_213_6, 1.587_401, 1.681_793];
-    const BASE: [f32; 16] = [
-        0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-    ];
-    let f = freq.min(63) as usize;
-    let ratio = BASE[f / 4] * SCALE[f % 4];
+    let ratio = opz2x6::conv::coarse_to_ratio(freq);
     if ratio <= 0.75 {
         return (0, 0); // MUL=0 は ymfm で 0.5 扱い
     }
@@ -178,7 +176,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let mut dur = 2.5f32;
     let mut gate = 2.0f32;
     let mut kc_override: Option<u8> = None;
-    let mut slots: [u32; 4] = [3, 1, 2, 0];
+    let mut slots: [u32; 4] = [0, 2, 1, 3];
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {

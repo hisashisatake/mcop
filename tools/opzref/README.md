@@ -25,7 +25,8 @@ cargo run -p opzref --release -- render "bank.syx" 0 out.wav --note 68 --dur 2.5
 - `--gate <sec>`   キーオン保持秒数（既定 2.0、以降はリリース）
 - `--kc <hex>`     OPM キーコードを直接指定（音程キャリブレーション用）
 - `--slots a,b,c,d` `ops[0..3]`（=[OP4,OP3,OP2,OP1]）を割り当てるレジスタ slot。
-  既定 `3,1,2,0` は opz2x6/38x6 と同じオペレーター写像。
+  既定 `0,2,1,3` は VMEM のバイト配置（OP4@0,OP2@10,OP3@20,OP1@30）がそのまま
+  物理slot順を反映しているという前提（TX81Z公式ドキュメント・実測波形で確認済み）。
 
 ## メモ
 

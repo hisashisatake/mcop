@@ -73,19 +73,47 @@ fn det_to_x6(det: u8) -> u8 {
     DT1_TO_X6[dt1 as usize]
 }
 
-/// TX81Z FREQ (0-63) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+/// TX81Z FREQ coarse(0-63) → [group(0-3), order基準値]。
 ///
-/// TX81Z の周波数コースは整数 MUL 比（0.5, 1, 2, ..., 15）を基数として
-/// {1.0, √2, 2^(2/3), 2^(3/4)} の4段階で刻む（= 4種 × 16グループ = 64値）。
+/// TX81Zの周波数比は「4個おきの連続ブロック」のような単純な規則ではなく、coarse値が
+/// 4グループ（グループごとに異なる線形係数）へ複雑にスクランブルされて割り当てられている。
+/// 旧実装は前者の単純化された誤った仮定を使っており、coarse値が大きくなるほど誤差が拡大していた
+/// （例: coarse=22で旧実装7.937 vs 実測7.00、+13.4%の誤差。FM倍音比としては協和(7.00)から
+/// 不協和寸前(7.937≒8倍音直下)への変質に相当し、金属的・非整数倍音的な音色劣化の主因だった）。
+/// 出典: https://mgregory22.me/tx81z/freqratios.html （TX81Zの周波数比を実測でリバースエンジニアリング。
+/// 著者自身「端数に説明のつかない周期誤差が残る」と明記しており完全な精度は無いが、
+/// 旧実装より大幅に正確）。
+/// fine(0-15、TX81Zの別パラメーターだがVMEMダンプには含まれないため常に0として扱う)は
+/// `order = order_base + fine` として加算される。
+const COARSE_TO_GROUP: [(u8, u16); 64] = [
+    (0, 0), (1, 0), (2, 0), (3, 0), (0, 8), (1, 8), (2, 8), (3, 8), (0, 24), (1, 24),
+    (0, 40), (2, 24), (3, 24), (0, 56), (1, 40), (2, 40), (0, 72), (3, 40), (1, 56), (0, 88),
+    (2, 56), (3, 56), (0, 104), (1, 72), (2, 72), (0, 120), (1, 88), (3, 72), (0, 136), (2, 88),
+    (1, 104), (0, 152), (3, 88), (2, 104), (0, 168), (1, 120), (0, 184), (3, 104), (2, 120), (1, 136),
+    (0, 200), (3, 120), (0, 216), (1, 152), (2, 136), (0, 232), (1, 168), (3, 136), (2, 152), (1, 184),
+    (2, 168), (3, 152), (1, 200), (2, 184), (3, 168), (1, 216), (2, 200), (3, 184), (1, 232), (2, 216),
+    (3, 200), (2, 232), (3, 216), (3, 232),
+];
+
+/// [COARSE_TO_GROUP]の4グループそれぞれの(基準値, 増分)係数。ratio = base + step * order。
+const FREQ_RATIO_COEFFS: [(f32, f32); 4] = [
+    (0.50, 0.0625),
+    (0.71, 0.088105),
+    (0.78, 0.098145),
+    (0.87, 0.108105),
+];
+
+/// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref共通で使う変換の核。
+pub fn coarse_to_ratio(coarse: u8) -> f32 {
+    let (group, order_base) = COARSE_TO_GROUP[coarse.min(63) as usize];
+    let (base, step) = FREQ_RATIO_COEFFS[group as usize];
+    base + step * order_base as f32
+}
+
+/// TX81Z FREQ (0-63) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
 /// 最近傍の整数 MUL を選び、差分セントを op_fine_tune に写像する。
 pub fn freq_to_mul_fine(freq: u8) -> (u8, u8) {
-    const SCALE: [f32; 4] = [1.0, 1.414_213_6, 1.587_401, 1.681_793];
-    const BASE: [f32; 16] = [
-        0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0,
-        8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-    ];
-    let f = freq.min(63) as usize;
-    let ratio = BASE[f / 4] * SCALE[f % 4];
+    let ratio = coarse_to_ratio(freq);
 
     // 最近傍の整数MUL（対数空間距離）
     let mut best_mul = 0u8;
@@ -263,20 +291,25 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     // 38x6 operators[0..3] へ写像する。
     //
     // 38x6 の ALGORITHMS は ymfm の OPN系 s_algorithm_ops を移植したもので、
-    // operators[0..3] は ymfm の m_op[0..3]（アルゴリズム上の O1/O2/O3/O4）と一致する。
-    // OPZ(YM2414) は OPM系チップなので、レジスタ slot → m_op に slot1↔slot2 の
-    // インターリーブが入る（ymfm `opz_registers::operator_map`：m_op=[slot0,slot2,slot1,slot3]）。
-    // TX81Z が VMEM の OP1〜OP4 を slot0〜slot3 へ素直に書く（OP1→slot0 … OP4→slot3）ため、
-    //   m_op = [slot0, slot2, slot1, slot3] = [OP1, OP3, OP2, OP4]
-    // となる。よって operators = [OP1, OP3, OP2, OP4] = [ops[3], ops[1], ops[2], ops[0]]。
+    // operators[0..3] は ymfm の m_op[0..3]（アルゴリズム上の O1/O2/O3/O4、O1が最深
+    // モジュレーター兼フィードバック対象、O4がキャリア。YM2608マニュアル図2-3の
+    // S1(FB)→S2→S3→S4=Cと一致）を意味する。
     //
-    // 旧実装は単純逆順 [OP1, OP2, OP3, OP4] で、この slot1↔2 入替（OP2↔OP3）を
-    // 落としていた。そのため非整数キャリア比パッチ（LoTine81Z 等、alg4 のキャリアが
-    // OP2/OP4 にずれて基音 1.0× を失い tritone 上ずり）で音程が狂っていた。
-    // ymfm OPZ 参照（opzref）で alg4=LoTine が基音 415Hz に復帰し、alg2=GrandPiano の
-    // 倍音は実機録音と同等を維持することを確認済み（slot1↔2 はチップ固有で全 alg 共通、
-    // アルゴリズム番号の再マップは不要）。
-    const OP_SRC: [usize; 4] = [3, 1, 2, 0]; // operators[i] ← ops[OP_SRC[i]]
+    // OPZ(YM2414)は OPM系チップなので、レジスタ物理slot → m_op に slot1↔slot2 の
+    // インターリーブが入る（ymfm `opz_registers::operator_map`：m_op=[slot0,slot2,slot1,slot3]）。
+    // 一方 TX81Z の VMEM ファイルはバイトオフセット順で OP4(0-9)/OP2(10-19)/OP3(20-29)/OP1(30-39)
+    // と書かれており（parse.rs参照）、これはバルクダンプがチップ内部レジスタをそのまま
+    // 反映したものなので、物理slot0=OP4, slot1=OP2, slot2=OP3, slot3=OP1 と対応する。
+    // よって m_op = [slot0, slot2, slot1, slot3] = [OP4, OP3, OP2, OP1] = ops[] そのもの
+    // （恒等写像）。
+    //
+    // 旧実装は [ops[3], ops[1], ops[2], ops[0]]（OP1をoperators[0]=フィードバック対象へ）
+    // だったが、これは「VMEMがOP1→slot0の素直な順で書かれる」という誤った前提に基づいていた。
+    // TX81Z公式ドキュメント（fm_overview: 「OP4 modulates OP3, 3 modulates 2, 2 modulates 1」）・
+    // NOZ氏の解説（OPP系はOPN/OPM系と結線順が逆）・ymfm OPZ参照(opzref)での実測波形
+    // （旧写像は全サンプル±最大振幅で暴れる純ノイズ、恒等写像は滑らかな減衰包絡線）の
+    // 三点で恒等写像が正しいことを確認した。
+    const OP_SRC: [usize; 4] = [0, 1, 2, 3]; // operators[i] ← ops[OP_SRC[i]]（恒等写像）
     let operators = std::array::from_fn(|i| {
         let op = &voice.ops[OP_SRC[i]];
         let is_carrier = carriers.contains(&i);
@@ -397,12 +430,15 @@ mod tests {
     }
 
     #[test]
-    fn freq_sqrt2_interval_near_tritone() {
-        // FREQ 5 = 1.414x: MUL=1 か MUL=2 の近傍（600¢）
-        let (m, oft) = freq_to_mul_fine(5);
-        // ±600¢ なので either MUL=1(oft>128) or MUL=2(oft<128)
-        assert!(m == 1 || m == 2);
-        if m == 1 { assert!(oft > 128); } else { assert!(oft < 128); }
+    fn coarse_to_ratio_matches_reference_table() {
+        // https://mgregory22.me/tx81z/freqratios.html の実測値(fine=0)との照合。
+        // GrandPianoパッチ(Yamaha Factory Bank A voice0)で実際に使われている値を含む。
+        assert!((coarse_to_ratio(0) - 0.50).abs() < 1e-3);
+        assert!((coarse_to_ratio(4) - 1.00).abs() < 1e-3);
+        assert!((coarse_to_ratio(8) - 2.00).abs() < 1e-3);
+        assert!((coarse_to_ratio(13) - 4.00).abs() < 1e-3);
+        assert!((coarse_to_ratio(22) - 7.00).abs() < 1e-3); // 旧実装は7.937(+13.4%誤差)だった
+        assert!((coarse_to_ratio(25) - 8.00).abs() < 1e-3);
     }
 
     #[test]
@@ -448,32 +484,31 @@ mod tests {
     }
 
     #[test]
-    fn op_order_reversal() {
-        // ops[] = [OP4, OP3, OP2, OP1]。端点は OP4↔OP1 が入れ替わる:
-        // operators[0]=OP1(ops[3]), operators[3]=OP4(ops[0])
+    fn op_order_is_identity() {
+        // ops[] = [OP4, OP3, OP2, OP1] がそのまま operators[0..3] になる
+        // （OP4=最深モジュレーター兼フィードバック対象→operators[0]、OP1=キャリア→operators[3]）。
         let mut voice = OpzVoice::default();
-        voice.ops[0] = OpzOpData { out: 10, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP4
-        voice.ops[3] = OpzOpData { out: 80, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP1
+        voice.ops[0] = OpzOpData { out: 80, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP4
+        voice.ops[3] = OpzOpData { out: 10, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() }; // OP1
         let patch = voice_to_patch(&voice);
-        // operators[0] ← OP1 (out=80) → tl should be large
+        // operators[0] ← OP4 (out=80) → tl should be large
         assert!(patch.operators[0].tl > patch.operators[3].tl,
-            "operators[0](OP1,out=80) should have higher tl than operators[3](OP4,out=10)");
+            "operators[0](OP4,out=80) should have higher tl than operators[3](OP1,out=10)");
     }
 
     #[test]
-    fn opz_slot_interleave_swaps_op2_op3() {
-        // OPZ(YM2414) の slot1↔slot2 インターリーブ（ymfm operator_map）を反映し、
-        // operators = [OP1, OP3, OP2, OP4] になることを検証する。
-        // ops[] = [OP4, OP3, OP2, OP1] に判別用 freq（→mul）を仕込む。
+    fn op_order_no_interleave() {
+        // ops[] = [OP4, OP3, OP2, OP1] の順序をそのまま保つ（恒等写像）ことを検証する。
+        // ops[] に判別用 freq（→mul、いずれも coarse_to_ratio が整数比になる値）を仕込む。
         let mut voice = OpzVoice::default();
-        voice.ops[0] = OpzOpData { freq: 8,  det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP4 → mul2
-        voice.ops[1] = OpzOpData { freq: 12, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP3 → mul3
-        voice.ops[2] = OpzOpData { freq: 16, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP2 → mul4
-        voice.ops[3] = OpzOpData { freq: 4,  det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP1 → mul1
+        voice.ops[0] = OpzOpData { freq: 8,  det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP4 → ratio2.0,mul2
+        voice.ops[1] = OpzOpData { freq: 13, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP3 → ratio4.0,mul4
+        voice.ops[2] = OpzOpData { freq: 22, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP2 → ratio7.0,mul7
+        voice.ops[3] = OpzOpData { freq: 25, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP1 → ratio8.0,mul8
         let p = voice_to_patch(&voice);
-        assert_eq!(p.operators[0].mul, 1, "operators[0]=OP1");
-        assert_eq!(p.operators[1].mul, 3, "operators[1]=OP3 (slot1↔2 interleave)");
-        assert_eq!(p.operators[2].mul, 4, "operators[2]=OP2 (slot1↔2 interleave)");
-        assert_eq!(p.operators[3].mul, 2, "operators[3]=OP4");
+        assert_eq!(p.operators[0].mul, 2, "operators[0]=OP4");
+        assert_eq!(p.operators[1].mul, 4, "operators[1]=OP3");
+        assert_eq!(p.operators[2].mul, 7, "operators[2]=OP2");
+        assert_eq!(p.operators[3].mul, 8, "operators[3]=OP1");
     }
 }
