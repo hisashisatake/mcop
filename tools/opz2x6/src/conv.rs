@@ -29,20 +29,21 @@ fn out_to_tl(out: u8) -> u8 {
     (out.min(99) as f32 / 99.0 * 254.0).round() as u8
 }
 
-/// モジュレーター TL 天井の既定値。
+/// `--mod-cap` 診断オプション用の参考値（切り分け診断で明るさを抑えたい場合に指定する）。
 ///
-/// エンジンの `modulation` は位相サイクル単位（1.0=1周=2πrad）で、変調深度は
-/// β[rad] = tl_to_gain(tl) × FM_MODULATION_INDEX_SCALE(4.0) × 2π。
-/// TL=254 → β≈24rad（ノイズ）、TL=200 → β≈2.4rad。
-/// 200 だと弱打でも明るすぎ（ブラス寄り）になり、180 の方が聴感が良いと確認したため 180 を既定とする。
-/// 180 を基準にしても velocity_sensitivity(KVS) が強打時にモジュレーター実効 TL を ~190 まで
-/// 押し上げるため、弱打=穏やか／強打=明るい のグラデーションになる。
-/// キャリアは音量に直結するため天井を設けず out_to_tl を使う。
+/// 既定（`--mod-cap` 未指定）ではモジュレーター TL に天井を設けず、キャリアと同じ
+/// `out_to_tl` を使う（実機の OUT パラメーターをそのまま反映）。天井を設ける運用は
+/// 過去に「配線が誤っていた状態」を耳で補正するための対症療法だったことが判明したため
+/// （実機録音との比較検証、2026-07-01）、既定からは外した。
 pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
-/// OUT → 38x6 TL（モジュレーター用、上限 `cap`）。
-fn out_to_tl_mod(out: u8, cap: u8) -> u8 {
-    (out.min(99) as f32 / 99.0 * cap as f32).round() as u8
+/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（診断用）、
+/// `None`（既定）ならキャリアと同じ `out_to_tl` を使う（天井なし＝実機忠実）。
+fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
+    match cap {
+        Some(cap) => (out.min(99) as f32 / 99.0 * cap as f32).round() as u8,
+        None => out_to_tl(out),
+    }
 }
 
 /// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L。
@@ -246,8 +247,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions)
 /// 変換オプション（音質追い込み用の上書き群）。
 #[derive(Clone, Copy, Debug)]
 pub struct ConvOptions {
-    /// モジュレーター TL 天井。
-    pub mod_tl_cap: u8,
+    /// モジュレーター TL 天井（診断用）。`None`（既定）で天井なし＝実機忠実。
+    pub mod_tl_cap: Option<u8>,
     /// チャンネルフィードバックの上書き（`Some(n)` で 38x6 feedback を直接指定、`None` で .syx 由来）。
     /// 切り分け診断用：`Some(0)` でフィードバックを無効化できる。
     pub fb_override: Option<u8>,
@@ -273,7 +274,7 @@ pub struct ConvOptions {
 impl Default for ConvOptions {
     fn default() -> Self {
         Self {
-            mod_tl_cap: DEFAULT_MOD_TL_CAP,
+            mod_tl_cap: None,
             fb_override: None,
             ksr_override: None,
             carrier_sustain: 0.0,
@@ -370,12 +371,20 @@ mod tests {
 
     #[test]
     fn out_to_tl_mod_caps_at_given_cap() {
-        assert_eq!(out_to_tl_mod(0, 200), 0);
-        assert_eq!(out_to_tl_mod(99, 200), 200);
-        assert!(out_to_tl_mod(50, 200) > 0 && out_to_tl_mod(50, 200) < 200);
+        assert_eq!(out_to_tl_mod(0, Some(200)), 0);
+        assert_eq!(out_to_tl_mod(99, Some(200)), 200);
+        assert!(out_to_tl_mod(50, Some(200)) > 0 && out_to_tl_mod(50, Some(200)) < 200);
         // 天井を変えると最大値も追従する
-        assert_eq!(out_to_tl_mod(99, 254), 254);
-        assert_eq!(out_to_tl_mod(99, 180), 180);
+        assert_eq!(out_to_tl_mod(99, Some(254)), 254);
+        assert_eq!(out_to_tl_mod(99, Some(180)), 180);
+    }
+
+    #[test]
+    fn out_to_tl_mod_uncapped_matches_carrier_scaling() {
+        // capがNone(既定)ならキャリアと同じout_to_tlになる（天井なし＝実機忠実）
+        for out in [0u8, 50, 74, 77, 99] {
+            assert_eq!(out_to_tl_mod(out, None), out_to_tl(out));
+        }
     }
 
     #[test]

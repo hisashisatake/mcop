@@ -14,8 +14,8 @@
 //! - `--octave <N>` でオクターブ（既定 4）を指定する。
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
 //! - `--voice <N>` を指定すると WAV 出力をその音色番号（0始まり）1件のみに絞る。
-//! - `--mod-cap <N>` でモジュレーター TL 天井（既定 180）を上書きする。
-//!   大きいほど変調が深く明るい（254 でノイズ寄り）。音質追い込み用。
+//! - `--mod-cap <N>` でモジュレーター TL に天井を設ける（既定は天井なし＝キャリアと同じ
+//!   `out_to_tl`、実機の OUT をそのまま反映）。切り分け診断用（明るさを人為的に抑えたい場合）。
 //! - `--fb <N>` でチャンネルフィードバック（0-255）を全音色一律で上書きする。
 //!   省略時は .syx 由来。切り分け診断用（`--fb 0` でフィードバック無効）。
 //! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
@@ -98,7 +98,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut octave: i32 = 4;
     let mut note = "C".to_string();
     let mut voice_filter: Option<usize> = None;
-    let mut mod_cap: u8 = opz2x6::conv::DEFAULT_MOD_TL_CAP;
+    let mut mod_cap: Option<u8> = None;
     let mut fb_override: Option<u8> = None;
     let mut ksr_override: Option<u8> = None;
     let mut carrier_sustain: f32 = 0.0;
@@ -138,7 +138,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--mod-cap" => {
                 let v = args.get(i + 1).ok_or("--mod-cap に値がありません")?;
-                mod_cap = v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?;
+                mod_cap = Some(v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?);
                 i += 2;
             }
             "--fb" => {
