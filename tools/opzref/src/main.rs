@@ -7,7 +7,10 @@
 //!   opzref --selftest [out.wav] [kc(hex)]
 //!   opzref render <bank.syx> <voice_index> [out.wav]
 //!                 [--note <midi>] [--dur <sec>] [--gate <sec>]
-//!                 [--kc <hex>] [--slots a,b,c,d]
+//!                 [--kc <hex>] [--slots a,b,c,d] [--force-sine]
+//!
+//! --force-sine は全オペレーターの波形(ow)を強制的に正弦波(0)にする診断用オプション。
+//! ymfm OPZの非sine波形テーブルの再現精度を疑うときの切り分けに使う。
 //!
 //! ops[] は [OP4,OP3,OP2,OP1]。--slots は ops[0..3] を割り当てる
 //! レジスタ slot (0..3)。既定 [0,2,1,3] は VMEM のバイト配置（OP4@0,OP2@10,OP3@20,OP1@30、
@@ -109,6 +112,7 @@ fn render_voice(
     sr: u32,
     gate_secs: f32,
     dur_secs: f32,
+    force_sine: bool,
 ) -> Vec<f32> {
     // チャンネル: alg/fb, panR(bit7), keyoff
     let ch20 = 0x80 | ((v.feedback & 0x07) << 3) | (v.algorithm & 0x07);
@@ -122,7 +126,13 @@ fn render_voice(
     // 各オペレーター
     for (j, op) in v.ops.iter().enumerate() {
         let slot = slots[j];
-        write_operator(opz, op, slot);
+        if force_sine {
+            let mut op = op.clone();
+            op.ow = 0;
+            write_operator(opz, &op, slot);
+        } else {
+            write_operator(opz, op, slot);
+        }
     }
 
     // キーオン: 0x20 bit6=1 (ch0 は regdata[0x08]=0 既定なので発火)
@@ -183,6 +193,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let mut gate = 2.0f32;
     let mut kc_override: Option<u8> = None;
     let mut slots: [u32; 4] = [0, 2, 1, 3];
+    let mut force_sine = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -199,6 +210,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
                 slots = [parts[0], parts[1], parts[2], parts[3]];
                 i += 2;
             }
+            "--force-sine" => { force_sine = true; i += 1; }
             other => { out = other.to_string(); i += 1; }
         }
     }
@@ -220,7 +232,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let kc = kc_override.unwrap_or_else(|| midi_to_kc(note));
     eprintln!("note={note} kc=0x{kc:02X} sr={sr} slots={slots:?}");
 
-    let mut buf = render_voice(&opz, v, kc, slots, sr, gate, dur);
+    let mut buf = render_voice(&opz, v, kc, slots, sr, gate, dur, force_sine);
     let peak = normalize(&mut buf);
     eprintln!("peak(before norm)={peak:.6} samples={}", buf.len());
 
