@@ -9,7 +9,7 @@ use crate::parse::OpzVoice;
 // index = algorithm (0-7), value = 38x6 operators[] のキャリアインデックス一覧
 // ---------------------------------------------------------------------------
 
-const CARRIERS: [&[usize]; 8] = [
+pub const CARRIERS: [&[usize]; 8] = [
     &[3],          // 0: O1→O2→O3→O4
     &[3],          // 1: (O1+O2)→O3→O4
     &[3],          // 2: (O1+(O2→O3))→O4
@@ -19,6 +19,26 @@ const CARRIERS: [&[usize]; 8] = [
     &[1, 2, 3],    // 6: (O1→O2)+O3+O4
     &[0, 1, 2, 3], // 7: O1+O2+O3+O4（全並列）
 ];
+
+/// 指定アルゴリズムでオペレーター`operator_index`（38x6 operators[]のインデックス）が
+/// キャリアかどうか。opzref（レジスタ直書き検証ツール）からも共有で使う。
+pub fn is_carrier(alg: u8, operator_index: usize) -> bool {
+    CARRIERS[alg.min(7) as usize].contains(&operator_index)
+}
+
+/// TX81Z Aalg：アルゴリズムによる減衰量（実機のTLレジスタへの追加減衰、キャリアのみに適用）。
+///
+/// 出典: nornandブログ「TX81Zを解析した（Operator Output Level編）」の箇条書き
+/// （アルゴリズム1234=減衰0／5=op1,3が8・op2,4が0／67=op1,2,3が13・op4が0／8=全op16）。
+/// この「減衰を受けるオペレーター」の集合は[CARRIERS]（キャリア）と完全に一致し、
+/// 減衰量はキャリア本数nに対し`-20*log10(n)`dB（並列合成時の位相加算ヘッドルーム補正、
+/// 0.75dB/stepでほぼ厳密に8/13/16と一致）。モジュレーターおよび単一キャリアのアルゴリズムは0。
+const ALG_ATTEN_BY_CARRIER_COUNT: [u8; 5] = [0, 0, 8, 13, 16];
+
+/// アルゴリズム(0-7)のキャリアに適用するAalg減衰量。opzrefからも共有で使う。
+pub fn alg_atten(alg: u8) -> u8 {
+    ALG_ATTEN_BY_CARRIER_COUNT[CARRIERS[alg.min(7) as usize].len().min(4)]
+}
 
 // ---------------------------------------------------------------------------
 // スカラー変換
@@ -58,8 +78,9 @@ fn aol_to_tl(aol: u8) -> u8 {
 }
 
 /// OUT (TX81Z Output Level 0-99, 99=最大) → 38x6 TL（キャリア用、0=無音, 255=最大）。
-fn out_to_tl(out: u8) -> u8 {
-    aol_to_tl(ol_to_atten(out))
+/// `extra_atten` はAalg（アルゴリズムによる追加減衰、[alg_atten]参照）。
+fn out_to_tl(out: u8, extra_atten: u8) -> u8 {
+    aol_to_tl(ol_to_atten(out).saturating_add(extra_atten).min(127))
 }
 
 /// `--mod-cap` 診断オプション用の参考値（切り分け診断で明るさを抑えたい場合に指定する）。
@@ -75,7 +96,7 @@ pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     match cap {
         Some(cap) => (out.min(99) as f32 / 99.0 * cap as f32).round() as u8,
-        None => out_to_tl(out),
+        None => out_to_tl(out, 0),
     }
 }
 
@@ -232,7 +253,7 @@ fn fb_to_x6(fb: u8) -> u8 {
 // オペレーター変換
 // ---------------------------------------------------------------------------
 
-fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions) -> OperatorParams {
+fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions) -> OperatorParams {
     let mod_tl_cap = opts.mod_tl_cap;
     let (mul, op_fine_tune) = freq_to_mul_fine(op.freq);
 
@@ -241,7 +262,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, opts: ConvOptions)
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
     let mut params = OperatorParams {
-        tl: if is_carrier { out_to_tl(op.out) } else { out_to_tl_mod(op.out, mod_tl_cap) },
+        tl: if is_carrier { out_to_tl(op.out, alg_atten) } else { out_to_tl_mod(op.out, mod_tl_cap) },
         ar: ar_to_x6(op.ar, op.rs, is_carrier),
         d1r: opm_rate_to_x6(op.d1r, op.rs, is_carrier),
         d2r: opm_rate_to_x6(d2r, op.rs, is_carrier),
@@ -344,10 +365,11 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     // （旧写像は全サンプル±最大振幅で暴れる純ノイズ、恒等写像は滑らかな減衰包絡線）の
     // 三点で恒等写像が正しいことを確認した。
     const OP_SRC: [usize; 4] = [0, 1, 2, 3]; // operators[i] ← ops[OP_SRC[i]]（恒等写像）
+    let atten = alg_atten(alg as u8);
     let operators = std::array::from_fn(|i| {
         let op = &voice.ops[OP_SRC[i]];
         let is_carrier = carriers.contains(&i);
-        convert_op(op, is_carrier, opts)
+        convert_op(op, is_carrier, atten, opts)
     });
 
     Ym38x6Patch {
@@ -397,9 +419,9 @@ mod tests {
 
     #[test]
     fn out_to_tl_polarity() {
-        assert_eq!(out_to_tl(0), 0);    // 無音
-        assert_eq!(out_to_tl(99), 255); // 最大（キャリア用）
-        assert!(out_to_tl(50) > 0 && out_to_tl(50) < 255);
+        assert_eq!(out_to_tl(0, 0), 0);    // 無音
+        assert_eq!(out_to_tl(99, 0), 255); // 最大（キャリア用）
+        assert!(out_to_tl(50, 0) > 0 && out_to_tl(50, 0) < 255);
     }
 
     #[test]
@@ -426,8 +448,37 @@ mod tests {
     fn out_to_tl_mod_uncapped_matches_carrier_scaling() {
         // capがNone(既定)ならキャリアと同じout_to_tlになる（天井なし＝実機忠実）
         for out in [0u8, 50, 74, 77, 99] {
-            assert_eq!(out_to_tl_mod(out, None), out_to_tl(out));
+            assert_eq!(out_to_tl_mod(out, None), out_to_tl(out, 0));
         }
+    }
+
+    #[test]
+    fn alg_atten_matches_reference_table() {
+        // nornandブログの箇条書き（キャリア本数=1..4 → 減衰0/0/8/13/16）と
+        // CARRIERSのキャリア本数が一致することを検証する。
+        assert_eq!(alg_atten(0), 0); // アルゴリズム1(reg0, 単一キャリア)
+        assert_eq!(alg_atten(1), 0);
+        assert_eq!(alg_atten(2), 0);
+        assert_eq!(alg_atten(3), 0);
+        assert_eq!(alg_atten(4), 8);  // アルゴリズム5(reg4, 2キャリア)
+        assert_eq!(alg_atten(5), 13); // アルゴリズム6(reg5, 3キャリア)
+        assert_eq!(alg_atten(6), 13); // アルゴリズム7(reg6, 3キャリア)
+        assert_eq!(alg_atten(7), 16); // アルゴリズム8(reg7, 4キャリア=全並列)
+    }
+
+    #[test]
+    fn alg_atten_reduces_multi_carrier_carrier_tl() {
+        // 4キャリア(alg7)ではAalg=16減衰が乗るぶん、単一キャリア(alg0)よりtlが小さくなる。
+        let single = out_to_tl(99, alg_atten(0));
+        let quad = out_to_tl(99, alg_atten(7));
+        assert!(quad < single, "4キャリアのtl({quad})は単一キャリアのtl({single})より小さいはず");
+    }
+
+    #[test]
+    fn is_carrier_matches_carriers_table() {
+        assert!(is_carrier(0, 3) && !is_carrier(0, 0)); // alg0: キャリアはoperators[3]のみ
+        assert!(is_carrier(4, 1) && is_carrier(4, 3) && !is_carrier(4, 0)); // alg4: キャリアは1,3
+        assert!((0..4).all(|i| is_carrier(7, i))); // alg7: 全オペレーターがキャリア
     }
 
     #[test]
@@ -496,42 +547,42 @@ mod tests {
     #[test]
     fn kvs_carrier_is_zero() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 0, "carrier velocity_sensitivity must be 0");
     }
 
     #[test]
     fn kvs_modulator_maps_70_at_max() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 70);
     }
 
     #[test]
     fn kvs_modulator_zero_stays_zero() {
         let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default());
         assert_eq!(p.velocity_sensitivity, 0);
     }
 
     #[test]
     fn egt1_forces_d2r_nonzero() {
         let op = OpzOpData { d2r: 0, egt: 1, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default());
         assert!(p.d2r > 0, "EGT=1 with D2R=0 should force d2r > 0");
     }
 
     #[test]
     fn egt0_d2r_zero_stays_zero() {
         let op = OpzOpData { d2r: 0, egt: 0, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default());
         assert_eq!(p.d2r, 0, "EGT=0 D2R=0 → sustain型（d2r=0のまま）");
     }
 
     #[test]
     fn waveform_direct_copy() {
         let op = OpzOpData { ow: 5, freq: 4, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default());
         assert_eq!(p.waveform, 5);
     }
 

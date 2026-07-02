@@ -118,14 +118,19 @@ fn render_voice(
     opz.write(0x38, ((v.pms & 0x07) << 4) | (v.ams & 0x03));
 
     // 各オペレーター
+    // Aalg（アルゴリズムによる追加減衰、opz2x6::conv::alg_atten）はキャリアのみに乗る。
+    // TX81Zファームウェアが「OL」パラメーターをTLレジスタへ書き込む際に加算する値なので、
+    // レジスタ直書きのopzrefでも同じ補正が必要（opz2x6と共有、project memory参照）。
+    let atten = opz2x6::conv::alg_atten(v.algorithm);
     for (j, op) in v.ops.iter().enumerate() {
         let slot = slots[j];
+        let alg_atten = if opz2x6::conv::is_carrier(v.algorithm, j) { atten } else { 0 };
         if force_sine {
             let mut op = op.clone();
             op.ow = 0;
-            write_operator(opz, &op, slot);
+            write_operator(opz, &op, slot, alg_atten);
         } else {
-            write_operator(opz, op, slot);
+            write_operator(opz, op, slot, alg_atten);
         }
     }
 
@@ -143,12 +148,13 @@ fn render_voice(
     buf
 }
 
-fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32) {
+fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8) {
     let (mul, fine) = freq_to_reg_mul_fine(op.freq);
     let dt1 = DT1_FROM_DET[op.det.min(6) as usize];
     // TX81Z OUT (0-99, 99=最大) → OPZ TL register (0-127, 0=最大)。
-    // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)。
-    let tl = opz2x6::conv::ol_to_atten(op.out);
+    // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)に
+    // Aalg（アルゴリズムによる追加減衰、キャリアのみ）を加算する。
+    let tl = opz2x6::conv::ol_to_atten(op.out).saturating_add(alg_atten).min(127);
 
     // 0x40: DT1(6-4) | MUL(3-0), data bit7=0
     opz.write(op_reg(0x40, slot), ((dt1 & 0x07) << 4) | (mul & 0x0f));
