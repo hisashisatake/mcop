@@ -76,10 +76,20 @@ pub fn scale_3bit(v: u8) -> u8 {
     v.min(7) * 36
 }
 
-/// 2bit（0〜3）→ 8bit（0〜255）: ×85。KSR に使用。
+/// OPN KS(0-3、rate scaling)→ 38x6 ksr(0-255、実行時の音域依存レート倍率)。
+///
+/// エンジンの`ksr_rate_multiplier`は`exponent=ksr/255`の線形カーブ
+/// （ksr=255で1オクターブごとに2倍、ksr=0で音域に依らず常に1.0）。
+/// 実機の絶対keycode法則(eg_rate=2R+keycode>>(3-KS))はKS=0〜3で2倍刻み
+/// (1x,2x,4x,8x)のため、本来はKS=0→exponent 0.125だが、実機比較
+/// （MUCOM88実機C2/C6）で「KS=0は音域依存がほぼ無い方が近い」と判定
+/// されたため、KS=0のみ理論値でなく聴感を優先してksr=0(フラット)とする。
+/// KS=2=128(exponent≈0.5)は他コンバーター(opz2x6)のGrandPianoキャリア実機比較で
+/// 検証済み、KS=3=255(exponent=1.0)は理論値。opz2x6::conv::ks_to_ksrと同一テーブル。
 #[inline]
-pub fn scale_2bit(v: u8) -> u8 {
-    v.min(3) * 85
+pub fn ks_to_ksr(v: u8) -> u8 {
+    const TABLE: [u8; 4] = [0, 64, 128, 255];
+    TABLE[v.min(3) as usize]
 }
 
 /// Total Level: OPN（0=最大音量, 127=最小音量）→ 38x6（0=最小, 254=最大）。
@@ -182,7 +192,7 @@ impl OpnOperator {
             rr: opn_rr_to_x6(self.rr, self.ks),
             mul: self.mul.min(15),
             dt1: opn_dt1_to_x6(self.dt1),
-            ksr: scale_2bit(self.ks),
+            ksr: ks_to_ksr(self.ks),
             am_enable: self.am_enable,
             velocity_sensitivity: 0,
             waveform: 0,
@@ -282,7 +292,7 @@ mod tests {
         assert_eq!(scale_5bit(31), 248);
         assert_eq!(scale_4bit(15), 255);
         assert_eq!(scale_3bit(7), 252);
-        assert_eq!(scale_2bit(3), 255);
+        assert_eq!(ks_to_ksr(3), 255);
     }
 
     #[test]
@@ -335,7 +345,7 @@ mod tests {
         assert_eq!(p.waveform, 0);
         assert_eq!(p.op_fine_tune, 128);
         assert_eq!(p.dt1, 128); // dt1=0 → center
-        assert_eq!(p.ksr, 85);  // ks=1 → scale_2bit(1)=85
+        assert_eq!(p.ksr, 64);  // ks=1 → ks_to_ksr(1)=64
     }
 
     #[test]

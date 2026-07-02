@@ -79,20 +79,30 @@ pub fn sl_to_level(sl: u8) -> f32 {
 }
 
 /// KSR値(0〜255)→A4(note=69)からのオクターブ差に対するレート倍率。
-/// 実機OPM/OPNのKSR(2bit)は1オクターブあたりのレート倍率が約1.09倍(KSR=0)〜
-/// 2倍(KSR=3)で、1段ごとに倍々(指数的)に増える。ksr=0〜255をこの範囲の
-/// 指数カーブにマッピングする（ksr=0でも実機KSR=0と同じ約9%/octの変化が残る）。
+/// `exponent = ksr/255`の線形カーブで、ksr=255(実機KS=3相当)は1オクターブごとに
+/// 2倍(exponent=1.0)、ksr=0は音域に依らず常に1.0（オクターブ依存なし）。
 ///
-/// A4より低いノートでは 1.0 にクランプする。実機OPNのkeyscalingは低音ほど
-/// eg_rateへの加算が小さく低音は遅くなるが、KS=0では加算が0〜3段(keycode>>3)と
-/// 極小で低音の遅さはごくわずか。一方この指数カーブ(9%/oct)はその実機の効きより
-/// 強く、低音側で減衰が過剰に遅くなりMUCOM88実機の聴感から離れる。クランプにより
-/// 低音側の効きすぎを抑え、KS=0実機の「低音をほぼ遅くしない」挙動に寄せる。
-/// （mucom2x6 No.7等での聴き比べでクランプありの方が実機に近いと確認済み）
+/// 【2026-07-02 二段階の改訂】旧実装（指数カーブ`0.125×2^(3ksr/255)`＋A4未満クランプ）を
+/// 2回に分けて改訂した。
+///
+/// 1回目: クランプ撤去。opz2x6がキャリアのKSR焼き込みを廃止した結果、低音でKSRが
+/// 実質消失する回帰が発生（opzref実機忠実レンダリングとのEG減衰スロープ比較で発覚。
+/// GrandPiano D2で実機-13.5dB/sに対し38x6経由-3.8dB/sと約3.5倍遅かった）。
+///
+/// 2回目: カーブ自体を指数から線形へ変更。旧指数カーブは実機の絶対keycode法則
+/// （eg_rate=2R+keycode>>(3-KS)）のKS=0〜3の4アンカー点で理論上厳密一致していたが
+/// （0.125,0.25,0.5,1.0の2倍刻み）、過去の実機比較（mucom2x6、MUCOM88実機C2/C6）で
+/// 「KS=0は音域依存がほぼ無い方が近い」という聴感結果が別途存在し、指数カーブの
+/// KS=0値(0.125)とは矛盾していた。線形カーブはksr=0で厳密に0（フラット）になり、
+/// GrandPiano検証済みのKS=2アンカー（ksr=128→exponent≈0.5）とKS=3の理論値
+/// （ksr=255→exponent=1.0）は保持したまま、KS=0のみ聴感どおりフラットにできる。
+/// 実機KS(0-3)→ksrの対応表（0,64,128,255）は各コンバーター（opz2x6/opm2x6/mucom2x6/
+/// psr2x6の`ks_to_ksr`）側が持ち、エンジンはKS概念に依存しない汎用線形カーブに徹する
+/// （層分離: エンジンは忠実な物理法則、コンバーターが実機との対応・味付けを決める）。
 pub fn ksr_rate_multiplier(ksr: u8, note: u8) -> f32 {
     let octave_diff = (note as f32 - 69.0) / 12.0;
-    let exponent = 0.125 * 2f32.powf(3.0 * ksr as f32 / 255.0);
-    2f32.powf(octave_diff * exponent).max(1.0)
+    let exponent = ksr as f32 / 255.0;
+    2f32.powf(octave_diff * exponent)
 }
 
 /// 実効TL = clamp(TLベース値 + (Velocity/127) × VelocitySensitivity, 0, 255)
@@ -251,13 +261,17 @@ mod tests {
         // note=69（A4）ならオクターブ差0で常に1.0
         assert!((ksr_rate_multiplier(0, 69) - 1.0).abs() < 1e-6);
         assert!((ksr_rate_multiplier(255, 69) - 1.0).abs() < 1e-6);
-        // ksr=0、1オクターブ上（note=81）は実機KSR=0相当（約1.09倍≒9%増）
-        assert!((ksr_rate_multiplier(0, 81) - 2f32.powf(0.125)).abs() < 1e-6);
+        // ksr=0はフラット（音域に依らず常に1.0、実機KS=0相当）
+        assert!((ksr_rate_multiplier(0, 81) - 1.0).abs() < 1e-6);
+        assert!((ksr_rate_multiplier(0, 57) - 1.0).abs() < 1e-6);
+        // ksr=128(実機KS=2相当)、1オクターブ上はexponent=128/255≈0.5倍速
+        // （GrandPianoキャリア実機比較で検証済みのアンカー）
+        assert!((ksr_rate_multiplier(128, 81) - 2f32.powf(128.0 / 255.0)).abs() < 1e-6);
         // ksr=255、1オクターブ上（note=81）は実機KSR=3相当（2倍速）
         assert!((ksr_rate_multiplier(255, 81) - 2.0).abs() < 1e-6);
-        // ksr=0でも変化はゼロにならず、ksr=255より小さい
-        assert!(ksr_rate_multiplier(0, 81) > 1.0);
-        assert!(ksr_rate_multiplier(0, 81) < ksr_rate_multiplier(255, 81));
+        // A4未満はクランプせず1.0未満（低音ほど減衰が遅くなる、実機keycode相当）
+        assert!(ksr_rate_multiplier(128, 57) < 1.0);
+        assert!(ksr_rate_multiplier(255, 57) < ksr_rate_multiplier(128, 57));
     }
 
     #[test]

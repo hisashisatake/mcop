@@ -73,6 +73,21 @@ fn opm_rr_to_x6(rr: u8, ks: u8) -> u8 {
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
+/// OPM KS(0-3、rate scaling)→ 38x6 ksr(0-255、実行時の音域依存レート倍率)。
+///
+/// エンジンの`ksr_rate_multiplier`は`exponent=ksr/255`の線形カーブ
+/// （ksr=255で1オクターブごとに2倍、ksr=0で音域に依らず常に1.0）。
+/// 実機の絶対keycode法則(eg_rate=2×R+keycode>>(3-KS))はKS=0〜3で2倍刻み
+/// (1x,2x,4x,8x)のため、本来はKS=0→exponent 0.125だが、実機比較
+/// （MUCOM88実機C2/C6、mucom2x6経由）で「KS=0は音域依存がほぼ無い方が近い」と
+/// 判定されたため、KS=0のみ理論値でなく聴感を優先してksr=0(フラット)とする。
+/// KS=2=128(exponent≈0.5)は他コンバーター(opz2x6)のGrandPianoキャリア実機比較で
+/// 検証済み、KS=3=255(exponent=1.0)は理論値。opz2x6/mucom2x6/psr2x6の同名関数と同一テーブル。
+fn ks_to_ksr(ks: u8) -> u8 {
+    const TABLE: [u8; 4] = [0, 64, 128, 255];
+    TABLE[ks.min(3) as usize]
+}
+
 /// OPM AMS sensitivity（CH 2-bit、0-3）→ 38x6 ams（0=off、1/128/255）。
 fn ams_to_x6(reg: u8) -> u8 {
     if reg == 0 { return 0; }
@@ -120,7 +135,7 @@ fn convert_op(op: &OpmOpReg, muted: bool) -> OperatorParams {
         rr: opm_rr_to_x6(op.rr, op.ks),
         mul: op.mul.min(15),
         dt1: dt1_to_x6(op.dt1),
-        ksr: op.ks.min(3) * 85,
+        ksr: ks_to_ksr(op.ks),
         am_enable: op.ams_en,
         velocity_sensitivity: 0,
         waveform: 0,

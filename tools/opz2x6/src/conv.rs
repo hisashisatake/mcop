@@ -204,32 +204,49 @@ fn ksr_add(rs: u8) -> u16 {
     KEY_CODE_A4 >> ksr_shift
 }
 
+/// TX81Z RS(0-3、rate scaling)→ 38x6 ksr(0-255、実行時の音域依存レート倍率)。
+///
+/// エンジンの`ksr_rate_multiplier`は`exponent=ksr/255`の線形カーブ
+/// （ksr=255で1オクターブごとに2倍、ksr=0で音域に依らず常に1.0）。
+/// 実機の絶対keycode法則(eg_rate=2R+keycode>>(3-RS))はRS=0〜3で2倍刻み
+/// (1x,2x,4x,8x)のため、本来はRS=0→exponent 0.125だが、過去の実機比較
+/// （mucom2x6、MUCOM88実機C2/C6）で「RS=0は音域依存がほぼ無い方が近い」と
+/// 判定されたため、RS=0のみ理論値でなく聴感を優先してksr=0(フラット)とする。
+/// RS=2=128(exponent≈0.5)はGrandPianoキャリアの実機比較で検証済み、
+/// RS=3=255(exponent=1.0)は理論値。
+fn ks_to_ksr(rs: u8) -> u8 {
+    const TABLE: [u8; 4] = [0, 64, 128, 255];
+    TABLE[rs.min(3) as usize]
+}
+
 /// OPM型5-bitレート（AR/D1R/D2R, 0-31）→ 38x6 rate。
 ///
-/// **キャリア**は KSR(A4キーコード)の焼き込みを廃止する。38x6エンジンは実行時に
-/// `ksr_rate_multiplier(rs, note)` でノート依存KSRを別途適用するため、A4(実行時倍率1.0)では
-/// 焼き込み分(rs=3で+19)が二重適用ぎみに効き、減衰が速すぎて撥弦/打鍵キャリアが一瞬で
-/// 持続レベルに落ちて静的化していた。KSRは実行時に一元適用とし、レートは基準値とする。
-/// **モジュレーター**は音色（明るさの時間変化）維持のため従来どおり KSR を焼き込む。
-fn opm_rate_to_x6(rate: u8, rs: u8, is_carrier: bool) -> u8 {
+/// A4キーコードのKSR焼き込みをキャリア・モジュレーター双方に適用する。
+/// 【2026-07-02改訂】旧実装はキャリアの焼き込みを廃止し、ノート依存KSRを実行時の
+/// `ksr_rate_multiplier(rs, note)` のみに任せていたが、当時のエンジン側実装は
+/// A4未満で倍率を1.0にクランプしており、低音キャリアのKSRが実質消失していた
+/// （opzref実機忠実レンダリングとのEG減衰スロープ比較で発覚。GrandPiano D2の
+/// キャリアで実機-13.5dB/sに対し-3.8dB/sと約3.5倍遅かった）。
+/// クランプを撤去した（`ksr_rate_multiplier`側）ことで「A4焼き込み＋実行時倍率」が
+/// 実機の絶対keycode法則（eg_rate=2R+keycode>>(3-KS)）と数学的に等価になったため、
+/// キャリアの焼き込みも復活しモジュレーターと同じ扱いに戻す。
+fn opm_rate_to_x6(rate: u8, rs: u8) -> u8 {
     if rate == 0 { return 0; }
-    let add = if is_carrier { 0 } else { ksr_add(rs) };
-    let eg_rate = (2 * rate as u16 + add).min(62);
+    let eg_rate = (2 * rate as u16 + ksr_add(rs)).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
 const ATTACK_ONSET_BIAS: u16 = 30;
 
-fn ar_to_x6(ar: u8, rs: u8, is_carrier: bool) -> u8 {
+fn ar_to_x6(ar: u8, rs: u8) -> u8 {
     if ar == 0 { return 0; }
-    (opm_rate_to_x6(ar, rs, is_carrier) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
+    (opm_rate_to_x6(ar, rs) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
 }
 
 /// OPM型4-bitリリースレート（RR, 0-15）→ 38x6 rr。
-/// KSR焼き込みの扱いは [opm_rate_to_x6] と同様（キャリアは廃止、モジュレーターは従来どおり）。
-fn rr_to_x6(rr: u8, rs: u8, is_carrier: bool) -> u8 {
-    let add = if is_carrier { 0 } else { ksr_add(rs) };
-    let eg_rate = (4 * rr as u16 + 2 + add).min(62);
+/// KSR焼き込みの扱いは [opm_rate_to_x6] と同様（キャリア・モジュレーター共通）。
+fn rr_to_x6(rr: u8, rs: u8) -> u8 {
+    let eg_rate = (4 * rr as u16 + 2 + ksr_add(rs)).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
@@ -269,14 +286,14 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
 
     let mut params = OperatorParams {
         tl: if is_carrier { out_to_tl(op.out, alg_atten) } else { out_to_tl_mod(op.out, mod_tl_cap) },
-        ar: ar_to_x6(op.ar, op.rs, is_carrier),
-        d1r: opm_rate_to_x6(op.d1r, op.rs, is_carrier),
-        d2r: opm_rate_to_x6(d2r, op.rs, is_carrier),
+        ar: ar_to_x6(op.ar, op.rs),
+        d1r: opm_rate_to_x6(op.d1r, op.rs),
+        d2r: opm_rate_to_x6(d2r, op.rs),
         d1l: sl_to_x6(op.d1l, is_carrier),
-        rr: rr_to_x6(op.rr, op.rs, is_carrier),
+        rr: rr_to_x6(op.rr, op.rs),
         mul,
         dt1: det_to_x6(op.det),
-        ksr: opts.ksr_override.unwrap_or(op.rs.min(3) * 85),
+        ksr: opts.ksr_override.unwrap_or(ks_to_ksr(op.rs)),
         am_enable: op.ame,
         // キャリアは velocity_sensitivity=0（38x6の「velocity=音量」設計を維持）
         // モジュレーターは KVS を写像: KVS(0-7) → 0..168
@@ -547,11 +564,14 @@ mod tests {
     }
 
     #[test]
-    fn rate_ksr_carrier_vs_modulator() {
-        // D1R=16, rs=3: モジュレーターは KSR 焼き込みで速い、キャリアは KSR なしで遅い
-        let carr = opm_rate_to_x6(16, 3, true);
-        let modu = opm_rate_to_x6(16, 3, false);
-        assert!(carr < modu, "キャリアは KSR 無しで遅い(値が小さい): carr={carr} mod={modu}");
+    fn rate_ksr_baked_for_all_operators() {
+        // D1R=16: rs(rate scaling)が大きいほどA4キーコードの焼き込み量が増え速くなる。
+        // 【2026-07-02改訂】キャリア・モジュレーターを区別せず両方に焼き込む
+        // （旧実装はキャリアのみ焼き込みを廃止していたが、実行時KSR倍率の
+        // 低音クランプ撤去とセットで復活させた。opz2x6/conv.rs 冒頭コメント参照）。
+        let rs0 = opm_rate_to_x6(16, 0);
+        let rs3 = opm_rate_to_x6(16, 3);
+        assert!(rs0 < rs3, "rsが大きいほど焼き込み量が増え速い(値が大きい): rs0={rs0} rs3={rs3}");
     }
 
     #[test]
