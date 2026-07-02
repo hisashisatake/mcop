@@ -273,9 +273,15 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         ksr: opts.ksr_override.unwrap_or(op.rs.min(3) * 85),
         am_enable: op.ame,
         // キャリアは velocity_sensitivity=0（38x6の「velocity=音量」設計を維持）
-        // モジュレーターは KVS を写像: KVS(0-7) → 0..70
-        // (* 255/7 は実効TLを最大にクランプさせすぎるため * 10 に抑制)
-        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 10 },
+        // モジュレーターは KVS を写像: KVS(0-7) → 0..168
+        // 出典: nornandブログ「導出方法を考えてみた」のattKVS(kvs,velocity)導出式。
+        // 弱打(velocity=1)→強打(velocity=127)のAkvs減衰スイングをkvs=1..7で計算すると
+        // 厳密に `kvs*12`（TLレジスタ0-127スケール、0.75dB/step）になる。38x6のTLは同じ
+        // 約95.25dB幅を255段階(0.373dB/step、ちょうど2倍解像度)で表すため換算係数は正確に2倍
+        // → kvs*24。旧実装は255/7(≈36/step)を試して高velocity域でTLがクランプされすぎたため
+        // *10に抑制していたが、今回は実機準拠の値として*24を採用（base_tlが高いモジュレーターは
+        // 依然クランプの可能性があり、要聴感検証）。
+        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 24 },
         waveform: op.ow.min(7),
         op_fine_tune,
     };
@@ -552,10 +558,11 @@ mod tests {
     }
 
     #[test]
-    fn kvs_modulator_maps_70_at_max() {
+    fn kvs_modulator_maps_168_at_max() {
+        // kvs*24（実機attKVS導出式から: 弱打→強打の減衰スイングkvs*12を38x6のTL解像度(2倍)へ換算）
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
         let p = convert_op(&op, false, 0, ConvOptions::default());
-        assert_eq!(p.velocity_sensitivity, 70);
+        assert_eq!(p.velocity_sensitivity, 168);
     }
 
     #[test]
