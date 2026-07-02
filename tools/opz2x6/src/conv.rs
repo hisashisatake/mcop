@@ -83,16 +83,19 @@ fn out_to_tl(out: u8, extra_atten: u8) -> u8 {
     aol_to_tl(ol_to_atten(out).saturating_add(extra_atten).min(127))
 }
 
-/// `--mod-cap` 診断オプション用の参考値（切り分け診断で明るさを抑えたい場合に指定する）。
+/// モジュレーター TL 天井の既定値。
 ///
-/// 既定（`--mod-cap` 未指定）ではモジュレーター TL に天井を設けず、キャリアと同じ
-/// `out_to_tl` を使う（実機の OUT パラメーターをそのまま反映）。天井を設ける運用は
-/// 過去に「配線が誤っていた状態」を耳で補正するための対症療法だったことが判明したため
-/// （実機録音との比較検証、2026-07-01）、既定からは外した。
+/// 2026-07-01は「実機録音とのRMSE比較で天井なしが最良」としてこの天井を既定から外したが、
+/// 2026-07-02にGrandPiano等をopz2x6→38x6エンジン経由（`opzref`のymfm直接レンダリングではなく）
+/// で試聴したところ、天井なしは明確にノイジーだった。フィードバック無効化(`--fb 0`)・波形強制
+/// サイン化のいずれでも改善せず、天井180で初めてノイズが解消した（ユーザー確認、2026-07-02）。
+/// RMSE比較はサンプル単位の誤差であり聴感上の「ノイズっぽさ」（高域のギラつき等、全体エネルギー
+/// への寄与が小さい成分）を捉えにくいため、聴感の結果を優先しこの値を既定へ戻した。
 pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
-/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（診断用）、
-/// `None`（既定）ならキャリアと同じ `out_to_tl` を使う（天井なし＝実機忠実）。
+/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（既定は`Some(DEFAULT_MOD_TL_CAP)`）、
+/// `None` にするとキャリアと同じ `out_to_tl` を使う（天井なし＝実機のAol/Aalgをそのまま反映、
+/// 診断用。2026-07-02時点ではノイジーになることを確認済みなので通常は使わない）。
 fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     match cap {
         Some(cap) => (out.min(99) as f32 / 99.0 * cap as f32).round() as u8,
@@ -307,7 +310,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
 /// 変換オプション（音質追い込み用の上書き群）。
 #[derive(Clone, Copy, Debug)]
 pub struct ConvOptions {
-    /// モジュレーター TL 天井（診断用）。`None`（既定）で天井なし＝実機忠実。
+    /// モジュレーター TL 天井。既定は`Some(DEFAULT_MOD_TL_CAP)`。`None`にすると天井なし
+    /// （実機のAol/Aalgをそのまま反映、診断用。ノイジーになることを確認済みなので通常は使わない）。
     pub mod_tl_cap: Option<u8>,
     /// チャンネルフィードバックの上書き（`Some(n)` で 38x6 feedback を直接指定、`None` で .syx 由来）。
     /// 切り分け診断用：`Some(0)` でフィードバックを無効化できる。
@@ -334,7 +338,7 @@ pub struct ConvOptions {
 impl Default for ConvOptions {
     fn default() -> Self {
         Self {
-            mod_tl_cap: None,
+            mod_tl_cap: Some(DEFAULT_MOD_TL_CAP),
             fb_override: None,
             ksr_override: None,
             carrier_sustain: 0.0,
@@ -438,6 +442,15 @@ mod tests {
         assert_eq!(ol_to_atten(20), 79); // ここまでは1刻みの線形（Aol=99-OL）
         assert_eq!(ol_to_atten(19), 81); // ここから非線形域（2刻みに拡大）
         assert_eq!(ol_to_atten(0), 127);
+    }
+
+    #[test]
+    fn conv_options_default_caps_modulator_tl() {
+        // 2026-07-02: 天井なしはノイジーと判明したため、既定でDEFAULT_MOD_TL_CAP(180)を適用する。
+        assert_eq!(ConvOptions::default().mod_tl_cap, Some(DEFAULT_MOD_TL_CAP));
+        let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };
+        let p = convert_op(&op, false, 0, ConvOptions::default());
+        assert_eq!(p.tl, DEFAULT_MOD_TL_CAP, "既定ではモジュレーターTLがDEFAULT_MOD_TL_CAPで頭打ちになるはず");
     }
 
     #[test]
