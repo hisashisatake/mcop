@@ -196,6 +196,10 @@ pub fn freq_to_mul_fine(freq: u8) -> (u8, u8) {
 }
 
 /// A4 相当のキーコード（KSR rate scaling の焼き込み量基準）。
+/// 標準OPM/OPZのnote code表（C=0,C#=1,D=2,D#=4,E=5,F=6,F#=8,G=9,G#=10,A=12,A#=13,B=14。
+/// opzref::NOTECODEと同一）を用いて、block_freq上位5bitのkeycode=(block<<2)|(note>>2)
+/// （ymfm opm_key_code_to_phase_step/ymfm_opz.cppのkeycode定義と同一式）にA4(block=4, note=12)を
+/// 代入すると (4<<2)|(12>>2) = 19。他ツールのKEY_CODE_A4も同じ導出。
 const KEY_CODE_A4: u16 = 19;
 
 /// rs(0-3) に応じた KSR(rate key scaling)の加算量。

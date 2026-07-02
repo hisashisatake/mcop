@@ -47,6 +47,7 @@ fn dt2_to_op_fine_tune(dt2: u8) -> u8 {
 /// OPN/OPMで共通のEGレート式: eg_rate_eff = 2×rate + KSR補正（A4基準）。
 fn opm_rate_to_x6(rate: u8, ks: u8) -> u8 {
     if rate == 0 { return 0; }
+    // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
     let ksr_shift = 3u16.saturating_sub(ks.min(3) as u16);
     let ksr_add = KEY_CODE_A4 >> ksr_shift;
@@ -66,6 +67,7 @@ fn opm_ar_to_x6(ar: u8, ks: u8) -> u8 {
 
 /// OPM RR（4-bit、0-15）+ KS → 38x6 rr。
 fn opm_rr_to_x6(rr: u8, ks: u8) -> u8 {
+    // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
     let ksr_shift = 3u16.saturating_sub(ks.min(3) as u16);
     let ksr_add = KEY_CODE_A4 >> ksr_shift;

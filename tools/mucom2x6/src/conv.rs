@@ -132,7 +132,7 @@ pub fn opn_rate_to_x6(rate_5bit: u8, ks: u8) -> u8 {
     if rate_5bit == 0 {
         return 0;
     }
-    // A4 の OPN key_code ≈ 19 (block=4, note=A)
+    // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
     let ksr_shift = 3u16.saturating_sub(ks.min(3) as u16);
     let ksr_add = KEY_CODE_A4 >> ksr_shift;
@@ -169,6 +169,7 @@ pub fn opn_ar_to_x6(ar_5bit: u8, ks: u8) -> u8 {
 ///
 /// OPN RR の eg_rate_eff = 4×rr + 2 + ksr_at_a4(ks)。
 pub fn opn_rr_to_x6(rr_4bit: u8, ks: u8) -> u8 {
+    // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
     let ksr_shift = 3u16.saturating_sub(ks.min(3) as u16);
     let ksr_add = KEY_CODE_A4 >> ksr_shift;
