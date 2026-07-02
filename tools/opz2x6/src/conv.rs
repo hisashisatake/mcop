@@ -98,7 +98,10 @@ pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 /// 診断用。2026-07-02時点ではノイジーになることを確認済みなので通常は使わない）。
 fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     match cap {
-        Some(cap) => (out.min(99) as f32 / 99.0 * cap as f32).round() as u8,
+        Some(cap) => {
+            let aol = ol_to_atten(out);
+            ((127 - aol.min(127)) as f32 / 127.0 * cap as f32).round() as u8
+        }
         None => out_to_tl(out, 0),
     }
 }
@@ -430,7 +433,7 @@ mod tests {
     #[test]
     fn out_to_tl_polarity() {
         assert_eq!(out_to_tl(0, 0), 0);    // 無音
-        assert_eq!(out_to_tl(99, 0), 255); // 最大（キャリア用）
+        assert_eq!(out_to_tl(99, 0), 255); // 最大（キャリア用、Aalgなし）
         assert!(out_to_tl(50, 0) > 0 && out_to_tl(50, 0) < 255);
     }
 
@@ -465,7 +468,7 @@ mod tests {
 
     #[test]
     fn out_to_tl_mod_uncapped_matches_carrier_scaling() {
-        // capがNone(既定)ならキャリアと同じout_to_tlになる（天井なし＝実機忠実）
+        // capがNone(既定)ならキャリア(Aalgなし)と同じout_to_tlになる（天井なし＝実機忠実）
         for out in [0u8, 50, 74, 77, 99] {
             assert_eq!(out_to_tl_mod(out, None), out_to_tl(out, 0));
         }
