@@ -85,12 +85,6 @@ fn freq_to_reg_mul_fine(freq: u8) -> (u8, u8) {
     (mul, fine)
 }
 
-// TX81Z OUT (0-99, 99=最大) → OPZ TL register (0-127, 0=最大)。線形近似。
-fn out_to_tl_reg(out: u8) -> u8 {
-    let out = out.min(99) as f32;
-    ((99.0 - out) * 127.0 / 99.0).round().clamp(0.0, 127.0) as u8
-}
-
 fn midi_to_kc(midi: u8) -> u8 {
     // ymfm実測で判明: KCのオクターブ境界はC/C#間ではなくC#/D間よりさらにずれており、
     // 「オクターブブロックはC#(N)〜C(N+1)の12音」という区切りになっている
@@ -152,7 +146,9 @@ fn render_voice(
 fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32) {
     let (mul, fine) = freq_to_reg_mul_fine(op.freq);
     let dt1 = DT1_FROM_DET[op.det.min(6) as usize];
-    let tl = out_to_tl_reg(op.out);
+    // TX81Z OUT (0-99, 99=最大) → OPZ TL register (0-127, 0=最大)。
+    // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)。
+    let tl = opz2x6::conv::ol_to_atten(op.out);
 
     // 0x40: DT1(6-4) | MUL(3-0), data bit7=0
     opz.write(op_reg(0x40, slot), ((dt1 & 0x07) << 4) | (mul & 0x0f));

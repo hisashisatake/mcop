@@ -24,9 +24,42 @@ const CARRIERS: [&[usize]; 8] = [
 // スカラー変換
 // ---------------------------------------------------------------------------
 
-/// OUT (TX81Z Output Level 0-99, 99=最大) → 38x6 TL（キャリア用、0=無音, 254=最大）。
+/// TX81Z Operator Output Level(OL, 0-99, 99=最大) → 実機のTLレジスタ加算値(Aol, 0-127, 0=最大)。
+///
+/// 出典: nornandブログ「TX81Zを解析した（Operator Output Level編）」
+/// (https://nornand.hatenablog.com/entry/2020/11/21/201911、TX81Zシステムroom解析による実測値)。
+/// V_TL = A_vol + A_alg + A_ol + A_ls + A_kvs + A_ebs という式のA_ol項で、OL=20以上は
+/// 1刻みの線形（Aol=99-OL）だが、OL=19以下で急激に非線形化する（無音側を急に絞る）。
+/// 旧実装（out/99*254の単純線形近似）はこの非線形域を再現していなかった。
+const OL_TO_AOL: [u8; 100] = [
+    127, 122, 118, 114, 110, 107, 104, 102, 100, 98, // OL=0..9
+    96, 94, 92, 90, 88, 86, 85, 84, 82, 81, // OL=10..19
+    79, 78, 77, 76, 75, 74, 73, 72, 71, 70, // OL=20..29
+    69, 68, 67, 66, 65, 64, 63, 62, 61, 60, // OL=30..39
+    59, 58, 57, 56, 55, 54, 53, 52, 51, 50, // OL=40..49
+    49, 48, 47, 46, 45, 44, 43, 42, 41, 40, // OL=50..59
+    39, 38, 37, 36, 35, 34, 33, 32, 31, 30, // OL=60..69
+    29, 28, 27, 26, 25, 24, 23, 22, 21, 20, // OL=70..79
+    19, 18, 17, 16, 15, 14, 13, 12, 11, 10, // OL=80..89
+    9, 8, 7, 6, 5, 4, 3, 2, 1, 0, // OL=90..99
+];
+
+/// TX81Z Operator Output Level(OL, 0-99) → 実機のTLレジスタ加算値(Aol, 0-127)。
+/// opzref（レジスタ直書き検証ツール）からも共有で使う。
+pub fn ol_to_atten(ol: u8) -> u8 {
+    OL_TO_AOL[ol.min(99) as usize]
+}
+
+/// Aol(0-127, TX81Z実機のTLレジスタ加算値。0=最大出力、127=最小) → 38x6 TL(0-255, 0=無音, 255=最大)。
+/// 両者ともdB線形スケール（OPM系TLは0.75dB/step、38x6は0.373dB/stepでいずれも約95.25dB幅）
+/// なので、単純な向き反転+ビット幅リスケールで変換できる。
+fn aol_to_tl(aol: u8) -> u8 {
+    ((127 - aol.min(127)) as f32 / 127.0 * 255.0).round() as u8
+}
+
+/// OUT (TX81Z Output Level 0-99, 99=最大) → 38x6 TL（キャリア用、0=無音, 255=最大）。
 fn out_to_tl(out: u8) -> u8 {
-    (out.min(99) as f32 / 99.0 * 254.0).round() as u8
+    aol_to_tl(ol_to_atten(out))
 }
 
 /// `--mod-cap` 診断オプション用の参考値（切り分け診断で明るさを抑えたい場合に指定する）。
@@ -365,8 +398,18 @@ mod tests {
     #[test]
     fn out_to_tl_polarity() {
         assert_eq!(out_to_tl(0), 0);    // 無音
-        assert_eq!(out_to_tl(99), 254); // 最大（キャリア用）
-        assert!(out_to_tl(50) > 0 && out_to_tl(50) < 254);
+        assert_eq!(out_to_tl(99), 255); // 最大（キャリア用）
+        assert!(out_to_tl(50) > 0 && out_to_tl(50) < 255);
+    }
+
+    #[test]
+    fn ol_to_atten_matches_reference_table() {
+        // nornandブログ実測値の境界チェック（線形域と非線形域の境目・両端点）。
+        assert_eq!(ol_to_atten(99), 0);
+        assert_eq!(ol_to_atten(79), 20);
+        assert_eq!(ol_to_atten(20), 79); // ここまでは1刻みの線形（Aol=99-OL）
+        assert_eq!(ol_to_atten(19), 81); // ここから非線形域（2刻みに拡大）
+        assert_eq!(ol_to_atten(0), 127);
     }
 
     #[test]
