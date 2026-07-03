@@ -32,6 +32,38 @@ extern "C" {
     fn tauri_invoke_json(cmd: &str, args_json: &str) -> js_sys::Promise;
 }
 
+// main.js（メイン画面）の`#program-bank`/`#program-num`欄の現在値を同期的に読む。
+// エディタ起動直後の初期Bank/Programを、メイン画面の選択と一致させるために使う
+// （main.jsとeditor-wasmは別々にコンパイルされたJS/WASMなので、DOM経由で橋渡しする）。
+#[wasm_bindgen(inline_js = "
+export function read_program_fields() {
+    const bankEl = document.getElementById('program-bank');
+    const numEl = document.getElementById('program-num');
+    const bank = bankEl ? (parseInt(bankEl.value, 10) || 0) : 0;
+    const program = numEl ? (parseInt(numEl.value, 10) || 0) : 0;
+    return JSON.stringify({ bank, program });
+}
+")]
+extern "C" {
+    #[wasm_bindgen(js_name = read_program_fields)]
+    fn read_program_fields_js() -> String;
+}
+
+#[derive(Deserialize)]
+struct ProgramFields {
+    bank: u16,
+    program: u8,
+}
+
+/// メイン画面のBank/Program欄から初期値を読み取る（無ければ0/0）。
+pub fn read_program_fields() -> (u16, u8) {
+    let fields: ProgramFields = serde_json::from_str(&read_program_fields_js()).unwrap_or(ProgramFields {
+        bank: 0,
+        program: 0,
+    });
+    (fields.bank, fields.program)
+}
+
 /// 指定コマンドをTauri IPC経由で呼ぶ（fire-and-forget、戻り値は無視する）。
 fn invoke(cmd: &'static str, args: &impl Serialize) {
     let json = match serde_json::to_string(args) {
@@ -174,24 +206,8 @@ struct SetPatchArgs {
     patch: PatchDto,
 }
 
-/// `set_master_effects`コマンドの引数。最上位引数名はTauriの規約でcamelCaseへ変換される。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MasterEffectsArgs {
-    reverb_send: u8,
-    reverb_type: u8,
-    reverb_time: u8,
-    chorus_send: u8,
-    chorus_type: u8,
-    chorus_mod_rate: u8,
-    chorus_mod_depth: u8,
-    chorus_feedback: u8,
-    chorus_send_to_reverb: u8,
-}
-
-/// 現在の`EditorState`を`ym38x6_set_patch`/`set_master_effects`へ送信する。
-/// `app.rs`からdirtyフラグが立ったフレームでのみ呼ばれる。
-pub fn send_patch(state: &EditorState) {
+/// `EditorState`から`PatchDto`を構築する（`send_patch`とセーブ系関数で共有）。
+fn patch_dto_from_state(state: &EditorState) -> PatchDto {
     let operators = std::array::from_fn(|i| {
         let op = &state.operators[i];
         OperatorDto {
@@ -229,8 +245,28 @@ pub fn send_patch(state: &EditorState) {
         filter_eg_release: state.feg_r as u8,
         filter_eg_depth: state.feg_depth as u8,
     };
+    PatchDto { operators, channel }
+}
 
-    invoke("ym38x6_set_patch", &SetPatchArgs { patch: PatchDto { operators, channel } });
+/// `set_master_effects`コマンドの引数。最上位引数名はTauriの規約でcamelCaseへ変換される。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterEffectsArgs {
+    reverb_send: u8,
+    reverb_type: u8,
+    reverb_time: u8,
+    chorus_send: u8,
+    chorus_type: u8,
+    chorus_mod_rate: u8,
+    chorus_mod_depth: u8,
+    chorus_feedback: u8,
+    chorus_send_to_reverb: u8,
+}
+
+/// 現在の`EditorState`を`ym38x6_set_patch`/`set_master_effects`へ送信する。
+/// `app.rs`からdirtyフラグが立ったフレームでのみ呼ばれる。
+pub fn send_patch(state: &EditorState) {
+    invoke("ym38x6_set_patch", &SetPatchArgs { patch: patch_dto_from_state(state) });
 
     invoke(
         "set_master_effects",
@@ -270,13 +306,128 @@ pub async fn fetch_presets() -> Vec<PresetEntry> {
     invoke_query("list_presets", &Empty {}).await.unwrap_or_default()
 }
 
+/// ファイル/音色の識別情報（ファイル名・音色名・bank/program）。ロード/保存系の関数が
+/// 呼び出し側へ返す共通の戻り値型。
+pub struct PatchIdentity {
+    pub file_name: Option<String>,
+    pub patch_name: String,
+    pub bank: u16,
+    pub program: u8,
+}
+
 /// 指定プリセットの内容を取得して`state`へ書き込み、`dirty`を立てる
 /// （次フレームの`send_patch()`でエンジンへも反映される。エンジン側へ直接`ym38x6_set_program`は
 /// 呼ばない。`state`を単一の真実の情報源に保つことで、その後のノブ操作によるsend_patchが
 /// プリセット内容を上書きしてしまう不整合を避けるため）。
-pub async fn load_preset(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, bank: u16, program: u8) {
-    if let Some(patch) = invoke_query::<PatchDto>("get_preset_patch", &PresetPatchArgs { bank, program }).await {
-        patch.apply_to(&mut state.borrow_mut());
-        dirty.set(true);
-    }
+/// `get_preset_patch`はバックエンド側で「このプリセットの実ファイル」もOpen状態として記録するため、
+/// 戻り値の`bank`/`program`は常に問い合わせた値をそのまま返す（見つからなくても、ユーザーが
+/// 指定した値を表示に反映するため）。
+pub async fn load_preset(
+    state: Rc<RefCell<EditorState>>,
+    dirty: Rc<Cell<bool>>,
+    bank: u16,
+    program: u8,
+) -> Option<PatchIdentity> {
+    let loaded =
+        invoke_query::<LoadedPatchDto>("get_preset_patch", &PresetPatchArgs { bank, program }).await?;
+    loaded.patch.apply_to(&mut state.borrow_mut());
+    dirty.set(true);
+    Some(PatchIdentity {
+        file_name: loaded.file_name,
+        patch_name: loaded.patch_name,
+        bank: loaded.bank,
+        program: loaded.program,
+    })
+}
+
+/// `open_patch_file`/`get_preset_patch`が返す、読み込んだ音色の内容。
+/// `file_name`（実ファイル名）と`patch_name`（音色名、`PresetEntry.name`）は別概念のため
+/// 分けて持つ（1ファイルに複数音色が入りうる以上、ファイル名と音色名は一致するとは限らない）。
+#[derive(Deserialize)]
+struct LoadedPatchDto {
+    patch: PatchDto,
+    patch_name: String,
+    file_name: Option<String>,
+    bank: u16,
+    program: u8,
+}
+
+/// `save_patch_overwrite`/`save_patch_as`が成功時に返す保存結果。
+#[derive(Deserialize)]
+struct SavedFileDto {
+    patch_name: String,
+    file_name: String,
+    bank: u16,
+    program: u8,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavePatchArgs {
+    patch: PatchDto,
+    patch_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAsArgs {
+    patch: PatchDto,
+    patch_name: String,
+    bank: u16,
+    program: u8,
+    default_file_name: String,
+}
+
+/// presets_dir内/外を区別しない任意の`.38x6`ファイルをネイティブOpenダイアログで選び、`state`へ書き込む。
+/// PRESETSパネルの`load_preset`とは別経路（presets_dirスキャンを経由しない直接ファイル読み込み）。
+/// 成功時はそのファイルの実際のbank/programも返す（呼び出し側でスピン表示の更新に使う）。
+pub async fn open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>) -> Option<PatchIdentity> {
+    let loaded = invoke_query::<Option<LoadedPatchDto>>("open_patch_file", &Empty {}).await.flatten()?;
+    loaded.patch.apply_to(&mut state.borrow_mut());
+    dirty.set(true);
+    Some(PatchIdentity {
+        file_name: loaded.file_name,
+        patch_name: loaded.patch_name,
+        bank: loaded.bank,
+        program: loaded.program,
+    })
+}
+
+/// 現在Open/Save As済みのファイルへ現在の`state`を上書き保存する。`patch_name`は名前入力欄の
+/// 内容で、保存の都度エントリ名を更新する。未Openなら（バックエンド側がエラーを返すため）Noneが返る。
+pub async fn save_patch_overwrite(state: Rc<RefCell<EditorState>>, patch_name: String) -> Option<PatchIdentity> {
+    let patch = patch_dto_from_state(&state.borrow());
+    let saved = invoke_query::<SavedFileDto>("save_patch_overwrite", &SavePatchArgs { patch, patch_name }).await?;
+    Some(PatchIdentity {
+        file_name: Some(saved.file_name),
+        patch_name: saved.patch_name,
+        bank: saved.bank,
+        program: saved.program,
+    })
+}
+
+/// ネイティブSaveダイアログで保存先を選び、現在の`state`を新規`.38x6`として書き出す。
+/// `patch_name`（名前入力欄の内容）をそのままエントリ名として使い、`bank`/`program`は今表示されている
+/// スピンの値をそのまま書き込む（自動採番はしない＝見た目と動作を一致させる）。`default_file_name`は
+/// ダイアログの提案ファイル名にのみ使う。以後の`save_patch_overwrite`はこの新しいファイルに対して行われる。
+pub async fn save_patch_as(
+    state: Rc<RefCell<EditorState>>,
+    patch_name: String,
+    bank: u16,
+    program: u8,
+    default_file_name: String,
+) -> Option<PatchIdentity> {
+    let patch = patch_dto_from_state(&state.borrow());
+    let saved = invoke_query::<Option<SavedFileDto>>(
+        "save_patch_as",
+        &SaveAsArgs { patch, patch_name, bank, program, default_file_name },
+    )
+    .await
+    .flatten()?;
+    Some(PatchIdentity {
+        file_name: Some(saved.file_name),
+        patch_name: saved.patch_name,
+        bank: saved.bank,
+        program: saved.program,
+    })
 }

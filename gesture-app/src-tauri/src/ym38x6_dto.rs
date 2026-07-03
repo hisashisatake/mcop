@@ -175,3 +175,25 @@ impl From<((u16, u8), Preset)> for PresetEntryDto {
         Self { bank, program, name: preset.name }
     }
 }
+
+/// `open_patch_file`/`get_preset_patch`が返す、読み込んだ音色の内容。
+/// `file_name`（実ファイル名、例: "organ_family.38x6"）と`patch_name`（音色名、
+/// バンクファイル内の`PresetEntry.name`）は別概念のため分けて返す
+/// （1ファイルに複数音色が入っている場合、ファイル名と音色名は一致しない）。
+#[derive(Serialize)]
+pub struct LoadedPatchDto {
+    pub patch: Ym38x6PatchDto,
+    pub patch_name: String,
+    pub file_name: Option<String>,
+    pub bank: u16,
+    pub program: u8,
+}
+
+/// `save_patch_overwrite`/`save_patch_as`が成功時に返す保存結果。
+#[derive(Serialize)]
+pub struct SavedFileDto {
+    pub patch_name: String,
+    pub file_name: String,
+    pub bank: u16,
+    pub program: u8,
+}

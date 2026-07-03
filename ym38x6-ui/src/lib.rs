@@ -8,7 +8,7 @@ mod param_handle;
 mod selector;
 mod waveform;
 
-pub use knob::{knob, Knob};
+pub use knob::{knob, spin_control, Knob};
 pub use panel::{draw_param_panel, OperatorPanelParams, PanelParams};
 pub use param_handle::{BoolParamHandle, IntParamHandle};
 pub use selector::{enum_selector, CHORUS_TYPE_NAMES, REVERB_TYPE_NAMES};

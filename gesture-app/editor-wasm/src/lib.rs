@@ -7,9 +7,11 @@ mod app;
 mod handle;
 mod ipc;
 mod keyboard;
+mod program_sync;
 mod shift_keys;
 mod state;
 
+pub use program_sync::get_current_program;
 pub use shift_keys::notify_shift;
 
 use wasm_bindgen::prelude::*;

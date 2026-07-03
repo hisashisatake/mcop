@@ -360,6 +360,15 @@ async function toggleEditor() {
     await editorModule.default();
     editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
+  } else if (!editorVisible && editorHandle) {
+    // エディタを閉じてメイン画面に戻る瞬間に、Bank/Program欄をエディタ側の最新値へ同期する
+    // （リアルタイム同期はしない。既存のapplyProgram()リスナーへ委譲することで、
+    // savedFmBank等の内部状態や波形メモリモードとの整合性もそのまま保たれる）。
+    const { bank, program } = JSON.parse(editorModule.get_current_program());
+    const bankEl = document.getElementById('program-bank');
+    bankEl.value = bank;
+    document.getElementById('program-num').value = program;
+    bankEl.dispatchEvent(new Event('input'));
   }
 }
 
