@@ -284,16 +284,14 @@ pub fn send_patch(state: &EditorState) {
     );
 }
 
-/// `list_presets`コマンドが返すプリセット一覧の1件。
+/// `list_bank_entries`コマンドが返す、今のbankの担当ファイルが持つ音色一覧の1件。
+/// エントリーは常に同一bank（問い合わせたbank）のため`bank`は保持しない
+/// （DTOには含まれるが、ここでは無視して構わない）。
 #[derive(Deserialize, Clone)]
 pub struct PresetEntry {
-    pub bank: u16,
     pub program: u8,
     pub name: String,
 }
-
-#[derive(Serialize)]
-struct Empty {}
 
 #[derive(Serialize)]
 struct PresetPatchArgs {
@@ -301,9 +299,14 @@ struct PresetPatchArgs {
     program: u8,
 }
 
-/// `src-tauri`が`presets_dir()`（VSTと同じディレクトリ）から読み込んだプリセット一覧を取得する。
-pub async fn fetch_presets() -> Vec<PresetEntry> {
-    invoke_query("list_presets", &Empty {}).await.unwrap_or_default()
+#[derive(Serialize)]
+struct BankArgs {
+    bank: u16,
+}
+
+/// 今のbankの担当ファイルが持つ音色一覧を取得する（presets_dir全体ではない。未登録なら空）。
+pub async fn fetch_bank_entries(bank: u16) -> Vec<PresetEntry> {
+    invoke_query("list_bank_entries", &BankArgs { bank }).await.unwrap_or_default()
 }
 
 /// ファイル/音色の識別情報（ファイル名・音色名・bank/program）。ロード/保存系の関数が
@@ -315,13 +318,15 @@ pub struct PatchIdentity {
     pub program: u8,
 }
 
-/// 指定プリセットの内容を取得して`state`へ書き込み、`dirty`を立てる
+/// 指定のbank/programをレジストリから読み込んで`state`へ書き込み、`dirty`を立てる
 /// （次フレームの`send_patch()`でエンジンへも反映される。エンジン側へ直接`ym38x6_set_program`は
 /// 呼ばない。`state`を単一の真実の情報源に保つことで、その後のノブ操作によるsend_patchが
-/// プリセット内容を上書きしてしまう不整合を避けるため）。
-/// `get_preset_patch`はバックエンド側で「このプリセットの実ファイル」もOpen状態として記録するため、
-/// 戻り値の`bank`/`program`は常に問い合わせた値をそのまま返す（見つからなくても、ユーザーが
-/// 指定した値を表示に反映するため）。
+/// プリセット内容を上書きしてしまう不整合を避けるため）。バックエンド側はレジストリを引くだけで
+/// ディスクの再検索は行わない（`get_bank_program`）。Bank/Programスピンの変更・PRESETSリストの
+/// クリックの両方から呼ぶ（レジストリがOpen/Save/Save Asで正しく更新されているため、
+/// 常にこれだけで一貫した結果になる。別ファイルへ飛ぶ経路とファイル内に留まる経路を
+/// 分ける必要はない）。戻り値の`bank`/`program`は常に問い合わせた値をそのまま返す
+/// （見つからなくても、ユーザーが指定した値を表示に反映するため）。
 pub async fn load_preset(
     state: Rc<RefCell<EditorState>>,
     dirty: Rc<Cell<bool>>,
@@ -329,7 +334,7 @@ pub async fn load_preset(
     program: u8,
 ) -> Option<PatchIdentity> {
     let loaded =
-        invoke_query::<LoadedPatchDto>("get_preset_patch", &PresetPatchArgs { bank, program }).await?;
+        invoke_query::<LoadedPatchDto>("get_bank_program", &PresetPatchArgs { bank, program }).await?;
     loaded.patch.apply_to(&mut state.borrow_mut());
     dirty.set(true);
     Some(PatchIdentity {
@@ -340,7 +345,7 @@ pub async fn load_preset(
     })
 }
 
-/// `open_patch_file`/`get_preset_patch`が返す、読み込んだ音色の内容。
+/// `open_patch_file`/`get_bank_program`が返す、読み込んだ音色の内容。
 /// `file_name`（実ファイル名）と`patch_name`（音色名、`PresetEntry.name`）は別概念のため
 /// 分けて持つ（1ファイルに複数音色が入りうる以上、ファイル名と音色名は一致するとは限らない）。
 #[derive(Deserialize)]
@@ -366,6 +371,8 @@ struct SavedFileDto {
 struct SavePatchArgs {
     patch: PatchDto,
     patch_name: String,
+    bank: u16,
+    program: u8,
 }
 
 #[derive(Serialize)]
@@ -379,10 +386,13 @@ struct SaveAsArgs {
 }
 
 /// presets_dir内/外を区別しない任意の`.38x6`ファイルをネイティブOpenダイアログで選び、`state`へ書き込む。
-/// PRESETSパネルの`load_preset`とは別経路（presets_dirスキャンを経由しない直接ファイル読み込み）。
-/// 成功時はそのファイルの実際のbank/programも返す（呼び出し側でスピン表示の更新に使う）。
-pub async fn open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>) -> Option<PatchIdentity> {
-    let loaded = invoke_query::<Option<LoadedPatchDto>>("open_patch_file", &Empty {}).await.flatten()?;
+/// PRESETSパネルの`load_preset`とは別経路（レジストリを経由しない直接ファイル読み込み）。
+/// `bank`は「今エディタで選択中のbank」を渡す。ダイアログの初期ディレクトリ決定に使うだけでなく、
+/// ファイル自身が宣言するbank番号は**無視され**、この`bank`へファイルの全音色が丸ごとロードされる
+/// （ファイル自身のbankをそのまま採用するのではない。ユーザー確認済みの仕様）。
+/// 戻り値の`bank`はこの引数と同じ値になる。
+pub async fn open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, bank: u16) -> Option<PatchIdentity> {
+    let loaded = invoke_query::<Option<LoadedPatchDto>>("open_patch_file", &BankArgs { bank }).await.flatten()?;
     loaded.patch.apply_to(&mut state.borrow_mut());
     dirty.set(true);
     Some(PatchIdentity {
@@ -393,11 +403,18 @@ pub async fn open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<boo
     })
 }
 
-/// 現在Open/Save As済みのファイルへ現在の`state`を上書き保存する。`patch_name`は名前入力欄の
-/// 内容で、保存の都度エントリ名を更新する。未Openなら（バックエンド側がエラーを返すため）Noneが返る。
-pub async fn save_patch_overwrite(state: Rc<RefCell<EditorState>>, patch_name: String) -> Option<PatchIdentity> {
+/// 現在のbank/programの担当ファイルへ現在の`state`を上書き保存する。`patch_name`は名前入力欄の
+/// 内容で、保存の都度エントリ名を更新する。そのbankにまだファイルが無ければ
+/// （バックエンド側がエラーを返すため）Noneが返る。
+pub async fn save_patch_overwrite(
+    state: Rc<RefCell<EditorState>>,
+    bank: u16,
+    program: u8,
+    patch_name: String,
+) -> Option<PatchIdentity> {
     let patch = patch_dto_from_state(&state.borrow());
-    let saved = invoke_query::<SavedFileDto>("save_patch_overwrite", &SavePatchArgs { patch, patch_name }).await?;
+    let saved =
+        invoke_query::<SavedFileDto>("save_patch_overwrite", &SavePatchArgs { patch, patch_name, bank, program }).await?;
     Some(PatchIdentity {
         file_name: Some(saved.file_name),
         patch_name: saved.patch_name,

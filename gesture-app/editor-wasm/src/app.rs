@@ -95,6 +95,9 @@ struct Identity {
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
     unsaved_changes: Rc<Cell<bool>>,
+    /// `list_bank_entries`で取得した、今のbankの担当ファイルの音色一覧。`apply()`のたびに
+    /// 再取得し、Save/Save As/Openによるレジストリの変化を常に反映する。
+    presets: Rc<RefCell<Vec<ipc::PresetEntry>>>,
 }
 
 impl Identity {
@@ -106,11 +109,20 @@ impl Identity {
         crate::program_sync::set_current(loaded.bank, loaded.program);
         self.unsaved_changes.set(false);
         crate::shift_keys::request_repaint();
+
+        let presets = self.presets.clone();
+        let bank = loaded.bank;
+        wasm_bindgen_futures::spawn_local(async move {
+            *presets.borrow_mut() = ipc::fetch_bank_entries(bank).await;
+            crate::shift_keys::request_repaint();
+        });
     }
 }
 
-/// 指定のbank/programをオンメモリの`PresetBank`から読み込む。PRESETSリストのクリックと
-/// Bank/Programスピンの変更の両方から呼ぶ共通経路（`ipc::load_preset`＝`get_preset_patch`）。
+/// 指定のbank/programをレジストリから読み込む（`ipc::load_preset`＝`get_bank_program`、
+/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・起動直後の
+/// 初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく更新されているため、
+/// 「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
 async fn handle_navigate(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, identity: Identity, bank: u16, program: u8) {
     if let Some(loaded) = ipc::load_preset(state, dirty, bank, program).await {
         identity.apply(loaded);
@@ -161,16 +173,23 @@ impl ym38x6_ui::IntParamHandle for BankField {
 }
 
 /// presets_dir内/外を区別しない任意の`.38x6`ファイルをネイティブOpenダイアログで選ぶ。
-async fn handle_open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, identity: Identity) {
-    if let Some(loaded) = ipc::open_patch_file(state, dirty).await {
+/// `bank`はダイアログの初期ディレクトリ決定にのみ使う。
+async fn handle_open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, bank: u16, identity: Identity) {
+    if let Some(loaded) = ipc::open_patch_file(state, dirty, bank).await {
         identity.apply(loaded);
     }
 }
 
-/// 現在Open/Save As済みのファイルへ上書き保存する。名前入力欄で音色名を変更していれば
+/// 現在のbank/programの担当ファイルへ上書き保存する。名前入力欄で音色名を変更していれば
 /// それも一緒に保存される。
-async fn handle_save_patch_overwrite(state: Rc<RefCell<EditorState>>, patch_name: String, identity: Identity) {
-    if let Some(saved) = ipc::save_patch_overwrite(state, patch_name).await {
+async fn handle_save_patch_overwrite(
+    state: Rc<RefCell<EditorState>>,
+    bank: u16,
+    program: u8,
+    patch_name: String,
+    identity: Identity,
+) {
+    if let Some(saved) = ipc::save_patch_overwrite(state, bank, program, patch_name).await {
         identity.apply(saved);
     }
 }
@@ -217,13 +236,9 @@ pub struct EditorApp {
 
 impl EditorApp {
     pub fn new() -> Self {
+        // PRESETSリストは「今開いているファイルの中身」なので、ここでは空のまま用意するだけでよい
+        // （下の初期`handle_navigate`が完了すると、その`Identity::apply()`が自動で取得・反映する）。
         let presets = Rc::new(RefCell::new(Vec::new()));
-        let presets_for_fetch = presets.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let fetched = ipc::fetch_presets().await;
-            *presets_for_fetch.borrow_mut() = fetched;
-            crate::shift_keys::request_repaint();
-        });
 
         let state = Rc::new(RefCell::new(EditorState::default()));
         let dirty = Rc::new(Cell::new(false));
@@ -245,6 +260,7 @@ impl EditorApp {
                 current_bank: current_bank.clone(),
                 current_program: current_program.clone(),
                 unsaved_changes: unsaved_changes.clone(),
+                presets: presets.clone(),
             },
             initial_bank,
             initial_program,
@@ -270,6 +286,7 @@ impl EditorApp {
             current_bank: self.current_bank.clone(),
             current_program: self.current_program.clone(),
             unsaved_changes: self.unsaved_changes.clone(),
+            presets: self.presets.clone(),
         }
     }
 }
@@ -302,6 +319,7 @@ impl eframe::App for EditorApp {
                         wasm_bindgen_futures::spawn_local(handle_open_patch_file(
                             self.state.clone(),
                             self.dirty.clone(),
+                            self.current_bank.get(),
                             self.identity(),
                         ));
                     }
@@ -309,13 +327,26 @@ impl eframe::App for EditorApp {
                     if ui.add_enabled(save_enabled, egui::Button::new("Save")).clicked() {
                         wasm_bindgen_futures::spawn_local(handle_save_patch_overwrite(
                             self.state.clone(),
+                            self.current_bank.get(),
+                            self.current_program.get(),
                             self.current_patch_name.borrow().clone(),
                             self.identity(),
                         ));
                     }
                     if ui.button("Save As").clicked() {
                         let patch_name = self.current_patch_name.borrow().clone();
-                        let default_file_name = if patch_name.is_empty() { "patch".to_string() } else { patch_name.clone() };
+                        // ダイアログの提案ファイル名は「今開いているファイル名」を優先する
+                        // （Save Asはバンク全体を書き出すため、個々の音色名より自然）。
+                        // 何も開いていなければ音色名、それも空なら"patch"にフォールバックする。
+                        let default_file_name = self
+                            .current_file_name
+                            .borrow()
+                            .as_deref()
+                            .and_then(|f| f.strip_suffix(".38x6"))
+                            .filter(|f| !f.is_empty())
+                            .map(str::to_string)
+                            .or_else(|| (!patch_name.is_empty()).then(|| patch_name.clone()))
+                            .unwrap_or_else(|| "patch".to_string());
                         wasm_bindgen_futures::spawn_local(handle_save_patch_as(
                             self.state.clone(),
                             patch_name,
@@ -329,8 +360,8 @@ impl eframe::App for EditorApp {
 
                 // Bank（presets_dir内/外を区別しない、常に見える唯一の「今何を編集しているか」）。
                 // 他のパラメーターと同じ数値欄＋±ボタン（ym38x6_ui::spin_control）を使う。
-                // 値が変わったらオンメモリのPresetBankから(bank, 現在のprogram)を読み込む
-                // （PRESETSリストのクリックと全く同じ経路＝handle_navigate、BankField::set参照）。
+                // 値が変わったらpresets_dir全体から(bank, 現在のprogram)を探して読み込む
+                // （＝handle_navigate、BankField::set参照。別ファイルへ飛びうる唯一の操作）。
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Bank").text_style(egui::TextStyle::Body));
                     let bank_field = BankField {
@@ -354,22 +385,21 @@ impl eframe::App for EditorApp {
                 }
                 ui.separator();
 
+                // 「今開いているファイル」自身の音色一覧（presets_dir全体のブラウザではない）。
                 ui.label(egui::RichText::new("PRESETS").strong());
                 egui::ScrollArea::vertical().id_salt("presets").show(ui, |ui| {
-                    // 現在選択中のBankの音色だけに絞り込む（全bankをまとめて出すと、bankを
-                    // 切り替えるたびに一覧が増え続けているように見えてしまうため）。
-                    let current_bank = self.current_bank.get();
-                    for preset in self.presets.borrow().iter().filter(|p| p.bank == current_bank) {
+                    for preset in self.presets.borrow().iter() {
                         let label = format!("{:03} {}", preset.program, preset.name);
                         let selected = preset.program == self.current_program.get();
                         if ui.selectable_label(selected, &label).clicked() {
-                            self.current_bank.set(preset.bank);
+                            // レジストリを引くだけ（ディスク再検索なし）。今のbankのまま
+                            // programだけ切り替える＝別ファイルへは飛ばない（handle_navigate参照）。
                             self.current_program.set(preset.program);
                             wasm_bindgen_futures::spawn_local(handle_navigate(
                                 self.state.clone(),
                                 self.dirty.clone(),
                                 self.identity(),
-                                preset.bank,
+                                self.current_bank.get(),
                                 preset.program,
                             ));
                         }

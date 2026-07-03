@@ -3,6 +3,7 @@
 mod ym38x6_dto;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
@@ -57,52 +58,70 @@ fn ym38x6_set_patch(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, patch: Y
 }
 
 /// (bank, program)に対応するプリセットへ切り替える。ym38x6-vstのProgramパラメーターと
-/// 同じ`PresetBank::patch_for_program`を使うため、音はVSTと完全に同一になる。
-/// 波形メモリ音色は`bank == WAVEFORM_MEMORY_BANK`でprogramを波形スロットとして選ぶ。
+/// 同じ解決順序（レジストリ→フォールバック）を使うため、音はVSTと基本的に同一になる
+/// （レジストリはgesture-appセッション中のOpen/Save/Save Asで更新されるため、VST起動時の
+/// 状態からは変わりうる）。波形メモリ音色は`bank == WAVEFORM_MEMORY_BANK`でprogramを
+/// 波形スロットとして選ぶ。ディスクI/Oは行わない（`resolve_patch`参照）。
 #[tauri::command]
 fn ym38x6_set_program(
     engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
-    preset_bank: tauri::State<'_, PresetBank>,
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
+    fallback: tauri::State<'_, PresetBank>,
     bank: u16,
     program: u8,
 ) {
-    let patch = preset_bank.patch_for_program(bank, program);
+    let patch = resolve_patch(&registry.lock().unwrap(), &fallback, bank, program);
     engine.lock().unwrap().set_patch(patch);
 }
 
-/// プリセット一覧を返す（ym38x6-vstのPRESETSサイドバーと同じ`presets_dir()`から
-/// 読み込んだ`PresetBank`をソート済みで返す。フロントエンドの音色エディタが一覧表示に使う）。
+/// 今開いている（＝`registry`に登録済みの）bankのファイルが持つ音色一覧を返す
+/// （未登録なら空）。PRESETSパネルは「presets_dir全体のブラウザ」ではなく
+/// 「今のbankの担当ファイルの中身」を表示する。
 #[tauri::command]
-fn list_presets(preset_bank: tauri::State<'_, PresetBank>) -> Vec<PresetEntryDto> {
-    preset_bank.sorted_entries().into_iter().map(PresetEntryDto::from).collect()
+fn list_bank_entries(registry: tauri::State<'_, Mutex<BankRegistry>>, bank: u16) -> Vec<PresetEntryDto> {
+    let reg = registry.lock().unwrap();
+    reg.get(&bank)
+        .map(|bank_file| {
+            preset_entries(&bank_file.file).iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// (bank, program)のプリセット内容を返す（エンジンへは反映しない読み取り専用）。
 /// 音色エディタがプリセット選択時に自身のローカル状態を同期するために使う
 /// （`ym38x6_set_patch`で送り返すことで結果的にエンジンへも反映される）。
-/// 併せて`open_state`をこのプリセットの実ファイルに合わせて更新する。これにより
-/// PRESETSパネルから選んだプリセットも（Open/Save Asと同じく）そのまま上書き保存できる
-/// （presets_dir内のファイルをOpenダイアログを介さず直接選んだだけ、という扱い）。
+/// Bank/Programスピンの変更・PRESETSリストのクリックの両方がこれを呼ぶ
+/// （レジストリを引くだけで、ディスクの再検索は行わない。レジストリ自体がOpen/Save/Save Asで
+/// 正しく更新されているため、常にこれだけで一貫した結果になる）。
 #[tauri::command]
-fn get_preset_patch(
-    preset_bank: tauri::State<'_, PresetBank>,
-    open_state: tauri::State<'_, Mutex<Option<OpenPatchFile>>>,
+fn get_bank_program(
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
+    fallback: tauri::State<'_, PresetBank>,
     bank: u16,
     program: u8,
 ) -> LoadedPatchDto {
-    let located = locate_preset_file(&presets_dir(), bank, program);
-    let (patch, patch_name, file_name) = match &located {
-        Some(open) => {
-            let entry = preset_entries(&open.file).get(open.entry_index);
-            let patch = entry.map(|e| e.patch).unwrap_or_default();
-            let patch_name = entry.map(|e| e.name.clone()).unwrap_or_default();
-            let file_name = open.path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
-            (patch, patch_name, file_name)
+    let reg = registry.lock().unwrap();
+    if let Some(bank_file) = reg.get(&bank) {
+        if let Some(entry) = preset_entries(&bank_file.file).iter().find(|e| e.program == program) {
+            let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+            return LoadedPatchDto { patch: entry.patch.into(), patch_name: entry.name.clone(), file_name, bank, program };
         }
-        None => (preset_bank.patch_for_program(bank, program), String::new(), None),
-    };
-    *open_state.lock().unwrap() = located;
-    LoadedPatchDto { patch: patch.into(), patch_name, file_name, bank, program }
+    }
+    let patch = fallback.patch_for_program(bank, program);
+    LoadedPatchDto { patch: patch.into(), patch_name: String::new(), file_name: None, bank, program }
+}
+
+/// `ym38x6_set_program`/`get_bank_program`が共有する解決ロジック（レジストリ→フォールバック）。
+fn resolve_patch(
+    registry: &BankRegistry,
+    fallback: &PresetBank,
+    bank: u16,
+    program: u8,
+) -> ym38x6_core::Ym38x6Patch {
+    registry
+        .get(&bank)
+        .and_then(|bank_file| preset_entries(&bank_file.file).iter().find(|e| e.program == program).map(|e| e.patch))
+        .unwrap_or_else(|| fallback.patch_for_program(bank, program))
 }
 
 /// 38x6エンジンのパフォーマンスLFOを設定する。
@@ -166,13 +185,35 @@ fn set_master_effects(
     fx.set_chorus_send_to_reverb(chorus_send_to_reverb);
 }
 
-/// 現在Openされている`.38x6`ファイルの状態（presets_dirのプリセットとは別系統、
-/// 音色エディタのOpen/Save/Save Asが任意パスに対して操作する対象）。
-/// 上書き保存時は同じファイル内の他エントリを保ったまま、編集対象エントリだけを差し替えて書き戻す。
-struct OpenPatchFile {
+/// bank番号ごとの「担当ファイル」（presets_dir全体の中で、そのbankを最後に定義したファイル）。
+/// Open/Save/Save Asが直接更新する（音色エディタのファイル状態はpresets_dirの外/中を区別しない）。
+struct BankFile {
     path: PathBuf,
     file: PresetFile,
-    entry_index: usize,
+}
+type BankRegistry = HashMap<u16, BankFile>;
+
+/// `dir`内の`.38x6`ファイルをファイル名昇順で走査し、bank番号ごとに「最後に処理したファイル」を
+/// レジストリへ記録する（`PresetBank::load_from_dir`と同じ優先順位。Presetsは全リセット、
+/// Programsは差分マージという単位ではなく、ファイル単位で「最後に触れたファイル」を丸ごと覚える
+/// 簡略版。1バンク=1ファイルという運用を前提にしている）。起動時に1回だけ呼ぶ。
+fn build_registry(dir: &Path) -> BankRegistry {
+    let mut paths: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("38x6"))
+        .collect();
+    paths.sort();
+
+    let mut registry = HashMap::new();
+    for path in paths {
+        let Ok(json) = std::fs::read_to_string(&path) else { continue };
+        let Ok(file) = PresetFile::from_json(&json) else { continue };
+        registry.insert(preset_bank_of(&file), BankFile { path, file });
+    }
+    registry
 }
 
 /// `PresetFile`のPresets/Programsどちらのvariantでもエントリ一覧への参照を取り出す。
@@ -198,53 +239,27 @@ fn preset_bank_of(file: &PresetFile) -> u16 {
     }
 }
 
-/// Open/Save Asのネイティブダイアログの初期ディレクトリを決める。現在Openしているファイルが
-/// あればその親ディレクトリ、無ければ`presets_dir()`（何も開いていない起動直後はここが自然な
-/// デフォルト）。presets_dir内/外を区別する特別扱いはしない（単に「今開いているファイルの場所」）。
-fn current_open_dir(open_state: &Mutex<Option<OpenPatchFile>>) -> PathBuf {
-    open_state
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|open| open.path.parent().map(PathBuf::from))
-        .unwrap_or_else(presets_dir)
+/// Open/Save Asのネイティブダイアログの初期ディレクトリを決める。指定bankがレジストリに
+/// 登録済みならその親ディレクトリ、未登録（起動直後にそのbankへまだ触れていない等）なら
+/// `presets_dir()`。presets_dir内/外を区別する特別扱いはしない（単に「今のbankのファイルの場所」）。
+fn current_open_dir(registry: &BankRegistry, bank: u16) -> PathBuf {
+    registry.get(&bank).and_then(|bank_file| bank_file.path.parent().map(PathBuf::from)).unwrap_or_else(presets_dir)
 }
 
-/// `dir`内の`.38x6`ファイルを`PresetBank::load_from_dir`と同じ順序（ファイル名昇順）で走査し、
-/// (bank, program)を実際に定義しているファイルを`OpenPatchFile`として返す。
-/// 複数ファイルが同じ(bank, program)を定義する場合は最後に処理したファイルを採用する
-/// （`load_from_dir`が後読みのファイルで上書きするのと同じ優先順位）。
-fn locate_preset_file(dir: &Path, bank: u16, program: u8) -> Option<OpenPatchFile> {
-    let mut paths: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("38x6"))
-        .collect();
-    paths.sort();
-
-    let mut found = None;
-    for path in paths {
-        let Ok(json) = std::fs::read_to_string(&path) else { continue };
-        let Ok(file) = PresetFile::from_json(&json) else { continue };
-        if preset_bank_of(&file) == bank {
-            if let Some(entry_index) = preset_entries(&file).iter().position(|e| e.program == program) {
-                found = Some(OpenPatchFile { path, file, entry_index });
-            }
-        }
-    }
-    found
-}
-
-/// ネイティブOpenダイアログで`.38x6`ファイルを選び、先頭エントリを読み込む
-/// （複数エントリを持つバンクファイルでも先頭のみを対象とする。単一パッチの手動調整が主目的のため）。
+/// ネイティブOpenダイアログで`.38x6`ファイルを選び、全音色を読み込む。
+/// ファイル自身が宣言しているbank番号は無視し、**今エディタで選択中のbank**へ
+/// そのファイルの全音色を丸ごとロードする（＝レジストリにはそのbank番号で登録し、
+/// `PresetFile`内のbankフィールドも選択中のbankへ書き換える。ユーザー確認済みの仕様）。
+/// 先頭エントリを画面へ反映する（複数エントリを持つバンクファイルでも先頭のみを対象とする。
+/// 単一パッチの手動調整が主目的のため）。
 /// エンジンへの反映はフロントエンド側の既存dirty経路に任せ、このコマンドはengineに触らない。
 #[tauri::command]
 async fn open_patch_file(
     app: tauri::AppHandle,
-    open_state: tauri::State<'_, Mutex<Option<OpenPatchFile>>>,
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
+    bank: u16,
 ) -> Result<Option<LoadedPatchDto>, String> {
-    let start_dir = current_open_dir(&open_state);
+    let start_dir = current_open_dir(&registry.lock().unwrap(), bank);
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog().file().add_filter("38x6", &["38x6"]).set_directory(start_dir).blocking_pick_file()
     })
@@ -254,57 +269,67 @@ async fn open_patch_file(
     let path = picked.into_path().map_err(|e| e.to_string())?;
 
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let file = PresetFile::from_json(&json).map_err(|e| e.to_string())?;
-    let bank = preset_bank_of(&file);
+    let file = with_bank(PresetFile::from_json(&json).map_err(|e| e.to_string())?, bank);
     let entry = preset_entries(&file).first().ok_or("ファイルに音色が含まれていません")?.clone();
     let file_name = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
     let dto =
         LoadedPatchDto { patch: entry.patch.into(), patch_name: entry.name, file_name, bank, program: entry.program };
 
-    *open_state.lock().unwrap() = Some(OpenPatchFile { path, file, entry_index: 0 });
+    registry.lock().unwrap().insert(bank, BankFile { path, file });
     Ok(Some(dto))
 }
 
-/// 現在Openしているファイルへ上書き保存する（`open_patch_file`/`save_patch_as`で
-/// 開いた/保存した対象に対してのみ有効。未Openならエラーを返す）。
+/// `file`のbankフィールドを`bank`へ書き換えたものを返す（variant・エントリー内容はそのまま）。
+fn with_bank(file: PresetFile, bank: u16) -> PresetFile {
+    match file {
+        PresetFile::Presets { presets, .. } => PresetFile::Presets { bank, presets },
+        PresetFile::Programs { programs, .. } => PresetFile::Programs { bank, programs },
+    }
+}
+
+/// 現在のbankの担当ファイルへ上書き保存する（未登録ならエラー）。
 /// `patch_name`は音色エディタの名前入力欄の内容で、保存の都度エントリ名を更新する
 /// （＝Save時に名前を変更したい場合はここで反映される）。
 #[tauri::command]
 fn save_patch_overwrite(
-    open_state: tauri::State<'_, Mutex<Option<OpenPatchFile>>>,
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
+    bank: u16,
+    program: u8,
     patch: Ym38x6PatchDto,
     patch_name: String,
 ) -> Result<SavedFileDto, String> {
-    let mut guard = open_state.lock().unwrap();
-    let open = guard.as_mut().ok_or("ファイルが開かれていません（先にOpenかSave Asしてください）")?;
-    let bank = preset_bank_of(&open.file);
-    let entries = preset_entries_mut(&mut open.file);
-    let entry = entries.get_mut(open.entry_index).ok_or("保存先エントリが見つかりません")?;
+    let mut reg = registry.lock().unwrap();
+    let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
+    let entries = preset_entries_mut(&mut bank_file.file);
+    let entry = entries.iter_mut().find(|e| e.program == program).ok_or("保存先エントリが見つかりません")?;
     entry.patch = patch.into();
     entry.name = patch_name.clone();
-    let program = entry.program;
-    let file_name = open.path.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
-    let json = open.file.to_json().map_err(|e| e.to_string())?;
-    std::fs::write(&open.path, json).map_err(|e| e.to_string())?;
+    let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
+    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
     Ok(SavedFileDto { patch_name, file_name, bank, program })
 }
 
-/// ネイティブSaveダイアログで保存先を選び、新規`.38x6`ファイル（単一エントリ）として書き出す。
-/// 音色名（`PresetEntry.name`）は名前入力欄の`patch_name`をそのまま使う（ファイル名とは独立。
-/// 1ファイルに複数音色が入りうる以上、ファイル名と音色名は別概念のため）。
+/// ネイティブSaveダイアログで保存先を選び、新規`.38x6`ファイルとして書き出す。`Presets`形式は
+/// 「そのbankを丸ごと定義する」形式のため、今編集中の1音色だけを書くと、presets_dirで読み込んだ際に
+/// 同bankの他の全プログラムが失われてしまう。そのため、**今のbankの担当ファイル（レジストリ）**の
+/// 全エントリーを複製元とし、今編集中のprogramだけ最新の内容に差し替えて丸ごと書き出す
+/// （presets_dir全体の再検索はしない。何も登録されていない真っさらな状態なら、今の1音色のみになる）。
+/// 音色名（`PresetEntry.name`）は名前入力欄の`patch_name`をそのまま使う。
 /// `default_file_name`はSaveダイアログの提案ファイル名にのみ使う。
-/// 保存後は以後の`save_patch_overwrite`がこの新しいファイルに対して行われる。
+/// 保存後は**そのbankの担当ファイルがこの新しいファイルに置き換わる**
+/// （以後の`save_patch_overwrite`はこの新しいファイルに対して行われる）。
 #[tauri::command]
 async fn save_patch_as(
     app: tauri::AppHandle,
-    open_state: tauri::State<'_, Mutex<Option<OpenPatchFile>>>,
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
     patch: Ym38x6PatchDto,
     patch_name: String,
     bank: u16,
     program: u8,
     default_file_name: String,
 ) -> Result<Option<SavedFileDto>, String> {
-    let start_dir = current_open_dir(&open_state);
+    let start_dir = current_open_dir(&registry.lock().unwrap(), bank);
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -319,14 +344,21 @@ async fn save_patch_as(
     let path = picked.into_path().map_err(|e| e.to_string())?;
 
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("patch.38x6").to_string();
-    let file = PresetFile::Presets {
-        bank,
-        presets: vec![PresetEntry { program, name: patch_name.clone(), patch: patch.into() }],
-    };
+    let mut presets: Vec<PresetEntry> =
+        registry.lock().unwrap().get(&bank).map(|bank_file| preset_entries(&bank_file.file).clone()).unwrap_or_default();
+    match presets.iter_mut().find(|e| e.program == program) {
+        Some(entry) => {
+            entry.patch = patch.into();
+            entry.name = patch_name.clone();
+        }
+        None => presets.push(PresetEntry { program, name: patch_name.clone(), patch: patch.into() }),
+    }
+    presets.sort_by_key(|e| e.program);
+    let file = PresetFile::Presets { bank, presets };
     let json = file.to_json().map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
 
-    *open_state.lock().unwrap() = Some(OpenPatchFile { path, file, entry_index: 0 });
+    registry.lock().unwrap().insert(bank, BankFile { path, file });
     Ok(Some(SavedFileDto { patch_name, file_name, bank, program }))
 }
 
@@ -347,7 +379,12 @@ fn main() {
     let engine_audio = Arc::clone(&engine);
     let effects = Arc::new(Mutex::new(MasterEffects::new(sample_rate)));
     let effects_audio = Arc::clone(&effects);
-    let preset_bank = PresetBank::load_from_dir(&presets_dir());
+
+    // presets_dir()の読み込みは起動時にここで1回だけ行う。
+    // - fallback: 波形メモリ/GM2/プレースホルダーのフォールバックチェーン専用（読み取り専用、以後更新しない）。
+    // - registry: bank番号ごとの担当ファイル。Open/Save/Save Asがセッション中に直接更新する。
+    let fallback = PresetBank::load_from_dir(&presets_dir());
+    let registry = build_registry(&presets_dir());
 
     let stream = device
         .build_output_stream::<f32, _, _>(
@@ -372,8 +409,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(engine)
         .manage(effects)
-        .manage(preset_bank)
-        .manage(Mutex::new(None::<OpenPatchFile>))
+        .manage(fallback)
+        .manage(Mutex::new(registry))
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,
@@ -383,8 +420,8 @@ fn main() {
             ym38x6_set_patch,
             ym38x6_set_program,
             ym38x6_set_performance_lfo,
-            list_presets,
-            get_preset_patch,
+            list_bank_entries,
+            get_bank_program,
             open_patch_file,
             save_patch_overwrite,
             save_patch_as,
@@ -418,31 +455,47 @@ mod tests {
     }
 
     #[test]
-    fn locate_preset_file_matches_bank_and_program() {
-        let dir = unique_temp_dir("locate_match");
+    fn build_registry_maps_bank_to_its_file() {
+        let dir = unique_temp_dir("registry_basic");
         std::fs::write(dir.join("a.38x6"), sample_json(0, 5, "Foo")).unwrap();
+        std::fs::write(dir.join("b.38x6"), sample_json(1, 2, "Bar")).unwrap();
 
-        let found = locate_preset_file(&dir, 0, 5).expect("should locate entry");
-        assert_eq!(found.entry_index, 0);
-        assert_eq!(found.path, dir.join("a.38x6"));
-
-        assert!(locate_preset_file(&dir, 0, 6).is_none(), "programが一致しなければNone");
-        assert!(locate_preset_file(&dir, 1, 5).is_none(), "bankが一致しなければNone");
+        let registry = build_registry(&dir);
+        assert_eq!(registry.get(&0).unwrap().path, dir.join("a.38x6"));
+        assert_eq!(registry.get(&1).unwrap().path, dir.join("b.38x6"));
+        assert!(registry.get(&2).is_none(), "存在しないbankは登録されない");
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn locate_preset_file_prefers_last_file_in_sorted_order() {
+    fn build_registry_prefers_last_file_in_sorted_order() {
         // PresetBank::load_from_dirと同じ「ファイル名昇順で後読みが勝つ」優先順位を確認する。
-        let dir = unique_temp_dir("locate_precedence");
+        let dir = unique_temp_dir("registry_precedence");
         std::fs::write(dir.join("a_first.38x6"), sample_json(0, 0, "First")).unwrap();
         std::fs::write(dir.join("b_second.38x6"), sample_json(0, 0, "Second")).unwrap();
 
-        let found = locate_preset_file(&dir, 0, 0).expect("should locate entry");
-        assert_eq!(found.path, dir.join("b_second.38x6"), "後読みのファイルが優先されるべき");
+        let registry = build_registry(&dir);
+        assert_eq!(registry.get(&0).unwrap().path, dir.join("b_second.38x6"), "後読みのファイルが優先されるべき");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn with_bank_overrides_bank_and_keeps_entries() {
+        // 回帰テスト: Openしたファイルが宣言するbank番号は無視し、今エディタで選択中のbankへ
+        // 全音色をロードする仕様（ファイル自身のbankをそのまま採用するのは誤りだった）。
+        let presets = PresetFile::Presets {
+            bank: 3,
+            presets: vec![PresetEntry { program: 5, name: "Foo".to_string(), patch: Ym38x6Patch::default() }],
+        };
+        let rebanked = with_bank(presets, 9);
+        assert_eq!(preset_bank_of(&rebanked), 9);
+        assert_eq!(preset_entries(&rebanked).len(), 1);
+        assert_eq!(preset_entries(&rebanked)[0].program, 5);
+
+        let programs = PresetFile::Programs { bank: 3, programs: vec![] };
+        assert_eq!(preset_bank_of(&with_bank(programs, 9)), 9);
     }
 
     #[test]
@@ -451,5 +504,11 @@ mod tests {
         let programs = PresetFile::Programs { bank: 9, programs: vec![] };
         assert_eq!(preset_bank_of(&presets), 7);
         assert_eq!(preset_bank_of(&programs), 9);
+    }
+
+    #[test]
+    fn current_open_dir_falls_back_to_presets_dir_when_bank_unregistered() {
+        let registry = BankRegistry::new();
+        assert_eq!(current_open_dir(&registry, 0), presets_dir());
     }
 }
