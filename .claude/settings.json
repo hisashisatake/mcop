@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "Set-ExecutionPolicy RemoteSigned -Scope Process",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ]
+  }
+}

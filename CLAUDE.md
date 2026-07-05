@@ -15,6 +15,12 @@
 
 作業はPowerShellを基本とする。bash（Git Bash）はForkに同梱されたものに依存しており、PCによって有無が変わるため使用しない。
 
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope Process
+```
+
+スクリプト実行がブロックされる環境向けの実行ポリシー緩和。`.claude/settings.json`のSessionStart Hookで自動実行される。
+
 ### git
 
 ```powershell
