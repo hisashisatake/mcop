@@ -119,6 +119,8 @@ pub struct OpzOpData {
     pub freq: u8,  // Frequency Coarse 0-63
     pub det: u8,   // Detune 0-6 (3=中心)
     pub ow: u8,    // Operator Waveform 0-7 (ACEDより取得、未設定=0)
+    pub egsft: u8, // EG Shift 0-3: 0=off(96dB), 1=48dB, 2=24dB, 3=12dB（ACEDより取得、未設定=0。
+                   // EGの減衰レンジを指定幅へ圧縮する。manual p20/p75、VMEM addr73等 bits5-4）
 }
 
 /// TX81Z 1ボイス分のデータ。
@@ -229,6 +231,7 @@ fn parse_op(data: &[u8], base: usize) -> OpzOpData {
         freq: get(data, base + F_FREQ),
         det:  get(data, base + F_DET),
         ow:   0,
+        egsft: 0, // ACED領域から後で上書き
     }
 }
 
@@ -288,6 +291,7 @@ fn parse_vmem_op(data: &[u8], base: usize) -> OpzOpData {
         freq: get(data, base + VM_FREQ) & 0x3F,
         det:  b9 & 0x07, // DBT(0-6): 3=中心、0=最大負デチューン
         ow:   0, // ACED領域から後で上書き
+        egsft: 0, // ACED領域から後で上書き
     }
 }
 
@@ -326,6 +330,12 @@ fn parse_vmem_voice(data: &[u8], number: u32) -> Option<OpzVoice> {
         v.ops[1].ow = (get(data, VMEM_ACED_OP3_OPW) >> 4) & 0x07;
         v.ops[2].ow = (get(data, VMEM_ACED_OP2_OPW) >> 4) & 0x07;
         v.ops[3].ow = (get(data, VMEM_ACED_OP1_OPW) >> 4) & 0x07;
+        // ACED EGSFT（EGシフト）: OPWバイトの1つ手前 addr73/77/75/79 の bits[5:4]
+        // （manual p75: "0 0 EGSFT FIX FIXRG"。0=off(96dB), 1=48dB, 2=24dB, 3=12dB）
+        v.ops[0].egsft = (get(data, VMEM_ACED_OP4_OPW - 1) >> 4) & 0x03;
+        v.ops[1].egsft = (get(data, VMEM_ACED_OP3_OPW - 1) >> 4) & 0x03;
+        v.ops[2].egsft = (get(data, VMEM_ACED_OP2_OPW - 1) >> 4) & 0x03;
+        v.ops[3].egsft = (get(data, VMEM_ACED_OP1_OPW - 1) >> 4) & 0x03;
     }
 
     if v.name.is_empty() {

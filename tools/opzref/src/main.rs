@@ -166,6 +166,10 @@ fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8) {
     opz.write(op_reg(0xa0, slot), ((op.ame as u8) << 7) | (op.d1r & 0x1f));
     // 0xc0: DT2(7-6)=0 | D2R(4-0), data bit5=0
     opz.write(op_reg(0xc0, slot), op.d2r & 0x1f);
+    // 0xc0 alt (data bit5=1): EG shift(7-6) | Reverb rate(2-0)=0。
+    // EGSFT: 0=off(96dB), 1=48dB, 2=24dB, 3=12dB（EG減衰レンジの圧縮。manual p20/p75）。
+    // ymfmは0x120偽レジスタへ格納し compute_volume で env_attenuation >> eg_shift を適用する。
+    opz.write(op_reg(0xc0, slot), 0x20 | ((op.egsft & 0x03) << 6));
     // 0xe0: D1L(7-4) | RR(3-0)
     opz.write(op_reg(0xe0, slot), ((op.d1l & 0x0f) << 4) | (op.rr & 0x0f));
     // 0x40 alt (data bit7=1): waveform(6-4) | fine(3-0)
@@ -224,8 +228,8 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     for (j, op) in v.ops.iter().enumerate() {
         let (mul, fine) = freq_to_reg_mul_fine(op.freq);
         eprintln!(
-            "  ops[{j}]->slot{}: out={} freq={}(mul{}.f{}) ow={} ar={} d1l={} rr={}",
-            slots[j], op.out, op.freq, mul, fine, op.ow, op.ar, op.d1l, op.rr
+            "  ops[{j}]->slot{}: out={} freq={}(mul{}.f{}) ow={} ar={} d1l={} rr={} egsft={}",
+            slots[j], op.out, op.freq, mul, fine, op.ow, op.ar, op.d1l, op.rr, op.egsft
         );
     }
 
