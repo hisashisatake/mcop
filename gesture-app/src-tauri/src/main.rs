@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
-use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, AdsrParams, ChorusType,
-    LfoWaveform, MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType, SoundEngine,
+use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, ChorusType,
+    LfoWaveform, MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType,
     Ym38x6Engine, Ym38x6LfoDestination};
 use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 
@@ -16,38 +16,21 @@ use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 /// 安定したスロット番号として供給する。発音中/リリース中のチャンネルが既にあっても、
 /// エンベロープを即座にカットしてAttackから再開する（実機Key-On挙動に準拠＝同音チョーク）。
 /// 押し直し時に同じスロットIDを渡すことで、直前のリリーステールがチョークされる。
-/// 音色は`ym38x6_set_program`/`ym38x6_set_patch`で設定したcurrent_patchを使う
-/// （`wave_slot`はトレイト互換のため受け取るが未使用）。
+/// 音色は`ym38x6_set_program`/`ym38x6_set_patch`で設定した保存済みパッチ（`current_patch`）を使う。
 #[tauri::command]
 fn note_on(
     engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
     channel: usize,
-    wave_slot: u8,
     frequency: f32,
+    velocity: u8,
 ) {
-    engine.lock().unwrap().note_on(channel, wave_slot, frequency, AdsrParams::default());
+    let mut engine = engine.lock().unwrap();
+    let patch = engine.current_patch();
+    engine.note_on(channel, frequency, velocity, patch);
 }
 
 #[tauri::command]
 fn note_off(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, channel: usize) {
-    engine.lock().unwrap().note_off(channel);
-}
-
-/// 38x6エンジンで指定チャンネルIDへNote-Onする。`patch`は4オペレーター分のパラメーターと
-/// チャンネルパラメーター一式。チャンネルIDの扱い（同音チョーク）は`note_on`と同じ。
-#[tauri::command]
-fn ym38x6_note_on(
-    engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
-    channel: usize,
-    frequency: f32,
-    velocity: u8,
-    patch: Ym38x6PatchDto,
-) {
-    engine.lock().unwrap().note_on_with_velocity(channel, frequency, velocity, patch.into());
-}
-
-#[tauri::command]
-fn ym38x6_note_off(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, channel: usize) {
     engine.lock().unwrap().note_off(channel);
 }
 
@@ -415,8 +398,6 @@ fn main() {
             note_on,
             note_off,
             set_master_effects,
-            ym38x6_note_on,
-            ym38x6_note_off,
             ym38x6_set_patch,
             ym38x6_set_program,
             ym38x6_set_performance_lfo,

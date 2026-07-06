@@ -136,7 +136,7 @@ impl From<ChannelParams> for ChannelParamsDto {
     }
 }
 
-/// `ym38x6_note_on`/`ym38x6_set_patch`で受け渡しする/`get_preset_patch`が返すパッチ一式
+/// `ym38x6_set_patch`で受け渡しする/`get_preset_patch`が返すパッチ一式
 /// （`Ym38x6Patch`のDTO）。
 #[derive(Deserialize, Serialize)]
 pub struct Ym38x6PatchDto {

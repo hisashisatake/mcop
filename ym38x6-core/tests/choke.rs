@@ -1,4 +1,4 @@
-use ym38x6_core::{AdsrParams, ChannelParams, OperatorParams, SoundEngine, Ym38x6Engine, Ym38x6Patch};
+use ym38x6_core::{ChannelParams, OperatorParams, Ym38x6Engine, Ym38x6Patch};
 
 /// AR最速・サスティン無限・RR=200（中速リリース）の4op並列(algorithm 7)パッチ。
 /// frequency=440.0(note=69)でKSRの影響を受けず、レート計算が単純になる。
@@ -24,7 +24,7 @@ fn sustained_release_patch() -> Ym38x6Patch {
     }
 }
 
-/// リリース中の同じチャンネルIDへ再度`note_on_with_velocity`すると、env_levelを0に
+/// リリース中の同じチャンネルIDへ再度`note_on`すると、env_levelを0に
 /// リセットせず残響レベルから再アタックする（実機OPMのKey-On挙動）。
 ///
 /// 残響保持を単独で観測するため、再アタックのARを最遅(ar=0)にする。
@@ -35,7 +35,7 @@ fn note_on_retriggers_from_residual_not_silence() {
     let mut engine = Ym38x6Engine::new(44100.0);
     let patch = sustained_release_patch();
     let ch = 0;
-    engine.note_on_with_velocity(ch, 440.0, 127, patch);
+    engine.note_on(ch, 440.0, 127, patch);
 
     let mut warmup = vec![0.0f32; 100];
     engine.render(&mut warmup, 1);
@@ -52,7 +52,7 @@ fn note_on_retriggers_from_residual_not_silence() {
     for op in slow_attack.operators.iter_mut() {
         op.ar = 0;
     }
-    engine.note_on_with_velocity(ch, 440.0, 127, slow_attack);
+    engine.note_on(ch, 440.0, 127, slow_attack);
 
     let mut after = vec![0.0f32; 500];
     engine.render(&mut after, 1);
@@ -77,7 +77,7 @@ fn choke_and_note_on_declicks_old_voice_instead_of_hard_cut() {
     let mut engine = Ym38x6Engine::new(44100.0);
     let patch = sustained_release_patch();
     let ch = 0;
-    engine.note_on_with_velocity(ch, 440.0, 127, patch);
+    engine.note_on(ch, 440.0, 127, patch);
 
     let mut warmup = vec![0.0f32; 100];
     engine.render(&mut warmup, 1);
@@ -113,14 +113,13 @@ fn choke_and_note_on_declicks_old_voice_instead_of_hard_cut() {
     );
 }
 
-/// SoundEngine::note_onはカレントパッチを使い、同じチャンネルIDで残響レベルから
-/// 再アタックする。新しいAttackがフルレベルへ向かうため、リリース残響レベルを上回る。
+/// note_onは同じチャンネルIDへ再発音すると残響レベルから再アタックする。
+/// 新しいAttackがフルレベルへ向かうため、リリース残響レベルを上回る。
 #[test]
-fn trait_note_on_reattacks_toward_full_level() {
+fn note_on_reattacks_toward_full_level() {
     let mut engine = Ym38x6Engine::new(44100.0);
-    engine.set_patch(sustained_release_patch());
     let ch = 0;
-    engine.note_on(ch, 0, 440.0, AdsrParams::default());
+    engine.note_on(ch, 440.0, 100, sustained_release_patch());
 
     let mut warmup = vec![0.0f32; 100];
     engine.render(&mut warmup, 1);
@@ -131,7 +130,7 @@ fn trait_note_on_reattacks_toward_full_level() {
     engine.render(&mut release_buf, 1);
     let release_peak = release_buf[900..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
-    engine.note_on(ch, 0, 440.0, AdsrParams::default());
+    engine.note_on(ch, 440.0, 100, sustained_release_patch());
 
     let mut after = vec![0.0f32; 500];
     engine.render(&mut after, 1);

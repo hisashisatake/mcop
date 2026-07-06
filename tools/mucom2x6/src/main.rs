@@ -217,7 +217,7 @@ fn render_wavs(
     cfg: &WavConfig,
     slot_filter: Option<u16>,
 ) -> Result<(), String> {
-    use ym38x6_core::{SoundEngine, Ym38x6Engine};
+    use ym38x6_core::Ym38x6Engine;
     const SR: f32 = 44_100.0;
     let wav_dir = output_dir.join("wav");
     std::fs::create_dir_all(&wav_dir)
@@ -260,7 +260,7 @@ fn render_wavs(
             }
         }
         let mut engine = Ym38x6Engine::new(SR);
-        engine.note_on_with_velocity(0, cfg.frequency, 110, patch);
+        engine.note_on(0, cfg.frequency, 110, patch);
 
         let on = (SR * cfg.on_secs) as usize;
         let off = (SR * cfg.off_secs) as usize;

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
     pitch_depth_cents, presets_dir, volume_depth, ChannelParams, ChorusType, LfoWaveform,
-    MasterEffects, OperatorParams, PresetBank, ReverbType, SoundEngine, Ym38x6Engine,
+    MasterEffects, OperatorParams, PresetBank, ReverbType, Ym38x6Engine,
     Ym38x6LfoDestination, Ym38x6Patch,
 };
 
@@ -538,7 +538,6 @@ impl Plugin for Ym38x6Plugin {
         // note-on時にそのMIDIチャンネルの program_patch を参照する。
         // 発音中の既存ボイスへは影響しない（チャンネルループは常にchannel_patchを使用）。
         let channel_patch = self.build_patch();
-        self.engine.set_patch(channel_patch);
 
         // 発音中チャンネルへDAWオートメーションの変更とAT/Poly AT Destinationの加算を反映する
         // （MIDIノート番号をそのままチャンネルIDとして使うため0〜127を走査する。
@@ -643,7 +642,7 @@ impl Plugin for Ym38x6Plugin {
                     let ch_id = midi_channel_note_id(channel, note);
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければGUI値。
                     let note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
-                    self.engine.note_on_with_velocity(ch_id, freq, velocity_u8, note_on_patch);
+                    self.engine.note_on(ch_id, freq, velocity_u8, note_on_patch);
                     // このMIDIチャンネルの現在のベンド量と音量ゲインを新ボイスへ反映する
                     self.engine.set_pitch_bend(ch_id, self.channel_bend_cents[channel as usize]);
                     self.engine.set_channel_volume(ch_id, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));

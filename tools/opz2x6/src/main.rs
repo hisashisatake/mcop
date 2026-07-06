@@ -276,7 +276,7 @@ fn render_wavs(
     voice_filter: Option<usize>,
     opts: conv::ConvOptions,
 ) -> Result<(), String> {
-    use ym38x6_core::{SoundEngine, Ym38x6Engine};
+    use ym38x6_core::Ym38x6Engine;
     const SR: f32 = 44_100.0;
     let wav_dir = output_dir.join("wav");
     std::fs::create_dir_all(&wav_dir)
@@ -296,7 +296,7 @@ fn render_wavs(
     for (idx, voice) in &targets {
         let patch = conv::voice_to_patch_opts(voice, opts);
         let mut engine = Ym38x6Engine::new(SR);
-        engine.note_on_with_velocity(0, cfg.frequency, 80, patch);
+        engine.note_on(0, cfg.frequency, 80, patch);
 
         let on_samples = (SR * cfg.on_secs) as usize;
         let off_samples = (SR * cfg.off_secs) as usize;

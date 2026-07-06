@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ym38x6_core::{
-    ChannelParams, OperatorParams, PresetEntry, PresetFile, SoundEngine, Ym38x6Engine, Ym38x6Patch,
+    ChannelParams, OperatorParams, PresetEntry, PresetFile, Ym38x6Engine, Ym38x6Patch,
 };
 
 /// 試聴に使う波形（番号と表示名）。ビルトイン32波形（4基本波 × 8変換）を全て出力する。
@@ -550,7 +550,7 @@ fn render_wavs(
 
     for (idx, v) in voices.iter().enumerate() {
         let mut engine = Ym38x6Engine::new(SR);
-        engine.note_on_with_velocity(0, v.freq, 110, v.patch);
+        engine.note_on(0, v.freq, 110, v.patch);
 
         let on = (SR * on_secs) as usize;
         let off = (SR * release_secs) as usize;

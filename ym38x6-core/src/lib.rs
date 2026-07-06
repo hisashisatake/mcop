@@ -75,7 +75,7 @@ use waveform::gen_builtin_waveform;
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
 pub use sound_core::{
     pitch_depth_cents, volume_depth, AdsrParams, ChorusType, LfoDestination, LfoWaveform,
-    MasterEffects, ReverbType, SoundEngine,
+    MasterEffects, ReverbType,
 };
 
 // ---------------------------------------------------------------------------
@@ -482,28 +482,21 @@ impl Ym38x6Engine {
         }
     }
 
-    /// 以降の`SoundEngine::note_on`はこのパッチで発音する。
+    /// パッチをエンジンに記憶させる（gesture-app用の「保存済みパッチ」）。フロントエンドが
+    /// 発音のたびにパッチ全体を送らずに済むよう、`set_patch`で事前設定→`current_patch`で取り出す。
     pub fn set_patch(&mut self, patch: Ym38x6Patch) {
         self.current_patch = patch;
     }
 
-    /// 指定チャンネルIDへベロシティ・パッチを明示指定してNote-Onする（VST/Tauriから使用）。
-    /// 既に同じIDで発音中/リリース中のチャンネルがあれば、env_levelを保持したまま
-    /// 残響から再アタックする（実機OPMのKey-On挙動。プチノイズが出ず、モジュレーターの
-    /// 残響ドラッグによるFMらしい明るさも再現される）。
-    pub fn note_on_with_velocity(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
-        if let Some(ch) = self.channels.get_mut(&channel) {
-            if !ch.is_idle() {
-                ch.retrigger(frequency, velocity, patch);
-                return;
-            }
-        }
-        self.channels.insert(channel, Channel::new(frequency, velocity, patch));
+    /// `set_patch`で記憶させたカレントパッチを返す（`Ym38x6Patch`はCopy）。
+    /// gesture-appのTauri層が`note_on`へ渡すパッチとして使う。
+    pub fn current_patch(&self) -> Ym38x6Patch {
+        self.current_patch
     }
 
     /// 同一IDの旧ボイスをデクリックフェードでチョーク（数msで消音）してから新ボイスを発音する。
     /// 残響再アタックではなく明示的に切り替えたい場合に使う（サステインペダルのスウェル等、
-    /// 将来のボイス管理用）。`note_on_with_velocity`がデフォルトの残響再アタック。
+    /// 将来のボイス管理用）。`note_on`がデフォルトの残響再アタック。
     pub fn choke_and_note_on(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
         if let Some(mut old) = self.channels.remove(&channel) {
             if !old.is_idle() {
@@ -571,10 +564,31 @@ impl Ym38x6Engine {
         }
     }
 
+    /// 指定チャンネルIDへ周波数・ベロシティ・パッチを明示指定してNote-Onする。
+    /// 既に同じIDで発音中/リリース中のチャンネルがあれば、env_levelを保持したまま
+    /// 残響から再アタックする（実機OPMのKey-On挙動。プチノイズが出ず、モジュレーターの
+    /// 残響ドラッグによるFMらしい明るさも再現される）。
+    /// gesture-appは`current_patch()`で取り出した保存済みパッチを渡す（Tauri層で供給）。
+    pub fn note_on(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            if !ch.is_idle() {
+                ch.retrigger(frequency, velocity, patch);
+                return;
+            }
+        }
+        self.channels.insert(channel, Channel::new(frequency, velocity, patch));
+    }
+
     /// CC103〜106（≧64）：指定チャンネルの指定オペレーター(0〜3)をキーオンする。
     pub fn note_on_operator(&mut self, channel: usize, op_index: usize) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.note_on_operator(op_index);
+        }
+    }
+
+    pub fn note_off(&mut self, channel: usize) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.note_off();
         }
     }
 
@@ -608,22 +622,8 @@ impl Ym38x6Engine {
             ch.set_performance_lfo(rate, delay, waveform, destination, depth);
         }
     }
-}
 
-impl SoundEngine for Ym38x6Engine {
-    /// wave_slot/adsrはトレイト互換のため残すが未使用。velocity=127固定でカレントパッチを使う。
-    fn note_on(&mut self, channel: usize, _wave_slot: u8, frequency: f32, _adsr: AdsrParams) {
-        let patch = self.current_patch;
-        self.note_on_with_velocity(channel, frequency, 127, patch);
-    }
-
-    fn note_off(&mut self, channel: usize) {
-        if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.note_off();
-        }
-    }
-
-    fn render(&mut self, output: &mut [f32], num_channels: usize) {
+    pub fn render(&mut self, output: &mut [f32], num_channels: usize) {
         let num_channels = num_channels.max(1);
         let sample_rate = self.sample_rate;
         let wave_tables = &self.wave_tables;
@@ -686,8 +686,7 @@ mod tests {
     #[test]
     fn note_on_produces_non_silent_output() {
         let mut engine = Ym38x6Engine::new(44100.0);
-        engine.set_patch(loud_patch(0));
-        engine.note_on(0, 0, 440.0, AdsrParams::default());
+        engine.note_on(0, 440.0, 100, loud_patch(0));
 
         let mut buf = vec![0.0f32; 512];
         engine.render(&mut buf, 1);
@@ -698,7 +697,7 @@ mod tests {
     fn note_off_operator_silences_single_op_and_note_on_operator_retriggers() {
         let mut engine = Ym38x6Engine::new(44100.0);
         let ch = 0;
-        engine.note_on_with_velocity(ch, 440.0, 127, loud_patch(0));
+        engine.note_on(ch, 440.0, 127, loud_patch(0));
 
         engine.note_off_operator(ch, 0);
         // チャンネル全体は他のOpが鳴り続けるためidleにならない
@@ -718,7 +717,7 @@ mod tests {
     fn note_off_operator_on_op3_is_independent_like_other_ops() {
         let mut engine = Ym38x6Engine::new(44100.0);
         let ch = 0;
-        engine.note_on_with_velocity(ch, 440.0, 127, loud_patch(0));
+        engine.note_on(ch, 440.0, 127, loud_patch(0));
 
         engine.note_off_operator(ch, 3);
 
@@ -737,7 +736,7 @@ mod tests {
     fn set_operator_f_number_overrides_single_operator_frequency() {
         let mut engine = Ym38x6Engine::new(44100.0);
         let ch = 0;
-        engine.note_on_with_velocity(ch, 440.0, 127, loud_patch(0));
+        engine.note_on(ch, 440.0, 127, loud_patch(0));
 
         engine.set_operator_f_number(ch, 0, crate::mapping::F_NUMBER_CENTER / 2);
 
@@ -757,8 +756,8 @@ mod tests {
 
         let mut engine_lo = Ym38x6Engine::new(44100.0);
         let mut engine_hi = Ym38x6Engine::new(44100.0);
-        engine_lo.note_on_with_velocity(0, 440.0, 40, patch);
-        engine_hi.note_on_with_velocity(0, 440.0, 120, patch);
+        engine_lo.note_on(0, 440.0, 40, patch);
+        engine_hi.note_on(0, 440.0, 120, patch);
 
         let mut buf_lo = vec![0.0f32; 100];
         let mut buf_hi = vec![0.0f32; 100];
@@ -785,8 +784,8 @@ mod tests {
 
         let mut engine_zero = Ym38x6Engine::new(44100.0);
         let mut engine_max = Ym38x6Engine::new(44100.0);
-        engine_zero.note_on_with_velocity(0, 440.0, 100, patch_zero);
-        engine_max.note_on_with_velocity(0, 440.0, 100, patch_max);
+        engine_zero.note_on(0, 440.0, 100, patch_zero);
+        engine_max.note_on(0, 440.0, 100, patch_max);
 
         let mut buf_zero = vec![0.0f32; 100];
         let mut buf_max = vec![0.0f32; 100];
@@ -832,8 +831,8 @@ mod tests {
 
         let mut engine_flat = Ym38x6Engine::new(44100.0);
         let mut engine_bright = Ym38x6Engine::new(44100.0);
-        engine_flat.note_on_with_velocity(0, 440.0, 100, make(0));
-        engine_bright.note_on_with_velocity(0, 440.0, 100, make(255));
+        engine_flat.note_on(0, 440.0, 100, make(0));
+        engine_bright.note_on(0, 440.0, 100, make(255));
 
         let mut buf_flat = vec![0.0f32; 512];
         let mut buf_bright = vec![0.0f32; 512];
@@ -873,7 +872,7 @@ mod tests {
 
             let mut engine = Ym38x6Engine::new(44100.0);
             let ch = 0;
-            engine.note_on_with_velocity(ch, 440.0, 100, patch);
+            engine.note_on(ch, 440.0, 100, patch);
 
             let mut buf = vec![0.0f32; 44100];
             engine.render(&mut buf, 1);
@@ -922,7 +921,7 @@ mod tests {
 
             let mut engine = Ym38x6Engine::new(44100.0);
             let ch = 0;
-            engine.note_on_with_velocity(ch, 440.0, 100, patch);
+            engine.note_on(ch, 440.0, 100, patch);
 
             let mut buf = vec![0.0f32; 44100];
             engine.render(&mut buf, 1);
@@ -964,7 +963,7 @@ mod tests {
         patch.channel.ams = 255;
 
         let mut engine = Ym38x6Engine::new(44100.0);
-        engine.note_on_with_velocity(0, 440.0, 127, patch);
+        engine.note_on(0, 440.0, 127, patch);
 
         let mut buf = vec![0.0f32; 4410]; // 0.1秒（音色LFO数周期分）
         engine.render(&mut buf, 1);
@@ -988,7 +987,7 @@ mod tests {
         // gain=0.5 で出力が半分、gain=0.0 で無音になることを確認。
         let make = || {
             let mut e = Ym38x6Engine::new(44100.0);
-            e.note_on_with_velocity(0, 440.0, 127, loud_patch(0));
+            e.note_on(0, 440.0, 127, loud_patch(0));
             e
         };
 
@@ -1023,8 +1022,8 @@ mod tests {
         let mut engine = Ym38x6Engine::new(44100.0);
         // ch0 (MIDI ch0, note0): id=0
         // ch1 (MIDI ch1, note0): id=128
-        engine.note_on_with_velocity(0,   440.0, 127, loud_patch(0));
-        engine.note_on_with_velocity(128, 440.0, 127, loud_patch(0));
+        engine.note_on(0,   440.0, 127, loud_patch(0));
+        engine.note_on(128, 440.0, 127, loud_patch(0));
 
         // MIDI ch0 を無音化
         engine.set_channel_volume_group(0, 0.0);

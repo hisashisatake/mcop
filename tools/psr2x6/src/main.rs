@@ -179,7 +179,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode, PsrC
 /// リリースレートが遅い音色（RR=0で約284.9秒相当）でも減衰の様子を確認できるよう、
 /// 通常より長めのテールを確保している。
 fn render_wavs(voices: &[NamedVoice], output_dir: &std::path::Path, opts: PsrConvOptions) -> Result<(), String> {
-    use ym38x6_core::{SoundEngine, Ym38x6Engine};
+    use ym38x6_core::Ym38x6Engine;
     const SR: f32 = 44_100.0;
     let wav_dir = output_dir.join("wav");
     std::fs::create_dir_all(&wav_dir)
@@ -188,7 +188,7 @@ fn render_wavs(voices: &[NamedVoice], output_dir: &std::path::Path, opts: PsrCon
     for (i, nv) in voices.iter().enumerate() {
         let patch = nv.voice.to_ym38x6_patch_opts(opts);
         let mut engine = Ym38x6Engine::new(SR);
-        engine.note_on_with_velocity(0, 261.63, 110, patch);
+        engine.note_on(0, 261.63, 110, patch);
 
         let on = (SR * 1.2) as usize;
         let off = (SR * 3.0) as usize;

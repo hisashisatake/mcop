@@ -12,7 +12,7 @@
 //!   - CC100/101/6: RPN選択とData Entry（ピッチベンド感度のみ）
 //!   - CC120/CC123: All Sound Off / All Notes Off
 
-use ym38x6_core::{SoundEngine, Ym38x6Engine};
+use ym38x6_core::Ym38x6Engine;
 
 use crate::bank::PatchBank;
 use crate::smf::{parse_smf, EvKind};
@@ -92,7 +92,7 @@ pub fn render_smf(
                 let patch = bank.patch(programs[chi]).clone();
                 let id = chi * 128 + note as usize;
                 let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-                engine.note_on_with_velocity(id, freq, vel, patch);
+                engine.note_on(id, freq, vel, patch);
                 // Channel::newはchannel_gain=1.0で初期化するため、現在のCC11ゲインを再適用する。
                 let gain = (ch_cc11[chi] as f32 / 127.0).powi(2);
                 engine.set_channel_volume(id, gain);

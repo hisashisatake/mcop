@@ -22,7 +22,6 @@ let isUpdating     = false;
 let pendingPos     = null;   // {x,y} — mousemove から animation tick へ橋渡し
 let mouseHeld      = false;
 let mousePos       = { x: 0, y: 0 };
-let currentProgram = 0;
 
 // ym38x6ビルトイン波形（スロット0〜7、waveform.rs参照）。波形メモリ音色のProgram番号に対応。
 const WAVE_NAMES = ['sine', 'half-sine', 'abs-sine', 'square', 'saw', 'quantized', 'pulse', 'octave'];
@@ -120,7 +119,6 @@ async function applyPerformanceLfoToActiveChannels() {
       ? WAVEFORM_MEMORY_BANK
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
     const program = Math.max(0, Math.min(127, parseInt(numEl.value, 10) || 0));
-    currentProgram = program;
     labelEl.textContent = programName(bank, program);
     await invoke('ym38x6_set_program', { bank, program });
     lastChordKey = null; // 同じコードでも即座に音色変更させる
@@ -252,7 +250,9 @@ async function updateChord(px, py) {
     // 押し直し（前のコードを離した後の再発音）でも同じスロットIDへnote_onするため、
     // エンジン側で直前のリリーステールが即座にカット&再アタックされる（同音チョーク）。
     for (let i = 0; i < frequencies.length; i++) {
-      await invoke('note_on', { channel: i, waveSlot: currentProgram, frequency: frequencies[i] });
+      // velocity=100固定（普通に弾いた相当）。マウス演奏はまだ強弱を検出しない。
+      // 音色は set_program/set_patch で設定済みの保存済みパッチが使われる。
+      await invoke('note_on', { channel: i, frequency: frequencies[i], velocity: 100 });
       nextChannels.push(i);
       await applyPerformanceLfo(i);
     }

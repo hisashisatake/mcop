@@ -150,22 +150,6 @@ impl Default for AdsrParams {
 }
 
 // ---------------------------------------------------------------------------
-// SoundEngine trait
-// ---------------------------------------------------------------------------
-
-/// Common interface implemented by the 38x6 FM engine (and any future sound engine).
-///
-/// `Send` is required so the engine can be moved to the audio thread.
-pub trait SoundEngine: Send {
-    /// 指定チャンネルIDへ即座にキーオンする（既存の内容があれば上書き）。
-    /// 同じIDで発音中/リリース中のチャンネルが既にあっても、エンベロープを即座にカットして
-    /// Attackから再開する（実機FM音源のKey-On時の挙動に準拠＝同音チョーク）。
-    fn note_on(&mut self, channel: usize, wave_slot: u8, frequency: f32, adsr: AdsrParams);
-    fn note_off(&mut self, channel: usize);
-    fn render(&mut self, output: &mut [f32], num_channels: usize);
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -48,7 +48,7 @@ use patch::PatchBank;
 use smf::SmfBuilder;
 use ssg::SsgState;
 use vgm::{VgmCmd, VgmIter};
-use ym38x6_core::{algorithm, SoundEngine, Ym38x6Patch};
+use ym38x6_core::{algorithm, Ym38x6Patch};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -626,7 +626,7 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
                         base_kc[ch] = kc;
                         let note = kc_to_midi_note(kc);
                         let (pb, _) = compute_pitch_bend(kc, kc, kf);
-                        engine.note_on_with_velocity(ch, midi_to_freq(note), 100, patch);
+                        engine.note_on(ch, midi_to_freq(note), 100, patch);
                         engine.set_pitch_bend(ch, pb_cents(pb));
                         active[ch] = true;
                     } else {
@@ -648,7 +648,7 @@ fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(
                             base_kc[ch] = val;
                             let note = kc_to_midi_note(val);
                             let (pb2, _) = compute_pitch_bend(val, val, kf);
-                            engine.note_on_with_velocity(ch, midi_to_freq(note), 100, cur_patch[ch]);
+                            engine.note_on(ch, midi_to_freq(note), 100, cur_patch[ch]);
                             engine.set_pitch_bend(ch, pb_cents(pb2));
                         } else {
                             engine.set_pitch_bend(ch, pb_cents(pb));
@@ -1158,7 +1158,7 @@ impl OpnSink for WavSink {
         // 正確な周波数(freq)を渡すと、その後のベンド(整数ノート基準のセント)が
         // 二重計上され、2音目以降が初音の端数ぶんズレる（ノイズはピッチ無視のため影響なし）。
         let f = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-        self.engine.note_on_with_velocity(ch, f, vel, self.patches[ch]);
+        self.engine.note_on(ch, f, vel, self.patches[ch]);
         // Channel::newはgain=1.0で初期化するため、現在のch_gainを再適用する。
         self.engine.set_channel_volume(ch, self.ch_gain[ch]);
         self.engine.set_pitch_bend(ch, self.bend_cents[ch]);

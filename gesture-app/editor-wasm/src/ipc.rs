@@ -91,8 +91,8 @@ async fn invoke_query<T: serde::de::DeserializeOwned>(cmd: &'static str, args: &
 #[serde(rename_all = "camelCase")]
 struct NoteOnArgs {
     channel: usize,
-    wave_slot: u8,
     frequency: f32,
+    velocity: u8,
 }
 
 #[derive(Serialize)]
@@ -101,9 +101,11 @@ struct NoteOffArgs {
 }
 
 /// `src-tauri/src/main.rs`の`note_on`コマンドを呼ぶ。音色は直前の`send_patch`で
-/// 設定済みのcurrent_patchが使われるため`wave_slot`は常に0（未使用、トレイト互換のためのダミー）。
+/// 設定済みの保存済みパッチ（current_patch）が使われる。
+/// velocityはキーボード試奏用の固定値（100＝普通に弾いた相当。gesture-appはまだ演奏動作から
+/// ベロシティを可変化していない）。
 pub fn note_on(channel: usize, frequency: f32) {
-    invoke("note_on", &NoteOnArgs { channel, wave_slot: 0, frequency });
+    invoke("note_on", &NoteOnArgs { channel, frequency, velocity: 100 });
 }
 
 /// `src-tauri/src/main.rs`の`note_off`コマンドを呼ぶ。
