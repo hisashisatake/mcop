@@ -14,7 +14,7 @@ Inspired by Ryu Umemoto's YM-2609, which explored a similar "what if" premise us
 
 ```
 ym38x6/
-  sound-core/         # Core primitives — WaveTable, AdsrParams, SoundEngine trait
+  sound-core/         # Core primitives — WaveTable, AdsrParams, PerformanceLfo, MasterEffects
   ym38x6-core/        # 38x6 FM engine implementation (depends on sound-core)
   ym38x6-vst/         # 38x6 VST3/CLAP plugin (nice-plug)
   gesture-app/        # Composition app (Tauri v2, Windows desktop)

@@ -76,7 +76,7 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 ym38x6/
   Cargo.toml           ← ワークスペース
   spec.md              ← 設計仕様書
-  sound-core/          ← WaveTable・AdsrParams・SoundEngineトレイト（基盤ライブラリ）
+  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects（基盤ライブラリ）
   ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存。波形メモリ音色も生成）
   ym38x6-ui/            ← エディタ共有描画ロジック（egui依存のみ。VST/gesture-app両対応）
   ym38x6-vst/          ← 38x6 VST3/CLAPプラグイン（nice-plug）
@@ -199,9 +199,8 @@ REAPER等のDAWで動作確認する場合は `target\bundled` をVST plug-in pa
 sound-core（基盤）
   WaveTable（1024×u16 log符号化）
   AdsrParams
-  SoundEngineトレイト
   PerformanceLfo / PerformanceLfoTarget（共通Destination: 0=Pitch, 1=Volume）
-  MasterEffects（Reverb/Chorus、SoundEngine::render()出力に後段適用）
+  MasterEffects（Reverb/Chorus、各エンジンのrender()出力に後段適用）
   波形変換：32サンプルi8入力 → 1024サンプル対数フォーマット
 
 ym38x6-core（38x6実装）

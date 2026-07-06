@@ -2,11 +2,10 @@
 
 ## チャンネルIDとキーオン契約（sound-core共通）
 
-`SoundEngine`トレイトは`note_on(channel, wave_slot, frequency, adsr)`で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。
+`Ym38x6Engine::note_on(channel, frequency, velocity, patch)`で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。
 
 - 同じ`channel`へ再度`note_on`すると、`env_level`を0（無音）に落とさず**残響レベルからAttackを再開**する（実機OPMのKey-On挙動。EGは減衰量をリセットせず現在値からアタックするため、前の音が消えきる前のキーオンではARが本来の立ち上がりをせず、モジュレーターのエンベロープが残響に引きずられる＝FMらしい再アタックの明るさが出る）。これにより同音連打でもプチノイズが出ない
   - ※以前は「即座にカットしてAttackから再開する同音チョーク」を実機準拠としていたが、これは実機EGの誤解に基づくものだった。実機は切らずに残響から再アタックする
-- 明示的にチョークしたい場合は`choke_and_note_on`（旧ボイスを数msのデクリックフェードで消してから新ボイス発音）を使う。サステインペダルのスウェル等、将来のボイス管理用に温存
 - ピッチベンドは`set_pitch_bend(channel, cents)`、または`set_pitch_bend_group(group, cents)`で`channel >> 7`が一致する全ボイスへ一括適用する（MIDIチャンネル単位ベンド）
 - VST（ym38x6-vst）はボイスIDを`midi_ch*128 + note`で符号化する（一意性＝Note Off/同音再アタックの突き合わせ、グループ性＝`id >> 7`でMIDIチャンネルを復元しベンド一括適用、を両立）
 - gesture-appはコードの声部インデックス（0〜N-1の固定スロット）を`channel`として使う（[spec-app.md](spec-app.md)参照）
@@ -426,7 +425,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 **実装方式：**
 - Reverb：コムフィルタ＋オールパスフィルタ構成のアルゴリズミックリバーブ（Room1〜Plate）。Delay/Panning Delayタイプはフィードバックディレイラインで実現
 - Chorus：LFO変調ディレイライン（Chorus1〜4、Flanger、Feedback Chorus）。Short Delay系タイプは変調なしの短ディレイ
-- `sound-core`に依存ゼロのDSPモジュールとして実装し、各`SoundEngine::render()`の出力に対してapp/plugin側のレンダリング後段で適用する
+- `sound-core`に依存ゼロのDSPモジュールとして実装し、各エンジンの`render()`出力に対してapp/plugin側のレンダリング後段で適用する
 
 **OPQコンバーターとの関係：**
 エフェクトはOPQ由来パラメーターではないため、OPQ変換対象外。38x6独自フォーマット（.38x6）にのみ保存される。

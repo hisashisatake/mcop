@@ -203,10 +203,6 @@ struct Channel {
     svf: Svf,
     /// フィルターCutoffを変調するFilter EG。
     filter_eg: FilterEnvelope,
-    /// チョークで破棄される直前に仕込む線形フェードアウトの総サンプル数（0=通常状態）。
-    declick_total: u32,
-    /// デクリックフェードの残りサンプル数。declick_totalから1ずつ減り、0で完全に消える。
-    declick_remaining: u32,
 }
 
 impl Channel {
@@ -242,16 +238,7 @@ impl Channel {
             tone_lfo: ToneLfo::new(),
             svf: Svf::new(),
             filter_eg,
-            declick_total: 0,
-            declick_remaining: 0,
         }
-    }
-
-    /// チョークで破棄される直前に呼ぶ。出力を`samples`サンプルかけて線形に0へ落とし、
-    /// 旧ボイスが非ゼロ振幅で瞬間消滅することによるクリックノイズを防ぐ。
-    fn start_declick(&mut self, samples: u32) {
-        self.declick_total = samples.max(1);
-        self.declick_remaining = self.declick_total;
     }
 
     /// 発音/リリース中のチャンネルを、残響レベルを保持したまま再キーオンする
@@ -272,9 +259,6 @@ impl Channel {
         self.base_frequency = frequency;
         self.velocity = velocity;
         self.filter_eg.note_on();
-        // チョーク経由でデクリック中だった場合は解除して通常再生に戻す。
-        self.declick_total = 0;
-        self.declick_remaining = 0;
     }
 
     fn set_performance_lfo(
@@ -310,10 +294,6 @@ impl Channel {
     }
 
     fn is_idle(&self) -> bool {
-        // デクリックフェード中はランプが終わるまで生存させる（途中で消すと逆にクリックになる）。
-        if self.declick_total > 0 {
-            return self.declick_remaining == 0;
-        }
         self.operators.iter().all(|op| op.is_idle())
     }
 
@@ -409,24 +389,14 @@ impl Channel {
         );
         let cutoff_hz = cutoff_to_hz(cutoff);
         let filter_type = FilterType::from_u8(self.channel_params.filter_type);
-        let out = self.svf.process(
+        self.svf.process(
             dry,
             sample_rate,
             cutoff_hz,
             self.channel_params.filter_resonance,
             self.channel_params.filter_self_oscillation,
             filter_type,
-        );
-
-        // デクリックフェード：チョークされた旧ボイスを線形に0へ落とす。
-        // 最初のサンプルはgain=1.0（直前と連続）、declick_totalサンプルかけて0に向かう。
-        if self.declick_total > 0 {
-            let gain = self.declick_remaining as f32 / self.declick_total as f32;
-            self.declick_remaining = self.declick_remaining.saturating_sub(1);
-            out * gain
-        } else {
-            out
-        }
+        )
     }
 }
 
@@ -454,15 +424,9 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 
 const TOTAL_SLOTS: usize = 256;
 
-/// チョークで破棄されるボイスを線形フェードアウトさせる時間（秒）。クリック緩和用。
-/// 新ボイスの発音タイミングは遅らせず、消えゆく旧ボイスにのみ適用するためレイテンシーは増えない。
-const DECLICK_SECONDS: f32 = 0.004;
-
 pub struct Ym38x6Engine {
     sample_rate: f32,
     channels: HashMap<usize, Channel>,
-    /// チョークされ、デクリックフェード中の旧ボイス。フェード完了で破棄される。
-    fading_voices: Vec<Channel>,
     wave_tables: Vec<Option<WaveTable>>,
     current_patch: Ym38x6Patch,
 }
@@ -476,7 +440,6 @@ impl Ym38x6Engine {
         Self {
             sample_rate,
             channels: HashMap::new(),
-            fading_voices: Vec::new(),
             wave_tables,
             current_patch: Ym38x6Patch::default(),
         }
@@ -492,19 +455,6 @@ impl Ym38x6Engine {
     /// gesture-appのTauri層が`note_on`へ渡すパッチとして使う。
     pub fn current_patch(&self) -> Ym38x6Patch {
         self.current_patch
-    }
-
-    /// 同一IDの旧ボイスをデクリックフェードでチョーク（数msで消音）してから新ボイスを発音する。
-    /// 残響再アタックではなく明示的に切り替えたい場合に使う（サステインペダルのスウェル等、
-    /// 将来のボイス管理用）。`note_on`がデフォルトの残響再アタック。
-    pub fn choke_and_note_on(&mut self, channel: usize, frequency: f32, velocity: u8, patch: Ym38x6Patch) {
-        if let Some(mut old) = self.channels.remove(&channel) {
-            if !old.is_idle() {
-                old.start_declick((self.sample_rate * DECLICK_SECONDS) as u32);
-                self.fading_voices.push(old);
-            }
-        }
-        self.channels.insert(channel, Channel::new(frequency, velocity, patch));
     }
 
     /// 発音中チャンネルのピッチベンド量（セント）を設定する（MIDI Pitch Bend / RPN0）。
@@ -627,17 +577,9 @@ impl Ym38x6Engine {
         let num_channels = num_channels.max(1);
         let sample_rate = self.sample_rate;
         let wave_tables = &self.wave_tables;
-        let fading_voices = &mut self.fading_voices;
         for frame in output.chunks_mut(num_channels) {
             let mut mix = 0.0f32;
             for ch in self.channels.values_mut() {
-                if ch.is_idle() {
-                    continue;
-                }
-                mix += ch.tick(sample_rate, wave_tables);
-            }
-            // チョークされフェードアウト中の旧ボイスも一緒にミックスする
-            for ch in fading_voices.iter_mut() {
                 if ch.is_idle() {
                     continue;
                 }
@@ -648,7 +590,6 @@ impl Ym38x6Engine {
             }
         }
         self.channels.retain(|_, ch| !ch.is_idle());
-        self.fading_voices.retain(|ch| !ch.is_idle());
     }
 }
 

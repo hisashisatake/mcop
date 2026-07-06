@@ -65,54 +65,6 @@ fn note_on_retriggers_from_residual_not_silence() {
     );
 }
 
-/// `choke_and_note_on`（明示チョークAPI、将来のサステインペダル等向け）は旧ボイスを
-/// 即座に瞬間消滅させず、数ms（DECLICK_SECONDS=4ms≒176サンプル@44.1kHz）かけて
-/// 線形にフェードアウトしてから消す（クリックノイズ緩和）。新ボイスの発音タイミングは
-/// 遅れない（旧ボイスに重ねてフェードするため）。
-///
-/// 旧ボイスのフェードを単独で観測するため、新ボイスはアタック最遅(ar=0)にして
-/// 観測ウィンドウ内ではほぼ無音に保つ。
-#[test]
-fn choke_and_note_on_declicks_old_voice_instead_of_hard_cut() {
-    let mut engine = Ym38x6Engine::new(44100.0);
-    let patch = sustained_release_patch();
-    let ch = 0;
-    engine.note_on(ch, 440.0, 127, patch);
-
-    let mut warmup = vec![0.0f32; 100];
-    engine.render(&mut warmup, 1);
-
-    engine.note_off(ch);
-
-    // RR=200のリリースで1000サンプル分減衰させる（env_level: 1.0 → 約0.72）
-    let mut release_buf = vec![0.0f32; 1000];
-    engine.render(&mut release_buf, 1);
-    let release_peak = release_buf[900..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-
-    // 明示チョーク。新ボイスはアタック最遅(ar=0)にして、観測ウィンドウ内ではほぼ無音に保つ。
-    let mut slow_attack = sustained_release_patch();
-    for op in slow_attack.operators.iter_mut() {
-        op.ar = 0;
-    }
-    engine.choke_and_note_on(ch, 440.0, 127, slow_attack);
-
-    let mut after = vec![0.0f32; 2000];
-    engine.render(&mut after, 1);
-    // デクリック開始直後：旧ボイスはまだ生きている（瞬間カットされていない）
-    let early_peak = after[0..50].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-    // デクリック期間（≒176サンプル）を十分過ぎた後：旧ボイスは消え、新ボイスはまだほぼ無音
-    let late_peak = after[400..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-
-    assert!(
-        early_peak > release_peak * 0.5,
-        "choke should fade the old voice (not hard-cut it): early_peak={early_peak}, release_peak={release_peak}"
-    );
-    assert!(
-        late_peak < release_peak * 0.5,
-        "the choked voice should fade out within the declick window: late_peak={late_peak}, release_peak={release_peak}"
-    );
-}
-
 /// note_onは同じチャンネルIDへ再発音すると残響レベルから再アタックする。
 /// 新しいAttackがフルレベルへ向かうため、リリース残響レベルを上回る。
 #[test]

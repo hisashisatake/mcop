@@ -39,7 +39,7 @@ ym38x6/                  ← ワークスペースルート
   spec.md
   CLAUDE.md
 
-  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・SoundEngineトレイト）
+  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・PerformanceLfo・MasterEffects）
     Cargo.toml
     src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
                              波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
@@ -97,11 +97,10 @@ ym38x6-core（VCO実装の一つ＝FM発振源）
   Ym38x6Engine           ← 4opFM合成（差し替え対象。将来はPCM/減算/物理モデル等に置換可能）
 ```
 
-- **現状（未実現・要注意）**: VCO抽象はまだ"目標"であって実装されていない。`SoundEngine` トレイトは
-  存在するが形骸化しており、実質的に機能している契約は `render()`（音声プル）のみ。
-  `note_on(wave_slot, AdsrParams)` は旧WMS-1由来の語彙で、ym38x6では未使用
-  （`Ym38x6Engine::note_on` 内コメント参照）。消費側（ym38x6-vst・gesture-app）は具象 `Ym38x6Engine` と
-  `Ym38x6Patch` に直接結合しており、トレイト越しのポリモーフィズムは使っていない。
+- **現状（未実現・要注意）**: VCO抽象はまだ"目標"であって実装されていない。旧`SoundEngine`トレイトは
+  単一実装（`Ym38x6Engine`）でポリモーフィズムが一度も使われていなかったため撤去済み
+  （`note_on`/`note_off`/`render`は`impl Ym38x6Engine`の通常の固有メソッド）。消費側（ym38x6-vst・
+  gesture-app）は元々具象`Ym38x6Engine`と`Ym38x6Patch`に直接結合していた。
   sound-core に `PerformanceLfo`/`MasterEffects` がある点だけは土台として有効。
 - **WMS-1同居時代の実態（参考）**: かつて gesture-app は `enum EngineHandle { Wms1, Ym38x6 }` で
   2エンジンを切り替えたが、共有できたのは `render()` のみ。発音はエンジン別の並行コマンド群
