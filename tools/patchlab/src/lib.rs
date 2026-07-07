@@ -6,7 +6,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use ym38x6_core::{Ym38x6Engine, Ym38x6Patch};
+use ym38x6_core::{Vco, Ym38x6Engine, Ym38x6Patch};
 
 /// JSONで与えた1パッチ（`Ym38x6Patch` のserde表現）を1ノート分レンダリングし、
 /// モノラルf32サンプル列を返す。
@@ -30,7 +30,8 @@ fn render_patch(
         .map_err(|e| PyValueError::new_err(format!("patch JSON parse error: {e}")))?;
 
     let mut engine = Ym38x6Engine::new(sample_rate);
-    engine.note_on(0, freq, velocity, patch);
+    engine.set_patch(patch);
+    engine.note_on(0, freq, velocity);
 
     let on = (sample_rate * on_secs).max(0.0) as usize;
     let off = (sample_rate * release_secs).max(0.0) as usize;
