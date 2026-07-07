@@ -1,5 +1,7 @@
 use std::f32::consts::TAU;
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // パラメーターマッピング
 // ---------------------------------------------------------------------------
@@ -36,13 +38,59 @@ fn next_random(state: &mut u32) -> f32 {
 // パフォーマンスLFO（ビブラート/トレモロ）
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum LfoWaveform {
     #[default]
     Triangle,
     Sine,
     Square,
     SampleHold,
+    /// 位相0→-1、1直前→+1のランプ（のこぎり波）。
+    Saw,
+    /// 三角波を上下でクリップした台形。
+    Trapezoid,
+    /// 周期ごとに新しい目標値を抽選し、位相で前回値→次回値を線形補間する
+    /// 滑らかなランダムウォーク（階段状のSampleHoldとの違いはここ）。
+    Random,
+    /// ロジスティック写像(`x = 3.9 * x * (1 - x)`)を周期ごとに反復する決定論的カオス。
+    /// 周期内はSampleHold同様にホールドする。
+    Chaos,
+}
+
+/// パフォーマンスLFOのFadeモード（4種）。
+///
+/// ON-IN/ON-OUTはnote_on起点、OFF-IN/OFF-OUTはnote_off起点でfade_time秒かけて
+/// 振幅ゲインをランプする。既存のDelay（`delay`フィールド、ハードカットオーバー方式）
+/// とは独立したパラメーターで、Delayが経過した後にFadeが効き始める。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum LfoFadeMode {
+    /// note_on後、Delay経過を起点に振幅ゲインが0→1にフェードイン。
+    #[default]
+    OnIn,
+    /// note_on後、Delay経過を起点に振幅ゲインが1→0にフェードアウト。
+    OnOut,
+    /// note_off前は振幅ゲイン0、note_off後にfade_time秒かけて0→1にフェードイン。
+    OffIn,
+    /// note_off前は振幅ゲイン1、note_off後にfade_time秒かけて1→0にフェードアウト。
+    OffOut,
+}
+
+/// パフォーマンスLFOの「波形の形」に関する設定値のまとめ。
+///
+/// `rate`/`delay`とは別に、音色パッチ側（`ym38x6-core`の`ChannelParams`等）が
+/// 1フィールドとして保持できるように独立させてある。LFOの意味論（enum定義・
+/// 波形計算・Fadeロジック）は`sound-core`に閉じ、呼び出し側はこの構造体を
+/// 持ち回るだけでよい。
+#[derive(Clone, Copy, PartialEq, Debug, Default, Serialize, Deserialize)]
+pub struct PerformanceLfoShape {
+    pub waveform: LfoWaveform,
+    pub fade_mode: LfoFadeMode,
+    /// Fadeにかかる時間。`delay_to_seconds`と同じ0〜10秒レンジ（0=フェード無効・
+    /// 常時フルゲインとなり、旧来のハードエッジ挙動と等価になる）。
+    pub fade_time: u8,
+    /// 波形の中心シフト(-100〜100)。生値(-1.0〜1.0)に`offset/100.0`を加算してから
+    /// クランプする。
+    pub offset: i8,
 }
 
 /// Rate/Delay/Waveformを持つ、エンジン非依存のパフォーマンスLFO。
@@ -54,10 +102,22 @@ pub struct PerformanceLfo {
     rate: u8,
     delay: u8,
     waveform: LfoWaveform,
+    fade_mode: LfoFadeMode,
+    fade_time: u8,
+    offset: i8,
     phase: f32,
     elapsed: f32,
     rng_state: u32,
     sh_value: f32,
+    /// Random波形の補間元・補間先（周期境界で`random_prev = random_next`にスライドする）。
+    random_prev: f32,
+    random_next: f32,
+    /// Chaos波形のロジスティック写像の状態(0.0〜1.0)。
+    chaos_state: f32,
+    /// note_on〜note_offの間はtrue（Fade OFF系の起点判定に使う）。
+    gate_open: bool,
+    /// note_off後の経過秒（Fade OFF系のランプに使う）。
+    released_elapsed: f32,
 }
 
 impl PerformanceLfo {
@@ -66,10 +126,18 @@ impl PerformanceLfo {
             rate: 0,
             delay: 0,
             waveform: LfoWaveform::default(),
+            fade_mode: LfoFadeMode::default(),
+            fade_time: 0,
+            offset: 0,
             phase: 0.0,
             elapsed: 0.0,
             rng_state: 0x1234_5678,
             sh_value: 0.0,
+            random_prev: 0.0,
+            random_next: 0.0,
+            chaos_state: 0.5,
+            gate_open: false,
+            released_elapsed: 0.0,
         }
     }
 
@@ -85,10 +153,27 @@ impl PerformanceLfo {
         self.waveform = waveform;
     }
 
+    /// `waveform`/`fade_mode`/`fade_time`/`offset`を一括設定する。
+    pub fn set_shape(&mut self, shape: PerformanceLfoShape) {
+        self.waveform = shape.waveform;
+        self.fade_mode = shape.fade_mode;
+        self.fade_time = shape.fade_time;
+        self.offset = shape.offset;
+    }
+
     /// キーオン時に呼び出し、位相とディレイ経過時間をリセットする
     pub fn note_on(&mut self) {
         self.phase = 0.0;
         self.elapsed = 0.0;
+        self.gate_open = true;
+        self.released_elapsed = 0.0;
+        self.chaos_state = 0.5;
+    }
+
+    /// キーオフ時に呼び出す。Fade OFF-IN/OFF-OUTの起点をリセットする。
+    pub fn note_off(&mut self) {
+        self.gate_open = false;
+        self.released_elapsed = 0.0;
     }
 
     /// 1サンプル進めて変調値（-1.0〜1.0）を返す。ディレイ経過前は常に0.0。
@@ -97,20 +182,76 @@ impl PerformanceLfo {
         let prev_phase = self.phase;
         self.phase = (self.phase + freq / sample_rate).fract();
         self.elapsed += 1.0 / sample_rate;
-
-        if self.waveform == LfoWaveform::SampleHold && self.phase < prev_phase {
-            self.sh_value = next_random(&mut self.rng_state);
+        if !self.gate_open {
+            self.released_elapsed += 1.0 / sample_rate;
         }
 
-        if self.elapsed < delay_to_seconds(self.delay) {
+        let period_wrapped = self.phase < prev_phase;
+        if period_wrapped {
+            match self.waveform {
+                LfoWaveform::SampleHold => self.sh_value = next_random(&mut self.rng_state),
+                LfoWaveform::Random => {
+                    self.random_prev = self.random_next;
+                    self.random_next = next_random(&mut self.rng_state);
+                }
+                LfoWaveform::Chaos => {
+                    self.chaos_state = 3.9 * self.chaos_state * (1.0 - self.chaos_state);
+                }
+                _ => {}
+            }
+        }
+
+        let delay_seconds = delay_to_seconds(self.delay);
+        if self.elapsed < delay_seconds {
             return 0.0;
         }
 
-        match self.waveform {
+        let raw = match self.waveform {
             LfoWaveform::Triangle => triangle(self.phase),
             LfoWaveform::Sine => (self.phase * TAU).sin(),
             LfoWaveform::Square => if self.phase < 0.5 { 1.0 } else { -1.0 },
             LfoWaveform::SampleHold => self.sh_value,
+            LfoWaveform::Saw => 2.0 * self.phase - 1.0,
+            LfoWaveform::Trapezoid => (triangle(self.phase) * 2.0).clamp(-1.0, 1.0),
+            LfoWaveform::Random => self.random_prev + self.phase * (self.random_next - self.random_prev),
+            LfoWaveform::Chaos => 2.0 * self.chaos_state - 1.0,
+        };
+
+        let shifted = (raw + self.offset as f32 / 100.0).clamp(-1.0, 1.0);
+        shifted * self.fade_gain(delay_seconds)
+    }
+
+    /// Fadeモードに応じた振幅ゲイン（0.0〜1.0）を計算する。
+    /// `fade_time=0`は常時フルゲイン（フェード無効、旧来のハードエッジ挙動と等価）。
+    fn fade_gain(&self, delay_seconds: f32) -> f32 {
+        let fade_seconds = delay_to_seconds(self.fade_time);
+        if fade_seconds <= 0.0 {
+            return 1.0;
+        }
+
+        match self.fade_mode {
+            LfoFadeMode::OnIn => {
+                let t = (self.elapsed - delay_seconds).max(0.0);
+                (t / fade_seconds).min(1.0)
+            }
+            LfoFadeMode::OnOut => {
+                let t = (self.elapsed - delay_seconds).max(0.0);
+                1.0 - (t / fade_seconds).min(1.0)
+            }
+            LfoFadeMode::OffIn => {
+                if self.gate_open {
+                    0.0
+                } else {
+                    (self.released_elapsed / fade_seconds).min(1.0)
+                }
+            }
+            LfoFadeMode::OffOut => {
+                if self.gate_open {
+                    1.0
+                } else {
+                    1.0 - (self.released_elapsed / fade_seconds).min(1.0)
+                }
+            }
         }
     }
 }

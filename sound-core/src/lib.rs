@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 
 pub mod lfo;
-pub use lfo::{LfoWaveform, PerformanceLfo, LfoDestination, PerformanceLfoTarget, apply_lfo_modulation,
-    pitch_depth_cents, volume_depth};
+pub use lfo::{LfoWaveform, LfoFadeMode, PerformanceLfoShape, PerformanceLfo, LfoDestination,
+    PerformanceLfoTarget, apply_lfo_modulation, pitch_depth_cents, volume_depth};
 
 // ---------------------------------------------------------------------------
 // Master effects (Reverb / Chorus)
