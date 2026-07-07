@@ -52,11 +52,17 @@ fn build_panel_params<'a>(
         ams: vi(&params.ams, setter),
         cutoff: vi(&params.cutoff, setter),
         resonance: vi(&params.resonance, setter),
-        feg_a: vi(&params.feg_a, setter),
-        feg_d: vi(&params.feg_d, setter),
-        feg_s: vi(&params.feg_s, setter),
-        feg_r: vi(&params.feg_r, setter),
+        feg_ar: vi(&params.feg_ar, setter),
+        feg_d1r: vi(&params.feg_d1r, setter),
+        feg_d1l: vi(&params.feg_d1l, setter),
+        feg_d2r: vi(&params.feg_d2r, setter),
+        feg_rr: vi(&params.feg_rr, setter),
         feg_depth: vi(&params.feg_depth, setter),
+        vca_ar: vi(&params.vca_ar, setter),
+        vca_d1r: vi(&params.vca_d1r, setter),
+        vca_d1l: vi(&params.vca_d1l, setter),
+        vca_d2r: vi(&params.vca_d2r, setter),
+        vca_rr: vi(&params.vca_rr, setter),
         rev_send: vi(&params.rev_send, setter),
         reverb_type: vi(&params.reverb_type, setter),
         cho_send: vi(&params.cho_send, setter),
@@ -130,11 +136,17 @@ pub(crate) fn create_editor(
                                             set!(params.ams, ch.ams as i32);
                                             set!(params.cutoff, ch.filter_cutoff as i32);
                                             set!(params.resonance, ch.filter_resonance as i32);
-                                            set!(params.feg_a, ch.filter_eg_attack as i32);
-                                            set!(params.feg_d, ch.filter_eg_decay as i32);
-                                            set!(params.feg_s, ch.filter_eg_sustain as i32);
-                                            set!(params.feg_r, ch.filter_eg_release as i32);
+                                            set!(params.feg_ar, ch.filter_eg_ar as i32);
+                                            set!(params.feg_d1r, ch.filter_eg_d1r as i32);
+                                            set!(params.feg_d1l, ch.filter_eg_d1l as i32);
+                                            set!(params.feg_d2r, ch.filter_eg_d2r as i32);
+                                            set!(params.feg_rr, ch.filter_eg_rr as i32);
                                             set!(params.feg_depth, ch.filter_eg_depth as i32);
+                                            set!(params.vca_ar, ch.vca_eg_ar as i32);
+                                            set!(params.vca_d1r, ch.vca_eg_d1r as i32);
+                                            set!(params.vca_d1l, ch.vca_eg_d1l as i32);
+                                            set!(params.vca_d2r, ch.vca_eg_d2r as i32);
+                                            set!(params.vca_rr, ch.vca_eg_rr as i32);
                                             for (i, op) in preset.patch.operators.iter().enumerate() {
                                                 let op_p = &params.operators[i];
                                                 set!(op_p.tl, op.tl as i32);

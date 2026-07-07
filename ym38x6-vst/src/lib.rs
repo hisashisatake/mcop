@@ -244,11 +244,17 @@ impl Ym38x6Plugin {
             filter_resonance: p.resonance.value() as u8,
             filter_type: self.filter_type,
             filter_self_oscillation: self.filter_self_oscillation,
-            filter_eg_attack: p.feg_a.value() as u8,
-            filter_eg_decay: p.feg_d.value() as u8,
-            filter_eg_sustain: p.feg_s.value() as u8,
-            filter_eg_release: p.feg_r.value() as u8,
+            filter_eg_ar: p.feg_ar.value() as u8,
+            filter_eg_d1r: p.feg_d1r.value() as u8,
+            filter_eg_d1l: p.feg_d1l.value() as u8,
+            filter_eg_d2r: p.feg_d2r.value() as u8,
+            filter_eg_rr: p.feg_rr.value() as u8,
             filter_eg_depth: p.feg_depth.value() as u8,
+            vca_eg_ar: p.vca_ar.value() as u8,
+            vca_eg_d1r: p.vca_d1r.value() as u8,
+            vca_eg_d1l: p.vca_d1l.value() as u8,
+            vca_eg_d2r: p.vca_d2r.value() as u8,
+            vca_eg_rr: p.vca_rr.value() as u8,
         };
 
         Ym38x6Patch { operators, channel }
