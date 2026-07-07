@@ -50,10 +50,10 @@ def make_brass_patch(
     filter_resonance: int = 0,   # レゾナンス（大=ピーク強調）
     filter_type: int = 0,        # 0=LP / 1=HP / 2=BP
     filter_eg_depth: int = 0,    # EGで開く量（cutoff + eg×depth）
-    filter_eg_attack: int = 0,   # フィルターEG: A
-    filter_eg_decay: int = 0,    # 〃 D
-    filter_eg_sustain: int = 0,  # 〃 S
-    filter_eg_release: int = 0,  # 〃 R
+    filter_eg_ar: int = 0,   # フィルターEG: A
+    filter_eg_d1r: int = 0,    # 〃 D
+    filter_eg_d1l: int = 0,  # 〃 S
+    filter_eg_rr: int = 0,  # 〃 R
 ) -> dict:
     """高レベルノブからブラスパッチ dict を生成する。骨格は固定。"""
 
@@ -75,8 +75,8 @@ def make_brass_patch(
         pms=0, ams=0,
         filter_cutoff=filter_cutoff, filter_resonance=filter_resonance,
         filter_type=filter_type, filter_self_oscillation=False,
-        filter_eg_attack=filter_eg_attack, filter_eg_decay=filter_eg_decay,
-        filter_eg_sustain=filter_eg_sustain, filter_eg_release=filter_eg_release,
+        filter_eg_ar=filter_eg_ar, filter_eg_d1r=filter_eg_d1r,
+        filter_eg_d1l=filter_eg_d1l, filter_eg_rr=filter_eg_rr,
         filter_eg_depth=filter_eg_depth,
     )
     if algorithm == 4:
@@ -113,7 +113,7 @@ BRASS_FAMILY: dict[int, tuple[str, dict]] = {
     62: ("SynthBrass_1",   dict(brightness=160, attack=140, aggression=90,  detune=0,  carrier_wf=8,
                                 carrier_tl=212,
                                 filter_cutoff=70, filter_resonance=180, filter_type=0, filter_eg_depth=185,
-                                filter_eg_attack=70, filter_eg_decay=90, filter_eg_sustain=130, filter_eg_release=60)),
+                                filter_eg_ar=70, filter_eg_d1r=90, filter_eg_d1l=130, filter_eg_rr=60)),
     63: ("SynthBrass_2",   dict(brightness=160, attack=85,  aggression=70,  detune=0,  carrier_wf=8,
                                 carrier_tl=235,
                                 filter_cutoff=160, filter_resonance=100, filter_type=0)),

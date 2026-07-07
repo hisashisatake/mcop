@@ -105,8 +105,8 @@ def _make_patch(mod_wf: int, car_wf: int, mod_tl: int,
         pms=0, ams=0,
         filter_cutoff=255, filter_resonance=0, filter_type=0,
         filter_self_oscillation=False,
-        filter_eg_attack=0, filter_eg_decay=0, filter_eg_sustain=0,
-        filter_eg_release=0, filter_eg_depth=0,
+        filter_eg_ar=0, filter_eg_d1r=0, filter_eg_d1l=0,
+        filter_eg_rr=0, filter_eg_depth=0,
     )
     patch = {
         "operators": [
