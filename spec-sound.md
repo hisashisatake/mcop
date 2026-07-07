@@ -215,7 +215,7 @@ G# → 79AH, A  → 80EH, A# → 889H, B  → 90AH
 | DR（ディケイレート） | 5bit | 0〜255 | 指数カーブ（8.71ms〜284.9秒、0はフリーズ） |
 | SR（サスティンレート） | 5bit | 0〜255 | OPQ由来（DR2相当）。DRと同じ指数カーブ |
 | RR（リリースレート） | 4bit | 0〜255 | 指数カーブ（8.71ms(255)〜284.9秒(0)、全域を指数補間。実機reg=15/reg=0に厳密一致。RRは実機にもフリーズが存在しないためAR/DRと異なり0でも有限値） |
-| SL（サスティンレベル） | 4bit | 0〜255 | 0〜255をenv_level閾値に線形マッピング(d1l/255)。dBリニアエンベロープにより出力は-96dB(0)〜0dB(255)のdB線形（255=減衰なし）。※フィルターEGのSLは別途sl_to_level(-93dB(0)〜0dB(255))を使用 |
+| SL（サスティンレベル） | 4bit | 0〜255 | 0〜255をenv_level閾値に線形マッピング(d1l/255)。dBリニアエンベロープにより出力は-96dB(0)〜0dB(255)のdB線形（255=減衰なし）。※VCF/VCAのD1L（sound-core::Eg）も同じ線形マッピング(d1l/255)を使用 |
 | KSR | 2bit | 0〜255 | 指数カーブ（1octあたり約1.09倍(0)〜2倍(255)、1段ごとに倍） |
 | AMオン/オフ | 1bit | 0 or 1（8bitで保持） | |
 | Velocity Sensitivity | なし | 0〜255（デフォルト0） | 38x6独自拡張（DX7/OPS由来）。OPQ/OPZ系チップにはハードウェア機能として存在しない。音の明るさ（モジュレーターの変調量）にのみ作用し、音量には作用しない（音量はベロシティが常時担当） |
@@ -333,9 +333,10 @@ half-squared / 2x-half / 2x-squared-half / 2x-abs-half / 2x-pos-squared-half）�
 | AM感度 | 2bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でAMS=1〜3相当の23.9〜95.6dBをdepth=1-10^(-dB/20)で振幅深度に変換） |
 | PM感度 | 3bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でPMS=1(+/-5cents)〜PMS=7(+/-700cents)相当、約7.13oct） |
 
-### フィルター（State Variable Filter、ボイス単位）
+### フィルター（Vcf: State Variable Filter + キーオン連動EG、ボイス単位）
 
-FM合成出力にかけるアナログシンセ的なVCF相当。OPQ由来パラメーターとは独立した38x6独自拡張。
+FM合成出力にかけるアナログシンセ的なVCF相当（`sound-core::Vcf`トレイト、具象実装`VoiceFilter`）。
+OPQ由来パラメーターとは独立した38x6独自拡張。
 
 | パラメーター | 値域 | 備考 |
 |------------|------|------|
@@ -343,19 +344,25 @@ FM合成出力にかけるアナログシンセ的なVCF相当。OPQ由来パラ
 | Resonance | 0〜255 | レゾナンス。Self-Oscillation ON時は255でカットオフ周波数のサイン波が自己発振 |
 | Self-Oscillation | 0 or 1（8bitで保持） | デフォルト=1（ON）。OFF時は255でも発振寸前で安定動作 |
 | Filter Type | 0〜2（8bitで保持） | 0=LP、1=HP、2=BP |
-| Filter EG A（Attack） | 0〜255 | キーオンからピークまでの時間 |
-| Filter EG D（Decay） | 0〜255 | ピークからサスティンレベルまでの時間 |
-| Filter EG S（Sustain） | 0〜255 | キーオン中に保持するレベル |
-| Filter EG R（Release） | 0〜255 | キーオフから0までの時間 |
+| Filter EG AR | 0〜255 | キーオンからピークまでの時間 |
+| Filter EG D1R | 0〜255 | ピークからD1Lレベルまでの時間 |
+| Filter EG D1L | 0〜255 | D1Rが到達するレベル（サスティン相当、線形d1l/255） |
+| Filter EG D2R | 0〜255 | D1Lからさらに減衰する速度。0で旧4段ADSR相当（D1Lに張り付く） |
+| Filter EG RR | 0〜255 | キーオフから0までの時間 |
 | Filter EG Depth | 0〜255 | Filter EGがCutoffに与える変調量 |
+
+**Filter EGの形式：** 5段OPM形式（AR→D1R→D1L→D2R→RR、+Idle）。38x6本体のFM EG
+（`operator.rs`のEnvPhase/tick_envelope）と同じ状態遷移・同じD1L解釈（線形 d1l/255）を持つ
+状態機械`sound-core::Eg`を、Cutoff変調用に流用している。
 
 **Filter EGの加算モデル：**
 ```
 実効Cutoff = clamp(Cutoffベース値 + Filter EG出力 × Filter EG Depth, 0, 255)
 ```
-キーオンでA→D→Sの順に推移し、キーオフでRに移行する（オペレーターのエンベロープと同様の挙動、MC-404等のフィルターエンベロープ相当）。
+キーオンでAR→D1R→D1L→D2Rの順に推移し、キーオフでRRに移行する（オペレーターのエンベロープと同様の挙動、
+MC-404等のフィルターエンベロープ相当）。
 
-**実装方式：** State Variable Filter（SVF）
+**実装方式：** State Variable Filter（SVF、`sound-core::Svf`）
 - LP/HP/BPを同一回路から同時出力できる構造で、Filter Typeによる切り替えと相性が良い
 - 高Resonanceでも数値的に安定（Self-Oscillation時の発振も含めて安定動作）
 
@@ -363,6 +370,24 @@ Self-Oscillation ON + Filter EGでCutoffをスイープすると、発振に突�
 
 **OPQコンバーターとの関係：**
 フィルターはOPQ由来パラメーターではないため、OPQ変換対象外。38x6独自フォーマット（.38x6）にのみ保存される。
+
+### VCA（Vca: ボイス単位の振幅EGオーバーレイ）
+
+FM合成 → Vcf通過後の信号に乗算するボイス単位の振幅オーバーレイ（`sound-core::Vca`トレイト、
+具象実装`VoiceAmp`）。EG形式はVcfと同じ5段OPM形式（AR/D1R/D1L/D2R/RR、`sound-core::Eg`）。
+
+| パラメーター | 値域 | 備考 |
+|------------|------|------|
+| VCA EG AR | 0〜255（既定255） | 既定は最速（数サンプル） |
+| VCA EG D1R | 0〜255（既定0） | 既定はD1L=255のため実質無効 |
+| VCA EG D1L | 0〜255（既定255） | 既定は完全サステイン（常時全開） |
+| VCA EG D2R | 0〜255（既定0） | 既定はサステインのまま張り付く |
+| VCA EG RR | 0〜255（既定255） | 既定は最速（note off直後に0へ） |
+
+既定パラメーターではアタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となり、FM本来の
+キャリアEG（`operator.rs`のオペレーター単位EG）を変えない**透過的レイヤー**として働く（二重EG化を
+避ける既定設計）。ユーザーがVCA EGのAR/RR等を変えることで、キャリアEGとは独立にアタック/リリースの
+「量」を上書きする効果音的な表現に使える。
 
 ---
 
@@ -533,8 +558,8 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（20個）：**
-Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG A / Filter EG D / Filter EG S / Filter EG R / Filter EG Depth / Reverb Send / Chorus Send
+**チャンネル単位（26個）：**
+Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -728,7 +753,8 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
             "algorithm": 0, "feedback": 0,
             "tone_lfo_freq": 0, "tone_lfo_pmd": 0, "tone_lfo_amd": 0, "tone_lfo_delay": 0, "pms": 0, "ams": 0,
             "filter_cutoff": 255, "filter_resonance": 0, "filter_type": 0, "filter_self_oscillation": true,
-            "filter_eg_attack": 0, "filter_eg_decay": 0, "filter_eg_sustain": 0, "filter_eg_release": 0, "filter_eg_depth": 0
+            "filter_eg_ar": 0, "filter_eg_d1r": 0, "filter_eg_d1l": 0, "filter_eg_d2r": 0, "filter_eg_rr": 0, "filter_eg_depth": 0,
+            "vca_eg_ar": 255, "vca_eg_d1r": 0, "vca_eg_d1l": 255, "vca_eg_d2r": 0, "vca_eg_rr": 255
           }
         }
       },
