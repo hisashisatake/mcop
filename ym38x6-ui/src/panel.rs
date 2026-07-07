@@ -40,11 +40,18 @@ pub struct PanelParams<'a> {
     // FILTER
     pub cutoff: Box<dyn IntParamHandle + 'a>,
     pub resonance: Box<dyn IntParamHandle + 'a>,
-    pub feg_a: Box<dyn IntParamHandle + 'a>,
-    pub feg_d: Box<dyn IntParamHandle + 'a>,
-    pub feg_s: Box<dyn IntParamHandle + 'a>,
-    pub feg_r: Box<dyn IntParamHandle + 'a>,
+    pub feg_ar: Box<dyn IntParamHandle + 'a>,
+    pub feg_d1r: Box<dyn IntParamHandle + 'a>,
+    pub feg_d1l: Box<dyn IntParamHandle + 'a>,
+    pub feg_d2r: Box<dyn IntParamHandle + 'a>,
+    pub feg_rr: Box<dyn IntParamHandle + 'a>,
     pub feg_depth: Box<dyn IntParamHandle + 'a>,
+    // VCA (TVAオーバーレイ)
+    pub vca_ar: Box<dyn IntParamHandle + 'a>,
+    pub vca_d1r: Box<dyn IntParamHandle + 'a>,
+    pub vca_d1l: Box<dyn IntParamHandle + 'a>,
+    pub vca_d2r: Box<dyn IntParamHandle + 'a>,
+    pub vca_rr: Box<dyn IntParamHandle + 'a>,
     // MASTER EFFECT
     pub rev_send: Box<dyn IntParamHandle + 'a>,
     pub reverb_type: Box<dyn IntParamHandle + 'a>,
@@ -136,11 +143,26 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                 ui.horizontal_wrapped(|ui| {
                     knob(ui, &*params.cutoff, "CUT");
                     knob(ui, &*params.resonance, "RES");
-                    knob(ui, &*params.feg_a, "F.A");
-                    knob(ui, &*params.feg_d, "F.D");
-                    knob(ui, &*params.feg_s, "F.S");
-                    knob(ui, &*params.feg_r, "F.R");
+                    knob(ui, &*params.feg_ar, "F.AR");
+                    knob(ui, &*params.feg_d1r, "F.D1R");
+                    knob(ui, &*params.feg_d1l, "F.D1L");
+                    knob(ui, &*params.feg_d2r, "F.D2R");
+                    knob(ui, &*params.feg_rr, "F.RR");
                     knob(ui, &*params.feg_depth, "F.DEP");
+                });
+            });
+        });
+
+        // ---- VCA（TVAオーバーレイ） ----
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("VCA").strong());
+                ui.horizontal_wrapped(|ui| {
+                    knob(ui, &*params.vca_ar, "V.AR");
+                    knob(ui, &*params.vca_d1r, "V.D1R");
+                    knob(ui, &*params.vca_d1l, "V.D1L");
+                    knob(ui, &*params.vca_d2r, "V.D2R");
+                    knob(ui, &*params.vca_rr, "V.RR");
                 });
             });
         });
