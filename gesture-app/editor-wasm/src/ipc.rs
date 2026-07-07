@@ -147,11 +147,17 @@ struct ChannelDto {
     filter_resonance: u8,
     filter_type: u8,
     filter_self_oscillation: bool,
-    filter_eg_attack: u8,
-    filter_eg_decay: u8,
-    filter_eg_sustain: u8,
-    filter_eg_release: u8,
+    filter_eg_ar: u8,
+    filter_eg_d1r: u8,
+    filter_eg_d1l: u8,
+    filter_eg_d2r: u8,
+    filter_eg_rr: u8,
     filter_eg_depth: u8,
+    vca_eg_ar: u8,
+    vca_eg_d1r: u8,
+    vca_eg_d1l: u8,
+    vca_eg_d2r: u8,
+    vca_eg_rr: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -195,11 +201,17 @@ impl PatchDto {
         state.resonance = ch.filter_resonance as i32;
         state.filter_type = ch.filter_type as i32;
         state.filter_self_oscillation = ch.filter_self_oscillation;
-        state.feg_a = ch.filter_eg_attack as i32;
-        state.feg_d = ch.filter_eg_decay as i32;
-        state.feg_s = ch.filter_eg_sustain as i32;
-        state.feg_r = ch.filter_eg_release as i32;
+        state.feg_ar = ch.filter_eg_ar as i32;
+        state.feg_d1r = ch.filter_eg_d1r as i32;
+        state.feg_d1l = ch.filter_eg_d1l as i32;
+        state.feg_d2r = ch.filter_eg_d2r as i32;
+        state.feg_rr = ch.filter_eg_rr as i32;
         state.feg_depth = ch.filter_eg_depth as i32;
+        state.vca_ar = ch.vca_eg_ar as i32;
+        state.vca_d1r = ch.vca_eg_d1r as i32;
+        state.vca_d1l = ch.vca_eg_d1l as i32;
+        state.vca_d2r = ch.vca_eg_d2r as i32;
+        state.vca_rr = ch.vca_eg_rr as i32;
     }
 }
 
@@ -241,11 +253,17 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
         filter_resonance: state.resonance as u8,
         filter_type: state.filter_type as u8,
         filter_self_oscillation: state.filter_self_oscillation,
-        filter_eg_attack: state.feg_a as u8,
-        filter_eg_decay: state.feg_d as u8,
-        filter_eg_sustain: state.feg_s as u8,
-        filter_eg_release: state.feg_r as u8,
+        filter_eg_ar: state.feg_ar as u8,
+        filter_eg_d1r: state.feg_d1r as u8,
+        filter_eg_d1l: state.feg_d1l as u8,
+        filter_eg_d2r: state.feg_d2r as u8,
+        filter_eg_rr: state.feg_rr as u8,
         filter_eg_depth: state.feg_depth as u8,
+        vca_eg_ar: state.vca_ar as u8,
+        vca_eg_d1r: state.vca_d1r as u8,
+        vca_eg_d1l: state.vca_d1l as u8,
+        vca_eg_d2r: state.vca_d2r as u8,
+        vca_eg_rr: state.vca_rr as u8,
     };
     PatchDto { operators, channel }
 }
