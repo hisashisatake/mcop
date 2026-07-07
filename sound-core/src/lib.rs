@@ -20,6 +20,15 @@ pub use effects::{ChorusType, MasterEffects, ReverbType};
 pub mod vco;
 pub use vco::{AudioProcessor, Vco};
 
+pub mod eg;
+pub use eg::Eg;
+
+pub mod vcf;
+pub use vcf::{cutoff_to_hz, effective_cutoff, FilterType, Svf, Vcf, VoiceFilter};
+
+pub mod vca;
+pub use vca::{Vca, VoiceAmp};
+
 // ---------------------------------------------------------------------------
 // Wave table format (ymfm-compatible log encoding)
 // ---------------------------------------------------------------------------
