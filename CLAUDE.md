@@ -76,8 +76,10 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 ym38x6/
   Cargo.toml           ← ワークスペース
   spec.md              ← 設計仕様書
-  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects（基盤ライブラリ）
-  ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存。波形メモリ音色も生成）
+  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界（基盤ライブラリ）
+    Vcoトレイト        ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engineが実装
+    AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
+  ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存、Vco実装の一つ。波形メモリ音色も生成）
   ym38x6-ui/            ← エディタ共有描画ロジック（egui依存のみ。VST/gesture-app両対応）
   ym38x6-vst/          ← 38x6 VST3/CLAPプラグイン（nice-plug）
   gesture-app/         ← 作曲支援Tauriアプリ
@@ -202,6 +204,8 @@ sound-core（基盤）
   PerformanceLfo / PerformanceLfoTarget（共通Destination: 0=Pitch, 1=Volume）
   MasterEffects（Reverb/Chorus、各エンジンのrender()出力に後段適用）
   波形変換：32サンプルi8入力 → 1024サンプル対数フォーマット
+  Vcoトレイト（発振エンジンの演奏ライフサイクル境界。Ym38x6Engineが実装）
+  AudioProcessorトレイト（後段DSP共通境界。MasterEffectsが実装）
 
 ym38x6-core（38x6実装）
   Ym38x6Engine：4opFM合成 + フィルター + 音色LFO + チャンネル管理（無制限）
