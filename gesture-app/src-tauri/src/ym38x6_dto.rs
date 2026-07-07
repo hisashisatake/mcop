@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ym38x6_core::{ChannelParams, OperatorParams, Preset, Ym38x6Patch};
+use ym38x6_core::{ChannelParams, OperatorParams, PerformanceLfoShape, Preset, Ym38x6Patch};
 
 /// フロントエンドから渡される/返すオペレーター単位パラメーター（`OperatorParams`のDTO）。
 #[derive(Deserialize, Serialize)]
@@ -120,6 +120,9 @@ impl From<ChannelParamsDto> for ChannelParams {
             vca_eg_d1l: dto.vca_eg_d1l,
             vca_eg_d2r: dto.vca_eg_d2r,
             vca_eg_rr: dto.vca_eg_rr,
+            // TODO(フェーズ7次ステップ): 波形8種/Fade/OffsetのTauri IPC配線は未着手。
+            // それまでは既定値（Triangle/OnIn/fade_time=0/offset=0、旧来のハードエッジ挙動と等価）を使う。
+            perf_lfo_shape: PerformanceLfoShape::default(),
         }
     }
 }
