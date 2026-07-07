@@ -4,7 +4,7 @@
 //! `MasterEffects` のリバーブセンドを後段で掛けて聴感を再現するためのヘルパー。
 //! `send`=0 のときは何もしない（＝従来どおりの完全ドライ）。
 
-use ym38x6_core::{MasterEffects, ReverbType};
+use ym38x6_core::{AudioProcessor, MasterEffects, ReverbType};
 
 /// マスターリバーブ設定。
 pub struct ReverbConfig {

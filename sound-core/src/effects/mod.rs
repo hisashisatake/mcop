@@ -8,7 +8,9 @@ pub mod reverb;
 pub use chorus::{Chorus, ChorusType};
 pub use reverb::{Reverb, ReverbType};
 
-/// `SoundEngine::render()`が出力するインターリーブ済みdryバッファに対し、
+use crate::AudioProcessor;
+
+/// `Vco::render()`が出力するインターリーブ済みdryバッファに対し、
 /// 後段でReverb/Chorusセンドを適用するマスターエフェクト。
 ///
 /// 信号フロー（spec.md マスターエフェクトセクション参照）:
@@ -81,10 +83,12 @@ impl MasterEffects {
     pub fn set_chorus_feedback(&mut self, value: u8) {
         self.chorus.set_feedback(value);
     }
+}
 
+impl AudioProcessor for MasterEffects {
     /// インターリーブ済み出力バッファに対し、フレーム単位でReverb/Chorusを適用する。
     /// `num_channels == 1`の場合はモノラルとして扱い、L=Rで処理した結果を平均する。
-    pub fn process(&mut self, buffer: &mut [f32], num_channels: usize) {
+    fn process(&mut self, buffer: &mut [f32], num_channels: usize) {
         let reverb_send = self.reverb_send as f32 / 255.0;
         let chorus_send = self.chorus_send as f32 / 255.0;
         let chorus_send_to_reverb = self.chorus_send_to_reverb as f32 / 255.0;
