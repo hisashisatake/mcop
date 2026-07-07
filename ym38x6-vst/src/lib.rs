@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
     pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType,
-    LfoWaveform, MasterEffects, OperatorParams, PresetBank, ReverbType, Vco, Ym38x6Engine,
-    Ym38x6LfoDestination, Ym38x6Patch,
+    LfoWaveform, MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank, ReverbType, Vco,
+    Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
 };
 
 /// MIDIノート番号の総数（0〜127）。MIDIノート番号をそのままチャンネルIDとして使うため
@@ -255,6 +255,9 @@ impl Ym38x6Plugin {
             vca_eg_d1l: p.vca_d1l.value() as u8,
             vca_eg_d2r: p.vca_d2r.value() as u8,
             vca_eg_rr: p.vca_rr.value() as u8,
+            // TODO(フェーズ7次ステップ): 波形8種/Fade/OffsetのDAWパラメーター/NRPN配線は未着手。
+            // それまでは既定値（Triangle/OnIn/fade_time=0/offset=0、旧来のハードエッジ挙動と等価）を使う。
+            perf_lfo_shape: PerformanceLfoShape::default(),
         };
 
         Ym38x6Patch { operators, channel }
