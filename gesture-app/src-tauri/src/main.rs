@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
-use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, ChorusType,
+use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChorusType,
     LfoWaveform, MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType,
-    Ym38x6Engine, Ym38x6LfoDestination};
+    Vco, Ym38x6Engine, Ym38x6LfoDestination};
 use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 
 /// 指定チャンネルIDへキーオンする。チャンネルIDは呼び出し側（フロントエンド）が
@@ -24,9 +24,8 @@ fn note_on(
     frequency: f32,
     velocity: u8,
 ) {
-    let mut engine = engine.lock().unwrap();
-    let patch = engine.current_patch();
-    engine.note_on(channel, frequency, velocity, patch);
+    // 音色は`ym38x6_set_patch`で設定済みのカレントパッチを使う（`Vco::note_on`）。
+    engine.lock().unwrap().note_on(channel, frequency, velocity);
 }
 
 #[tauri::command]
