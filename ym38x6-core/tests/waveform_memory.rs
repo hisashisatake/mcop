@@ -9,7 +9,7 @@
 //! そのためLFO系は「振幅が周期的に大きく変動する」ことをピーク比較で検証する。
 
 use ym38x6_core::{
-    waveform_memory_patch, AdsrParams, LfoWaveform, Ym38x6Engine,
+    waveform_memory_patch, AdsrParams, LfoWaveform, Vco, Ym38x6Engine,
     Ym38x6LfoDestination,
 };
 
@@ -34,7 +34,8 @@ fn performance_lfo_volume_destination_modulates_amplitude() {
     let mut engine = Ym38x6Engine::new(sample_rate);
     let ch = 0;
     // 矩形波（waveform=3）は振幅が常に±1付近なので、振幅変動はLFOの効果として観測できる。
-    engine.note_on(ch, 220.0, 127, waveform_memory_patch(3, sustained_adsr()));
+    engine.set_patch(waveform_memory_patch(3, sustained_adsr()));
+    engine.note_on(ch, 220.0, 127);
     // rate=255（20Hz、最速）でバッファ内に複数周期が収まるようにする。
     engine.set_performance_lfo(ch, 255, 0, LfoWaveform::Square, Ym38x6LfoDestination::Volume, 1.0);
 
@@ -63,7 +64,8 @@ fn performance_lfo_pitch_destination_shifts_output() {
     let sample_rate = 44100.0;
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
-    engine_flat.note_on(0, 440.0, 127, waveform_memory_patch(0, sustained_adsr()));
+    engine_flat.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine_flat.note_on(0, 440.0, 127);
     engine_flat.set_performance_lfo(0, 220, 0, LfoWaveform::Sine, Ym38x6LfoDestination::Pitch, 0.0);
     let mut warm_flat = vec![0.0f32; 200];
     engine_flat.render(&mut warm_flat, 1);
@@ -71,7 +73,8 @@ fn performance_lfo_pitch_destination_shifts_output() {
     engine_flat.render(&mut buf_flat, 1);
 
     let mut engine_mod = Ym38x6Engine::new(sample_rate);
-    engine_mod.note_on(0, 440.0, 127, waveform_memory_patch(0, sustained_adsr()));
+    engine_mod.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine_mod.note_on(0, 440.0, 127);
     // ±1200セント（±1オクターブ）の大きめのビブラート
     engine_mod.set_performance_lfo(0, 220, 0, LfoWaveform::Sine, Ym38x6LfoDestination::Pitch, 1200.0);
     let mut warm_mod = vec![0.0f32; 200];
@@ -91,13 +94,16 @@ fn polyphony_two_identical_voices_sum_to_double() {
     let patch = waveform_memory_patch(0, sustained_adsr());
 
     let mut engine_one = Ym38x6Engine::new(sample_rate);
-    engine_one.note_on(0, 440.0, 127, patch);
+    engine_one.set_patch(patch);
+    engine_one.note_on(0, 440.0, 127);
     let mut buf_one = vec![0.0f32; 256];
     engine_one.render(&mut buf_one, 1);
 
     let mut engine_two = Ym38x6Engine::new(sample_rate);
-    engine_two.note_on(0, 440.0, 127, patch);
-    engine_two.note_on(1, 440.0, 127, patch);
+    engine_two.set_patch(patch);
+    engine_two.note_on(0, 440.0, 127);
+    engine_two.set_patch(patch);
+    engine_two.note_on(1, 440.0, 127);
     let mut buf_two = vec![0.0f32; 256];
     engine_two.render(&mut buf_two, 1);
 
@@ -125,8 +131,10 @@ fn finished_channel_no_longer_affects_mix() {
 
     // ミックス: 持続音(B, ch=1, 660Hz) + 途中で離鍵する音(A, ch=0, 440Hz)
     let mut mix = Ym38x6Engine::new(sample_rate);
-    mix.note_on(0, 440.0, 127, releasing);
-    mix.note_on(1, 660.0, 127, sustained);
+    mix.set_patch(releasing);
+    mix.note_on(0, 440.0, 127);
+    mix.set_patch(sustained);
+    mix.note_on(1, 660.0, 127);
     let mut warm = vec![0.0f32; WARMUP];
     mix.render(&mut warm, 1);
     mix.note_off(0); // Aを離鍵
@@ -137,7 +145,8 @@ fn finished_channel_no_longer_affects_mix() {
 
     // 参照: 持続音(B)のみを同じtick数だけ鳴らす（Bのボイス状態が一致する）
     let mut reference = Ym38x6Engine::new(sample_rate);
-    reference.note_on(1, 660.0, 127, sustained);
+    reference.set_patch(sustained);
+    reference.note_on(1, 660.0, 127);
     let mut warm_ref = vec![0.0f32; WARMUP];
     reference.render(&mut warm_ref, 1);
     let mut settle_ref = vec![0.0f32; SETTLE];
@@ -163,7 +172,8 @@ fn different_waveform_slots_produce_different_output() {
     let sample_rate = 44100.0;
     let render_slot = |waveform: u8| {
         let mut engine = Ym38x6Engine::new(sample_rate);
-        engine.note_on(0, 440.0, 127, waveform_memory_patch(waveform, sustained_adsr()));
+        engine.set_patch(waveform_memory_patch(waveform, sustained_adsr()));
+        engine.note_on(0, 440.0, 127);
         let mut warmup = vec![0.0f32; 200];
         engine.render(&mut warmup, 1);
         let mut buf = vec![0.0f32; 512];

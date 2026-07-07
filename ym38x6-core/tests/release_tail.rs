@@ -6,7 +6,7 @@
 //! という流れでリリーステールの長さ（秒）を出力する。
 //! ユーザープリセットが存在しない環境では何も出力せずスキップする。
 
-use ym38x6_core::{presets_dir, PresetBank, Ym38x6Engine};
+use ym38x6_core::{presets_dir, PresetBank, Vco, Ym38x6Engine};
 
 const SAMPLE_RATE: f32 = 44100.0;
 
@@ -22,8 +22,8 @@ fn release_tail() {
 
         let mut engine = Ym38x6Engine::new(SAMPLE_RATE);
         let ch = 0;
-        engine.note_on(ch, 440.0, 127, preset.patch);
-
+        engine.set_patch(preset.patch);
+        engine.note_on(ch, 440.0, 127);
         // サスティンに達するまで1秒分render
         let mut buf = vec![0.0f32; SAMPLE_RATE as usize];
         engine.render(&mut buf, 1);

@@ -1,4 +1,4 @@
-use ym38x6_core::{ChannelParams, OperatorParams, Ym38x6Engine, Ym38x6Patch};
+use ym38x6_core::{ChannelParams, OperatorParams, Vco, Ym38x6Engine, Ym38x6Patch};
 
 /// AR最速・サスティン無限・RR=200（中速リリース）の4op並列(algorithm 7)パッチ。
 /// frequency=440.0(note=69)でKSRの影響を受けず、レート計算が単純になる。
@@ -35,8 +35,8 @@ fn note_on_retriggers_from_residual_not_silence() {
     let mut engine = Ym38x6Engine::new(44100.0);
     let patch = sustained_release_patch();
     let ch = 0;
-    engine.note_on(ch, 440.0, 127, patch);
-
+    engine.set_patch(patch);
+    engine.note_on(ch, 440.0, 127);
     let mut warmup = vec![0.0f32; 100];
     engine.render(&mut warmup, 1);
 
@@ -52,8 +52,8 @@ fn note_on_retriggers_from_residual_not_silence() {
     for op in slow_attack.operators.iter_mut() {
         op.ar = 0;
     }
-    engine.note_on(ch, 440.0, 127, slow_attack);
-
+    engine.set_patch(slow_attack);
+    engine.note_on(ch, 440.0, 127);
     let mut after = vec![0.0f32; 500];
     engine.render(&mut after, 1);
     let after_peak = after.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
@@ -71,8 +71,8 @@ fn note_on_retriggers_from_residual_not_silence() {
 fn note_on_reattacks_toward_full_level() {
     let mut engine = Ym38x6Engine::new(44100.0);
     let ch = 0;
-    engine.note_on(ch, 440.0, 100, sustained_release_patch());
-
+    engine.set_patch(sustained_release_patch());
+    engine.note_on(ch, 440.0, 100);
     let mut warmup = vec![0.0f32; 100];
     engine.render(&mut warmup, 1);
 
@@ -82,8 +82,9 @@ fn note_on_reattacks_toward_full_level() {
     engine.render(&mut release_buf, 1);
     let release_peak = release_buf[900..].iter().fold(0.0f32, |m, &s| m.max(s.abs()));
 
-    engine.note_on(ch, 440.0, 100, sustained_release_patch());
+    engine.set_patch(sustained_release_patch());
 
+    engine.note_on(ch, 440.0, 100);
     let mut after = vec![0.0f32; 500];
     engine.render(&mut after, 1);
     // 残響から再アタックし、フルレベルへ立ち上がるためリリースレベルを超える

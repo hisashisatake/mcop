@@ -459,7 +459,7 @@ impl PresetBank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Ym38x6Engine;
+    use crate::{Vco, Ym38x6Engine};
 
     #[test]
     fn algorithm_and_waveform_stay_in_range_for_all_programs() {
@@ -478,7 +478,8 @@ mod tests {
     fn placeholder_patch_is_audible() {
         for (bank, program) in [(0u16, 0u8), (0, 64), (1, 42), (128, 127)] {
             let mut engine = Ym38x6Engine::new(44100.0);
-            engine.note_on(0, 440.0, 127, placeholder_patch(bank, program));
+            engine.set_patch(placeholder_patch(bank, program));
+            engine.note_on(0, 440.0, 127);
             let mut buf = vec![0.0f32; 512];
             engine.render(&mut buf, 1);
             assert!(buf.iter().all(|&s| s.is_finite()));
@@ -500,8 +501,8 @@ mod tests {
         for program in [0u8, 4, 80] {
             let mut engine = Ym38x6Engine::new(44100.0);
             let patch = gm2_bank0_patch(program).expect("implemented program");
-            engine.note_on(0, 440.0, 100, patch);
-
+            engine.set_patch(patch);
+            engine.note_on(0, 440.0, 100);
             let mut buf = vec![0.0f32; 44100];
             engine.render(&mut buf, 1);
             assert!(buf.iter().all(|&s| s.is_finite()), "program {program}: non-finite sample");
@@ -526,7 +527,8 @@ mod tests {
         // エンジンで可聴・有限であることを確認する。
         for waveform in [0u8, 8, 16, 24, 12, 20, 28] {
             let mut engine = Ym38x6Engine::new(44100.0);
-            engine.note_on(0, 440.0, 127, waveform_memory_patch(waveform, AdsrParams::default()));
+            engine.set_patch(waveform_memory_patch(waveform, AdsrParams::default()));
+            engine.note_on(0, 440.0, 127);
             let mut buf = vec![0.0f32; 512];
             engine.render(&mut buf, 1);
             assert!(buf.iter().all(|&s| s.is_finite()), "waveform {waveform}: non-finite sample");

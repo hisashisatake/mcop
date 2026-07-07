@@ -4,7 +4,7 @@
 //! 基本周波数へ正しく反映されるかをゼロクロス測定で確認する。
 //! vgm2x6→SMFのCSV診断では見えない「エンジンがベンド値を周波数に変換する」段を検証する。
 
-use ym38x6_core::{waveform_memory_patch, AdsrParams, Ym38x6Engine};
+use ym38x6_core::{waveform_memory_patch, AdsrParams, Vco, Ym38x6Engine};
 
 fn sustained_adsr() -> AdsrParams {
     AdsrParams { attack: 255, decay: 0, sustain: 255, release: 0 }
@@ -40,7 +40,8 @@ fn render_freq_with_bend(bend_cents: f32) -> f32 {
     let mut engine = Ym38x6Engine::new(sample_rate);
     let ch = 0;
     // waveform 0 = サイン波（ゼロクロスが素直で基本周波数を測りやすい）
-    engine.note_on(ch, 440.0, 127, waveform_memory_patch(0, sustained_adsr()));
+    engine.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine.note_on(ch, 440.0, 127);
     engine.set_pitch_bend(ch, bend_cents);
 
     // フィルター・エンベロープを落ち着かせてから測定
@@ -88,10 +89,12 @@ fn pitch_bend_group_applies_to_matching_midi_channel() {
     let id_a = midi_ch * 128 + 69; // A4
     let id_b = midi_ch * 128 + 81; // A5（同じMIDIチャンネル）
     let other = 5 * 128 + 69; // 別MIDIチャンネル
-    engine.note_on(id_a, 440.0, 127, waveform_memory_patch(0, sustained_adsr()));
-    engine.note_on(id_b, 880.0, 127, waveform_memory_patch(0, sustained_adsr()));
-    engine.note_on(other, 440.0, 127, waveform_memory_patch(0, sustained_adsr()));
-
+    engine.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine.note_on(id_a, 440.0, 127);
+    engine.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine.note_on(id_b, 880.0, 127);
+    engine.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine.note_on(other, 440.0, 127);
     // MIDIチャンネル3へ+1200セント。id_a/id_bは上がるが、otherは変わらないはず。
     engine.set_pitch_bend_group(midi_ch, 1200.0);
 
