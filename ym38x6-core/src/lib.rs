@@ -64,9 +64,7 @@ pub use preset::{
     PresetEntry, PresetFile, WAVEFORM_MEMORY_BANK,
 };
 use serde::{Deserialize, Serialize};
-use sound_core::{
-    apply_lfo_modulation, convert_wave_32, PerformanceLfo, PerformanceLfoTarget, WaveTable,
-};
+use sound_core::{apply_lfo_modulation, convert_wave_32, PerformanceLfo, PerformanceLfoTarget, WaveTable};
 use tone_lfo::{ams_to_depth, pms_to_cents_range, ToneLfo};
 use waveform::gen_builtin_waveform;
 
@@ -74,7 +72,8 @@ use waveform::gen_builtin_waveform;
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
     pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
-    LfoDestination, LfoWaveform, MasterEffects, ReverbType, Vca, Vcf, Vco, VoiceAmp, VoiceFilter,
+    LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca,
+    Vcf, Vco, VoiceAmp, VoiceFilter,
 };
 
 // ---------------------------------------------------------------------------
@@ -137,6 +136,10 @@ pub struct ChannelParams {
     /// VCA EG RR(0〜255)。既定255（最速、note off後すぐ0へ）。
     #[serde(default = "default_vca_eg_rr")]
     pub vca_eg_rr: u8,
+    /// パフォーマンスLFOの波形/Fade/Offset設定（sound-core::PerformanceLfoShape）。
+    /// 既定はTriangle/OnIn/fade_time=0/offset=0で、旧来のハードエッジ挙動と等価。
+    #[serde(default)]
+    pub perf_lfo_shape: PerformanceLfoShape,
 }
 
 fn default_vca_eg_ar() -> u8 {
@@ -179,6 +182,7 @@ impl Default for ChannelParams {
             vca_eg_d1l: default_vca_eg_d1l(),
             vca_eg_d2r: 0,
             vca_eg_rr: default_vca_eg_rr(),
+            perf_lfo_shape: PerformanceLfoShape::default(),
         }
     }
 }
@@ -258,6 +262,9 @@ impl Channel {
         vcf.note_on();
         let mut vca = VoiceAmp::new();
         vca.note_on();
+        let mut perf_lfo = PerformanceLfo::new();
+        perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        perf_lfo.note_on();
         Self {
             operators,
             channel_params: patch.channel,
@@ -266,7 +273,7 @@ impl Channel {
             note,
             base_frequency: frequency,
             velocity,
-            perf_lfo: PerformanceLfo::new(),
+            perf_lfo,
             lfo_destination: Ym38x6LfoDestination::default(),
             lfo_depth: 0.0,
             pitch_mod_cents: 0.0,
@@ -299,6 +306,8 @@ impl Channel {
         self.velocity = velocity;
         self.vcf.note_on();
         self.vca.note_on();
+        self.perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        self.perf_lfo.note_on();
     }
 
     fn set_performance_lfo(
@@ -322,6 +331,7 @@ impl Channel {
         }
         self.vcf.note_off();
         self.vca.note_off();
+        self.perf_lfo.note_off();
     }
 
     /// CC103〜106（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。

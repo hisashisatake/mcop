@@ -9,8 +9,8 @@
 //! そのためLFO系は「振幅が周期的に大きく変動する」ことをピーク比較で検証する。
 
 use ym38x6_core::{
-    waveform_memory_patch, AdsrParams, LfoWaveform, Vco, Ym38x6Engine,
-    Ym38x6LfoDestination,
+    waveform_memory_patch, AdsrParams, LfoFadeMode, LfoWaveform, PerformanceLfoShape, Vco,
+    Ym38x6Engine, Ym38x6LfoDestination,
 };
 
 /// 即アタック・無減衰・無限サスティンのADSR（出力レベルを1.0付近で保持し、
@@ -54,6 +54,43 @@ fn performance_lfo_volume_destination_modulates_amplitude() {
     assert!(
         min_peak < max_peak * 0.5,
         "Volume LFOで振幅が周期的に大きく落ちるはず: min={min_peak} max={max_peak}"
+    );
+}
+
+/// パッチの`ChannelParams.perf_lfo_shape`がnote_on時にPerformanceLfoへ反映されることを
+/// end-to-endで確認する。fade_timeだけが異なる2エンジンを同条件で鳴らし、出力が違うことで
+/// 「patchのfade_timeが実際に効いている」ことを示す（filter/VCA由来の他の変動と混同しないよう、
+/// 絶対的な振幅閾値ではなく差分の有無で判定する）。
+#[test]
+fn performance_lfo_shape_from_patch_is_applied_at_note_on() {
+    let sample_rate = 44100.0;
+    let render_with_fade_time = |fade_time: u8| {
+        let mut engine = Ym38x6Engine::new(sample_rate);
+        let mut patch = waveform_memory_patch(3, sustained_adsr()); // 矩形波（振幅±1で変動が見やすい）
+        patch.channel.perf_lfo_shape = PerformanceLfoShape {
+            waveform: LfoWaveform::Square,
+            fade_mode: LfoFadeMode::OnIn,
+            fade_time,
+            offset: 0,
+        };
+        engine.set_patch(patch);
+        engine.note_on(0, 220.0, 127);
+        engine.set_performance_lfo(0, 255, 0, LfoWaveform::Square, Ym38x6LfoDestination::Volume, 1.0);
+
+        let mut warmup = vec![0.0f32; 200];
+        engine.render(&mut warmup, 1);
+        let mut buf = vec![0.0f32; 2000];
+        engine.render(&mut buf, 1);
+        buf
+    };
+
+    let long_fade = render_with_fade_time(200); // delay_to_seconds(200)≈7.84秒、この窓ではほぼゲイン0
+    let no_fade = render_with_fade_time(0); // フェード無効、常時フルゲイン
+
+    let differs = long_fade.iter().zip(no_fade.iter()).any(|(a, b)| (a - b).abs() > 1e-3);
+    assert!(
+        differs,
+        "patchのperf_lfo_shape.fade_timeが反映されていれば、fade_time違いで出力が変わるはず"
     );
 }
 
