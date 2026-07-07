@@ -365,10 +365,10 @@ fn build_filter_demo(
     patch.channel.filter_resonance = demo.resonance;
     patch.channel.filter_self_oscillation = demo.self_osc;
     patch.channel.filter_eg_depth = demo.eg_depth;
-    patch.channel.filter_eg_attack = a;
-    patch.channel.filter_eg_decay = d;
-    patch.channel.filter_eg_sustain = s;
-    patch.channel.filter_eg_release = r;
+    patch.channel.filter_eg_ar = a;
+    patch.channel.filter_eg_d1r = d;
+    patch.channel.filter_eg_d1l = s;
+    patch.channel.filter_eg_rr = r;
 
     let freq = override_freq
         .unwrap_or_else(|| note_to_freq(demo.octave, demo.note).expect("内蔵の基準音は常に有効"));

@@ -110,15 +110,23 @@ ym38x6-core（VCO実装の一つ＝FM発振源）
   2エンジンを切り替えたが、共有できたのは `render()` のみ。発音はエンジン別の並行コマンド群
   （`note_on系` と `ym38x6_note_on系`）で、フロントが `engine_type` で分岐していた。
   ＝当時もVCOポリモーフィズムは無く、WMS-1廃止で具象1本へ収束した。
-- **フェーズ7の残り（モジュレーション層本体）**: LFO拡張・EG（Pitch/Filter/TVA）・VCF/VCA・表情ルーティングは
-  未実装。これらは**ボイス内・キーオン連動EG・サンプル単位**の処理であり、今回確立した`AudioProcessor`
-  （全ボイス合算後のマスター段バッファ一括加工）とは別レイヤー。`Vcf`/`Vca`トレイトは、EG形式
-  （候補 A:5段OPM / B:4点T/L / C:ADSR+Depth / B':4点+ADSR GUI）が確定するそれらの実装と同時に定義する
-  （実装ゼロの形骸化トレイトを避けるため）。
+- **現状（フェーズ7ステップ2で実現済み）**: EG形式は5段OPM形式（AR/D1R/D1L/D2R/RR、38x6本体のFM EGと
+  同じ形式）で確定した。状態機械そのものは`sound-core`の`Eg`（`sound-core/src/eg.rs`）に実装し、
+  ボイス単位のモジュレーション用トレイト`Vcf`/`Vca`（`sound-core/src/vcf.rs`/`sound-core/src/vca.rs`）
+  として`sound-core`に実装した。`Vcf`はSVF本体 + Cutoffを変調するキーオン連動EGを一体で保持する
+  （具象実装`VoiceFilter`）。`Vca`はボイス単位の振幅EGオーバーレイで、既定パラメーター
+  （ar=255,d1r=0,d1l=255,d2r=0,rr=255）ではアタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となり、
+  FM本来のキャリアEG（`operator.rs`）を変えない透過的レイヤーとして働く（具象実装`VoiceAmp`）。
+  `Vcf`/`Vca`は`Ym38x6Engine`のChannel内部に留め、`Vco`トレイト自体
+  （note_on/note_off/render/pitch_bend系/channel_volume系の7メソッド）は変更していない。
+  `Vcf`/`Vca`は`AudioProcessor`（全ボイス合算後のマスター段バッファ一括加工）とは別の粒度
+  （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
+  旧フィルターEGの4段ADSR（`ym38x6-core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
+  cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
+- **フェーズ7の残り（モジュレーション層本体）**: LFO拡張・表情ルーティングは未実装。これらも
+  **ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、`AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
   UI・MIDI実装を再利用できる状態を目指す。
-- **留意（実装時に確定）**: 現状フィルター（VCF）相当は ym38x6-core 側（`filter.rs`）にあり、ボイス内蔵の
-  ままである。フェーズ7でVCFをモジュレーション層へ移す/共有する設計は、上記`Vcf`トレイト定義と併せて決める。
 
 ---
 

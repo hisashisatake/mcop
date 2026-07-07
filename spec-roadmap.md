@@ -11,7 +11,8 @@
 ## 現在地
 
 **フェーズ5：実機音色資産の取り込みと音作り基盤**と**フェーズ7：MC-505風モジュレーション拡張**を並行進行中
-（フェーズ7はステップ1「VCO抽象境界の確立」完了、次はEG形式確定→Vcf/Vca定義）
+（フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」完了、
+次はLFO拡張・表情ルーティング）
 
 ---
 
@@ -63,9 +64,12 @@
     ym38x6-core のFMエンジンはVCO実装の一つとして扱い、将来は別の発振源へ置換できる抽象境界を用意する
     （詳細は spec.md「クレート構成／VCO抽象」を参照）
   → ステップ1「VCO抽象境界の確立」完了（Vco/AudioProcessorトレイトをsound-coreに実装）
-  → ステップ2「EG形式の確定」: 5段OPM形式（AR/D1R/D1L/D2R/RR）を採用、Vcf/Vca定義に着手
+  → ステップ2「EG形式の確定とVcf/Vca定義」完了: 5段OPM形式（AR/D1R/D1L/D2R/RR）を採用。
+    状態機械`Eg`・トレイト`Vcf`/`Vca`をsound-coreに実装（具象実装`VoiceFilter`/`VoiceAmp`）。
+    旧フィルターEG（4段ADSR、ym38x6-core/src/filter.rs）は撤去しVcfへ統合済み。
+    Pitch EG（EnvelopeによるピッチModulation）は今回のスコープ外で未着手のまま残る
+  → 次のステップ: LFO拡張・表情ルーティング・Pitch EG（未着手）
   → LFO拡張: Fade(4モード)・Offset・波形8種・カットオフ行先(オートワウ)・手動ワウ・LFO×2
-  → EG: Pitch/Filter/TVA（形式は実装時確定で保留）
   → velocity→音量「量」（ChannelParams、既定255）
   → 表情コントローラー・ルーティング: CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等
   → VST/NRPN配線（差分検知方式に追加）

@@ -35,48 +35,9 @@ pub fn tl_to_gain(tl: u8) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// レート値(0〜255)→1サンプルあたりのEG変化量。
-/// rate=0は特殊値で「変化なし」（OPM/OPNのAR=0/D1R=0/D2R=0と同じフリーズ状態）。
-/// rate=1〜255はt_max（rate=1、最遅）〜t_min（rate=255、最速）の指数マッピング。
-fn rate_to_delta(rate: u8, sample_rate: f32, t_min: f32, t_max: f32) -> f32 {
-    if rate == 0 {
-        return 0.0;
-    }
-    let t = t_min * (t_max / t_min).powf(1.0 - (rate as f32 - 1.0) / 254.0);
-    1.0 / (t * sample_rate)
-}
-
-/// AR: 0.68ms〜20.2秒。OPM AR(5bit)のreg=31〜1(eg_rate=62〜2、KSRなし)の理論値が基準。
-/// reg=31(eg_rate=62)はキーオン時に瞬時attenuation=0となる特殊仕様だが、
-/// 増分テーブルの値自体はreg=30(eg_rate=60)と同一のため0.68msを採用。
-/// rate=0はreg=0相当のフリーズ（発音しない）。
-pub fn ar_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    rate_to_delta(rate, sample_rate, 0.00068, 20.2)
-}
-
-/// D1R/D2R: 8.71ms〜284.9秒。OPM D1R/D2R(5bit)のreg=31〜1(eg_rate=62〜2、KSRなし)の理論値が基準。
-/// rate=0はD1R/D2R=0相当のフリーズ（サスティンレベルを無限保持）。
-pub fn decay_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    rate_to_delta(rate, sample_rate, 0.00871, 284.9)
-}
-
-/// RR: 8.71ms〜284.9秒。OPM RR(4bit)のreg=15〜0(eg_rate=62〜2、KSRなし)の理論値が基準。
-/// [decay_to_delta]と同じeg_rate範囲だが、RRは`eg_rate = reg*4+2`でreg=0でも
-/// eg_rate=2となり実機にフリーズが存在しないため、rate=0〜255の全域を指数補間する
-/// （rate=0でも284.9秒で減衰し、無限保持の特殊値は持たない）。
-pub fn rr_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    let t_min: f32 = 0.00871;
-    let t_max: f32 = 284.9;
-    let t = t_min * (t_max / t_min).powf(1.0 - rate as f32 / 255.0);
-    1.0 / (t * sample_rate)
-}
-
-/// SL値(0〜255)→サスティンレベル比率(0.0〜1.0)。実機OPM SL(4bit)のreg=0(0dB、減衰なし)〜
-/// reg=15(-93dB、ほぼ無音)をsl=255〜0に厳密アンカーし、dB単位で線形補間する。
-pub fn sl_to_level(sl: u8) -> f32 {
-    let db = -93.0 * (255 - sl) as f32 / 255.0;
-    10f32.powf(db / 20.0)
-}
+// AR/D1R/D2R/RRの時定数マッピングはsound-core側（eg.rs）へ移設済み。
+// operator.rsの`use crate::mapping::*;`がそのまま動くよう、ここで再エクスポートする。
+pub use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta};
 
 /// KSR値(0〜255)→A4(note=69)からのオクターブ差に対するレート倍率。
 /// `exponent = ksr/255`の線形カーブで、ksr=255(実機KS=3相当)は1オクターブごとに
@@ -206,54 +167,6 @@ mod tests {
         assert!((tl_to_gain(0) - 10f32.powf(-95.25 / 20.0)).abs() < 1e-9);
         assert!(tl_to_gain(0) > 0.0 && tl_to_gain(0) < tl_to_gain(255));
         assert!(tl_to_gain(128) < tl_to_gain(255));
-    }
-
-    #[test]
-    fn ar_to_delta_bounds() {
-        let sr = 44100.0;
-        // rate=0はフリーズ（変化なし）
-        assert_eq!(ar_to_delta(0, sr), 0.0);
-        let slowest = ar_to_delta(1, sr);
-        let fastest = ar_to_delta(255, sr);
-        assert!((slowest - 1.0 / (20.2 * sr)).abs() < 1e-9);
-        assert!((fastest - 1.0 / (0.00068 * sr)).abs() < 1e-9);
-        assert!(fastest > slowest);
-    }
-
-    #[test]
-    fn decay_to_delta_bounds() {
-        let sr = 44100.0;
-        // rate=0はフリーズ（変化なし）
-        assert_eq!(decay_to_delta(0, sr), 0.0);
-        assert!((decay_to_delta(255, sr) - 1.0 / (0.00871 * sr)).abs() < 1e-9);
-        assert!((decay_to_delta(1, sr) - 1.0 / (284.9 * sr)).abs() < 1e-9);
-    }
-
-    #[test]
-    fn rr_to_delta_bounds() {
-        let sr = 44100.0;
-        // rr=0はreg=0相当（284.9秒、フリーズではない）
-        assert!((rr_to_delta(0, sr) - 1.0 / (284.9 * sr)).abs() < 1e-9);
-        // rr=255はreg=15相当（8.71ms）
-        assert!((rr_to_delta(255, sr) - 1.0 / (0.00871 * sr)).abs() < 1e-9);
-        // 指数カーブ：全域で滑らかに増加する
-        assert!(rr_to_delta(0, sr) < rr_to_delta(64, sr));
-        assert!(rr_to_delta(64, sr) < rr_to_delta(128, sr));
-        assert!(rr_to_delta(128, sr) < rr_to_delta(192, sr));
-        assert!(rr_to_delta(192, sr) < rr_to_delta(255, sr));
-    }
-
-    #[test]
-    fn sl_to_level_bounds() {
-        // sl=255はreg=0相当（0dB、減衰なし）
-        assert!((sl_to_level(255) - 1.0).abs() < 1e-6);
-        // sl=0はreg=15相当（-93dB）
-        assert!((sl_to_level(0) - 10f32.powf(-93.0 / 20.0)).abs() < 1e-9);
-        // 指数カーブ：全域で滑らかに増加する
-        assert!(sl_to_level(0) < sl_to_level(64));
-        assert!(sl_to_level(64) < sl_to_level(128));
-        assert!(sl_to_level(128) < sl_to_level(192));
-        assert!(sl_to_level(192) < sl_to_level(255));
     }
 
     #[test]

@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
-// SVFフィルター + Filter EG（spec.md「フィルター」セクション参照）
+// SVFフィルター + Vcf（spec.md「フィルター」セクション参照）
 //
 // FM合成出力にかけるボイス単位のVCF相当。Cutoff/Resonance/Filter Type（LP/HP/BP）と、
-// Cutoffを変調するFilter EG（A→D→S→R+Idle、OperatorのEGと同様の挙動）を実装する。
+// Cutoffを変調するキーオン連動EG（5段OPM形式、[crate::eg::Eg]）を実装する。
 //
 // 数式・マッピングはすべて初期案（暫定）。CLAUDE.mdのテスト方針に従い、
 // 実装後に音を聴いて係数を調整する。
 // ---------------------------------------------------------------------------
 
-use crate::mapping::{ar_to_delta, decay_to_delta, rr_to_delta, sl_to_level};
+use crate::eg::Eg;
 
 /// Cutoff(0〜255)→Hz（対数、0≒20Hz、255≒20kHz、暫定）。
 pub fn cutoff_to_hz(cutoff: u8) -> f32 {
@@ -119,75 +119,78 @@ impl Default for Svf {
 }
 
 // ---------------------------------------------------------------------------
-// Filter EG
+// Vcf トレイト + 具象実装（VoiceFilter）
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum FilterEgPhase {
-    Attack,
-    Decay,
-    Sustain,
-    Release,
-    Idle,
+/// ボイス単位のVCFセクションの共通インターフェース。SVF本体 + Cutoffを変調する
+/// キーオン連動EGを一体で保持する。発振原理に依存しないプリミティブ型のみで構成される。
+pub trait Vcf: Send {
+    fn note_on(&mut self);
+    fn note_off(&mut self);
+    #[allow(clippy::too_many_arguments)]
+    fn process(
+        &mut self,
+        input: f32,
+        sample_rate: f32,
+        base_cutoff: u8,
+        resonance: u8,
+        filter_type: FilterType,
+        self_oscillation: bool,
+        eg_ar: u8,
+        eg_d1r: u8,
+        eg_d1l: u8,
+        eg_d2r: u8,
+        eg_rr: u8,
+        eg_depth: u8,
+    ) -> f32;
 }
 
-/// Filter EG（A→D→S→R+Idle）。出力は0.0〜1.0で、effective_cutoffへの入力として使う。
-pub struct FilterEnvelope {
-    phase: FilterEgPhase,
-    level: f32,
+/// ボイス単位のVCFセクション（SVF本体 + Cutoffを変調するキーオン連動EGを一体で保持する）。
+pub struct VoiceFilter {
+    svf: Svf,
+    cutoff_eg: Eg,
 }
 
-impl FilterEnvelope {
+impl VoiceFilter {
     pub fn new() -> Self {
-        Self { phase: FilterEgPhase::Idle, level: 0.0 }
-    }
-
-    pub fn note_on(&mut self) {
-        self.phase = FilterEgPhase::Attack;
-        self.level = 0.0;
-    }
-
-    pub fn note_off(&mut self) {
-        if self.phase != FilterEgPhase::Idle {
-            self.phase = FilterEgPhase::Release;
-        }
-    }
-
-    /// 1サンプル分エンベロープを進め、現在のレベル(0.0〜1.0)を返す。
-    pub fn tick(&mut self, sample_rate: f32, attack: u8, decay: u8, sustain: u8, release: u8) -> f32 {
-        let sustain_level = sl_to_level(sustain);
-        match self.phase {
-            FilterEgPhase::Attack => {
-                self.level += ar_to_delta(attack, sample_rate);
-                if self.level >= 1.0 {
-                    self.level = 1.0;
-                    self.phase = FilterEgPhase::Decay;
-                }
-            }
-            FilterEgPhase::Decay => {
-                self.level -= decay_to_delta(decay, sample_rate);
-                if self.level <= sustain_level {
-                    self.level = sustain_level;
-                    self.phase = FilterEgPhase::Sustain;
-                }
-            }
-            FilterEgPhase::Sustain => {}
-            FilterEgPhase::Release => {
-                self.level -= rr_to_delta(release, sample_rate);
-                if self.level <= 0.0 {
-                    self.level = 0.0;
-                    self.phase = FilterEgPhase::Idle;
-                }
-            }
-            FilterEgPhase::Idle => {}
-        }
-        self.level
+        Self { svf: Svf::new(), cutoff_eg: Eg::new() }
     }
 }
 
-impl Default for FilterEnvelope {
+impl Default for VoiceFilter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Vcf for VoiceFilter {
+    fn note_on(&mut self) {
+        self.cutoff_eg.note_on();
+    }
+
+    fn note_off(&mut self) {
+        self.cutoff_eg.note_off();
+    }
+
+    fn process(
+        &mut self,
+        input: f32,
+        sample_rate: f32,
+        base_cutoff: u8,
+        resonance: u8,
+        filter_type: FilterType,
+        self_oscillation: bool,
+        eg_ar: u8,
+        eg_d1r: u8,
+        eg_d1l: u8,
+        eg_d2r: u8,
+        eg_rr: u8,
+        eg_depth: u8,
+    ) -> f32 {
+        let eg_level = self.cutoff_eg.tick(sample_rate, eg_ar, eg_d1r, eg_d1l, eg_d2r, eg_rr);
+        let cutoff = effective_cutoff(base_cutoff, eg_level, eg_depth);
+        let cutoff_hz = cutoff_to_hz(cutoff);
+        self.svf.process(input, sample_rate, cutoff_hz, resonance, self_oscillation, filter_type)
     }
 }
 
@@ -251,40 +254,6 @@ mod tests {
             peak_on > peak_off * 2.0,
             "Self-Oscillation ONの方が余韻が長く残るはず: on={peak_on}, off={peak_off}"
         );
-    }
-
-    #[test]
-    fn filter_envelope_transitions_through_phases() {
-        let sr = 44100.0;
-        let mut eg = FilterEnvelope::new();
-        eg.note_on();
-        assert_eq!(eg.phase, FilterEgPhase::Attack);
-
-        for _ in 0..200 {
-            if eg.phase != FilterEgPhase::Attack {
-                break;
-            }
-            eg.tick(sr, 255, 255, 128, 255);
-        }
-        assert_eq!(eg.phase, FilterEgPhase::Decay);
-
-        for _ in 0..400 {
-            if eg.phase != FilterEgPhase::Decay {
-                break;
-            }
-            eg.tick(sr, 255, 255, 128, 255);
-        }
-        assert_eq!(eg.phase, FilterEgPhase::Sustain);
-
-        eg.note_off();
-        assert_eq!(eg.phase, FilterEgPhase::Release);
-        for _ in 0..200 {
-            if eg.phase == FilterEgPhase::Idle {
-                break;
-            }
-            eg.tick(sr, 255, 255, 128, 255);
-        }
-        assert_eq!(eg.phase, FilterEgPhase::Idle);
     }
 
     #[test]

@@ -98,16 +98,28 @@ pub(crate) struct Ym38x6Params {
     pub cutoff: IntParam,
     #[id = "resonance"]
     pub resonance: IntParam,
-    #[id = "feg_a"]
-    pub feg_a: IntParam,
-    #[id = "feg_d"]
-    pub feg_d: IntParam,
-    #[id = "feg_s"]
-    pub feg_s: IntParam,
-    #[id = "feg_r"]
-    pub feg_r: IntParam,
+    #[id = "feg_ar"]
+    pub feg_ar: IntParam,
+    #[id = "feg_d1r"]
+    pub feg_d1r: IntParam,
+    #[id = "feg_d1l"]
+    pub feg_d1l: IntParam,
+    #[id = "feg_d2r"]
+    pub feg_d2r: IntParam,
+    #[id = "feg_rr"]
+    pub feg_rr: IntParam,
     #[id = "feg_depth"]
     pub feg_depth: IntParam,
+    #[id = "vca_ar"]
+    pub vca_ar: IntParam,
+    #[id = "vca_d1r"]
+    pub vca_d1r: IntParam,
+    #[id = "vca_d1l"]
+    pub vca_d1l: IntParam,
+    #[id = "vca_d2r"]
+    pub vca_d2r: IntParam,
+    #[id = "vca_rr"]
+    pub vca_rr: IntParam,
     #[id = "rev_send"]
     pub rev_send: IntParam,
     #[id = "cho_send"]
@@ -150,11 +162,17 @@ impl Default for Ym38x6Params {
             ams: IntParam::new("AMS", 0, IntRange::Linear { min: 0, max: 255 }),
             cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
             resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_a: IntParam::new("Filter EG Attack", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_d: IntParam::new("Filter EG Decay", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_s: IntParam::new("Filter EG Sustain", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_r: IntParam::new("Filter EG Release", 0, IntRange::Linear { min: 0, max: 255 }),
+            feg_ar: IntParam::new("Filter EG AR", 0, IntRange::Linear { min: 0, max: 255 }),
+            feg_d1r: IntParam::new("Filter EG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
+            feg_d1l: IntParam::new("Filter EG D1L", 0, IntRange::Linear { min: 0, max: 255 }),
+            feg_d2r: IntParam::new("Filter EG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
+            feg_rr: IntParam::new("Filter EG RR", 0, IntRange::Linear { min: 0, max: 255 }),
             feg_depth: IntParam::new("Filter EG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            vca_ar: IntParam::new("VCA EG AR", 255, IntRange::Linear { min: 0, max: 255 }),
+            vca_d1r: IntParam::new("VCA EG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
+            vca_d1l: IntParam::new("VCA EG D1L", 255, IntRange::Linear { min: 0, max: 255 }),
+            vca_d2r: IntParam::new("VCA EG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
+            vca_rr: IntParam::new("VCA EG RR", 255, IntRange::Linear { min: 0, max: 255 }),
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
             operators: Default::default(),

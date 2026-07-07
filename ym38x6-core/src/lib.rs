@@ -1,5 +1,4 @@
 pub mod algorithm;
-pub mod filter;
 pub mod mapping;
 pub mod operator;
 pub mod preset;
@@ -11,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use algorithm::ALGORITHMS;
-use filter::{cutoff_to_hz, effective_cutoff, FilterEnvelope, FilterType, Svf};
 use mapping::{
     feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
     FM_MODULATION_INDEX_SCALE,
@@ -75,8 +73,8 @@ use waveform::gen_builtin_waveform;
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
-    pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, LfoDestination,
-    LfoWaveform, MasterEffects, ReverbType, Vco,
+    pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
+    LfoDestination, LfoWaveform, MasterEffects, ReverbType, Vca, Vcf, Vco, VoiceAmp, VoiceFilter,
 };
 
 // ---------------------------------------------------------------------------
@@ -109,16 +107,48 @@ pub struct ChannelParams {
     pub filter_type: u8,
     /// Self-Oscillation有効フラグ。
     pub filter_self_oscillation: bool,
-    /// Filter EG Attack(0〜255)。
-    pub filter_eg_attack: u8,
-    /// Filter EG Decay(0〜255)。
-    pub filter_eg_decay: u8,
-    /// Filter EG Sustain(0〜255)。
-    pub filter_eg_sustain: u8,
-    /// Filter EG Release(0〜255)。
-    pub filter_eg_release: u8,
+    /// Filter EG AR(0〜255)。
+    pub filter_eg_ar: u8,
+    /// Filter EG D1R(0〜255)。
+    pub filter_eg_d1r: u8,
+    /// Filter EG D1L(0〜255、サステインレベル)。
+    pub filter_eg_d1l: u8,
+    /// Filter EG D2R(0〜255)。4段ADSR時代には無かった段。既定0で旧挙動と等価
+    /// （D1Lで完全サステイン、旧仕様の退化ケース）。
+    #[serde(default)]
+    pub filter_eg_d2r: u8,
+    /// Filter EG RR(0〜255)。
+    pub filter_eg_rr: u8,
     /// Filter EGがCutoffに与える変調量(0〜255)。
     pub filter_eg_depth: u8,
+    /// VCA(TVA)オーバーレイ EG AR(0〜255)。既定255（最速）でFM本来のキャリアEGを変えない
+    /// 透過的マクロ・エンベロープ（spec.md「Vca」参照）。
+    #[serde(default = "default_vca_eg_ar")]
+    pub vca_eg_ar: u8,
+    /// VCA EG D1R(0〜255)。既定0（d1l=255のため実質無効）。
+    #[serde(default)]
+    pub vca_eg_d1r: u8,
+    /// VCA EG D1L(0〜255)。既定255（完全サステイン、常時全開）。
+    #[serde(default = "default_vca_eg_d1l")]
+    pub vca_eg_d1l: u8,
+    /// VCA EG D2R(0〜255)。既定0（サステインのまま張り付く）。
+    #[serde(default)]
+    pub vca_eg_d2r: u8,
+    /// VCA EG RR(0〜255)。既定255（最速、note off後すぐ0へ）。
+    #[serde(default = "default_vca_eg_rr")]
+    pub vca_eg_rr: u8,
+}
+
+fn default_vca_eg_ar() -> u8 {
+    255
+}
+
+fn default_vca_eg_d1l() -> u8 {
+    255
+}
+
+fn default_vca_eg_rr() -> u8 {
+    255
 }
 
 impl Default for ChannelParams {
@@ -138,11 +168,17 @@ impl Default for ChannelParams {
             filter_resonance: 0,
             filter_type: 0,
             filter_self_oscillation: true,
-            filter_eg_attack: 0,
-            filter_eg_decay: 0,
-            filter_eg_sustain: 0,
-            filter_eg_release: 0,
+            filter_eg_ar: 0,
+            filter_eg_d1r: 0,
+            filter_eg_d1l: 0,
+            filter_eg_d2r: 0,
+            filter_eg_rr: 0,
             filter_eg_depth: 0,
+            vca_eg_ar: default_vca_eg_ar(),
+            vca_eg_d1r: 0,
+            vca_eg_d1l: default_vca_eg_d1l(),
+            vca_eg_d2r: 0,
+            vca_eg_rr: default_vca_eg_rr(),
         }
     }
 }
@@ -200,10 +236,10 @@ struct Channel {
     channel_gain: f32,
     /// 音色LFO本体（PMS/AMS×PMD/AMD、spec.md「音色LFO」セクション参照）。
     tone_lfo: ToneLfo,
-    /// 4op合成後に適用するSVFフィルター（spec.md「フィルター」セクション参照）。
-    svf: Svf,
-    /// フィルターCutoffを変調するFilter EG。
-    filter_eg: FilterEnvelope,
+    /// 4op合成後に適用するVCFセクション（sound-core::VoiceFilter、spec.md「フィルター」セクション参照）。
+    vcf: VoiceFilter,
+    /// 4op合成後に適用するVCAオーバーレイ（sound-core::VoiceAmp）。
+    vca: VoiceAmp,
 }
 
 impl Channel {
@@ -218,8 +254,10 @@ impl Channel {
             op.note_on(frequency, velocity);
             op
         });
-        let mut filter_eg = FilterEnvelope::new();
-        filter_eg.note_on();
+        let mut vcf = VoiceFilter::new();
+        vcf.note_on();
+        let mut vca = VoiceAmp::new();
+        vca.note_on();
         Self {
             operators,
             channel_params: patch.channel,
@@ -237,8 +275,8 @@ impl Channel {
             tl_carrier_mod_delta: 0.0,
             channel_gain: 1.0,
             tone_lfo: ToneLfo::new(),
-            svf: Svf::new(),
-            filter_eg,
+            vcf,
+            vca,
         }
     }
 
@@ -259,7 +297,8 @@ impl Channel {
         self.note = note;
         self.base_frequency = frequency;
         self.velocity = velocity;
-        self.filter_eg.note_on();
+        self.vcf.note_on();
+        self.vca.note_on();
     }
 
     fn set_performance_lfo(
@@ -281,7 +320,8 @@ impl Channel {
         for op in self.operators.iter_mut() {
             op.note_off();
         }
-        self.filter_eg.note_off();
+        self.vcf.note_off();
+        self.vca.note_off();
     }
 
     /// CC103〜106（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。
@@ -375,29 +415,23 @@ impl Channel {
         let velocity_gain = velocity_to_volume_gain(self.velocity);
         let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain * self.channel_gain;
 
-        // SVFフィルター + Filter EG（4op合成後）
-        let filter_eg_level = self.filter_eg.tick(
-            sample_rate,
-            self.channel_params.filter_eg_attack,
-            self.channel_params.filter_eg_decay,
-            self.channel_params.filter_eg_sustain,
-            self.channel_params.filter_eg_release,
-        );
-        let cutoff = effective_cutoff(
-            self.channel_params.filter_cutoff,
-            filter_eg_level,
-            self.channel_params.filter_eg_depth,
-        );
-        let cutoff_hz = cutoff_to_hz(cutoff);
-        let filter_type = FilterType::from_u8(self.channel_params.filter_type);
-        self.svf.process(
+        // VCF（4op合成後） + VCA（TVAオーバーレイ）
+        let cp = &self.channel_params;
+        let filtered = self.vcf.process(
             dry,
             sample_rate,
-            cutoff_hz,
-            self.channel_params.filter_resonance,
-            self.channel_params.filter_self_oscillation,
-            filter_type,
-        )
+            cp.filter_cutoff,
+            cp.filter_resonance,
+            FilterType::from_u8(cp.filter_type),
+            cp.filter_self_oscillation,
+            cp.filter_eg_ar,
+            cp.filter_eg_d1r,
+            cp.filter_eg_d1l,
+            cp.filter_eg_d2r,
+            cp.filter_eg_rr,
+            cp.filter_eg_depth,
+        );
+        self.vca.process(filtered, sample_rate, cp.vca_eg_ar, cp.vca_eg_d1r, cp.vca_eg_d1l, cp.vca_eg_d2r, cp.vca_eg_rr)
     }
 }
 
@@ -865,10 +899,10 @@ mod tests {
             patch.channel.filter_cutoff = 64;
             patch.channel.filter_resonance = 255;
             patch.channel.filter_self_oscillation = true;
-            patch.channel.filter_eg_attack = 200;
-            patch.channel.filter_eg_decay = 150;
-            patch.channel.filter_eg_sustain = 128;
-            patch.channel.filter_eg_release = 150;
+            patch.channel.filter_eg_ar = 200;
+            patch.channel.filter_eg_d1r = 150;
+            patch.channel.filter_eg_d1l = 128;
+            patch.channel.filter_eg_rr = 150;
             patch.channel.filter_eg_depth = 255;
 
             let mut engine = Ym38x6Engine::new(44100.0);
