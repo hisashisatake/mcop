@@ -11,8 +11,9 @@
 ## 現在地
 
 **フェーズ5：実機音色資産の取り込みと音作り基盤**と**フェーズ7：MC-505風モジュレーション拡張**を並行進行中
-（フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」完了、
-次はLFO拡張・表情ルーティング）
+（フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」・
+ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」完了、
+次はLFOのカットオフ行先(オートワウ)/LFO×2・表情ルーティング・Pitch EG）
 
 ---
 
@@ -68,8 +69,13 @@
     状態機械`Eg`・トレイト`Vcf`/`Vca`をsound-coreに実装（具象実装`VoiceFilter`/`VoiceAmp`）。
     旧フィルターEG（4段ADSR、ym38x6-core/src/filter.rs）は撤去しVcfへ統合済み。
     Pitch EG（EnvelopeによるピッチModulation）は今回のスコープ外で未着手のまま残る
-  → 次のステップ: LFO拡張・表情ルーティング・Pitch EG（未着手）
-  → LFO拡張: Fade(4モード)・Offset・波形8種・カットオフ行先(オートワウ)・手動ワウ・LFO×2
+  → ステップ3「LFO拡張（波形8種/Fade/Offset）」完了: `LfoWaveform`にSaw/Trapezoid/Random/Chaosを追加し
+    8種に、`LfoFadeMode`(ON-IN/ON-OUT/OFF-IN/OFF-OUT)・`PerformanceLfoShape`(waveform/fade_mode/
+    fade_time/offset)を新設。`ChannelParams.perf_lfo_shape`として発音中もリアルタイム反映。
+    VST（NRPN+DAWパラメーター両対応）・ym38x6-ui共有パネル・gesture-app（editor-wasm/Tauri IPC）まで配線済み
+  → 次のステップ: LFOのカットオフ行先(オートワウ)・手動ワウ・LFO×2・表情ルーティング・
+    velocity→音量の量・Pitch EG（いずれも未着手）
+  → LFO拡張の残り: カットオフ行先(オートワウ)・手動ワウ・LFO×2
   → velocity→音量「量」（ChannelParams、既定255）
   → 表情コントローラー・ルーティング: CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等
   → VST/NRPN配線（差分検知方式に追加）
