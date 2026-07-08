@@ -1,6 +1,8 @@
 use crate::knob::knob;
 use crate::param_handle::{BoolParamHandle, IntParamHandle};
-use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, REVERB_TYPE_NAMES};
+use crate::selector::{
+    enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES,
+};
 use crate::waveform::waveform_selector;
 
 /// オペレーター単位パラメーター一式（VST/gesture-app共通のハンドル束）。
@@ -30,6 +32,10 @@ pub struct PanelParams<'a> {
     pub lfo_rate: Box<dyn IntParamHandle + 'a>,
     pub lfo_depth: Box<dyn IntParamHandle + 'a>,
     pub lfo_delay: Box<dyn IntParamHandle + 'a>,
+    pub lfo_waveform: Box<dyn IntParamHandle + 'a>,
+    pub lfo_fade_mode: Box<dyn IntParamHandle + 'a>,
+    pub lfo_fade_time: Box<dyn IntParamHandle + 'a>,
+    pub lfo_offset: Box<dyn IntParamHandle + 'a>,
     // TONE LFO
     pub tone_freq: Box<dyn IntParamHandle + 'a>,
     pub tone_pmd: Box<dyn IntParamHandle + 'a>,
@@ -117,6 +123,10 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                         knob(ui, &*params.lfo_rate, "L.RATE");
                         knob(ui, &*params.lfo_depth, "L.DEP");
                         knob(ui, &*params.lfo_delay, "L.DLY");
+                        enum_selector(ui, &*params.lfo_waveform, "L.WAVE", &LFO_WAVEFORM_NAMES, 2);
+                        enum_selector(ui, &*params.lfo_fade_mode, "L.FADE", &LFO_FADE_MODE_NAMES, 3);
+                        knob(ui, &*params.lfo_fade_time, "L.F.TM");
+                        knob(ui, &*params.lfo_offset, "L.OFS");
                     });
                 });
             });
