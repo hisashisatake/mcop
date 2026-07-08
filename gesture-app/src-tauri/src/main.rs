@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
-use ym38x6_core::{pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChorusType,
+use ym38x6_core::{cutoff_depth, pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChorusType,
     MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType,
     Vco, Ym38x6Engine, Ym38x6LfoDestination};
 use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
@@ -108,6 +108,7 @@ fn resolve_patch(
 
 /// 38x6エンジンのパフォーマンスLFOを設定する。
 /// `destination`: 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、38x6拡張）
+/// / 3=Cutoff（オートワウ、38x6拡張）
 /// `cc77`/`cc1`/`mod_depth_range`は仕様の実効Depth計算式（CC77/CC1/RPN0,5）への入力。
 /// 波形/Fade/Offset（`ChannelParams.perf_lfo_shape`）はTauri IPC未配線（フェーズ7次ステップ、
 /// ym38x6-vstのNRPN配線を参照）。
@@ -125,11 +126,13 @@ fn ym38x6_set_performance_lfo(
     let destination = match destination {
         1 => Ym38x6LfoDestination::Volume,
         2 => Ym38x6LfoDestination::TlCarrier,
+        3 => Ym38x6LfoDestination::Cutoff,
         _ => Ym38x6LfoDestination::Pitch,
     };
     let depth = match destination {
         Ym38x6LfoDestination::Pitch => pitch_depth_cents(cc77, cc1, mod_depth_range),
         Ym38x6LfoDestination::Volume | Ym38x6LfoDestination::TlCarrier => volume_depth(cc77, cc1),
+        Ym38x6LfoDestination::Cutoff => cutoff_depth(cc77, cc1),
     };
     engine.lock().unwrap().set_performance_lfo(channel, rate, delay, destination, depth);
 }

@@ -72,7 +72,7 @@ use waveform::gen_builtin_waveform;
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
     lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
-    pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
+    pitch_depth_cents, volume_depth, cutoff_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
     LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca,
     Vcf, Vco, VoiceAmp, VoiceFilter,
 };
@@ -207,6 +207,9 @@ pub enum Ym38x6LfoDestination {
     Pitch,
     Volume,
     TlCarrier,
+    /// フィルターCutoffへの持続的な変調（オートワウ）。Filter EG Depth（キーオン一発の変調）
+    /// とは独立に積み重なる（`Channel::tick`でLFOがシフトした基準Cutoffを、Filter EGがさらに変調する）。
+    Cutoff,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +239,8 @@ struct Channel {
     volume_mod_delta: f32,
     /// 拡張Destination=TlCarrier用：キャリア出力にかかる乗算ゲインのオフセット。
     tl_carrier_mod_delta: f32,
+    /// 拡張Destination=Cutoff用：フィルターCutoffへ加算するデルタ（オートワウ、0〜255単位系）。
+    cutoff_mod_delta: f32,
     /// CC7/CC11（Channel Volume × Expression）の積ゲイン（0.0〜1.0、GM2二乗カーブ適用済み）。
     /// VST/smf2wav が `set_channel_volume` で書き込み、LFO音量変調（volume_mod_delta）とは独立。
     channel_gain: f32,
@@ -281,6 +286,7 @@ impl Channel {
             bend_cents: 0.0,
             volume_mod_delta: 0.0,
             tl_carrier_mod_delta: 0.0,
+            cutoff_mod_delta: 0.0,
             channel_gain: 1.0,
             tone_lfo: ToneLfo::new(),
             vcf,
@@ -364,6 +370,9 @@ impl Channel {
             Ym38x6LfoDestination::TlCarrier => {
                 self.tl_carrier_mod_delta = lfo_value * self.lfo_depth;
             }
+            Ym38x6LfoDestination::Cutoff => {
+                self.cutoff_mod_delta = lfo_value * self.lfo_depth;
+            }
         }
         for op in self.operators.iter_mut() {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents);
@@ -426,10 +435,14 @@ impl Channel {
 
         // VCF（4op合成後） + VCA（TVAオーバーレイ）
         let cp = &self.channel_params;
+        // 拡張Destination=CutoffのLFO変調を基準Cutoffへ加算してからVcfへ渡す
+        // （Filter EG Depthはvcf.process内部でこの基準値をさらにキーオン一発で変調する）。
+        let modulated_cutoff =
+            (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
         let filtered = self.vcf.process(
             dry,
             sample_rate,
-            cp.filter_cutoff,
+            modulated_cutoff,
             cp.filter_resonance,
             FilterType::from_u8(cp.filter_type),
             cp.filter_self_oscillation,

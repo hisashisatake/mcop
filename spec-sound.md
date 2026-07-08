@@ -537,13 +537,15 @@ Delay（既存のハードカットオーバー）とは独立して共存する
 | 0（デフォルト） | Pitch（ビブラート） | `実効Depth(セント) = CC77値 + CC1値 × RPN0,5値 / 127` をピッチに加算 | F-Number全Op |
 | 1 | Volume（トレモロ） | `実効Depth = clamp(CC77値 + CC1値, 0, 255)` を各ノートの実効音量（ベロシティ音量適用後）に加算 | TL全オペレーター一括 |
 | 2 | TL（キャリア一括、トレモロ） | 同上（キャリアのみ） | 38x6拡張のみ |
+| 3 | Cutoff（オートワウ） | `実効Depth = clamp(CC77値 + CC1値, 0, 255)` をFilter Cutoff値（0〜255）へ加算 | 38x6拡張のみ |
 
 トレモロ（Destination=1/2）は各ノートの実効音量に対して相対的に作用するため、ベロシティによる音量差は維持されたまま揺れる。
 RPN 0,5（Modulation Depth Range）はDestination=Pitchの場合のみ意味を持つ（詳細はRPNセクション参照）。
+Cutoff（Destination=3）はLFOがシフトした基準Cutoffに対し、Filter EG Depth（キーオン一発の変調、フィルターセクション参照）がさらに独立に積み重なる（決め台詞「EG＝一発の形／LFO＝持続する揺れ」）。
 
 **実装方式：**
 `PerformanceLfo`はエンジン非依存の共通コンポーネントとして`sound-core`に実装する。
-適用先は`PerformanceLfoTarget`トレイトとして定義し、共通Destination（0=Pitch、1=Volume）に加え、38x6は拡張Destination（2=TLキャリア一括）も実装する。
+適用先は`PerformanceLfoTarget`トレイトとして定義し、共通Destination（0=Pitch、1=Volume）に加え、38x6は拡張Destination（2=TLキャリア一括、3=Cutoff/オートワウ）も実装する。
 
 Rate/Delay/Destination/Depthは演奏中の状態（`ChannelParams`には含まれない、VST/gesture-appが直接エンジンへ渡すパフォーマンス制御値）。
 一方、波形/Fade Mode/Fade Time/Offsetは`sound-core::PerformanceLfoShape`としてまとめ、`ChannelParams.perf_lfo_shape`の1フィールドに持たせている（音色パッチの一部として保存可能）。
@@ -847,7 +849,7 @@ NRPN番号は本実装（パフォーマンスLFO）で初めて定義する。M
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| Performance LFO Destination | 0, 0 | 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、トレモロ、38x6拡張のみ） |
+| Performance LFO Destination | 0, 0 | 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、トレモロ、38x6拡張のみ） / 3=Cutoff（オートワウ、38x6拡張のみ） |
 | Performance LFO Waveform | 0, 1 | 0=三角波 / 1=サイン波 / 2=矩形波 / 3=S&H / 4=のこぎり波 / 5=台形波 / 6=Random / 7=Chaos |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |

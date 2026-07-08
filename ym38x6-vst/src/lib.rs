@@ -16,10 +16,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
-    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_waveform_from_index, pitch_depth_cents,
-    presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType, LfoFadeMode, LfoWaveform,
-    MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank, ReverbType, Vco, Ym38x6Engine,
-    Ym38x6LfoDestination, Ym38x6Patch,
+    cutoff_depth, lfo_fade_mode_from_index, lfo_offset_from_param, lfo_waveform_from_index,
+    pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType,
+    LfoFadeMode, LfoWaveform, MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank,
+    ReverbType, Vco, Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
 };
 
 /// MIDIノート番号の総数（0〜127）。MIDIノート番号をそのままチャンネルIDとして使うため
@@ -287,6 +287,7 @@ impl Ym38x6Plugin {
             Ym38x6LfoDestination::Volume | Ym38x6LfoDestination::TlCarrier => {
                 volume_depth(self.effective_lfo_depth, self.lfo_cc1)
             }
+            Ym38x6LfoDestination::Cutoff => cutoff_depth(self.effective_lfo_depth, self.lfo_cc1),
         };
         self.engine.set_performance_lfo(
             channel,
@@ -343,12 +344,13 @@ impl Ym38x6Plugin {
                 self.lfo_rpn0_5 = cc_to_u7(value);
                 self.apply_performance_lfo_to_active();
             }
-            // NRPN(0,0): Performance LFO Destination（38x6拡張：2=TLキャリア一括）
+            // NRPN(0,0): Performance LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ）
             RpnSelection::Nrpn(0, 0) => {
                 self.lfo_destination = match cc_to_u7(value) {
                     0 => Ym38x6LfoDestination::Pitch,
                     1 => Ym38x6LfoDestination::Volume,
-                    _ => Ym38x6LfoDestination::TlCarrier,
+                    2 => Ym38x6LfoDestination::TlCarrier,
+                    _ => Ym38x6LfoDestination::Cutoff,
                 };
                 self.apply_performance_lfo_to_active();
             }

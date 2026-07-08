@@ -167,6 +167,40 @@ fn performance_lfo_pitch_destination_shifts_output() {
     assert!(differs, "ピッチ変調により出力波形が変化するはず");
 }
 
+/// Destination=Cutoff（オートワウ）は、LFOでシフトした基準CutoffをVcfへ渡すことで
+/// 音色（倍音構成）を持続的に変化させる。波形は矩形（倍音豊富でカットオフの効果が
+/// 出やすい）、基準Cutoffを低め(80)にしておき、LFOなし/ありの出力波形が異なることを確認する。
+#[test]
+fn performance_lfo_cutoff_destination_shifts_output() {
+    let sample_rate = 44100.0;
+
+    let mut patch = waveform_memory_patch(3, sustained_adsr());
+    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
+    patch.channel.filter_cutoff = 80;
+
+    let mut engine_flat = Ym38x6Engine::new(sample_rate);
+    engine_flat.set_patch(patch);
+    engine_flat.note_on(0, 220.0, 127);
+    engine_flat.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Cutoff, 0.0);
+    let mut warm_flat = vec![0.0f32; 200];
+    engine_flat.render(&mut warm_flat, 1);
+    let mut buf_flat = vec![0.0f32; 400];
+    engine_flat.render(&mut buf_flat, 1);
+
+    let mut engine_mod = Ym38x6Engine::new(sample_rate);
+    engine_mod.set_patch(patch);
+    engine_mod.note_on(0, 220.0, 127);
+    // 基準Cutoff(80)を中心に±150の大きめのオートワウ
+    engine_mod.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Cutoff, 150.0);
+    let mut warm_mod = vec![0.0f32; 200];
+    engine_mod.render(&mut warm_mod, 1);
+    let mut buf_mod = vec![0.0f32; 400];
+    engine_mod.render(&mut buf_mod, 1);
+
+    let differs = buf_flat.iter().zip(buf_mod.iter()).any(|(a, b)| (a - b).abs() > 1e-3);
+    assert!(differs, "カットオフLFO変調（オートワウ）により出力波形が変化するはず");
+}
+
 /// 同一波形・同一周波数・同一パッチの2音を別チャンネルIDで同時発音すると、
 /// 出力は1音の場合のちょうど2倍になる（各ボイス独立・加算合成）。
 #[test]

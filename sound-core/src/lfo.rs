@@ -362,6 +362,15 @@ pub fn volume_depth(cc77: u8, cc1: u8) -> f32 {
     (cc77 as u16 + cc1 as u16).min(255) as f32 / 255.0
 }
 
+/// Destination=Cutoff（38x6拡張、オートワウ）の実効Depth。
+/// `実効Depth = clamp(CC77値 + CC1値, 0, 255)`を、Filter EG Depthと同じ0〜255の
+/// カットオフ単位系のままデルタ最大値として返す（Volumeと異なり0.0〜1.0への正規化はしない）。
+///
+/// CC77/CC1は本プロジェクトの内部表現（0〜255）。
+pub fn cutoff_depth(cc77: u8, cc1: u8) -> f32 {
+    (cc77 as u16 + cc1 as u16).min(255) as f32
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -472,5 +481,14 @@ mod tests {
         // 合計が255を超える場合は255でclampされ、1.0に正規化される
         assert_eq!(volume_depth(255, 255), 1.0);
         assert_eq!(volume_depth(200, 200), 1.0);
+    }
+
+    #[test]
+    fn cutoff_depth_clamps_without_normalizing() {
+        assert_eq!(cutoff_depth(0, 0), 0.0);
+        assert_eq!(cutoff_depth(100, 50), 150.0);
+        // 合計が255を超える場合は255でclampされる（Volumeと異なり0〜1.0への正規化はしない）
+        assert_eq!(cutoff_depth(255, 255), 255.0);
+        assert_eq!(cutoff_depth(200, 200), 255.0);
     }
 }

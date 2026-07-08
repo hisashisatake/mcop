@@ -12,8 +12,9 @@
 
 **フェーズ5：実機音色資産の取り込みと音作り基盤**と**フェーズ7：MC-505風モジュレーション拡張**を並行進行中
 （フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」・
-ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」完了、
-次はLFOのカットオフ行先(オートワウ)/LFO×2・表情ルーティング・Pitch EG）
+ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
+ステップ4「LFOカットオフ行先(オートワウ)」完了、
+次は手動ワウ/LFO×2・表情ルーティング・Pitch EG）
 
 ---
 
@@ -73,9 +74,13 @@
     8種に、`LfoFadeMode`(ON-IN/ON-OUT/OFF-IN/OFF-OUT)・`PerformanceLfoShape`(waveform/fade_mode/
     fade_time/offset)を新設。`ChannelParams.perf_lfo_shape`として発音中もリアルタイム反映。
     VST（NRPN+DAWパラメーター両対応）・ym38x6-ui共有パネル・gesture-app（editor-wasm/Tauri IPC）まで配線済み
-  → 次のステップ: LFOのカットオフ行先(オートワウ)・手動ワウ・LFO×2・表情ルーティング・
-    velocity→音量の量・Pitch EG（いずれも未着手）
-  → LFO拡張の残り: カットオフ行先(オートワウ)・手動ワウ・LFO×2
+  → ステップ4「LFOカットオフ行先(オートワウ)」完了: `Ym38x6LfoDestination`に`Cutoff`を追加し、
+    `Channel::tick()`でLFOがシフトした基準CutoffをVcfへ渡すことでFilter EG Depth（キーオン一発の変調）
+    と独立に積み重なる持続的な変調を実現。Depthは`cutoff_depth(cc77,cc1)`（sound-core）で
+    Filter EG Depthと同じ0〜255単位系に統一。VST NRPN(0,0)=3・gesture-app Tauri IPCまで配線済み
+    （UIトグルは既存のTLキャリア一括同様スコープ外のまま）
+  → 次のステップ: 手動ワウ・LFO×2・表情ルーティング・velocity→音量の量・Pitch EG（いずれも未着手）
+  → LFO拡張の残り: 手動ワウ・LFO×2
   → velocity→音量「量」（ChannelParams、既定255）
   → 表情コントローラー・ルーティング: CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等
   → VST/NRPN配線（差分検知方式に追加）
