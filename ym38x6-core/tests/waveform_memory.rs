@@ -34,10 +34,13 @@ fn performance_lfo_volume_destination_modulates_amplitude() {
     let mut engine = Ym38x6Engine::new(sample_rate);
     let ch = 0;
     // 矩形波（waveform=3）は振幅が常に±1付近なので、振幅変動はLFOの効果として観測できる。
-    engine.set_patch(waveform_memory_patch(3, sustained_adsr()));
+    let mut patch = waveform_memory_patch(3, sustained_adsr());
+    // LFO波形も矩形にして、変動の有無をよりくっきり観測できるようにする。
+    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Square;
+    engine.set_patch(patch);
     engine.note_on(ch, 220.0, 127);
     // rate=255（20Hz、最速）でバッファ内に複数周期が収まるようにする。
-    engine.set_performance_lfo(ch, 255, 0, LfoWaveform::Square, Ym38x6LfoDestination::Volume, 1.0);
+    engine.set_performance_lfo(ch, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
 
     // アタックを終えて出力が安定するまでウォームアップ
     let mut warmup = vec![0.0f32; 200];
@@ -75,7 +78,7 @@ fn performance_lfo_shape_from_patch_is_applied_at_note_on() {
         };
         engine.set_patch(patch);
         engine.note_on(0, 220.0, 127);
-        engine.set_performance_lfo(0, 255, 0, LfoWaveform::Square, Ym38x6LfoDestination::Volume, 1.0);
+        engine.set_performance_lfo(0, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
 
         let mut warmup = vec![0.0f32; 200];
         engine.render(&mut warmup, 1);
@@ -94,26 +97,67 @@ fn performance_lfo_shape_from_patch_is_applied_at_note_on() {
     );
 }
 
+/// `set_channel_params`で`perf_lfo_shape`を変更すると、note_on済みの発音中ボイスにも
+/// 次ブロックからリアルタイムに反映される（VSTのNRPN/DAWパラメーター変更が発音中ノートへ
+/// 効くことを保証する。旧仕様はnote_on/retriggerでしか適用されなかった）。
+#[test]
+fn performance_lfo_shape_updates_live_via_set_channel_params() {
+    let sample_rate = 44100.0;
+    let render = |switch_to_square: bool| {
+        let mut engine = Ym38x6Engine::new(sample_rate);
+        let mut patch = waveform_memory_patch(3, sustained_adsr());
+        patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
+        engine.set_patch(patch);
+        engine.note_on(0, 220.0, 127);
+        engine.set_performance_lfo(0, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
+
+        let mut warmup = vec![0.0f32; 200];
+        engine.render(&mut warmup, 1);
+
+        if switch_to_square {
+            let mut updated = patch.channel;
+            updated.perf_lfo_shape.waveform = LfoWaveform::Square;
+            engine.set_channel_params(0, updated);
+        }
+
+        let mut buf = vec![0.0f32; 2000];
+        engine.render(&mut buf, 1);
+        buf
+    };
+
+    let switched = render(true);
+    let unswitched = render(false);
+
+    let differs = switched.iter().zip(unswitched.iter()).any(|(a, b)| (a - b).abs() > 1e-3);
+    assert!(
+        differs,
+        "note_on後にset_channel_paramsでwaveformを変更すると、発音中でも出力が変わるはず"
+    );
+}
+
 /// Destination=Pitch・Depth>0のパフォーマンスLFOは実効周波数を揺らすため、
 /// Depth=0の場合と出力波形が乖離する。
 #[test]
 fn performance_lfo_pitch_destination_shifts_output() {
     let sample_rate = 44100.0;
 
+    let mut patch = waveform_memory_patch(0, sustained_adsr());
+    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
+
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
-    engine_flat.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine_flat.set_patch(patch);
     engine_flat.note_on(0, 440.0, 127);
-    engine_flat.set_performance_lfo(0, 220, 0, LfoWaveform::Sine, Ym38x6LfoDestination::Pitch, 0.0);
+    engine_flat.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Pitch, 0.0);
     let mut warm_flat = vec![0.0f32; 200];
     engine_flat.render(&mut warm_flat, 1);
     let mut buf_flat = vec![0.0f32; 400];
     engine_flat.render(&mut buf_flat, 1);
 
     let mut engine_mod = Ym38x6Engine::new(sample_rate);
-    engine_mod.set_patch(waveform_memory_patch(0, sustained_adsr()));
+    engine_mod.set_patch(patch);
     engine_mod.note_on(0, 440.0, 127);
     // ±1200セント（±1オクターブ）の大きめのビブラート
-    engine_mod.set_performance_lfo(0, 220, 0, LfoWaveform::Sine, Ym38x6LfoDestination::Pitch, 1200.0);
+    engine_mod.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Pitch, 1200.0);
     let mut warm_mod = vec![0.0f32; 200];
     engine_mod.render(&mut warm_mod, 1);
     let mut buf_mod = vec![0.0f32; 400];

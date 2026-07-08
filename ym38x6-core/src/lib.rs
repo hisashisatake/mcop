@@ -314,13 +314,11 @@ impl Channel {
         &mut self,
         rate: u8,
         delay: u8,
-        waveform: LfoWaveform,
         destination: Ym38x6LfoDestination,
         depth: f32,
     ) {
         self.perf_lfo.set_rate(rate);
         self.perf_lfo.set_delay(delay);
-        self.perf_lfo.set_waveform(waveform);
         self.lfo_destination = destination;
         self.lfo_depth = depth;
     }
@@ -503,8 +501,12 @@ impl Ym38x6Engine {
     }
 
     /// 発音中チャンネルのチャンネルパラメーターを更新する（DAWオートメーション/NRPN用）。
+    /// `perf_lfo_shape`（波形/Fade/Offset）は他フィールドと同様にリアルタイムで`perf_lfo`へ
+    /// 伝播する（note_on/retriggerでのみ適用される旧仕様から変更、発音中でもVSTのNRPN/DAW
+    /// パラメーター変更が効くようにするため）。
     pub fn set_channel_params(&mut self, channel: usize, params: ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.perf_lfo.set_shape(params.perf_lfo_shape);
             ch.channel_params = params;
         }
     }
@@ -546,18 +548,18 @@ impl Ym38x6Engine {
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));
     }
 
-    /// 指定チャンネルのパフォーマンスLFO（Rate/Delay/Waveform/Destination/Depth）を設定する。
+    /// 指定チャンネルのパフォーマンスLFO（Rate/Delay/Destination/Depth）を設定する。
+    /// 波形/Fade/Offsetは`ChannelParams.perf_lfo_shape`（`set_channel_params`）側で扱う。
     pub fn set_performance_lfo(
         &mut self,
         channel: usize,
         rate: u8,
         delay: u8,
-        waveform: LfoWaveform,
         destination: Ym38x6LfoDestination,
         depth: f32,
     ) {
         if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.set_performance_lfo(rate, delay, waveform, destination, depth);
+            ch.set_performance_lfo(rate, delay, destination, depth);
         }
     }
 
