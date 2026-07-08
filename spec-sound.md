@@ -580,8 +580,8 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（28個）：**
-Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / パフォーマンスLFO Fade Time / パフォーマンスLFO Offset / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
+**チャンネル単位（30個）：**
+Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / パフォーマンスLFO Waveform / パフォーマンスLFO Fade Mode / パフォーマンスLFO Fade Time / パフォーマンスLFO Offset / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -594,9 +594,9 @@ Reverb Time / Chorus Mod Rate / Chorus Mod Depth / Chorus Feedback / Chorus Send
 （CC91/93やマスターエフェクトの「マスター単位」パラメーターのように、
 NRPN/CCとnice-plugパラメーターを併用する項目とは異なる点に注意）。
 
-Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / Performance LFO Destination / Performance LFO Waveform / Performance LFO Fade Mode / Reverb Type / Chorus Type
+Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / Performance LFO Destination / Reverb Type / Chorus Type
 
-※「Algorithm」は例外的に、NRPN(0,9)に加えて上記チャンネル単位のnice-plugパラメーターとしても公開する。
+※「Algorithm」「Performance LFO Waveform」「Performance LFO Fade Mode」は例外的に、対応するNRPNに加えて上記チャンネル単位のnice-plugパラメーターとしても公開する（DAWオートメーション/GUIノブ操作とNRPN/外部MIDIコントローラーの両方から設定できる）。
 
 ### MIDI CC（GM2準拠）
 
