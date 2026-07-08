@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
     pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType,
-    LfoWaveform, MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank, ReverbType, Vco,
-    Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
+    LfoFadeMode, LfoWaveform, MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank,
+    ReverbType, Vco, Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
 };
 
 /// MIDIノート番号の総数（0〜127）。MIDIノート番号をそのままチャンネルIDとして使うため
@@ -43,11 +43,14 @@ struct Ym38x6Plugin {
     operator_waveforms: [u8; 4],
     last_operator_waveforms: [u8; 4],
 
-    // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN(0,0)/(0,1)）の状態
+    // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN(0,0)/(0,1)/(0,22)）の状態
     lfo_cc1: u8,    // CC1 Modulation Wheel（Depth加算分）
     lfo_rpn0_5: u8, // RPN0,5 Modulation Depth Range（GM2準拠 0〜127、デフォルト64）
     lfo_destination: Ym38x6LfoDestination, // NRPN(0,0)
-    lfo_waveform: LfoWaveform,             // NRPN(0,1)
+    // 波形（8種）はperf_lfo_shape経由でset_channel_params()により発音中ボイスへも
+    // リアルタイムに伝播する（build_patch()参照。apply_performance_lfo_to_activeは不要）。
+    lfo_waveform: LfoWaveform, // NRPN(0,1)
+    lfo_fade_mode: LfoFadeMode, // NRPN(0,22)。fade_time/offsetはDAWパラメーター（lfo_fade_time/lfo_offset）。
     // lfo_rate/lfo_depth/lfo_delayはDAWパラメーターとCC76/77/78の両方から設定され得るため、
     // 2シャドウ方式で管理する（last_*_param: DAW側差分検知用、effective_*:
     // apply_performance_lfoへ実際に渡す値。CC受信時はlast_*_paramを更新せず
@@ -140,6 +143,14 @@ fn channel_gain(cc7: u8, cc11: u8) -> f32 {
     v7 * v7 * v11 * v11
 }
 
+/// パフォーマンスLFO Offsetの DAW パラメーター表現（0〜255、中心128）を
+/// `PerformanceLfoShape::offset`（i8、-100〜100、中心0）に変換する。
+/// `op_fine_tune`等と同じ中心128の慣習に合わせつつ、Offsetの内部表現に合わせて縮尺する。
+#[inline]
+fn lfo_offset_param_to_i8(value: u8) -> i8 {
+    (((value as i16 - 128) * 100) / 128).clamp(-100, 100) as i8
+}
+
 /// MIDIチャンネル(0〜15)とノート番号(0〜127)からエンジンのボイスIDを符号化する。
 /// `midi_ch*128 + note`。一意性（Note Off・同音再アタックの突き合わせ）と、
 /// グループ性（`id >> 7` でMIDIチャンネルを復元してベンド一括適用）を両立する。
@@ -166,6 +177,7 @@ impl Default for Ym38x6Plugin {
             lfo_rpn0_5: 64,
             lfo_destination: Ym38x6LfoDestination::Pitch,
             lfo_waveform: LfoWaveform::Triangle,
+            lfo_fade_mode: LfoFadeMode::default(),
             last_lfo_rate_param: 0,
             effective_lfo_rate: 0,
             last_lfo_depth_param: 0,
@@ -255,9 +267,12 @@ impl Ym38x6Plugin {
             vca_eg_d1l: p.vca_d1l.value() as u8,
             vca_eg_d2r: p.vca_d2r.value() as u8,
             vca_eg_rr: p.vca_rr.value() as u8,
-            // TODO(フェーズ7次ステップ): 波形8種/Fade/OffsetのDAWパラメーター/NRPN配線は未着手。
-            // それまでは既定値（Triangle/OnIn/fade_time=0/offset=0、旧来のハードエッジ挙動と等価）を使う。
-            perf_lfo_shape: PerformanceLfoShape::default(),
+            perf_lfo_shape: PerformanceLfoShape {
+                waveform: self.lfo_waveform,
+                fade_mode: self.lfo_fade_mode,
+                fade_time: p.lfo_fade_time.value() as u8,
+                offset: lfo_offset_param_to_i8(p.lfo_offset.value() as u8),
+            },
         };
 
         Ym38x6Patch { operators, channel }
@@ -277,7 +292,6 @@ impl Ym38x6Plugin {
             channel,
             self.effective_lfo_rate,
             self.effective_lfo_delay,
-            self.lfo_waveform,
             self.lfo_destination,
             depth,
         );
@@ -338,15 +352,20 @@ impl Ym38x6Plugin {
                 };
                 self.apply_performance_lfo_to_active();
             }
-            // NRPN(0,1): Performance LFO Waveform
+            // NRPN(0,1): Performance LFO Waveform（0〜7）。build_patch()経由でperf_lfo_shapeへ
+            // 反映され、set_channel_paramsが毎ブロック発音中ボイスへ伝播するため、
+            // Rate/Delay/Destinationと異なりapply_performance_lfo_to_activeの呼び出しは不要。
             RpnSelection::Nrpn(0, 1) => {
                 self.lfo_waveform = match cc_to_u7(value) {
                     1 => LfoWaveform::Sine,
                     2 => LfoWaveform::Square,
                     3 => LfoWaveform::SampleHold,
+                    4 => LfoWaveform::Saw,
+                    5 => LfoWaveform::Trapezoid,
+                    6 => LfoWaveform::Random,
+                    7 => LfoWaveform::Chaos,
                     _ => LfoWaveform::Triangle,
                 };
-                self.apply_performance_lfo_to_active();
             }
             // NRPN(0,2): Reverb Type
             RpnSelection::Nrpn(0, 2) => {
@@ -413,6 +432,16 @@ impl Ym38x6Plugin {
             RpnSelection::Nrpn(0, lsb @ 18..=21) => {
                 self.apply_operator_f_number_override((lsb - 18) as usize);
             }
+            // NRPN(0,22): Performance LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
+            // Waveformと同じくperf_lfo_shape経由でリアルタイム伝播するため、追加の反映呼び出しは不要。
+            RpnSelection::Nrpn(0, 22) => {
+                self.lfo_fade_mode = match cc_to_u7(value) {
+                    1 => LfoFadeMode::OnOut,
+                    2 => LfoFadeMode::OffIn,
+                    3 => LfoFadeMode::OffOut,
+                    _ => LfoFadeMode::OnIn,
+                };
+            }
             _ => {}
         }
     }
@@ -468,6 +497,7 @@ impl Plugin for Ym38x6Plugin {
         self.lfo_rpn0_5 = 64;
         self.lfo_destination = Ym38x6LfoDestination::Pitch;
         self.lfo_waveform = LfoWaveform::Triangle;
+        self.lfo_fade_mode = LfoFadeMode::default();
         self.last_lfo_rate_param = 0;
         self.effective_lfo_rate = 0;
         self.last_lfo_depth_param = 0;
