@@ -504,8 +504,25 @@ impl Ym38x6Engine {
 
     /// パッチをエンジンに記憶させる（gesture-app用の「保存済みパッチ」）。フロントエンドが
     /// 発音のたびにパッチ全体を送らずに済むよう、`set_patch`で事前設定→`current_patch`で取り出す。
+    /// 発音中チャンネルには影響しない（Program Change相当、次のnote-onから適用される）。
     pub fn set_patch(&mut self, patch: Ym38x6Patch) {
         self.current_patch = patch;
+    }
+
+    /// `set_patch`と同様に`current_patch`を更新した上で、現在発音中の全チャンネルにも
+    /// `set_channel_params`/`set_operator_params`と同じ内容を伝播する（GUI/DAWノブ変更相当、
+    /// ym38x6-vstの`process()`が毎ブロック行っている伝播をgesture-appのノブ操作向けに一度で行う版）。
+    /// Bank/Program切り替え（Program Change相当）で発音中の音色が変わらないようにするため、
+    /// `set_patch`とは使い分ける。
+    pub fn set_patch_live(&mut self, patch: Ym38x6Patch) {
+        self.current_patch = patch;
+        let channel_ids: Vec<usize> = self.channels.keys().copied().collect();
+        for channel in channel_ids {
+            self.set_channel_params(channel, patch.channel);
+            for (op_index, op) in patch.operators.iter().enumerate() {
+                self.set_operator_params(channel, op_index, *op);
+            }
+        }
     }
 
     /// `set_patch`で記憶させたカレントパッチを返す（`Ym38x6Patch`はCopy）。

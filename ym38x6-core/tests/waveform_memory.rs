@@ -135,6 +135,58 @@ fn performance_lfo_shape_updates_live_via_set_channel_params() {
     );
 }
 
+/// `set_patch_live`（gesture-appの音色エディタのノブ操作が呼ぶ）は、`set_patch`と異なり
+/// 発音中の全チャンネルへも即座にパラメーターを伝播する。これに対し`set_patch`（Program Change
+/// 相当）は次のnote-onまで発音中の音を変えないままであることも合わせて確認する。
+#[test]
+fn set_patch_live_updates_active_channel_but_set_patch_does_not() {
+    let sample_rate = 44100.0;
+    let base = waveform_memory_patch(3, sustained_adsr());
+    let mut brighter = base;
+    brighter.channel.filter_cutoff = 40;
+
+    let render_with = |use_live: bool| {
+        let mut engine = Ym38x6Engine::new(sample_rate);
+        engine.set_patch(base);
+        engine.note_on(0, 220.0, 127);
+        let mut warmup = vec![0.0f32; 200];
+        engine.render(&mut warmup, 1);
+
+        if use_live {
+            engine.set_patch_live(brighter);
+        } else {
+            engine.set_patch(brighter);
+        }
+
+        let mut buf = vec![0.0f32; 400];
+        engine.render(&mut buf, 1);
+        buf
+    };
+
+    let live = render_with(true);
+    let not_live = render_with(false);
+
+    let live_differs_from_base = {
+        let mut engine = Ym38x6Engine::new(sample_rate);
+        engine.set_patch(base);
+        engine.note_on(0, 220.0, 127);
+        let mut warmup = vec![0.0f32; 200];
+        engine.render(&mut warmup, 1);
+        let mut buf = vec![0.0f32; 400];
+        engine.render(&mut buf, 1);
+        buf
+    };
+
+    assert!(
+        live.iter().zip(live_differs_from_base.iter()).any(|(a, b)| (a - b).abs() > 1e-3),
+        "set_patch_liveは発音中チャンネルにも即座に反映されるはず"
+    );
+    assert_eq!(
+        not_live, live_differs_from_base,
+        "set_patch（Program Change相当）は発音中チャンネルを変えず、次のnote-onまで据え置かれるはず"
+    );
+}
+
 /// Destination=Pitch・Depth>0のパフォーマンスLFOは実効周波数を揺らすため、
 /// Depth=0の場合と出力波形が乖離する。
 #[test]

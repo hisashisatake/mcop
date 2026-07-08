@@ -33,10 +33,13 @@ fn note_off(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, channel: usize) 
     engine.lock().unwrap().note_off(channel);
 }
 
-/// 以降のNote-Onで使われるカレントパッチを設定する。
+/// 以降のNote-Onで使われるカレントパッチを設定すると同時に、現在発音中の全チャンネルへも
+/// 変更内容を即座に反映する（音色エディタのノブ操作向け。VSTのDAWオートメーション/NRPNが
+/// 発音中の音にも即座に効くのと同じ扱い）。Bank/Program切り替え（`ym38x6_set_program`）は
+/// これとは別に「次のnote-onから適用」のままとする。
 #[tauri::command]
 fn ym38x6_set_patch(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, patch: Ym38x6PatchDto) {
-    engine.lock().unwrap().set_patch(patch.into());
+    engine.lock().unwrap().set_patch_live(patch.into());
 }
 
 /// (bank, program)に対応するプリセットへ切り替える。ym38x6-vstのProgramパラメーターと
