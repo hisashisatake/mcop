@@ -300,6 +300,47 @@ pub fn apply_lfo_modulation(
 }
 
 // ---------------------------------------------------------------------------
+// ホスト側（VST NRPN/DAWパラメーター・Tauri DTO等）向けの整数表現との相互変換
+// ---------------------------------------------------------------------------
+
+/// `LfoWaveform`の宣言順インデックス(0〜7)から復元する。範囲外は`Triangle`にフォールバックする。
+/// NRPN/DAWパラメーター等、0〜7の整数表現からWaveformを選択するホスト側の橋渡しに使う
+/// （逆方向はフィールドレスenumのため`waveform as u8`で直接変換できる）。
+pub fn lfo_waveform_from_index(index: u8) -> LfoWaveform {
+    match index {
+        1 => LfoWaveform::Sine,
+        2 => LfoWaveform::Square,
+        3 => LfoWaveform::SampleHold,
+        4 => LfoWaveform::Saw,
+        5 => LfoWaveform::Trapezoid,
+        6 => LfoWaveform::Random,
+        7 => LfoWaveform::Chaos,
+        _ => LfoWaveform::Triangle,
+    }
+}
+
+/// `LfoFadeMode`の宣言順インデックス(0〜3)から復元する。範囲外は`OnIn`にフォールバックする
+/// （逆方向は`fade_mode as u8`で直接変換できる）。
+pub fn lfo_fade_mode_from_index(index: u8) -> LfoFadeMode {
+    match index {
+        1 => LfoFadeMode::OnOut,
+        2 => LfoFadeMode::OffIn,
+        3 => LfoFadeMode::OffOut,
+        _ => LfoFadeMode::OnIn,
+    }
+}
+
+/// `PerformanceLfoShape::offset`（i8、-100〜100、中心0）を、ホスト側の0〜255（中心128）表現へ変換する。
+pub fn lfo_offset_to_param(offset: i8) -> u8 {
+    (128 + (offset as i32 * 128) / 100).clamp(0, 255) as u8
+}
+
+/// ホスト側の0〜255（中心128）表現を、`PerformanceLfoShape::offset`（i8、-100〜100）へ変換する。
+pub fn lfo_offset_from_param(value: u8) -> i8 {
+    (((value as i32 - 128) * 100) / 128).clamp(-100, 100) as i8
+}
+
+// ---------------------------------------------------------------------------
 // 実効Depthの計算（CC1/CC77/RPN0,5）
 // ---------------------------------------------------------------------------
 
@@ -384,6 +425,44 @@ mod tests {
         assert!((pitch_depth_cents(0, 127, 64) - 64.0).abs() < 1e-2);
         // 両方最大なら加算される
         assert!((pitch_depth_cents(255, 255, 127) - 510.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn lfo_waveform_from_index_round_trips() {
+        let waveforms = [
+            LfoWaveform::Triangle,
+            LfoWaveform::Sine,
+            LfoWaveform::Square,
+            LfoWaveform::SampleHold,
+            LfoWaveform::Saw,
+            LfoWaveform::Trapezoid,
+            LfoWaveform::Random,
+            LfoWaveform::Chaos,
+        ];
+        for (i, &w) in waveforms.iter().enumerate() {
+            assert_eq!(lfo_waveform_from_index(i as u8), w);
+        }
+        // 範囲外はTriangleにフォールバック
+        assert_eq!(lfo_waveform_from_index(255), LfoWaveform::Triangle);
+    }
+
+    #[test]
+    fn lfo_fade_mode_from_index_round_trips() {
+        let modes = [LfoFadeMode::OnIn, LfoFadeMode::OnOut, LfoFadeMode::OffIn, LfoFadeMode::OffOut];
+        for (i, &m) in modes.iter().enumerate() {
+            assert_eq!(lfo_fade_mode_from_index(i as u8), m);
+        }
+        assert_eq!(lfo_fade_mode_from_index(255), LfoFadeMode::OnIn);
+    }
+
+    #[test]
+    fn lfo_offset_param_round_trip_near_center() {
+        assert_eq!(lfo_offset_to_param(0), 128);
+        assert_eq!(lfo_offset_from_param(128), 0);
+        // DT1と同じ中心128・除数128の慣習（CLAUDE.md「DT1」参照）。負側は理論値ぴったり(-100)に
+        // 達するが、正側は128分の127までしか伸びないため99止まり（このプロジェクト共通の性質）。
+        assert_eq!(lfo_offset_from_param(255), 99);
+        assert_eq!(lfo_offset_from_param(0), -100);
     }
 
     #[test]

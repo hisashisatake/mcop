@@ -71,6 +71,7 @@ use waveform::gen_builtin_waveform;
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
+    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
     pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
     LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca,
     Vcf, Vco, VoiceAmp, VoiceFilter,
