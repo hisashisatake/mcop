@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use ym38x6_core::{ChannelParams, OperatorParams, Preset, Ym38x6Patch};
+use ym38x6_core::{
+    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
+    ChannelParams, OperatorParams, PerformanceLfoShape, Preset, Ym38x6Patch,
+};
 
 /// フロントエンドから渡される/返すオペレーター単位パラメーター（`OperatorParams`のDTO）。
 #[derive(Deserialize, Serialize)]
@@ -92,6 +95,23 @@ pub struct ChannelParamsDto {
     pub vca_eg_d1l: u8,
     pub vca_eg_d2r: u8,
     pub vca_eg_rr: u8,
+    /// パフォーマンスLFOの波形/Fade/Offset（`ChannelParams.perf_lfo_shape`のDTO表現）。
+    /// waveform/fade_modeは宣言順インデックス、offsetは中心128（オフセットなし）の
+    /// 0〜255表現（ym38x6-vstのDAWパラメーターと同じ規約、`lfo_offset_from_param`/
+    /// `lfo_offset_to_param`で相互変換する）。未送信の古いフロントエンドでも
+    /// 旧来のハードエッジ挙動と等価な既定値になる。
+    #[serde(default)]
+    pub perf_lfo_waveform: u8,
+    #[serde(default)]
+    pub perf_lfo_fade_mode: u8,
+    #[serde(default)]
+    pub perf_lfo_fade_time: u8,
+    #[serde(default = "default_perf_lfo_offset")]
+    pub perf_lfo_offset: u8,
+}
+
+fn default_perf_lfo_offset() -> u8 {
+    128
 }
 
 impl From<ChannelParamsDto> for ChannelParams {
@@ -120,6 +140,12 @@ impl From<ChannelParamsDto> for ChannelParams {
             vca_eg_d1l: dto.vca_eg_d1l,
             vca_eg_d2r: dto.vca_eg_d2r,
             vca_eg_rr: dto.vca_eg_rr,
+            perf_lfo_shape: PerformanceLfoShape {
+                waveform: lfo_waveform_from_index(dto.perf_lfo_waveform),
+                fade_mode: lfo_fade_mode_from_index(dto.perf_lfo_fade_mode),
+                fade_time: dto.perf_lfo_fade_time,
+                offset: lfo_offset_from_param(dto.perf_lfo_offset),
+            },
         }
     }
 }
@@ -150,6 +176,10 @@ impl From<ChannelParams> for ChannelParamsDto {
             vca_eg_d1l: ch.vca_eg_d1l,
             vca_eg_d2r: ch.vca_eg_d2r,
             vca_eg_rr: ch.vca_eg_rr,
+            perf_lfo_waveform: ch.perf_lfo_shape.waveform as u8,
+            perf_lfo_fade_mode: ch.perf_lfo_shape.fade_mode as u8,
+            perf_lfo_fade_time: ch.perf_lfo_shape.fade_time,
+            perf_lfo_offset: lfo_offset_to_param(ch.perf_lfo_shape.offset),
         }
     }
 }

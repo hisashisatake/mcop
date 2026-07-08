@@ -41,7 +41,6 @@ const WAVEFORM_MEMORY_BANK = 16383;
 const LFO_RATE_DEFAULT = 140; // 中程度の速さ
 const LFO_RATE_STEP    = 8;
 const LFO_DELAY = 0;
-const LFO_WAVEFORM_TRIANGLE = 0;
 const LFO_DEST_PITCH  = 0; // ビブラート
 const LFO_DEST_VOLUME = 1; // トレモロ
 const MOD_DEPTH_RANGE = 64; // RPN0,5デフォルト（約50セント相当）
@@ -56,7 +55,6 @@ async function applyPerformanceLfo(channel) {
     channel,
     rate: lfoRate,
     delay: LFO_DELAY,
-    waveform: LFO_WAVEFORM_TRIANGLE,
     destination: lfoDestination,
     cc77: CC77_BASE,
     cc1: modWheel,

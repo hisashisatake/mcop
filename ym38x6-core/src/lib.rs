@@ -64,17 +64,17 @@ pub use preset::{
     PresetEntry, PresetFile, WAVEFORM_MEMORY_BANK,
 };
 use serde::{Deserialize, Serialize};
-use sound_core::{
-    apply_lfo_modulation, convert_wave_32, PerformanceLfo, PerformanceLfoTarget, WaveTable,
-};
+use sound_core::{apply_lfo_modulation, convert_wave_32, PerformanceLfo, PerformanceLfoTarget, WaveTable};
 use tone_lfo::{ams_to_depth, pms_to_cents_range, ToneLfo};
 use waveform::gen_builtin_waveform;
 
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
+    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
     pitch_depth_cents, volume_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
-    LfoDestination, LfoWaveform, MasterEffects, ReverbType, Vca, Vcf, Vco, VoiceAmp, VoiceFilter,
+    LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca,
+    Vcf, Vco, VoiceAmp, VoiceFilter,
 };
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,10 @@ pub struct ChannelParams {
     /// VCA EG RR(0〜255)。既定255（最速、note off後すぐ0へ）。
     #[serde(default = "default_vca_eg_rr")]
     pub vca_eg_rr: u8,
+    /// パフォーマンスLFOの波形/Fade/Offset設定（sound-core::PerformanceLfoShape）。
+    /// 既定はTriangle/OnIn/fade_time=0/offset=0で、旧来のハードエッジ挙動と等価。
+    #[serde(default)]
+    pub perf_lfo_shape: PerformanceLfoShape,
 }
 
 fn default_vca_eg_ar() -> u8 {
@@ -179,6 +183,7 @@ impl Default for ChannelParams {
             vca_eg_d1l: default_vca_eg_d1l(),
             vca_eg_d2r: 0,
             vca_eg_rr: default_vca_eg_rr(),
+            perf_lfo_shape: PerformanceLfoShape::default(),
         }
     }
 }
@@ -258,6 +263,9 @@ impl Channel {
         vcf.note_on();
         let mut vca = VoiceAmp::new();
         vca.note_on();
+        let mut perf_lfo = PerformanceLfo::new();
+        perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        perf_lfo.note_on();
         Self {
             operators,
             channel_params: patch.channel,
@@ -266,7 +274,7 @@ impl Channel {
             note,
             base_frequency: frequency,
             velocity,
-            perf_lfo: PerformanceLfo::new(),
+            perf_lfo,
             lfo_destination: Ym38x6LfoDestination::default(),
             lfo_depth: 0.0,
             pitch_mod_cents: 0.0,
@@ -299,19 +307,19 @@ impl Channel {
         self.velocity = velocity;
         self.vcf.note_on();
         self.vca.note_on();
+        self.perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        self.perf_lfo.note_on();
     }
 
     fn set_performance_lfo(
         &mut self,
         rate: u8,
         delay: u8,
-        waveform: LfoWaveform,
         destination: Ym38x6LfoDestination,
         depth: f32,
     ) {
         self.perf_lfo.set_rate(rate);
         self.perf_lfo.set_delay(delay);
-        self.perf_lfo.set_waveform(waveform);
         self.lfo_destination = destination;
         self.lfo_depth = depth;
     }
@@ -322,6 +330,7 @@ impl Channel {
         }
         self.vcf.note_off();
         self.vca.note_off();
+        self.perf_lfo.note_off();
     }
 
     /// CC103〜106（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。
@@ -493,8 +502,12 @@ impl Ym38x6Engine {
     }
 
     /// 発音中チャンネルのチャンネルパラメーターを更新する（DAWオートメーション/NRPN用）。
+    /// `perf_lfo_shape`（波形/Fade/Offset）は他フィールドと同様にリアルタイムで`perf_lfo`へ
+    /// 伝播する（note_on/retriggerでのみ適用される旧仕様から変更、発音中でもVSTのNRPN/DAW
+    /// パラメーター変更が効くようにするため）。
     pub fn set_channel_params(&mut self, channel: usize, params: ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.perf_lfo.set_shape(params.perf_lfo_shape);
             ch.channel_params = params;
         }
     }
@@ -536,18 +549,18 @@ impl Ym38x6Engine {
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));
     }
 
-    /// 指定チャンネルのパフォーマンスLFO（Rate/Delay/Waveform/Destination/Depth）を設定する。
+    /// 指定チャンネルのパフォーマンスLFO（Rate/Delay/Destination/Depth）を設定する。
+    /// 波形/Fade/Offsetは`ChannelParams.perf_lfo_shape`（`set_channel_params`）側で扱う。
     pub fn set_performance_lfo(
         &mut self,
         channel: usize,
         rate: u8,
         delay: u8,
-        waveform: LfoWaveform,
         destination: Ym38x6LfoDestination,
         depth: f32,
     ) {
         if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.set_performance_lfo(rate, delay, waveform, destination, depth);
+            ch.set_performance_lfo(rate, delay, destination, depth);
         }
     }
 

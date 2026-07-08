@@ -44,11 +44,18 @@ pub struct EditorState {
     // CHANNEL
     pub algorithm: i32,
     pub feedback: i32,
-    // PERF LFO（gesture-app側ではローカル編集のみ。main.jsのホイール/Vキー制御とは未連動、
-    // ym38x6_set_performance_lfoへのブロードキャストは行わない。將来の連動はTODO）。
+    // PERF LFO Rate/Depth/Delayはgesture-app側ではローカル編集のみ（main.jsのホイール/Vキー制御とは
+    // 未連動、ym38x6_set_performance_lfoへのブロードキャストは行わない。將来の連動はTODO）。
     pub lfo_rate: i32,
     pub lfo_depth: i32,
     pub lfo_delay: i32,
+    // Waveform/Fade Mode/Fade Time/Offsetは`ChannelParams.perf_lfo_shape`の一部としてパッチに
+    // 保存され、Rate/Depth/Delayとは異なりym38x6_set_patch経由でエンジンへ送られる
+    // （宣言順インデックス。waveform=0〜7、fade_mode=0〜3。offsetは中心128＝オフセットなし）。
+    pub lfo_waveform: i32,
+    pub lfo_fade_mode: i32,
+    pub lfo_fade_time: i32,
+    pub lfo_offset: i32,
     // TONE LFO
     pub tone_freq: i32,
     pub tone_pmd: i32,
@@ -95,6 +102,10 @@ impl Default for EditorState {
             lfo_rate: 0,
             lfo_depth: 0,
             lfo_delay: 0,
+            lfo_waveform: 0,
+            lfo_fade_mode: 0,
+            lfo_fade_time: 0,
+            lfo_offset: 128,
             tone_freq: 0,
             tone_pmd: 0,
             tone_amd: 0,
