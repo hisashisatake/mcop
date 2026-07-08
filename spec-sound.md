@@ -499,9 +499,12 @@ GM2のCC1/76/77/78に対応する、演奏時のビブラート/トレモロ専�
 |------|-----|------|
 | Rate | CC76（Vibrato Rate） | 0〜255 → 0.01Hz〜20Hz（指数マッピング） |
 | Depth | CC77（ベース値）+ CC1（加算分） | Destinationにより単位・モデルが異なる（下記） |
-| Delay | CC78（Vibrato Delay） | キーオンから効果開始までの遅延。0〜255 → 0〜10秒（線形マッピング） |
+| Delay | CC78（Vibrato Delay） | キーオンから効果開始までの遅延。0〜255 → 0〜10秒（線形マッピング）。Fadeとは独立（下記） |
 | 波形 | NRPN「Performance LFO Waveform」で選択（下記） | デフォルト = 三角波 |
 | Destination | NRPN「Performance LFO Destination」で選択（下記） | デフォルト = Pitch（ビブラート） |
+| Fade Mode | NRPN「Performance LFO Fade Mode」で選択（下記） | デフォルト = ON-IN |
+| Fade Time | DAWパラメーター「Perf LFO Fade Time」 | 0〜255 → 0〜10秒（Delayと同じ線形マッピング）。0=フェード無効（常時フルゲイン、旧来のハードエッジ挙動と等価） |
+| Offset | DAWパラメーター「Perf LFO Offset」 | 0〜255（中心128=オフセットなし）→ 波形の中心シフト-100〜100（内部表現、生値-1.0〜1.0に`offset/100.0`を加算してクランプ） |
 
 **Waveform enum：**
 
@@ -510,7 +513,22 @@ GM2のCC1/76/77/78に対応する、演奏時のビブラート/トレモロ専�
 | 0（デフォルト） | 三角波 |
 | 1 | サイン波 |
 | 2 | 矩形波 |
-| 3 | S&H（ランダム） |
+| 3 | S&H（ランダム、階段状） |
+| 4 | のこぎり波 |
+| 5 | 台形波 |
+| 6 | Random（周期ごとの目標値を位相で線形補間する滑らかなランダムウォーク） |
+| 7 | Chaos（ロジスティック写像`x=3.9x(1-x)`による決定論的カオス、周期内はホールド） |
+
+**Fade Mode enum：**
+
+Delay（既存のハードカットオーバー）とは独立して共存する。DelayがゲートそのものでFadeはゲート解除後の振幅ゲインのランプ。
+
+| 値 | 意味 |
+|---|---|
+| 0（デフォルト） | ON-IN：note_on後、Delay経過を起点に振幅ゲインが0→1にフェードイン |
+| 1 | ON-OUT：note_on後、Delay経過を起点に振幅ゲインが1→0にフェードアウト |
+| 2 | OFF-IN：note_off前は振幅ゲイン0、note_off後にFade Timeかけて0→1にフェードイン（リリーステール中のみ効く） |
+| 3 | OFF-OUT：note_off前は振幅ゲイン1、note_off後にFade Timeかけて1→0にフェードアウト（リリーステール中のみ効く） |
 
 **Destination enum：**
 
@@ -524,8 +542,12 @@ GM2のCC1/76/77/78に対応する、演奏時のビブラート/トレモロ専�
 RPN 0,5（Modulation Depth Range）はDestination=Pitchの場合のみ意味を持つ（詳細はRPNセクション参照）。
 
 **実装方式：**
-`PerformanceLfo`（Rate/Depth/Delay/Waveform）はエンジン非依存の共通コンポーネントとして`sound-core`に実装する。
+`PerformanceLfo`はエンジン非依存の共通コンポーネントとして`sound-core`に実装する。
 適用先は`PerformanceLfoTarget`トレイトとして定義し、共通Destination（0=Pitch、1=Volume）に加え、38x6は拡張Destination（2=TLキャリア一括）も実装する。
+
+Rate/Delay/Destination/Depthは演奏中の状態（`ChannelParams`には含まれない、VST/gesture-appが直接エンジンへ渡すパフォーマンス制御値）。
+一方、波形/Fade Mode/Fade Time/Offsetは`sound-core::PerformanceLfoShape`としてまとめ、`ChannelParams.perf_lfo_shape`の1フィールドに持たせている（音色パッチの一部として保存可能）。
+`Ym38x6Engine::set_channel_params`は他のChannelParamsフィールドと同様に`perf_lfo_shape`も毎ブロック発音中ボイスへ伝播するため、VSTのNRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに反映される（note_on/retriggerでのみ適用される、という制限はない）。
 
 ---
 
@@ -558,8 +580,8 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（26個）：**
-Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
+**チャンネル単位（28個）：**
+Algorithm / Feedback / パフォーマンスLFO Rate / パフォーマンスLFO Depth（ベース値）/ パフォーマンスLFO Delay / パフォーマンスLFO Fade Time / パフォーマンスLFO Offset / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -572,7 +594,7 @@ Reverb Time / Chorus Mod Rate / Chorus Mod Depth / Chorus Feedback / Chorus Send
 （CC91/93やマスターエフェクトの「マスター単位」パラメーターのように、
 NRPN/CCとnice-plugパラメーターを併用する項目とは異なる点に注意）。
 
-Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / Performance LFO Destination / Performance LFO Waveform / Reverb Type / Chorus Type
+Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / Performance LFO Destination / Performance LFO Waveform / Performance LFO Fade Mode / Reverb Type / Chorus Type
 
 ※「Algorithm」は例外的に、NRPN(0,9)に加えて上記チャンネル単位のnice-plugパラメーターとしても公開する。
 
@@ -814,6 +836,7 @@ CC99/98またはCC101/100（RPN）に127,127（Null）を送ると選択解除�
 | Poly AT Destination | Poly Key Pressureの加算先（destination enum、下記） |
 | Performance LFO Destination | パフォーマンスLFOの加算先（destination enum、パフォーマンスLFOセクション参照） |
 | Performance LFO Waveform | パフォーマンスLFOの波形（waveform enum、パフォーマンスLFOセクション参照） |
+| Performance LFO Fade Mode | パフォーマンスLFOのFadeモード（fade mode enum、パフォーマンスLFOセクション参照） |
 | Reverb Type | Reverbのタイプ（type enum、マスターエフェクトセクション参照） |
 | Chorus Type | Chorusのタイプ（type enum、マスターエフェクトセクション参照） |
 | Operator F-Number (Op0〜3) | OP単位F-Numberの上書き（13bit × 4、下記参照） |
@@ -825,7 +848,7 @@ NRPN番号は本実装（パフォーマンスLFO）で初めて定義する。M
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
 | Performance LFO Destination | 0, 0 | 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、トレモロ、38x6拡張のみ） |
-| Performance LFO Waveform | 0, 1 | 0=三角波 / 1=サイン波 / 2=矩形波 / 3=S&H |
+| Performance LFO Waveform | 0, 1 | 0=三角波 / 1=サイン波 / 2=矩形波 / 3=S&H / 4=のこぎり波 / 5=台形波 / 6=Random / 7=Chaos |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Reverb Time | 0, 4 | 0〜255 |
@@ -843,6 +866,7 @@ NRPN番号は本実装（パフォーマンスLFO）で初めて定義する。M
 | Operator F-Number Op1 | 0, 19 | 同上 |
 | Operator F-Number Op2 | 0, 20 | 同上 |
 | Operator F-Number Op3 | 0, 21 | 同上 |
+| Performance LFO Fade Mode | 0, 22 | 0=ON-IN / 1=ON-OUT / 2=OFF-IN / 3=OFF-OUT |
 
 **AT Destination / Poly AT Destination（アフタータッチの加算先）：**
 
