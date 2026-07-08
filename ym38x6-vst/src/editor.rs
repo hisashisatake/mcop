@@ -2,7 +2,7 @@ use nice_plug::prelude::*;
 use nice_plug_egui::resizable_window::ResizableWindow;
 use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
 use std::sync::{Arc, Mutex};
-use ym38x6_core::{presets_dir, PresetBank, Ym38x6Patch};
+use ym38x6_core::{lfo_offset_to_param, presets_dir, PresetBank, Ym38x6Patch};
 use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
 
 use crate::param_adapter::{vb, vi};
@@ -44,6 +44,10 @@ fn build_panel_params<'a>(
         lfo_rate: vi(&params.lfo_rate, setter),
         lfo_depth: vi(&params.lfo_depth, setter),
         lfo_delay: vi(&params.lfo_delay, setter),
+        lfo_waveform: vi(&params.lfo_waveform, setter),
+        lfo_fade_mode: vi(&params.lfo_fade_mode, setter),
+        lfo_fade_time: vi(&params.lfo_fade_time, setter),
+        lfo_offset: vi(&params.lfo_offset, setter),
         tone_freq: vi(&params.tone_freq, setter),
         tone_pmd: vi(&params.tone_pmd, setter),
         tone_amd: vi(&params.tone_amd, setter),
@@ -128,6 +132,10 @@ pub(crate) fn create_editor(
                                             let ch = &preset.patch.channel;
                                             set!(params.algorithm, ch.algorithm as i32);
                                             set!(params.feedback, ch.feedback as i32);
+                                            set!(params.lfo_waveform, ch.perf_lfo_shape.waveform as i32);
+                                            set!(params.lfo_fade_mode, ch.perf_lfo_shape.fade_mode as i32);
+                                            set!(params.lfo_fade_time, ch.perf_lfo_shape.fade_time as i32);
+                                            set!(params.lfo_offset, lfo_offset_to_param(ch.perf_lfo_shape.offset) as i32);
                                             set!(params.tone_freq, ch.tone_lfo_freq as i32);
                                             set!(params.tone_pmd, ch.tone_lfo_pmd as i32);
                                             set!(params.tone_amd, ch.tone_lfo_amd as i32);

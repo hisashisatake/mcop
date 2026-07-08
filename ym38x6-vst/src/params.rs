@@ -82,6 +82,10 @@ pub(crate) struct Ym38x6Params {
     pub lfo_depth: IntParam,
     #[id = "lfo_delay"]
     pub lfo_delay: IntParam,
+    #[id = "lfo_waveform"]
+    pub lfo_waveform: IntParam,
+    #[id = "lfo_fade_mode"]
+    pub lfo_fade_mode: IntParam,
     #[id = "lfo_fade_time"]
     pub lfo_fade_time: IntParam,
     #[id = "lfo_offset"]
@@ -158,6 +162,10 @@ impl Default for Ym38x6Params {
             lfo_rate: IntParam::new("Perf LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
             lfo_depth: IntParam::new("Perf LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             lfo_delay: IntParam::new("Perf LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            // 宣言順インデックス(0=Triangle〜7=Chaos、lfo_waveform_from_index参照)。
+            lfo_waveform: IntParam::new("Perf LFO Waveform", 0, IntRange::Linear { min: 0, max: 7 }),
+            // 宣言順インデックス(0=OnIn〜3=OffOut、lfo_fade_mode_from_index参照)。
+            lfo_fade_mode: IntParam::new("Perf LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
             // fade_time=0はフェード無効（旧来のハードエッジ挙動と等価）。
             lfo_fade_time: IntParam::new("Perf LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（op_fine_tune等と同じ中心128の慣習）。

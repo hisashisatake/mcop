@@ -16,9 +16,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
-    pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType,
-    LfoFadeMode, LfoWaveform, MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank,
-    ReverbType, Vco, Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
+    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_waveform_from_index, pitch_depth_cents,
+    presets_dir, volume_depth, AudioProcessor, ChannelParams, ChorusType, LfoFadeMode, LfoWaveform,
+    MasterEffects, OperatorParams, PerformanceLfoShape, PresetBank, ReverbType, Vco, Ym38x6Engine,
+    Ym38x6LfoDestination, Ym38x6Patch,
 };
 
 /// MIDIノート番号の総数（0〜127）。MIDIノート番号をそのままチャンネルIDとして使うため
@@ -49,8 +50,13 @@ struct Ym38x6Plugin {
     lfo_destination: Ym38x6LfoDestination, // NRPN(0,0)
     // 波形（8種）はperf_lfo_shape経由でset_channel_params()により発音中ボイスへも
     // リアルタイムに伝播する（build_patch()参照。apply_performance_lfo_to_activeは不要）。
-    lfo_waveform: LfoWaveform, // NRPN(0,1)
-    lfo_fade_mode: LfoFadeMode, // NRPN(0,22)。fade_time/offsetはDAWパラメーター（lfo_fade_time/lfo_offset）。
+    // algorithm/last_algorithmと同型の1シャドウ差分検知方式でDAWパラメーター（lfo_waveform/
+    // lfo_fade_mode）とNRPN(0,1)/(0,22)を共存させる。fade_time/offsetは同型シャドウ不要の
+    // DAW専用パラメーター（lfo_fade_time/lfo_offset、対応するGM2 CCが無いため）。
+    lfo_waveform: LfoWaveform,  // NRPN(0,1) / DAWパラメーターlfo_waveform
+    lfo_fade_mode: LfoFadeMode, // NRPN(0,22) / DAWパラメーターlfo_fade_mode
+    last_lfo_waveform_param: u8,
+    last_lfo_fade_mode_param: u8,
     // lfo_rate/lfo_depth/lfo_delayはDAWパラメーターとCC76/77/78の両方から設定され得るため、
     // 2シャドウ方式で管理する（last_*_param: DAW側差分検知用、effective_*:
     // apply_performance_lfoへ実際に渡す値。CC受信時はlast_*_paramを更新せず
@@ -143,14 +149,6 @@ fn channel_gain(cc7: u8, cc11: u8) -> f32 {
     v7 * v7 * v11 * v11
 }
 
-/// パフォーマンスLFO Offsetの DAW パラメーター表現（0〜255、中心128）を
-/// `PerformanceLfoShape::offset`（i8、-100〜100、中心0）に変換する。
-/// `op_fine_tune`等と同じ中心128の慣習に合わせつつ、Offsetの内部表現に合わせて縮尺する。
-#[inline]
-fn lfo_offset_param_to_i8(value: u8) -> i8 {
-    (((value as i16 - 128) * 100) / 128).clamp(-100, 100) as i8
-}
-
 /// MIDIチャンネル(0〜15)とノート番号(0〜127)からエンジンのボイスIDを符号化する。
 /// `midi_ch*128 + note`。一意性（Note Off・同音再アタックの突き合わせ）と、
 /// グループ性（`id >> 7` でMIDIチャンネルを復元してベンド一括適用）を両立する。
@@ -178,6 +176,8 @@ impl Default for Ym38x6Plugin {
             lfo_destination: Ym38x6LfoDestination::Pitch,
             lfo_waveform: LfoWaveform::Triangle,
             lfo_fade_mode: LfoFadeMode::default(),
+            last_lfo_waveform_param: 0,
+            last_lfo_fade_mode_param: 0,
             last_lfo_rate_param: 0,
             effective_lfo_rate: 0,
             last_lfo_depth_param: 0,
@@ -271,7 +271,7 @@ impl Ym38x6Plugin {
                 waveform: self.lfo_waveform,
                 fade_mode: self.lfo_fade_mode,
                 fade_time: p.lfo_fade_time.value() as u8,
-                offset: lfo_offset_param_to_i8(p.lfo_offset.value() as u8),
+                offset: lfo_offset_from_param(p.lfo_offset.value() as u8),
             },
         };
 
@@ -356,16 +356,7 @@ impl Ym38x6Plugin {
             // 反映され、set_channel_paramsが毎ブロック発音中ボイスへ伝播するため、
             // Rate/Delay/Destinationと異なりapply_performance_lfo_to_activeの呼び出しは不要。
             RpnSelection::Nrpn(0, 1) => {
-                self.lfo_waveform = match cc_to_u7(value) {
-                    1 => LfoWaveform::Sine,
-                    2 => LfoWaveform::Square,
-                    3 => LfoWaveform::SampleHold,
-                    4 => LfoWaveform::Saw,
-                    5 => LfoWaveform::Trapezoid,
-                    6 => LfoWaveform::Random,
-                    7 => LfoWaveform::Chaos,
-                    _ => LfoWaveform::Triangle,
-                };
+                self.lfo_waveform = lfo_waveform_from_index(cc_to_u7(value));
             }
             // NRPN(0,2): Reverb Type
             RpnSelection::Nrpn(0, 2) => {
@@ -435,12 +426,7 @@ impl Ym38x6Plugin {
             // NRPN(0,22): Performance LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
             // Waveformと同じくperf_lfo_shape経由でリアルタイム伝播するため、追加の反映呼び出しは不要。
             RpnSelection::Nrpn(0, 22) => {
-                self.lfo_fade_mode = match cc_to_u7(value) {
-                    1 => LfoFadeMode::OnOut,
-                    2 => LfoFadeMode::OffIn,
-                    3 => LfoFadeMode::OffOut,
-                    _ => LfoFadeMode::OnIn,
-                };
+                self.lfo_fade_mode = lfo_fade_mode_from_index(cc_to_u7(value));
             }
             _ => {}
         }
@@ -498,6 +484,8 @@ impl Plugin for Ym38x6Plugin {
         self.lfo_destination = Ym38x6LfoDestination::Pitch;
         self.lfo_waveform = LfoWaveform::Triangle;
         self.lfo_fade_mode = LfoFadeMode::default();
+        self.last_lfo_waveform_param = 0;
+        self.last_lfo_fade_mode_param = 0;
         self.last_lfo_rate_param = 0;
         self.effective_lfo_rate = 0;
         self.last_lfo_depth_param = 0;
@@ -550,6 +538,20 @@ impl Plugin for Ym38x6Plugin {
         if algorithm != self.last_algorithm {
             self.algorithm = algorithm;
             self.last_algorithm = algorithm;
+        }
+
+        // Perf LFO Waveform/Fade Mode：algorithmと同じ差分検知方式。NRPN(0,1)/(0,22)直接書き込みと
+        // 共存する（build_patch()がself.lfo_waveform/self.lfo_fade_modeを毎ブロック読むため、
+        // Rate/Depth/Delayのような明示的なapply_performance_lfo_to_active呼び出しは不要）。
+        let lfo_waveform_param = self.params.lfo_waveform.value() as u8;
+        if lfo_waveform_param != self.last_lfo_waveform_param {
+            self.lfo_waveform = lfo_waveform_from_index(lfo_waveform_param);
+            self.last_lfo_waveform_param = lfo_waveform_param;
+        }
+        let lfo_fade_mode_param = self.params.lfo_fade_mode.value() as u8;
+        if lfo_fade_mode_param != self.last_lfo_fade_mode_param {
+            self.lfo_fade_mode = lfo_fade_mode_from_index(lfo_fade_mode_param);
+            self.last_lfo_fade_mode_param = lfo_fade_mode_param;
         }
 
         // Waveform Op0〜3：algorithmと同じ差分検知方式。NRPN(0,10)〜(0,13)直接書き込みと共存する。
