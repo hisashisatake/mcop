@@ -158,6 +158,12 @@ struct ChannelDto {
     vca_eg_d1l: u8,
     vca_eg_d2r: u8,
     vca_eg_rr: u8,
+    // 宣言順インデックス(waveform=0〜7、fade_mode=0〜3)。offsetは中心128＝オフセットなし
+    // （ym38x6_dto::ChannelParamsDtoと同じ表現、src-tauri側でLfoWaveform/i8へ変換する）。
+    perf_lfo_waveform: u8,
+    perf_lfo_fade_mode: u8,
+    perf_lfo_fade_time: u8,
+    perf_lfo_offset: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -168,8 +174,9 @@ struct PatchDto {
 
 impl PatchDto {
     /// 受信したパッチ内容を`EditorState`へ書き込む（プリセット選択時の同期に使う）。
-    /// PERF LFO（lfo_rate/depth/delay）はパッチに含まれないため変更しない
+    /// Perf LFOのRate/Depth/Delayはパッチに含まれないため変更しない
     /// （main.jsのホイール/Vキー制御とは別系統という既存方針のまま）。
+    /// Waveform/Fade Mode/Fade Time/Offsetは`perf_lfo_shape`としてパッチに含まれるため反映する。
     fn apply_to(&self, state: &mut EditorState) {
         for (i, op) in self.operators.iter().enumerate() {
             state.operators[i] = crate::state::OperatorState {
@@ -212,6 +219,10 @@ impl PatchDto {
         state.vca_d1l = ch.vca_eg_d1l as i32;
         state.vca_d2r = ch.vca_eg_d2r as i32;
         state.vca_rr = ch.vca_eg_rr as i32;
+        state.lfo_waveform = ch.perf_lfo_waveform as i32;
+        state.lfo_fade_mode = ch.perf_lfo_fade_mode as i32;
+        state.lfo_fade_time = ch.perf_lfo_fade_time as i32;
+        state.lfo_offset = ch.perf_lfo_offset as i32;
     }
 }
 
@@ -264,6 +275,10 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
         vca_eg_d1l: state.vca_d1l as u8,
         vca_eg_d2r: state.vca_d2r as u8,
         vca_eg_rr: state.vca_rr as u8,
+        perf_lfo_waveform: state.lfo_waveform as u8,
+        perf_lfo_fade_mode: state.lfo_fade_mode as u8,
+        perf_lfo_fade_time: state.lfo_fade_time as u8,
+        perf_lfo_offset: state.lfo_offset as u8,
     };
     PatchDto { operators, channel }
 }
