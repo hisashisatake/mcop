@@ -2,6 +2,7 @@
 //! 依存しない。VST（ym38x6-vst）とgesture-appの両方から、パラメーターアクセスを`IntParamHandle`/
 //! `BoolParamHandle`で適合させて利用する想定。
 
+mod algorithm_diagram;
 mod eg_preview;
 mod knob;
 mod panel;

@@ -1,3 +1,4 @@
+use crate::algorithm_diagram::algorithm_diagram;
 use crate::eg_preview::eg_preview;
 use crate::knob::knob;
 use crate::param_handle::{BoolParamHandle, IntParamHandle};
@@ -80,37 +81,39 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む。最優先で上に表示） ----
         for (i, op) in params.operators.iter().enumerate() {
-            ui.horizontal(|ui| {
-                eg_preview(
-                    ui,
-                    op.tl.value() as u8,
-                    op.ar.value() as u8,
-                    op.d1r.value() as u8,
-                    op.d1l.value() as u8,
-                    op.d2r.value() as u8,
-                    op.rr.value() as u8,
-                );
-                ui.group(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
-                        knob(ui, &*op.tl, "TL");
-                        knob(ui, &*op.ar, "AR");
-                        knob(ui, &*op.d1r, "D1R");
-                        knob(ui, &*op.d2r, "D2R");
-                        knob(ui, &*op.d1l, "D1L");
-                        knob(ui, &*op.rr, "RR");
-                        knob(ui, &*op.mul, "MUL");
-                        knob(ui, &*op.dt1, "DT1");
-                        knob(ui, &*op.ksr, "KSR");
-                        knob(ui, &*op.vel_sens, "VEL");
-                        knob(ui, &*op.op_fine_tune, "FINE");
-                        let mut am = op.ame.value();
-                        if ui.checkbox(&mut am, "AM").changed() {
-                            op.ame.begin_edit();
-                            op.ame.set(am);
-                            op.ame.end_edit();
-                        }
-                        waveform_selector(ui, &*op.waveform, i);
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
+                    ui.horizontal(|ui| {
+                        eg_preview(
+                            ui,
+                            op.tl.value() as u8,
+                            op.ar.value() as u8,
+                            op.d1r.value() as u8,
+                            op.d1l.value() as u8,
+                            op.d2r.value() as u8,
+                            op.rr.value() as u8,
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            knob(ui, &*op.tl, "TL");
+                            knob(ui, &*op.ar, "AR");
+                            knob(ui, &*op.d1r, "D1R");
+                            knob(ui, &*op.d2r, "D2R");
+                            knob(ui, &*op.d1l, "D1L");
+                            knob(ui, &*op.rr, "RR");
+                            knob(ui, &*op.mul, "MUL");
+                            knob(ui, &*op.dt1, "DT1");
+                            knob(ui, &*op.ksr, "KSR");
+                            knob(ui, &*op.vel_sens, "VEL");
+                            knob(ui, &*op.op_fine_tune, "FINE");
+                            let mut am = op.ame.value();
+                            if ui.checkbox(&mut am, "AM").changed() {
+                                op.ame.begin_edit();
+                                op.ame.set(am);
+                                op.ame.end_edit();
+                            }
+                            waveform_selector(ui, &*op.waveform, i);
+                        });
                     });
                 });
             });
@@ -121,9 +124,12 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             ui.group(|ui| {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("CHANNEL").strong());
-                    ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.algorithm, "ALG");
-                        knob(ui, &*params.feedback, "FB");
+                    ui.horizontal(|ui| {
+                        algorithm_diagram(ui, params.algorithm.value() as u8);
+                        ui.horizontal_wrapped(|ui| {
+                            knob(ui, &*params.algorithm, "ALG");
+                            knob(ui, &*params.feedback, "FB");
+                        });
                     });
                 });
             });
@@ -159,19 +165,19 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
         });
 
         // ---- フィルター ----
-        ui.horizontal(|ui| {
-            eg_preview(
-                ui,
-                255,
-                params.feg_ar.value() as u8,
-                params.feg_d1r.value() as u8,
-                params.feg_d1l.value() as u8,
-                params.feg_d2r.value() as u8,
-                params.feg_rr.value() as u8,
-            );
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("FILTER").strong());
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("FILTER").strong());
+                ui.horizontal(|ui| {
+                    eg_preview(
+                        ui,
+                        255,
+                        params.feg_ar.value() as u8,
+                        params.feg_d1r.value() as u8,
+                        params.feg_d1l.value() as u8,
+                        params.feg_d2r.value() as u8,
+                        params.feg_rr.value() as u8,
+                    );
                     ui.horizontal_wrapped(|ui| {
                         knob(ui, &*params.cutoff, "CUT");
                         knob(ui, &*params.resonance, "RES");
@@ -187,19 +193,19 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
         });
 
         // ---- VCA（TVAオーバーレイ） ----
-        ui.horizontal(|ui| {
-            eg_preview(
-                ui,
-                255,
-                params.vca_ar.value() as u8,
-                params.vca_d1r.value() as u8,
-                params.vca_d1l.value() as u8,
-                params.vca_d2r.value() as u8,
-                params.vca_rr.value() as u8,
-            );
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("VCA").strong());
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("VCA").strong());
+                ui.horizontal(|ui| {
+                    eg_preview(
+                        ui,
+                        255,
+                        params.vca_ar.value() as u8,
+                        params.vca_d1r.value() as u8,
+                        params.vca_d1l.value() as u8,
+                        params.vca_d2r.value() as u8,
+                        params.vca_rr.value() as u8,
+                    );
                     ui.horizontal_wrapped(|ui| {
                         knob(ui, &*params.vca_ar, "V.AR");
                         knob(ui, &*params.vca_d1r, "V.D1R");
