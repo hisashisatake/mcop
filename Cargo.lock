@@ -6293,6 +6293,7 @@ name = "ym38x6-ui"
 version = "0.1.0"
 dependencies = [
  "egui",
+ "sound-core",
 ]
 
 [[package]]

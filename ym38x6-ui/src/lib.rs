@@ -1,7 +1,8 @@
-//! ym38x6エディタの共有描画ロジック。eguiのみに依存し、nice-plug/Tauri/cpalには依存しない。
-//! VST（ym38x6-vst）とgesture-appの両方から、パラメーターアクセスを`IntParamHandle`/
+//! ym38x6エディタの共有描画ロジック。eguiとsound-coreのみに依存し、nice-plug/Tauri/cpalには
+//! 依存しない。VST（ym38x6-vst）とgesture-appの両方から、パラメーターアクセスを`IntParamHandle`/
 //! `BoolParamHandle`で適合させて利用する想定。
 
+mod eg_preview;
 mod knob;
 mod panel;
 mod param_handle;

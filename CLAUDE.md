@@ -80,7 +80,7 @@ ym38x6/
     Vcoトレイト        ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engineが実装
     AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
   ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存、Vco実装の一つ。波形メモリ音色も生成）
-  ym38x6-ui/            ← エディタ共有描画ロジック（egui依存のみ。VST/gesture-app両対応）
+  ym38x6-ui/            ← エディタ共有描画ロジック（egui+sound-coreに依存。VST/gesture-app両対応）
   ym38x6-vst/          ← 38x6 VST3/CLAPプラグイン（nice-plug）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
@@ -91,7 +91,7 @@ ym38x6/
 
 `sound-core` と `ym38x6-core` はnice-plugにもTauriにも依存しない純粋なRustライブラリ。
 音源エンジンの変更はこの2クレートに閉じる。
-`ym38x6-ui` はeguiのみに依存し、nice-plug/Tauri/cpalに依存しない（VSTとgesture-app双方の音色エディタが共有する描画ロジック）。
+`ym38x6-ui` はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない（VSTとgesture-app双方の音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用）。
 
 ---
 

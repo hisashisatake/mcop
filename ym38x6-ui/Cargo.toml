@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 egui = "0.34"
+sound-core = { path = "../sound-core" }
