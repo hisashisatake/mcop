@@ -1,5 +1,5 @@
 use crate::algorithm_diagram::algorithm_diagram;
-use crate::eg_preview::eg_preview;
+use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
 use crate::knob::knob;
 use crate::param_handle::{BoolParamHandle, IntParamHandle};
 use crate::selector::{
@@ -87,6 +87,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                     ui.horizontal(|ui| {
                         eg_preview(
                             ui,
+                            EgAmplitudeMapping::DbLinear,
                             op.tl.value() as u8,
                             op.ar.value() as u8,
                             op.d1r.value() as u8,
@@ -171,6 +172,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                 ui.horizontal(|ui| {
                     eg_preview(
                         ui,
+                        EgAmplitudeMapping::AmplitudeLinear,
                         255,
                         params.feg_ar.value() as u8,
                         params.feg_d1r.value() as u8,
@@ -199,6 +201,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                 ui.horizontal(|ui| {
                     eg_preview(
                         ui,
+                        EgAmplitudeMapping::AmplitudeLinear,
                         255,
                         params.vca_ar.value() as u8,
                         params.vca_d1r.value() as u8,

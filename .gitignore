@@ -2,6 +2,8 @@ gesture-app/node_modules/
 gesture-app/src-tauri/gen/
 .vscode/
 docs/
+# 引継ぎ資料の置き場。コミット対象外（個人の作業環境に依存するため）。
+handoff/
 # 変換ツールの入出力データ置き場（コミット対象外）
 tools/*/private/
 # Claude Codeの個人設定（権限allowリスト等。共有しない）

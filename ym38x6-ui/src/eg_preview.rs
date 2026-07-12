@@ -7,12 +7,21 @@
 // 構造（ユーザーとの対話で確定した仕様）:
 //   縦軸=dB（0dB天井〜DB_FLOOR床）、横軸=時間。
 //   AR: 床からTL（TLノブをdB変換した値。0dBが天井で、TLが低いほど天井より下に位置する）へ接続。
-//   DR: TLからSL（D1LをdB変換しTLへ加算した値、dB同士の加算＝リニアゲイン同士の乗算に相当）へ接続。
+//   DR: TLからSL（D1Lの寄与をTLへdB加算した値）へ接続。
 //   SR: SLからさらにSR_DROP_DB（dBレンジの2/3）ぶん下降した点まで減衰（絶対位置ではなくSLからの
 //       相対量なので、D1Lの違いがSR/Release側にも一貫して反映される）。
 //   RR: SRの到達点から床（無音）へ接続。
 // note-on側（AR/DR/SR）は緑、Release（RR）は赤。TLノブを持たないFILTER/VCAはtl=255
 // （減衰なし＝天井0dB）で呼び出すことで、OPと全く同じ描画仕様のまま使う。
+//
+// D1L(EGレベル)→dBの変換方式は[EgAmplitudeMapping]でパネル種別ごとに切り替える
+// （2026-07-12、エンジンとの不一致バグを修正）:
+//   OP（振幅EGがdBリニア、operator.rsの`env_amp = 10^(-(1-level)*4.8)`）は
+//   `DbLinear`＝`DB_FLOOR*(1-level)`。旧実装は`AmplitudeLinear`（20*log10）を全パネル共通で
+//   使っており、d1l=180（ピアノ系で頻用）だとグラフ上−3dBなのに実際の聴感は−28dB相当という
+//   最大40dB級のズレがあった。VCAはEGレベルをゲインとして線形乗算する（vca.rs）ため
+//   `AmplitudeLinear`が正しい。FILTERのEG出力はcutoff加算比率でdB量ではないが（vcf.rs）、
+//   OP/VCAと軸を揃えるためAmplitudeLinearのまま流用する（レベル形状の相似表示として扱う）。
 //
 // 横幅の割り当て方針:
 //   各フェーズの横幅は、そのフェーズの実測秒数（sound-coreのar_to_delta/decay_to_delta/
@@ -75,6 +84,13 @@ const COLOR_HELD: Color32 = Color32::from_rgb(80, 220, 90);
 const COLOR_RELEASE: Color32 = Color32::from_rgb(230, 80, 70);
 const COLOR_SILENT: Color32 = Color32::from_gray(110);
 
+/// フリーズ区間（rate=0で目標に到達せず現在レベルに留まる区間）を破線で描くための長さ設定。
+/// rate=0とrate=1は「留まり続ける」vs「目標まで完全到達する」という到達レベルの段差が本質的に
+/// 生じる（フリーズの物理的な意味の違いを正直に表した結果）。破線にすることで「ここは減衰せず
+/// 保持され続ける」区間だと視覚的に区別し、段差が計算ミスではなく意図した表現だと伝える。
+const DASH_LENGTH: f32 = 4.0;
+const DASH_GAP: f32 = 3.0;
+
 /// 折れ線の各交点（頂点）に打つ丸印の色。計算結果を目視確認しやすいよう頂点ごとに色分けする。
 const DOT_RADIUS: f32 = 2.5;
 const COLOR_DOT_START: Color32 = Color32::from_gray(160);
@@ -119,6 +135,29 @@ fn level_to_db(linear_fraction: f32) -> f32 {
     }
 }
 
+/// EGレベル(0.0〜1.0、Eg::tick()の生の出力)をエンジンの適用方式に応じてdBへ変換する方式。
+/// OPとVCA/FILTERでエンジン側がEGレベルを振幅へ適用する式が異なるため、パネルの種類で切り替える。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EgAmplitudeMapping {
+    /// OP（FMキャリア）: 振幅EGはdBリニア（`env_amp = 10^(-(1-level)*4.8)`、operator.rsの
+    /// tick_envelope/tick参照）。TLとdB加算で合成されるため、レベルの寄与は
+    /// `DB_FLOOR*(1-level)`（TLからの相対dB減衰）で求まる。
+    DbLinear,
+    /// VCA: `Eg::tick()`の出力をゲインとしてそのまま振幅に線形乗算する（vca.rs参照）ので、
+    /// レベルをdB軸で表示するには`20*log10(level)`（level_to_db）で変換する。
+    /// FILTER: EG出力はcutoff加算量の比率であり物理的なdB量ではないが（vcf.rs参照）、
+    /// OP/VCAと視覚を揃えるため同じ対数圧縮の軸に載せる（レベル形状の相似表示として使う）。
+    AmplitudeLinear,
+}
+
+/// EGレベル(0.0〜1.0)がTLからどれだけdB減衰するかを、マッピング方式に応じて求める。
+fn level_contribution_db(mapping: EgAmplitudeMapping, level_linear: f32) -> f32 {
+    match mapping {
+        EgAmplitudeMapping::DbLinear => DB_FLOOR * (1.0 - level_linear),
+        EgAmplitudeMapping::AmplitudeLinear => level_to_db(level_linear),
+    }
+}
+
 /// TLノブ(0〜255)をdBへ変換する。ym38x6-core::mapping::tl_to_gainと同じ理論値
 /// （実機OPM TL、0.75dB/step・127段をtl=255(0dB)〜tl=0(-95.25dB)にアンカー）をdBのまま返す
 /// （tl_to_gainはリニアゲインを返すため、このプレビューのdB軸ではその手前のdB値を直接使う）。
@@ -128,10 +167,23 @@ fn tl_to_db(tl: u8) -> f32 {
     (-95.25 * (255 - tl) as f32 / 255.0).max(DB_FLOOR)
 }
 
+/// 2点間を線分で描く。`dashed`が真なら破線（フリーズ中＝目標に到達せず現在レベルに留まり続ける
+/// ことを示す）、偽なら実線（目標へ実際に減衰・到達する）で描く。
+fn draw_segment(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool) {
+    let stroke = Stroke::new(1.5, color);
+    if dashed {
+        painter.extend(Shape::dashed_line(&[from, to], stroke, DASH_LENGTH, DASH_GAP));
+    } else {
+        painter.add(Shape::line(vec![from, to], stroke));
+    }
+}
+
 /// TL/AR/D1R/D1L/D2R/RR(いずれも0〜255)から、AR/DR/SR=緑・RR=赤の2色に塗り分けた
 /// 折れ線グラフを描く。パネル左側に配置する固定サイズの液晶風ウィジェット。
 /// TLを持たないFILTER/VCAはtl=255（減衰なし）で呼び出す。
-pub fn eg_preview(ui: &mut Ui, tl: u8, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) {
+/// `mapping`はEGレベルをdBへ変換する方式（OP=[EgAmplitudeMapping::DbLinear]、
+/// FILTER/VCA=[EgAmplitudeMapping::AmplitudeLinear]）。
+pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) {
     let (rect, _response) = ui.allocate_exact_size(Vec2::new(WIDTH, HEIGHT), egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
@@ -175,8 +227,8 @@ pub fn eg_preview(ui: &mut Ui, tl: u8, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8
     // これによりD1L（SLレベル）がSL点の高さに直結して見える（旧progress方式はD1Rが遅いと
     // SL点がTL付近に留まり、D1Lを動かしても縦に動かないのが欠点だった）。
     // AR: 床 -> TL（AR>0は常に完全到達）。
-    // DR: TL -> SL。D1Rフリーズ(rate=0)ならTLに留まる。SLの絶対dB位置はTL+D1LのdB加算で求める。
-    let sl_db = (tl_db + level_to_db(d1l as f32 / 255.0)).max(DB_FLOOR);
+    // DR: TL -> SL。D1Rフリーズ(rate=0)ならTLに留まる。SLの絶対dB位置はTL+D1Lの寄与（mapping依存）で求める。
+    let sl_db = (tl_db + level_contribution_db(mapping, d1l as f32 / 255.0)).max(DB_FLOOR);
     let decay1_db = if d1r == 0 { tl_db } else { sl_db };
 
     // SR: SL -> SLからSR_DROP_DBぶん下降した点（絶対位置ではなくSL相対、D1Lの効果を保つため）。
@@ -201,7 +253,11 @@ pub fn eg_preview(ui: &mut Ui, tl: u8, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8
     let sl_pt = Pos2::new(x, db_to_y(decay1_db));
     x += hold_weight * scale;
     let hold_pt = Pos2::new(x, db_to_y(hold_db));
-    painter.add(Shape::line(vec![start_pt, tl_pt, sl_pt, hold_pt], Stroke::new(1.5, COLOR_HELD)));
+    // AR区間はフリーズしない（ar==0は上で早期return済み）ので常に実線。D1R/D2R区間はrate=0のとき
+    // 目標に到達せず現在レベルに留まり続けるだけなので破線にして「フリーズ中」だと視覚的に示す。
+    draw_segment(painter, start_pt, tl_pt, COLOR_HELD, false);
+    draw_segment(painter, tl_pt, sl_pt, COLOR_HELD, d1r == 0);
+    draw_segment(painter, sl_pt, hold_pt, COLOR_HELD, d1r == 0 || d2r == 0);
 
     let release_start = hold_pt;
     x += release_weight * scale;
@@ -294,9 +350,9 @@ mod tests {
     }
 
     /// テスト用に、本体eg_preview()と同じ縦方向ターゲット方式でDR/SR到達レベルを再現するヘルパー。
-    fn target_levels(tl: u8, d1l: u8, d1r: u8, d2r: u8) -> (f32, f32) {
+    fn target_levels(mapping: EgAmplitudeMapping, tl: u8, d1l: u8, d1r: u8, d2r: u8) -> (f32, f32) {
         let tl_db = tl_to_db(tl);
-        let sl_db = (tl_db + level_to_db(d1l as f32 / 255.0)).max(DB_FLOOR);
+        let sl_db = (tl_db + level_contribution_db(mapping, d1l as f32 / 255.0)).max(DB_FLOOR);
         let decay1_db = if d1r == 0 { tl_db } else { sl_db };
         let sr_target_db = (decay1_db - SR_DROP_DB).max(DB_FLOOR);
         let hold_db = if d1r == 0 || d2r == 0 { decay1_db } else { sr_target_db };
@@ -307,8 +363,8 @@ mod tests {
     fn d1l_moves_sl_vertex_vertically_regardless_of_d1r_rate() {
         // 要望: D1Lを変えるとSL点が縦に動く。有限レートなら常にSLへ完全到達するため、
         // D1Rが遅く(rate=8)てもD1Lの違いがdecay1_dbにそのまま出る（旧progress方式では出なかった）。
-        let (sl_lo, _) = target_levels(255, 100, 8, 128);
-        let (sl_hi, _) = target_levels(255, 220, 8, 128);
+        let (sl_lo, _) = target_levels(EgAmplitudeMapping::DbLinear, 255, 100, 8, 128);
+        let (sl_hi, _) = target_levels(EgAmplitudeMapping::DbLinear, 255, 220, 8, 128);
         assert!(sl_hi > sl_lo, "D1Lを上げるとSL点は上がるはず: lo={sl_lo} hi={sl_hi}");
     }
 
@@ -316,8 +372,35 @@ mod tests {
     fn frozen_d1r_holds_at_tl_and_ignores_d1l() {
         // D1Rフリーズ(rate=0)はTLに留まる＝decay1_dbはTLで、D1Lによらず一定。
         let tl_db = tl_to_db(200);
-        let (sl_a, _) = target_levels(200, 60, 0, 128);
-        let (sl_b, _) = target_levels(200, 240, 0, 128);
+        let (sl_a, _) = target_levels(EgAmplitudeMapping::DbLinear, 200, 60, 0, 128);
+        let (sl_b, _) = target_levels(EgAmplitudeMapping::DbLinear, 200, 240, 0, 128);
         assert!((sl_a - tl_db).abs() < 1e-6 && (sl_b - tl_db).abs() < 1e-6);
+    }
+
+    #[test]
+    fn db_linear_matches_engine_env_amp_formula() {
+        // operator.rsのenv_amp = 10^(-(1-level)*4.8) をdBに変換すると -(1-level)*4.8*20 = -96*(1-level)
+        // となり、DB_FLOOR=-96.0のDbLinearマッピングと厳密に一致するはず（OPパネルの正しさの根拠）。
+        for level in [0.0f32, 0.25, 0.502, 0.75, 1.0] {
+            let engine_db = 20.0 * (10f32.powf(-(1.0 - level) * 4.8)).log10();
+            let preview_db = level_contribution_db(EgAmplitudeMapping::DbLinear, level);
+            assert!(
+                (engine_db - preview_db).abs() < 1e-3,
+                "level={level} engine={engine_db} preview={preview_db}"
+            );
+        }
+    }
+
+    #[test]
+    fn db_linear_sl_is_much_lower_than_amplitude_linear_for_typical_piano_d1l() {
+        // 修正前バグの再発防止: d1l=180（ピアノ系で頻用）のとき、旧実装のAmplitudeLinear（20*log10）は
+        // 約-3dBしか沈まないが、エンジンの実際の振幅EG(dBリニア)では約-28dB沈む。この差が
+        // 「グラフ上はほぼ天井なのに聴感では大きく減衰する」というズレの正体だった。
+        let (db_linear_sl, _) = target_levels(EgAmplitudeMapping::DbLinear, 255, 180, 8, 128);
+        let (amp_linear_sl, _) = target_levels(EgAmplitudeMapping::AmplitudeLinear, 255, 180, 8, 128);
+        assert!(
+            db_linear_sl < amp_linear_sl - 10.0,
+            "DbLinearの方が大きく沈むはず: db_linear={db_linear_sl} amp_linear={amp_linear_sl}"
+        );
     }
 }
