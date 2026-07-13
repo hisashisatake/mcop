@@ -25,7 +25,8 @@
 ## 実装ロードマップ
 
 フェーズ一覧と現在地は [spec-roadmap.md](spec-roadmap.md) に分離した。
-現在は **フェーズ5：実機音色資産の取り込みと音作り基盤**（進行中）。
+現在は **フェーズ5：実機音色資産の取り込みと音作り基盤** と **フェーズ7：MC-505風モジュレーション拡張** を並行進行中
+（フェーズ7はチャンネルLFO三層再編の設計＝ステップ5が完了し、次はコア実装＝ステップ6）。
 
 ---
 
@@ -39,7 +40,7 @@ ym38x6/                  ← ワークスペースルート
   spec.md
   CLAUDE.md
 
-  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・PerformanceLfo・MasterEffects）
+  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・PerformanceLfo〈チャンネルLFO、改称予定〉・MasterEffects）
     Cargo.toml
     src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
                              波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
@@ -89,13 +90,19 @@ VSTプラグイン:  nice-plug（ym38x6-vstに実装済み）
 ```
 sound-core（モジュレーション/処理層 + VCO抽象）
   VCO抽象トレイト        ← 「ピッチ付き発振源」のインターフェース
-  モジュレーション層      ← LFO・EG（Pitch/Filter/TVA）・VCF・VCA・表情コントローラー・ルーティング
+  モジュレーション層      ← チャンネルLFO(LFO1/2)・EG（Pitch/Filter/TVA）・VCF・VCA・表情コントローラー・ルーティング
   MasterEffects          ← Reverb/Chorus（出力後段）
         ▲ implements VCO
         │
 ym38x6-core（VCO実装の一つ＝FM発振源）
   Ym38x6Engine           ← 4opFM合成（差し替え対象。将来はPCM/減算/物理モデル等に置換可能）
 ```
+
+**モジュレーションの三層モデル：** モジュレーション層の値は、帰属を①音色（パッチ.38x6）／②パート状態
+（MIDIチャンネル単位のCC）／③ジェスチャー（揮発）の三層に分けて管理する（決め台詞「パッチが定義し、
+CCが補正し、ジェスチャーが今を動かす」）。チャンネルLFO（LFO1/LFO2）をはじめ各モジュレーション量は、
+①基準値に②③を加算した実効値で作用するため、ホイールを触らなくてもパッチ定義の揺れは鳴る（GM2互換）。
+詳細は[spec-sound.md「モジュレーションの三層モデル」](spec-sound.md#モジュレーションの三層モデル音色パート状態ジェスチャー)を参照。
 
 - **現状（フェーズ7ステップ1で実現済み）**: VCO抽象境界を`sound-core`の`Vco`トレイト（発振原理に依存しない
   演奏ライフサイクル: note_on/note_off/render/pitch_bend系/channel_volume系の7メソッド）として確立した。
@@ -104,6 +111,8 @@ ym38x6-core（VCO実装の一つ＝FM発振源）
   音色パッチ（`Ym38x6Patch`）はトレイトに含めず、38x6固有の具象API（`set_patch`/`set_channel_params`/
   `set_operator_params`等）のまま残した。`note_on`はパッチ引数を廃止し、事前に`set_patch`で設定した
   カレントパッチを使う形に統一した（呼び出し側は`set_patch`→`note_on`の2段呼び出しになる）。
+  この「エンジン全体で単一カレントパッチ」前提は、三層モデルの②パート状態をMIDIチャンネル単位で独立させることで
+  マルチパート（マルチティンバー）化できる前提条件でもある（マルチパート実装自体は将来のスコープ）。
   旧`SoundEngine`トレイトは単一実装でポリモーフィズムが一度も使われていなかったため撤去済みだったが、
   今回は「発振エンジンを差し替え可能にしたい」という明示的な意図のもとで再導入した点が異なる。
 - **WMS-1同居時代の実態（参考）**: かつて gesture-app は `enum EngineHandle { Wms1, Ym38x6 }` で
@@ -123,8 +132,10 @@ ym38x6-core（VCO実装の一つ＝FM発振源）
   （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
   旧フィルターEGの4段ADSR（`ym38x6-core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
   cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
-- **フェーズ7の残り（モジュレーション層本体）**: LFO拡張・表情ルーティングは未実装。これらも
-  **ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、`AudioProcessor`とは別レイヤー。
+- **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（設計＝ステップ5完了、
+  コア実装ステップ6〜smf2wavステップ9が未実装）、手動ワウ・表情ルーティング・velocity→音量「量」・
+  Pitch EGが未実装。これらも**ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、
+  `AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
   UI・MIDI実装を再利用できる状態を目指す。
 

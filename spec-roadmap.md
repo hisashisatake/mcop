@@ -13,8 +13,8 @@
 **フェーズ5：実機音色資産の取り込みと音作り基盤**と**フェーズ7：MC-505風モジュレーション拡張**を並行進行中
 （フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」・
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
-ステップ4「LFOカットオフ行先(オートワウ)」完了、
-次は手動ワウ/LFO×2・表情ルーティング・Pitch EG）
+ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」完了、
+次はステップ6「チャンネルLFO三層再編のコア実装」）
 
 ---
 
@@ -30,7 +30,7 @@
   → マウスによる2Dジェスチャー入力UIの実装
   → キャリブレーション（C-F-G基準点）の実装
 
-フェーズ2: パフォーマンスLFO・マスターエフェクト実装
+フェーズ2: パフォーマンスLFO（現: チャンネルLFO）・マスターエフェクト実装
   → PerformanceLfo / PerformanceLfoTarget をsound-coreに実装
   → MasterEffects（Reverb/Chorus）をsound-coreに実装
 
@@ -79,12 +79,22 @@
     と独立に積み重なる持続的な変調を実現。Depthは`cutoff_depth(cc77,cc1)`（sound-core）で
     Filter EG Depthと同じ0〜255単位系に統一。VST NRPN(0,0)=3・gesture-app Tauri IPCまで配線済み
     （UIトグルは既存のTLキャリア一括同様スコープ外のまま）
-  → 次のステップ: 手動ワウ・LFO×2・表情ルーティング・velocity→音量の量・Pitch EG（いずれも未着手）
-  → LFO拡張の残り: 手動ワウ・LFO×2
-  → velocity→音量「量」（ChannelParams、既定255）
-  → 表情コントローラー・ルーティング: CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等
-  → VST/NRPN配線（差分検知方式に追加）
-  → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE
+  → ステップ5「チャンネルLFO三層再編（設計・spec改訂）」完了: 旧「パフォーマンスLFO」の帰属分裂
+    （波形/Fade/Offsetはパッチ所有・Rate/Delay/Destination/Depthはランタイム専用）を解消し、三層モデル
+    （①音色/②パート状態/③ジェスチャー）で再編する設計を確定。LFO×2対称・完全パッチ所有・実効Depth=三層加算・
+    Volume→Vca合流を spec-sound.md/spec.md/spec-app.md に明文化（コード変更なし）
+  → ステップ6「コア実装」: ChannelParamsへLFO1/2の全8項目を完全所有させ、実効値=三層加算、
+    Volume行きをVcaゲインへ合流、旧perf_lfo_shapeのserde互換移行（未着手）
+  → ステップ7「VST配線」: CC76/77/78をパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
+    新NRPN番地(0,23〜0,35)、DAWパラメーター37個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
+  → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのLFO2対応、ホイール/VキーのLFO1接続、
+    IPC/editor-wasm追随（未着手）
+  → ステップ9「smf2wav・変換ツール」: LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）
+  → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等）・
+    velocity→音量「量」（ChannelParams、既定255）・Pitch EG
+  → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
+  → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
+    チャンネルLFOのLFO×2は固定2基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）
 
 フェーズ8: パラメーターUI・音色運用
   → パラメーターUI・音色保存・プリセットライブラリ（.38x6 の書き出しUI）
