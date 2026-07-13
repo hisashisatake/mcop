@@ -14,7 +14,7 @@
 （フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」・
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」完了、
-次はステップ6「チャンネルLFO三層再編のコア実装」）
+次はステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」→ステップ6「コア実装」）
 
 ---
 
@@ -83,8 +83,23 @@
     （波形/Fade/Offsetはパッチ所有・Rate/Delay/Destination/Depthはランタイム専用）を解消し、三層モデル
     （①音色/②パート状態/③ジェスチャー）で再編する設計を確定。LFO×2対称・完全パッチ所有・実効Depth=三層加算・
     Volume→Vca合流を spec-sound.md/spec.md/spec-app.md に明文化（コード変更なし）
+  → ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」【次はここ・設計中】:
+    VCF/VCAのモジュレーション源を「一発(EG)にもループ(LFO)にもなるファンクションジェネレーター」に
+    統一する設計を詰めてspec改訂する（コード実装はステップ6へ）。背景=VCF/VCAはループさせればLFOであり、
+    アナログシンセ的なスイープ/うねりを一次源として持てる。主要論点:
+    (a) sound-core::Egにループモードを追加（D1R⇄D2Rの往復。底値の定義=D1R戻り再利用 or 新規D2L、
+        ノートオフで現在位置からRRへ離脱する連続性）。ADSR形状ループがチャンネルLFO(8波形/Offset)で
+        代替できない具体音を1つ確定してから採否を決める
+    (b) チャンネルLFOのCutoff/Volume行きをVCF/VCA側のファンクションジェネレーターへ合流(統合)するか併存か。
+        Pitch/TL行きはVCF/VCAという帰る家が無くVCO側に残る（TLはFM固有、Pitchは全VCO共通）
+    (c) 音色LFO(tone_lfo.rs、チップ内蔵でVCO固有＝VCO差し替えで消える)の再定義・改名
+        （「TONE LFO」は実態=チップ副次パラメーター以上に重い。opz2x6/opm2x6の写像先波及に注意）
+    → ステップ5で確定したチャンネルLFOのDestination構成を部分的に見直す可能性がある（先に確定させる理由）
   → ステップ6「コア実装」: ChannelParamsへLFO1/2の全8項目を完全所有させ、実効値=三層加算、
-    Volume行きをVcaゲインへ合流、旧perf_lfo_shapeのserde互換移行（未着手）
+    Volume行きをVcaゲインへ合流、旧perf_lfo_shapeのserde互換移行。**加えてEG/KSRレート倍率の共通化**
+    （`sound-core::Eg::tick`にレート倍率引数`rate_scale`を追加し、FM側=`ksr_mul`/VCF・VCA=`1.0`を渡す形へ
+    統一。`operator.rs`が独自に持つ複製状態機械`EnvPhase`/`tick_envelope`を削除し`Eg`へ一本化する。
+    既存operator.rsテスト群で「音が1サンプルもズレない」ことを担保しながら進める）（未着手）
   → ステップ7「VST配線」: CC76/77/78をパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
     新NRPN番地(0,23〜0,35)、DAWパラメーター37個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
   → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのLFO2対応、ホイール/VキーのLFO1接続、
