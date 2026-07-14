@@ -13,7 +13,7 @@
 ## 波形メモリ専用音色バンク（38x6のOP1のみ有効）
 
 フェーズ1ではプロトタイプとして独立クレートのWMS-1（波形オシレーター + ADSR）を用いていたが、
-その実態は38x6の1オペレーター相当であり、波形フォーマット・チャンネル契約・パフォーマンスLFO（現: チャンネルLFO）は
+その実態は38x6の1オペレーター相当であり、波形フォーマット・チャンネル契約・パフォーマンスLFO（現: FG／質感LFO）は
 すでに38x6と共通化されていた。そのため**WMS-1（wms1-core / wms1-vst）は廃止**し、同等の音色は
 38x6の**「波形メモリ専用音色バンク」**として提供する。これは38x6エンジンの専用モードではなく、
 予約バンク`WAVEFORM_MEMORY_BANK`に「OP1のみ可聴・OP2〜4はTL=0」という通常のパッチをまとめた
@@ -333,7 +333,7 @@ half-squared / 2x-half / 2x-squared-half / 2x-abs-half / 2x-pos-squared-half）�
 | AM感度 | 2bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でAMS=1〜3相当の23.9〜95.6dBをdepth=1-10^(-dB/20)で振幅深度に変換） |
 | PM感度 | 3bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でPMS=1(+/-5cents)〜PMS=7(+/-700cents)相当、約7.13oct） |
 
-### フィルター（Vcf: State Variable Filter + キーオン連動EG、ボイス単位）
+### フィルター（Vcf: State Variable Filter、ボイス単位）
 
 FM合成出力にかけるアナログシンセ的なVCF相当（`sound-core::Vcf`トレイト、具象実装`VoiceFilter`）。
 OPQ由来パラメーターとは独立した38x6独自拡張。
@@ -344,58 +344,118 @@ OPQ由来パラメーターとは独立した38x6独自拡張。
 | Resonance | 0〜255 | レゾナンス。Self-Oscillation ON時は255でカットオフ周波数のサイン波が自己発振 |
 | Self-Oscillation | 0 or 1（8bitで保持） | デフォルト=1（ON）。OFF時は255でも発振寸前で安定動作 |
 | Filter Type | 0〜2（8bitで保持） | 0=LP、1=HP、2=BP |
-| Filter EG AR | 0〜255 | キーオンからピークまでの時間 |
-| Filter EG D1R | 0〜255 | ピークからD1Lレベルまでの時間 |
-| Filter EG D1L | 0〜255 | D1Rが到達するレベル（サスティン相当、線形d1l/255） |
-| Filter EG D2R | 0〜255 | D1Lからさらに減衰する速度。0で旧4段ADSR相当（D1Lに張り付く） |
-| Filter EG RR | 0〜255 | キーオフから0までの時間 |
-| Filter EG Depth | 0〜255 | Filter EGがCutoffに与える変調量 |
 
-**Filter EGの形式：** 5段OPM形式（AR→D1R→D1L→D2R→RR、+Idle）。38x6本体のFM EG
-（`operator.rs`のEnvPhase/tick_envelope）と同じ状態遷移・同じD1L解釈（線形 d1l/255）を持つ
-状態機械`sound-core::Eg`を、Cutoff変調用に流用している。
-
-**Filter EGの加算モデル：**
-```
-実効Cutoff = clamp(Cutoffベース値 + Filter EG出力 × Filter EG Depth, 0, 255)
-```
-キーオンでAR→D1R→D1L→D2Rの順に推移し、キーオフでRRに移行する（オペレーターのエンベロープと同様の挙動、
-MC-404等のフィルターエンベロープ相当）。
+**Cutoffへの変調：** カットオフのキーオン連動スイープ／オートワウ／アシッドは **Cutoff FG**
+（[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）が担う。旧「Filter EG」の後継で、
+5段EG＋Loop/Floor/Curveを持ち、Depthは**バイポーラ**（中心128、カットオフを開く/閉じる両方向）。
+質感LFO（Destination=Cutoff）の5波形変調とも加算的に共存する（決め台詞「FG＝軌跡の変調／LFO＝5波形の飛び道具」）。
 
 **実装方式：** State Variable Filter（SVF、`sound-core::Svf`）
 - LP/HP/BPを同一回路から同時出力できる構造で、Filter Typeによる切り替えと相性が良い
 - 高Resonanceでも数値的に安定（Self-Oscillation時の発振も含めて安定動作）
 
-Self-Oscillation ON + Filter EGでCutoffをスイープすると、発振に突入する効果音的な表現が可能。
+Self-Oscillation ON + Cutoff FGでCutoffをスイープすると、発振に突入する効果音的な表現が可能。
 
 **OPQコンバーターとの関係：**
 フィルターはOPQ由来パラメーターではないため、OPQ変換対象外。38x6独自フォーマット（.38x6）にのみ保存される。
 
-### VCA（Vca: ボイス単位の振幅EGオーバーレイ）
+### VCA（Vca: ボイス単位の振幅オーバーレイ）
 
 FM合成 → Vcf通過後の信号に乗算するボイス単位の振幅オーバーレイ（`sound-core::Vca`トレイト、
-具象実装`VoiceAmp`）。EG形式はVcfと同じ5段OPM形式（AR/D1R/D1L/D2R/RR、`sound-core::Eg`）。
+具象実装`VoiceAmp`）。振幅の時間変化は **Gain FG**（[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）が担う。
+旧「VCA EG」の後継で、5段EG＋Loop/Floor/Curveを持つ。音量に負値は無いためDepthは持たず、
+**Floorがうねりの深さ**を担う（出力＝ゲイン直結、ループ=トレモロ／ワンショット=通常アンプEG）。
 
-| パラメーター | 値域 | 備考 |
-|------------|------|------|
-| VCA EG AR | 0〜255（既定255） | 既定は最速（数サンプル） |
-| VCA EG D1R | 0〜255（既定0） | 既定はD1L=255のため実質無効 |
-| VCA EG D1L | 0〜255（既定255） | 既定は完全サステイン（常時全開） |
-| VCA EG D2R | 0〜255（既定0） | 既定はサステインのまま張り付く |
-| VCA EG RR | 0〜255（既定255） | 既定は最速（note off直後に0へ） |
+既定（Loop=0・AR=255・D1L=255・RR=255）ではアタック・リリースとも数サンプルで完了しほぼ常時
+ゲイン1.0となり、FM本来のキャリアEG（`operator.rs`のオペレーター単位EG）を変えない**透過的レイヤー**
+として働く（二重EG化を避ける既定設計）。ユーザーがGain FGのAR/RR等を変えることで、キャリアEGとは
+独立にアタック/リリースの「量」を上書きする効果音的な表現に使える。
 
-既定パラメーターではアタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となり、FM本来の
-キャリアEG（`operator.rs`のオペレーター単位EG）を変えない**透過的レイヤー**として働く（二重EG化を
-避ける既定設計）。ユーザーがVCA EGのAR/RR等を変えることで、キャリアEGとは独立にアタック/リリースの
-「量」を上書きする効果音的な表現に使える。
+**質感LFOのVolume行きの合流点：** [質感LFO](#質感lfo5波形専用焼き込み)の
+Destination=Volume（5波形の飛び道具）は、このVcaゲインへ**乗算合流**する
+（`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`）。適用点はSVFフィルターの**後**（Vca段）である。
 
-**チャンネルLFOのVolume行きの合流点：** [チャンネルLFO](#チャンネルlfolfo1--lfo2)（LFO1/LFO2）の
-Destination=Volume（トレモロ）は、このVcaゲインへ**乗算合流**する（`Vcaゲイン = EGゲイン × (1 + LFOデルタ)`、
-Cutoff→Vcfと同型）。適用点はSVFフィルターの**後**（Vca段）である。
-
-> **自励発振時の挙動差：** Volumeトレモロの適用点がVCF前（旧方式のVCF前volume_gain）からVCF後（Vca段）へ
-> 変わったため、Self-Oscillation ONでフィルターが自己発振している音に対しても、新方式ではトレモロが掛かる
+> **自励発振時の挙動差：** Volume変調の適用点がVCF前（旧方式のVCF前volume_gain）からVCF後（Vca段）へ
+> 変わったため、Self-Oscillation ONでフィルターが自己発振している音に対しても、新方式では変調が掛かる
 > （旧方式では自励発振成分はVCF後に生じるため、VCF前のVolume変調が乗らなかった）。
+
+---
+
+## ファンクションジェネレーター（FG：Pitch / Cutoff / Gain）
+
+38x6のボイス単位モジュレーションは、**3つのファンクションジェネレーター（FG）スロット**——
+Pitch / Cutoff / Gain——に集約する。3スロットは共通の部品「ループ可能EG」を持ち、**行き先とDepthの
+性質だけが異なる**。MC-505のPitch / TVF（Filter）/ TVA（Level）3エンベロープに対応する構成である。
+
+FGは「**一発（ワンショット）にもループにもなる**」変調源で、アナログシンセ的なスイープ／うねり
+（アシッドフィルター・シンセタム・トレモロ）を一次源として持てる。ループさせればLFOに相当するが、
+LFOのサイン波では出せない「上りと下りが非対称な軌跡」を出せる点が固有価値（[質感LFO](#質感lfo5波形専用焼き込み)との境界参照）。
+
+### 共通部品：ループ可能EG
+
+FGの本体は、38x6本体のFM EGと同じ**5段OPM形式EG**（`sound-core::Eg`、AR→D1R→D1L→D2R→RR＋Idle）に、
+次の3項目を足した拡張である。**新規の別部品は作らない**（＝Loop=0で既存の5段EGと完全に一致し、後方互換）。
+
+| 追加項目 | 値域 | 役割 |
+|---|---|---|
+| Loop | 0/1（既定0） | 0=ワンショット（従来のADSR挙動そのまま）／1=ループ |
+| Floor | 0〜255（既定0） | ループ時の折り返しの底レベル（0=完全開閉、上げるほど浅い連続的なうねり） |
+| Curve | 0/1（既定0） | 0=線形（角の立つ三角）／1=サイン風（レイズドコサイン `0.5-0.5cos(π·進行度)` で角を丸める） |
+
+- **Loop=0（既定）**：キーオンで AR→D1R→D1L→D2R と推移し、キーオフで RR。**従来の5段EGと完全に同一**
+  （既存パッチは Loop=0 扱いで挙動不変）。
+- **Loop=1**：**Floor⇄peak を AR（開く/戻り）と D1R（閉じる/下降）が独立レートで往復**するループ
+  （LoopToD1L相当・膝なし）。上りと下りの非対称を保てる点が、対称波形しか出せないLFOサイン波との
+  決定的な差。**キーオフで現在位置から RR へ離脱**する（連続性）。
+- **Curve** はEGのタイミング計算（一定レート折り返し）は変えず、**出力レベルだけを整形**する。上り(AR)と
+  下り(D1R)の非対称を保ったまま角を丸められる（アシッド系のうねりに有効。プロトタイプA/B検証で確定）。
+
+### 3スロット
+
+| スロット | 行き先 | Depth | 適用点 | ループ用途 / ワンショット用途 |
+|---|---|---|---|---|
+| **Pitch FG** | F-Number（全Op） | **バイポーラ**（中心128、±） | ピッチ | ビブラート / シンセタム（一発のピッチ下降・上昇） |
+| **Cutoff FG** | Filter Cutoff（0〜255） | **バイポーラ**（中心128、±） | Cutoff（VCF前） | オートワウ・アシッド / フィルタースイープ |
+| **Gain FG** | Vcaゲイン | なし（Floorが深さ役） | Vcaゲイン（VCF後） | トレモロ / 通常アンプEG |
+
+各スロットは共通のループ可能EG（AR/D1R/D1L/D2R/RR/Loop/Floor/Curve）を持ち、加えて Pitch/Cutoff は
+**バイポーラDepth**（0〜255、中心128＝変調なし。128超＝＋方向、128未満＝−方向）を持つ。
+Gain は音量に負値が無いためDepthを持たず、Floor が深さを担う。
+
+- **Pitch FG（新規）**：ピッチ変調の一次源。バイポーラDepthにより、キーオン一発の**ピッチ下降
+  （上から落とす）と上昇（下から上げる）の両方**を作れる（シンセタム）。ループ時はビブラート。
+- **Cutoff FG**：旧「Filter EG」の後継。Depthを**バイポーラ化**（旧0〜255単極→中心128の±。
+  MC-505のFilter Env Depth −63〜+63相当）。カットオフを開く/閉じる両方向のスイープが可能。
+  `実効Cutoff = clamp(Cutoffベース + FG出力 × (Depth-128)/128, 0, 255)`。
+- **Gain FG**：旧「VCA EG」の後継。出力はVcaゲインへ直結（ループ=トレモロ／ワンショット=通常アンプEG）。
+
+各行き先では、FG・[チップ内LFO](#チップ内lfo)・[質感LFO](#質感lfo5波形専用焼き込み)が
+**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が積み重なる。Pitchは
+Pitch FG＋チップ内LFO(PMS/PMD)＋質感LFO(Dest=Pitch) が積み重なる）。
+
+### 演奏層による補正（Pitch FGのみ）
+
+②パート状態と③ジェスチャーのCCは **Pitch FGのみ** を補正する（Cutoff/Gain FGはパッチ/NRPN専用）。
+モジュレーションホイール＝ビブラート＝Pitch FGという古典的対応に従う。
+
+| CC | 層 | 作用 |
+|---|---|---|
+| CC1（Modulation Wheel） | ③ジェスチャー | Pitch FG Depthへの**瞬間加算**（×RPN(0,5)/127でセント換算） |
+| CC77（Vibrato Depth） | ②パート状態 | Pitch FG Depthへの**0起点パート加算** |
+| CC76（Vibrato Rate） | ②パート状態 | Pitch FGの速さ（AR/D1Rを一括スケール）への**64中心相対補正**（64=無補正） |
+| CC78（Vibrato Delay） | ②パート状態 | Pitch FG Delayへの**64中心相対補正**（64=無補正） |
+
+**実効Depth（三層加算）：** ①パッチが定義する基準Depthに②③を**加算**する（乗算ではない）。②③がゼロでも
+①のビブラートは鳴る（GM2互換：ホイールを触らなくてもパッチのビブラートは効く）。Pitch FGはループ時に
+AR/D1R の2レートを持つため、CC76「Vibrato Rate」は両レートを一括でスケールする（全体の速さ）。
+
+### 実装状況
+
+FGは`sound-core::Eg`にLoop/Floor/Curveを追加した拡張として実装する（ステップ6）。Loop=0既定で既存の
+5段EGテスト群が「音が1サンプルもズレない」ことを担保しながら進める。旧`Filter EG`（`VoiceFilter`）／
+`VCA EG`（`VoiceAmp`）はそれぞれ Cutoff FG／Gain FG へ移行し、Pitch FGを新設する。パッチの
+FGフィールド名（`pitch_fg`/`cutoff_fg`/`gain_fg`）と旧フィールド（`filter_eg_*`/`vca_eg_*`）の
+serde互換移行はステップ6で実施する。
 
 ---
 
@@ -494,8 +554,8 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 | パラメーター群 | 層 | 保存先 | 設定経路 |
 |---|---|---|---|
-| オペレーター12種×4 / Algorithm / Feedback / チップ内LFO6項目 / フィルター10項目 / VCA EG5項目 / **チャンネルLFO1・2 各8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
-| CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（チャンネルLFO1補正）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
+| オペレーター12種×4 / Algorithm / Feedback / チップ内LFO6項目 / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目** / **質感LFO8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
+| CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（Pitch FG補正）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
 | **CC1（モジュレーションホイール）** / Pitch Bend / アフタータッチ / CC64/66/67（ペダル）/ CC103〜106（OP単位キーオン） | ③ジェスチャー | 保存しない（揮発） | MIDI |
 
 **補強規則：**
@@ -506,7 +566,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 **実効値＝三層加算：** あるモジュレーション量の実効値は、①パッチが定義する基準値に、②パート補正と
 ③ジェスチャーを**加算**して求める（乗算ではない）。したがって②③がゼロでも①が定義した揺れは鳴り続ける
-（GM2互換：モジュレーションホイールを触らなくてもパッチのトレモロは効く）。具体式はチャンネルLFO節・CC表を参照。
+（GM2互換：モジュレーションホイールを触らなくてもパッチのビブラート/トレモロは効く）。具体式はFG節・CC表を参照。
 
 ### 単一カレントパッチ前提とマルチティンバー（将来）
 
@@ -521,9 +581,9 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 FMチップに内蔵された「音作り」用のLFO（プリセット・NRPNで設定）。VCO層（`ym38x6-core`）に属する
 **チップ固有の変調源で、VCOを差し替えると消える**（旧称「音色LFO」。「チップ内」はこのレイヤー帰属を
-名指しした呼称で、opz2x6/opm2x6が写像する先はこのチップ内LFOである）。演奏用の[チャンネルLFO](#チャンネルlfolfo1--lfo2)（旧称: パフォーマンスLFO）とは完全に独立しており、演奏時のビブラート/トレモロには影響しない。
+名指しした呼称で、opz2x6/opm2x6が写像する先はこのチップ内LFOである）。演奏用のモジュレーション（[FG](#ファンクションジェネレーターfgpitchcutoffgain)／[質感LFO](#質感lfo5波形専用焼き込み)）とは完全に独立しており、演奏時のビブラート/トレモロには影響しない。
 
-> **チップ内LFOとチャンネルLFOの違い（混同防止）：** チップ内LFO＝チップ忠実のPMS/AMS×PMD/AMD（音作り・パッチ内で完結）／チャンネルLFO＝38x6拡張のLFO×2（演奏時のビブラート/トレモロ/オートワウ）。両者は独立して同時に効く。
+> **チップ内LFOと演奏系モジュレーションの違い（混同防止）：** チップ内LFO＝チップ忠実のPMS/AMS×PMD/AMD（音作り・パッチ内で完結、VCO差し替えで消える）／FG・質感LFO＝38x6拡張の永続層（ビブラート/トレモロ/オートワウ等の軌跡はFG、5波形の飛び道具は質感LFO）。両系統は独立して同時に効く。
 
 | 項目 | 値 | 備考 |
 |------|-----|------|
@@ -540,49 +600,62 @@ FMチップに内蔵された「音作り」用のLFO（プリセット・NRPN�
 
 ---
 
-## チャンネルLFO（LFO1 / LFO2）
+## 質感LFO（5波形専用・焼き込み）
 
-演奏時のビブラート/トレモロ/オートワウを担う、**2基の独立したLFO**（LFO1・LFO2）。総称して
-「チャンネルLFO」と呼ぶ（旧称: パフォーマンスLFO）。音色LFO（PMD/AMD/PMS/AMS、チップ忠実の音作り）
-とは別物で、こちらは38x6拡張のパフォーマンス用LFOである。
+旧「チャンネルLFO（LFO1/LFO2）」を再編し、**軌跡（Floor⇄peak）では表せない波形だけ**を担う1基のLFO
+（旧称: パフォーマンスLFO → チャンネルLFO → 質感LFO）。ビブラート/トレモロ/オートワウの持続的な揺れは
+[FG](#ファンクションジェネレーターfgpitchcutoffgain)のループモードへ移行したため、質感LFOが担うのは
+**FGで出せない5波形**——矩形・台形・S&H・ランダム・カオス——に限定される。
 
-> **音色LFOとチャンネルLFOの違い（混同防止）：** 音色LFO＝チップ忠実のPMS/AMS×PMD/AMD（音作り・パッチ内で完結）／チャンネルLFO＝38x6拡張のLFO×2（演奏時のビブラート/トレモロ/オートワウ）。両者は独立して同時に効く。
+> **境界規則（FG↔質感LFO）：** 「**パラメーター化された時間軌跡なら FG、そうでない（固定ルックアップ
+> 波形／生成器）なら 質感LFO**」。三角・のこぎり・サインはFGのループ（Floor⇄peakをAR/D1Rで往復）で
+> 出せるため質感LFOは持たない。両者の重なりはゼロ。S&H/ランダム/カオスは値が乱数抽選や写像反復で
+> 決まる「生成器」で、FGの軌跡パラメーター（Floor/AR/D1R/Curve）が生かせないためLFO側に隔離する。
 
-**三層モデルにおける位置づけ**（[モジュレーションの三層モデル](#モジュレーションの三層モデル音色パート状態ジェスチャー)参照）：
-LFO1/LFO2の全パラメーターは**①音色（パッチ）が所有**する（`.38x6`に保存）。その上で、
-**②パート状態のCC76/77/78がLFO1のみを補正**し、**③ジェスチャーのCC1がLFO1のDepthに瞬間加算**する
-（下記「演奏層による補正」）。LFO2はパッチ／NRPN専用で、CC補正を受けない。
+**焼き込み専用：** 質感LFOは**①音色（パッチ）が所有**し、演奏CC（CC1/76/77/78）による補正は受けない
+（それらは[Pitch FG](#ファンクションジェネレーターfgpitchcutoffgain)へ）。既定 Depth=0 で不可視＝初心者の
+既定経路には現れない飛び道具。5波形は予測不能系のため手で動かす必要がなく、旧LFO2的な set-and-forget として扱う。
 
-### パッチ所有パラメーター（LFO1/LFO2 各8項目）
+### パッチ所有パラメーター（8項目）
 
-LFO1・LFO2は対称で、それぞれ以下の8項目を`ChannelParams`に持つ。既定はDepth=0（鳴らない）＝旧パッチ挙動と互換。
+全項目を`ChannelParams`が所有する（`.38x6`に保存）。既定はDepth=0（鳴らない）＝旧パッチ挙動と互換。
 
 | 項目 | 値域 | 既定 | 備考 |
 |------|------|------|------|
-| Waveform | 0〜7（8種） | 0=三角波 | 下記Waveform enum |
-| Fade Mode | 0〜3 | 0=ON-IN | 下記Fade Mode enum |
-| Fade Time | 0〜255 | 0 | 0〜10秒（線形）。0=フェード無効（常時フルゲイン、旧来のハードエッジ挙動と等価） |
-| Offset | 0〜255（中心128） | 128 | 波形の中心シフト-100〜100（生値-1.0〜1.0に`offset/100.0`を加算してクランプ） |
-| Rate | 0〜255 | LFO1=140 / LFO2=0 | 0.01Hz〜20Hz（指数）。LFO1既定140≒従来のホイールビブラート相当 |
-| Delay | 0〜255 | 0 | キーオンから効果開始までの遅延。0〜10秒（線形）。Fadeとは独立 |
+| Waveform | 0〜4（5種） | 0=矩形波 | 下記Waveform enum |
 | Destination | 0〜3 | 0=Pitch | 下記Destination enum |
-| 基準Depth | 0〜255 | 0 | パッチが定義する基準の揺れ量（②③の補正はこれに加算される） |
+| Rate | 0〜255 | 0 | 0.01Hz〜20Hz（指数） |
+| Depth | 0〜255 | 0 | 揺れ量（既定0＝鳴らない） |
+| Delay | 0〜255 | 0 | キーオンから効果開始までの遅延。0〜10秒（線形）。Fadeとは独立 |
+| Fade Mode | 0〜3 | 0=ON-IN | 下記Fade Mode enum |
+| Fade Time | 0〜255 | 0 | 0〜10秒（線形）。0=フェード無効 |
+| Offset | 0〜255（中心128） | 128 | 波形の中心シフト-100〜100（生値-1.0〜1.0に`offset/100.0`を加算してクランプ） |
 
-以前は波形/Fade/Offsetのみパッチ所有で、Rate/Delay/Destination/Depthはランタイム専用（VST/gesture-appが
-直接エンジンへ渡す）という帰属分裂があったが、本改訂で**全8項目をパッチ所有に統一**した。
+**Waveform enum（5種）：**
 
-**Waveform enum：**
+旧チャンネルLFOの8波形から、FGへ移行する三角/サイン/のこぎりを除いた5波形に絞り、0起点で再番号付けした。
 
 | 値 | 波形 |
 |---|---|
-| 0（デフォルト） | 三角波 |
-| 1 | サイン波 |
-| 2 | 矩形波 |
-| 3 | S&H（ランダム、階段状） |
-| 4 | のこぎり波 |
-| 5 | 台形波 |
-| 6 | Random（周期ごとの目標値を位相で線形補間する滑らかなランダムウォーク） |
-| 7 | Chaos（ロジスティック写像`x=3.9x(1-x)`による決定論的カオス、周期内はホールド） |
+| 0（デフォルト） | 矩形波 |
+| 1 | 台形波 |
+| 2 | S&H（ランダム、階段状） |
+| 3 | Random（周期ごとの目標値を位相で線形補間する滑らかなランダムウォーク） |
+| 4 | Chaos（ロジスティック写像`x=3.9x(1-x)`による決定論的カオス、周期内はホールド） |
+
+**Destination enum：**
+
+| 値 | 宛先 | 適用点 |
+|---|---|---|
+| 0（デフォルト） | Pitch | F-Number全Op |
+| 1 | Volume | **Vcaゲイン乗算合流・VCF後** |
+| 2 | TL（キャリア一括） | TL（VCF前）・38x6拡張のみ |
+| 3 | Cutoff | Cutoff（VCF前）・38x6拡張のみ |
+
+各行き先ではFG・チップ内LFOと**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が
+積み重なる）。Volume（Destination=1）は`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`でVca段（VCF後）へ乗算合流、
+TL（Destination=2）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
+（質感LFOは焼き込み専用のためCCによる加算補正はなく、演奏系CC1/76/77/78はPitch FGへ行く）。
 
 **Fade Mode enum：**
 
@@ -595,52 +668,18 @@ Delay（既存のハードカットオーバー）とは独立して共存する
 | 2 | OFF-IN：note_off前は振幅ゲイン0、note_off後にFade Timeかけて0→1にフェードイン（リリーステール中のみ効く） |
 | 3 | OFF-OUT：note_off前は振幅ゲイン1、note_off後にFade Timeかけて1→0にフェードアウト（リリーステール中のみ効く） |
 
-**Destination enum：**
-
-| 値 | 宛先 | Depthのモデル | 適用点 |
-|---|---|---|---|
-| 0（デフォルト） | Pitch（ビブラート） | `実効Depth(セント) = 基準Depth + CC77 + CC1 × RPN0,5値 / 127` をピッチに加算 | F-Number全Op |
-| 1 | Volume（トレモロ） | `実効Depth = clamp(基準Depth + CC77 + CC1, 0, 255)` をVcaゲインへ乗算変調 | **Vcaゲイン合流・VCF後** |
-| 2 | TL（キャリア一括、トレモロ） | 同上（キャリアのTLへ加算） | TL（VCF前）・38x6拡張のみ |
-| 3 | Cutoff（オートワウ） | 同上（Filter Cutoff値0〜255へ加算） | Cutoff（VCF前）・38x6拡張のみ |
-
-Volume（Destination=1）は**Vcaゲインへ乗算合流**する（`Vcaゲイン = EGゲイン × (1 + LFOデルタ)`、Cutoff→Vcfと同型）。
-適用点はVCF**後**である点が、TL（Destination=2、VCF前のキャリアTLに作用）と対比になる（VCA節の自励発振注記も参照）。
-TL（Destination=2）はキャリアのTLのみを一括で揺らす（明るさ方向のトレモロ）。
-トレモロ（Destination=1/2）は各ノートの実効音量に対して相対的に作用するため、ベロシティによる音量差は維持されたまま揺れる。
-Cutoff（Destination=3）はLFOがシフトした基準Cutoffに対し、Filter EG Depth（キーオン一発の変調、フィルターセクション参照）がさらに独立に積み重なる（決め台詞「EG＝一発の形／LFO＝持続する揺れ」）。
-RPN 0,5（Modulation Depth Range）はDestination=Pitchの場合のみ意味を持つ（詳細はRPNセクション参照）。
-
-### 演奏層による補正（LFO1のみ）
-
-②パート状態と③ジェスチャーのCCは**LFO1のみ**を補正する（LFO2はパッチ/NRPN専用）。
-
-| CC | 層 | 作用 |
-|---|---|---|
-| CC76（Vibrato Rate） | ②パート状態 | LFO1 Rateへの**64中心相対補正**（64=無補正、GM2 Sound Controller準拠） |
-| CC78（Vibrato Delay） | ②パート状態 | LFO1 Delayへの**64中心相対補正**（64=無補正） |
-| CC77（Vibrato Depth） | ②パート状態 | LFO1 基準Depthへの**0起点パート加算** |
-| CC1（Modulation Wheel） | ③ジェスチャー | LFO1 Depthへの**瞬間加算**（Destination=Pitch時は×RPN(0,5)/127でセント換算） |
-
-**実効Depth（三層加算）：**
-```
-Destination=Pitch:  実効セント = 基準Depth + CC77 + CC1 × RPN(0,5)値 / 127
-その他:             実効Depth  = clamp(基準Depth + CC77 + CC1, 0, 255)
-```
-基準Depth（①パッチ）がゼロでなければ、CC77/CC1（②③）がゼロでもパッチ定義の揺れは鳴る（GM2互換）。
-
 ### 実装状況
 
-`PerformanceLfo`（実装フェーズで`ChannelLfo`系へ改称予定）はエンジン非依存の共通コンポーネントとして
-`sound-core`に実装する。適用先は`PerformanceLfoTarget`（同改称予定）トレイトとして定義し、共通Destination
-（0=Pitch、1=Volume）に加え、38x6は拡張Destination（2=TLキャリア一括、3=Cutoff/オートワウ）も実装する。
-LFO1/LFO2の全8項目を`ChannelParams`に持たせ、`set_channel_params`が他のフィールドと同様に毎ブロック発音中
-ボイスへ伝播するため、NRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに反映される
-（note_on/retriggerでのみ適用される、という制限はない）。
+既存`sound-core/src/lfo.rs`（`PerformanceLfo`、8波形実装済み）から三角/サイン/のこぎりを除いた
+**5波形に絞った1基**を`ChannelParams`が所有する。適用先は`PerformanceLfoTarget`トレイト
+（Destination 0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff）。`set_channel_params`が他のフィールドと
+同様に毎ブロック発音中ボイスへ伝播するため、NRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに
+反映される。演奏系CC（CC1/76/77/78）は質感LFOには繋がらず[Pitch FG](#ファンクションジェネレーターfgpitchcutoffgain)へ行く。
 
-> **後方互換規則：** LFO1/LFO2の新フィールドは`#[serde(default)]`とし、旧`ChannelParams.perf_lfo_shape`
-> （波形/Fade Mode/Fade Time/Offset）はLFO1の対応項目へ読み込み移行する。型名`PerformanceLfo`・
-> `perf_lfo_shape`等のコード名と新用語「チャンネルLFO」の乖離は実装フェーズで解消する。
+> **後方互換規則：** 質感LFOの各フィールドは`#[serde(default)]`とする。旧`ChannelParams.perf_lfo_shape`
+> （波形/Fade Mode/Fade Time/Offset）や旧`lfo1`/`lfo2`を持つ既存`.38x6`は、波形が5波形（矩形/台形/S&H/
+> Random/Chaos）に該当すれば質感LFOへ、三角/サイン/のこぎりなら対応する[FG](#ファンクションジェネレーターfgpitchcutoffgain)の
+> ループ設定へ移行読み込みする。型名`PerformanceLfo`・`perf_lfo_shape`等のコード名の整合は実装フェーズ（ステップ6）で解消する。
 
 ---
 
@@ -673,10 +712,10 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（37個）：**
-Algorithm / Feedback / チャンネルLFO1 Rate / チャンネルLFO1 Depth（基準値）/ チャンネルLFO1 Delay / チャンネルLFO1 Waveform / チャンネルLFO1 Fade Mode / チャンネルLFO1 Fade Time / チャンネルLFO1 Offset / チャンネルLFO2 Rate / チャンネルLFO2 Depth（基準値）/ チャンネルLFO2 Delay / チャンネルLFO2 Waveform / チャンネルLFO2 Fade Mode / チャンネルLFO2 Fade Time / チャンネルLFO2 Offset / 音色LFO Freq / 音色LFO PMD / 音色LFO AMD / 音色LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Filter EG AR / Filter EG D1R / Filter EG D1L / Filter EG D2R / Filter EG RR / Filter EG Depth / VCA EG AR / VCA EG D1R / VCA EG D1L / VCA EG D2R / VCA EG RR / Reverb Send / Chorus Send
+**チャンネル単位（45個）：**
+Algorithm / Feedback / 質感LFO Rate / 質感LFO Depth / 質感LFO Delay / 質感LFO Waveform / 質感LFO Fade Mode / 質感LFO Fade Time / 質感LFO Offset / チップ内LFO Freq / チップ内LFO PMD / チップ内LFO AMD / チップ内LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Pitch FG AR / Pitch FG D1R / Pitch FG D1L / Pitch FG D2R / Pitch FG RR / Pitch FG Depth / Pitch FG Floor / Pitch FG Loop / Pitch FG Curve / Cutoff FG AR / Cutoff FG D1R / Cutoff FG D1L / Cutoff FG D2R / Cutoff FG RR / Cutoff FG Depth / Cutoff FG Floor / Cutoff FG Loop / Cutoff FG Curve / Gain FG AR / Gain FG D1R / Gain FG D1L / Gain FG D2R / Gain FG RR / Gain FG Floor / Gain FG Loop / Gain FG Curve / Reverb Send / Chorus Send
 
-（チャンネルLFO1/LFO2は各7個＝Rate/Depth(基準値)/Delay/Waveform/Fade Mode/Fade Time/Offset。DestinationのみNRPN専用のためDAWパラメーターには含めない。Rate/Depth/Delayはパッチ基準値で、演奏時のCC76/77/78補正=②パート状態はこれに加算される。）
+（質感LFOは7個＝Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。DestinationのみNRPN専用のためDAWパラメーターには含めない。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curveで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。）
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -689,15 +728,15 @@ Reverb Time / Chorus Mod Rate / Chorus Mod Depth / Chorus Feedback / Chorus Send
 （CC91/93やマスターエフェクトの「マスター単位」パラメーターのように、
 NRPN/CCとnice-plugパラメーターを併用する項目とは異なる点に注意）。
 
-Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / Channel LFO1 Destination / Channel LFO2 Destination / Reverb Type / Chorus Type
+Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / 質感LFO Destination / Reverb Type / Chorus Type
 
-※「Algorithm」「Channel LFO1/LFO2 Waveform」「Channel LFO1/LFO2 Fade Mode」は例外的に、対応するNRPNに加えて上記チャンネル単位のnice-plugパラメーターとしても公開する（DAWオートメーション/GUIノブ操作とNRPN/外部MIDIコントローラーの両方から設定できる）。
+※「Algorithm」「質感LFO Waveform」「質感LFO Fade Mode」「Pitch/Cutoff/Gain FG Loop」「Pitch/Cutoff/Gain FG Curve」は例外的に、対応するNRPNに加えて上記チャンネル単位のnice-plugパラメーターとしても公開する（DAWオートメーション/GUIノブ操作とNRPN/外部MIDIコントローラーの両方から設定できる）。
 
 ### MIDI CC（GM2準拠）
 
 | CC | GM2定義 | 38x6割り当て | GM2との関係 |
 |---|---|---|---|
-| CC 1 | Modulation Wheel | ③ジェスチャー：チャンネルLFO1 Depthへ瞬間加算（Pitch時は×RPN(0,5)/127） | 準拠（チャンネルLFO参照） |
+| CC 1 | Modulation Wheel | ③ジェスチャー：Pitch FG Depthへ瞬間加算（×RPN(0,5)/127でセント換算） | 準拠（FG参照） |
 | CC 5 | Portamento Time | Portamento Time | 完全準拠（下記参照） |
 | CC 7 | Channel Volume | Volume | 完全準拠 |
 | CC 10 | Pan | Pan | 完全準拠 |
@@ -711,9 +750,9 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC 73 | Attack Time | AR（キャリア一括） | 準拠 |
 | CC 74 | Brightness | Filter Cutoff | 完全準拠 |
 | CC 75 | Decay Time | D1R（キャリア一括） | 準拠 |
-| CC 76 | Vibrato Rate | ②パート状態：チャンネルLFO1 Rateへ64中心相対補正 | 完全準拠 |
-| CC 77 | Vibrato Depth | ②パート状態：チャンネルLFO1 基準Depthへ0起点加算 | 完全準拠 |
-| CC 78 | Vibrato Delay | ②パート状態：チャンネルLFO1 Delayへ64中心相対補正 | 完全準拠 |
+| CC 76 | Vibrato Rate | ②パート状態：Pitch FGの速さ（AR/D1R一括）へ64中心相対補正 | 完全準拠 |
+| CC 77 | Vibrato Depth | ②パート状態：Pitch FG Depthへ0起点加算 | 完全準拠 |
+| CC 78 | Vibrato Delay | ②パート状態：Pitch FG Delayへ64中心相対補正 | 完全準拠 |
 | CC 91 | Reverb Send Level | Reverb Send | 完全準拠（マスターエフェクト参照） |
 | CC 93 | Chorus Send Level | Chorus Send | 完全準拠（マスターエフェクト参照） |
 | CC 102 | （未定義） | Program Change 代替（VST3用。下記 Bank Select / Program Change 参照） | 38x6独自拡張（GM2未定義領域 CC102〜119 の先頭） |
@@ -790,7 +829,7 @@ CC64 OFF:        pedal_down = false
 | 0, 0 | Pitch Bend Sensitivity | ±2半音 | Pitch BendのF-Number換算レンジ（半音 + セント） |
 | 0, 1 | Channel Fine Tuning | 0セント | F-Numberオフセット（±100セント） |
 | 0, 2 | Channel Coarse Tuning | 0半音 | F-Numberオフセット（±64半音） |
-| 0, 5 | Modulation Depth Range | 64（約50セント相当） | チャンネルLFO1 Destination=Pitch時のCC1セント換算係数（チャンネルLFOセクション参照） |
+| 0, 5 | Modulation Depth Range | 64（約50セント相当） | Pitch FGのCC1セント換算係数（FGセクション参照） |
 | 127, 127 (7F,7F) | RPN/NRPN Null | - | 選択解除（誤操作防止のため必須） |
 
 ### Bank Select / Program Change
@@ -870,10 +909,10 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
             "algorithm": 0, "feedback": 0,
             "tone_lfo_freq": 0, "tone_lfo_pmd": 0, "tone_lfo_amd": 0, "tone_lfo_delay": 0, "pms": 0, "ams": 0,
             "filter_cutoff": 255, "filter_resonance": 0, "filter_type": 0, "filter_self_oscillation": true,
-            "filter_eg_ar": 0, "filter_eg_d1r": 0, "filter_eg_d1l": 0, "filter_eg_d2r": 0, "filter_eg_rr": 0, "filter_eg_depth": 0,
-            "vca_eg_ar": 255, "vca_eg_d1r": 0, "vca_eg_d1l": 255, "vca_eg_d2r": 0, "vca_eg_rr": 255,
-            "lfo1": { "waveform": 0, "fade_mode": 0, "fade_time": 0, "offset": 128, "rate": 140, "delay": 0, "destination": 0, "depth": 0 },
-            "lfo2": { "waveform": 0, "fade_mode": 0, "fade_time": 0, "offset": 128, "rate": 0, "delay": 0, "destination": 0, "depth": 0 }
+            "pitch_fg": { "ar": 0, "d1r": 0, "d1l": 255, "d2r": 0, "rr": 255, "depth": 128, "floor": 0, "loop": 0, "curve": 0 },
+            "cutoff_fg": { "ar": 0, "d1r": 0, "d1l": 0, "d2r": 0, "rr": 0, "depth": 128, "floor": 0, "loop": 0, "curve": 0 },
+            "gain_fg": { "ar": 255, "d1r": 0, "d1l": 255, "d2r": 0, "rr": 255, "floor": 0, "loop": 0, "curve": 0 },
+            "texture_lfo": { "waveform": 0, "destination": 0, "rate": 0, "depth": 0, "delay": 0, "fade_mode": 0, "fade_time": 0, "offset": 128 }
           }
         }
       },
@@ -882,11 +921,12 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   }
   ```
   `operators`は配列要素0〜3がOp0〜3に対応する（4要素固定）。各フィールドの意味・数値範囲は
-  「オペレーターパラメーター」「チャンネルパラメーター」「フィルター」「音色LFO」「チャンネルLFO」の各節を参照。
-  `lfo1`/`lfo2`はチャンネルLFO（LFO1/LFO2）の8項目で、`#[serde(default)]`により省略時は既定値
-  （LFO1: rate=140・depth=0、LFO2: rate=0・depth=0、他は共通既定）で読み込む。旧`perf_lfo_shape`
-  フィールド（波形/Fade Mode/Fade Time/Offset）を持つ既存`.38x6`は、それらをLFO1の対応項目へ移行して
-  読み込む（後方互換規則、チャンネルLFO節「実装状況」参照）。
+  「オペレーターパラメーター」「チャンネルパラメーター」「フィルター」「チップ内LFO」「ファンクションジェネレーター」「質感LFO」の各節を参照。
+  `pitch_fg`/`cutoff_fg`/`gain_fg`は3つのFGスロット（共通EG=ar/d1r/d1l/d2r/rr＋loop/floor/curve、
+  Pitch/Cutoffはバイポーラ depth〈中心128〉、Gainはdepth無し）、`texture_lfo`は5波形専用質感LFOの8項目。
+  いずれも`#[serde(default)]`により省略時は既定値（FG: loop=0で従来の5段EG挙動・depth=128でピッチ/カットオフ変調なし、
+  texture_lfo: depth=0で無効）で読み込む。旧`filter_eg_*`/`vca_eg_*`/`lfo1`/`lfo2`/`perf_lfo_shape`フィールドを持つ
+  既存`.38x6`は、それぞれ`cutoff_fg`/`gain_fg`/質感LFO・FGへ移行して読み込む（後方互換規則、FG節・質感LFO節「実装状況」参照）。
   現在は`Ym38x6Patch`のフィールドのみが対象で、ユーザー定義波形スロット(32〜255)の波形データ埋め込みは
   当該機能実装後に別途対応する（未実装）。`program`は`.opm`（VOPM）の`@:`番号(0-127)を継承可能な識別子。
 
@@ -935,26 +975,25 @@ CC99/98またはCC101/100（RPN）に127,127（Null）を送ると選択解除�
 | Filter Type | 0=LP / 1=HP / 2=BP |
 | AT Destination | Channel Pressureの加算先（destination enum、下記） |
 | Poly AT Destination | Poly Key Pressureの加算先（destination enum、下記） |
-| Channel LFO1 Destination | チャンネルLFO1の加算先（destination enum、チャンネルLFOセクション参照） |
-| Channel LFO1 Waveform | チャンネルLFO1の波形（waveform enum、チャンネルLFOセクション参照） |
-| Channel LFO1 Fade Mode | チャンネルLFO1のFadeモード（fade mode enum、チャンネルLFOセクション参照） |
-| Channel LFO2 Destination | チャンネルLFO2の加算先（destination enum、チャンネルLFOセクション参照） |
-| Channel LFO2 Waveform | チャンネルLFO2の波形（waveform enum、チャンネルLFOセクション参照） |
-| Channel LFO2 Fade Mode | チャンネルLFO2のFadeモード（fade mode enum、チャンネルLFOセクション参照） |
+| 質感LFO Destination | 質感LFOの加算先（destination enum、質感LFOセクション参照） |
+| 質感LFO Waveform | 質感LFOの波形（0〜4、質感LFOセクション参照） |
+| 質感LFO Fade Mode | 質感LFOのFadeモード（fade mode enum、質感LFOセクション参照） |
+| Pitch/Cutoff/Gain FG Loop | 各FGのループON/OFF（0/1、FGセクション参照） |
+| Pitch/Cutoff/Gain FG Curve | 各FGのカーブ（0=線形/1=サイン風、FGセクション参照） |
 | Reverb Type | Reverbのタイプ（type enum、マスターエフェクトセクション参照） |
 | Chorus Type | Chorusのタイプ（type enum、マスターエフェクトセクション参照） |
 | Operator F-Number (Op0〜3) | OP単位F-Numberの上書き（13bit × 4、下記参照） |
 
 **NRPN番号（MSB,LSB）：**
 
-NRPN番号は本実装（チャンネルLFO＝旧パフォーマンスLFO）で初めて定義した。MSB=0を「離散パラメーター」用に予約し、LSBを実装順に割り当てる。他の離散パラメーターのNRPN番号は実装時に追記する。
+NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で初めて定義し、本改訂で質感LFO＋FG Loop/Curveへ引き直した。MSB=0を「離散パラメーター」用に予約し、LSBを割り当てる。FGの連続パラメーター（AR/D1R/D1L/D2R/RR/Depth/Floor）は旧Filter/VCA EGと同様DAWオートメーション用パラメーターで、このNRPN離散表には含めない（Pitch FGの演奏補正はCC1/76/77/78で行う、FG節参照）。他の離散パラメーターのNRPN番号は実装時に追記する。
 
 **データ入力方式（0〜255値）：** CC6（Data Entry MSB、0〜127）を2倍スケール（`cc_to_u8` ＝ `min(cc6 × 2, 255)`）して0〜255値として受け取る。列挙値（Destination/Waveform/Fade Mode/Type等）はCC6の値をそのまま使う。より高精度が必要な項目（Operator F-Number）はCC6=MSB+CC38=LSBで14bit送信する（下記参照）。
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| Channel LFO1 Destination | 0, 0 | 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、トレモロ、38x6拡張のみ） / 3=Cutoff（オートワウ、38x6拡張のみ） |
-| Channel LFO1 Waveform | 0, 1 | 0=三角波 / 1=サイン波 / 2=矩形波 / 3=S&H / 4=のこぎり波 / 5=台形波 / 6=Random / 7=Chaos |
+| 質感LFO Destination | 0, 0 | 0=Pitch / 1=Volume / 2=TL（キャリア一括、38x6拡張のみ） / 3=Cutoff（38x6拡張のみ） |
+| 質感LFO Waveform | 0, 1 | 0=矩形波 / 1=台形波 / 2=S&H / 3=Random / 4=Chaos |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Reverb Time | 0, 4 | 0〜255 |
@@ -972,20 +1011,18 @@ NRPN番号は本実装（チャンネルLFO＝旧パフォーマンスLFO）で�
 | Operator F-Number Op1 | 0, 19 | 同上 |
 | Operator F-Number Op2 | 0, 20 | 同上 |
 | Operator F-Number Op3 | 0, 21 | 同上 |
-| Channel LFO1 Fade Mode | 0, 22 | 0=ON-IN / 1=ON-OUT / 2=OFF-IN / 3=OFF-OUT |
-| Channel LFO1 Rate | 0, 23 | 0〜255（パッチ基準値。CC76が64中心相対補正） |
-| Channel LFO1 Depth | 0, 24 | 0〜255（パッチ基準値。CC77が0起点加算、CC1が瞬間加算） |
-| Channel LFO1 Delay | 0, 25 | 0〜255（パッチ基準値。CC78が64中心相対補正） |
-| Channel LFO1 Fade Time | 0, 26 | 0〜255（0=フェード無効） |
-| Channel LFO1 Offset | 0, 27 | 0〜255（中心128=オフセットなし） |
-| Channel LFO2 Destination | 0, 28 | 0=Pitch / 1=Volume / 2=TL（キャリア一括、38x6拡張のみ） / 3=Cutoff（38x6拡張のみ） |
-| Channel LFO2 Waveform | 0, 29 | 0=三角波 / 1=サイン波 / 2=矩形波 / 3=S&H / 4=のこぎり波 / 5=台形波 / 6=Random / 7=Chaos |
-| Channel LFO2 Fade Mode | 0, 30 | 0=ON-IN / 1=ON-OUT / 2=OFF-IN / 3=OFF-OUT |
-| Channel LFO2 Rate | 0, 31 | 0〜255（パッチ基準値。CC補正なし＝LFO2はパッチ/NRPN専用） |
-| Channel LFO2 Depth | 0, 32 | 0〜255（パッチ基準値。CC補正なし） |
-| Channel LFO2 Delay | 0, 33 | 0〜255（パッチ基準値。CC補正なし） |
-| Channel LFO2 Fade Time | 0, 34 | 0〜255（0=フェード無効） |
-| Channel LFO2 Offset | 0, 35 | 0〜255（中心128=オフセットなし） |
+| 質感LFO Fade Mode | 0, 22 | 0=ON-IN / 1=ON-OUT / 2=OFF-IN / 3=OFF-OUT |
+| 質感LFO Rate | 0, 23 | 0〜255（焼き込み専用。CC補正なし） |
+| 質感LFO Depth | 0, 24 | 0〜255（焼き込み専用。CC補正なし） |
+| 質感LFO Delay | 0, 25 | 0〜255（焼き込み専用。CC補正なし） |
+| 質感LFO Fade Time | 0, 26 | 0〜255（0=フェード無効） |
+| 質感LFO Offset | 0, 27 | 0〜255（中心128=オフセットなし） |
+| Pitch FG Loop | 0, 28 | 0=ワンショット / 1=ループ |
+| Pitch FG Curve | 0, 29 | 0=線形 / 1=サイン風 |
+| Cutoff FG Loop | 0, 30 | 0=ワンショット / 1=ループ |
+| Cutoff FG Curve | 0, 31 | 0=線形 / 1=サイン風 |
+| Gain FG Loop | 0, 32 | 0=ワンショット / 1=ループ |
+| Gain FG Curve | 0, 33 | 0=線形 / 1=サイン風 |
 
 **AT Destination / Poly AT Destination（アフタータッチの加算先）：**
 
