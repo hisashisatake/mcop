@@ -81,6 +81,9 @@ fn op(tl: u8, ar: u8, d1r: u8, d2r: u8, d1l: u8, rr: u8, mul: u8, dt1: u8) -> Op
         velocity_sensitivity: 0,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     }
 }
 

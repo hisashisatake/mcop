@@ -37,6 +37,9 @@ pub fn waveform_memory_patch(waveform: u8, adsr: AdsrParams) -> Ym38x6Patch {
         velocity_sensitivity: 0,
         waveform,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // OP2〜4: TL=0でミュート(Algorithm 7では全Opがキャリアのため、音を消すにはTLを最小にする)。
     let muted = OperatorParams { tl: 0, ..patch.operators[0] };
@@ -133,6 +136,9 @@ pub fn placeholder_patch(bank: u16, program: u8) -> Ym38x6Patch {
         velocity_sensitivity: 0,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     for (i, op) in patch.operators.iter_mut().enumerate() {
         *op = OperatorParams { waveform: seed.wrapping_add(i as u8) % 8, ..base };
@@ -177,6 +183,9 @@ fn acoustic_grand_piano_patch() -> Ym38x6Patch {
         velocity_sensitivity: 80,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O2: ペア1のキャリア（基音、緩やかな自然減衰）
     patch.operators[1] = OperatorParams {
@@ -193,6 +202,9 @@ fn acoustic_grand_piano_patch() -> Ym38x6Patch {
         velocity_sensitivity: 40,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O3: ペア2のモジュレーター（高次倍音、わずかに高めデチューン）
     patch.operators[2] = OperatorParams {
@@ -209,6 +221,9 @@ fn acoustic_grand_piano_patch() -> Ym38x6Patch {
         velocity_sensitivity: 100,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O4: ペア2のキャリア（基音、わずかに低めデチューンでコーラス感）
     patch.operators[3] = OperatorParams {
@@ -225,6 +240,9 @@ fn acoustic_grand_piano_patch() -> Ym38x6Patch {
         velocity_sensitivity: 30,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     patch
 }
@@ -252,6 +270,9 @@ fn electric_piano_1_patch() -> Ym38x6Patch {
         velocity_sensitivity: 120,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O2: ベル成分のキャリア
     patch.operators[1] = OperatorParams {
@@ -268,6 +289,9 @@ fn electric_piano_1_patch() -> Ym38x6Patch {
         velocity_sensitivity: 60,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O3: メイン音のモジュレーター
     patch.operators[2] = OperatorParams {
@@ -284,6 +308,9 @@ fn electric_piano_1_patch() -> Ym38x6Patch {
         velocity_sensitivity: 50,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     // O4: メイン音のキャリア
     patch.operators[3] = OperatorParams {
@@ -300,6 +327,9 @@ fn electric_piano_1_patch() -> Ym38x6Patch {
         velocity_sensitivity: 20,
         waveform: 0,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     patch
 }
@@ -329,6 +359,9 @@ fn lead_1_square_patch() -> Ym38x6Patch {
         velocity_sensitivity: 40,
         waveform: 3,
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     patch.operators[0] = OperatorParams { tl: 255, ..base };
     patch.operators[1] = OperatorParams { dt1: 138, ..base };

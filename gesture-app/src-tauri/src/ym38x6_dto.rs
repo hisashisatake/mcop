@@ -48,6 +48,15 @@ pub struct OperatorParamsDto {
     /// 未送信のフロントエンドでも中心128（オフセットなし）として扱う。
     #[serde(default = "default_op_fine_tune")]
     pub op_fine_tune: u8,
+    /// ループ時の折り返しの底レベル(0〜255、既定0＝完全開閉)。
+    #[serde(default)]
+    pub floor: u8,
+    /// 0=ワンショット/1=ループ。未送信のフロントエンドでは0（従来のADSR挙動）として扱う。
+    #[serde(default)]
+    pub loop_enabled: u8,
+    /// 0=線形/1=サイン風。
+    #[serde(default)]
+    pub curve: u8,
 }
 
 fn default_op_fine_tune() -> u8 {
@@ -70,6 +79,9 @@ impl From<OperatorParamsDto> for OperatorParams {
             velocity_sensitivity: dto.velocity_sensitivity,
             waveform: dto.waveform,
             op_fine_tune: dto.op_fine_tune,
+            floor: dto.floor,
+            loop_enabled: dto.loop_enabled,
+            curve: dto.curve,
         }
     }
 }
@@ -90,6 +102,9 @@ impl From<OperatorParams> for OperatorParamsDto {
             velocity_sensitivity: op.velocity_sensitivity,
             waveform: op.waveform,
             op_fine_tune: op.op_fine_tune,
+            floor: op.floor,
+            loop_enabled: op.loop_enabled,
+            curve: op.curve,
         }
     }
 }

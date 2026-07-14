@@ -32,6 +32,9 @@ fn operator_panel<'a>(
         op_fine_tune: vi(&op.op_fine_tune, setter),
         ame: vb(&op.ame, setter),
         waveform: vi(&op.waveform, setter),
+        floor: vi(&op.floor, setter),
+        op_loop: vb(&op.op_loop, setter),
+        curve: vb(&op.curve, setter),
     }
 }
 

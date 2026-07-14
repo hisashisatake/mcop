@@ -22,6 +22,12 @@ pub struct OperatorPanelParams<'a> {
     pub op_fine_tune: Box<dyn IntParamHandle + 'a>,
     pub ame: Box<dyn BoolParamHandle + 'a>,
     pub waveform: Box<dyn IntParamHandle + 'a>,
+    /// ループ時の折り返しの底レベル(0〜255、既定0＝完全開閉)。`op_loop`がOFFの間は無効。
+    pub floor: Box<dyn IntParamHandle + 'a>,
+    /// OP単位ループEG（VCF/VCAのFGと同じLoop/Floor/Curve機構をFMオペレーターEGに開放したもの）。
+    pub op_loop: Box<dyn BoolParamHandle + 'a>,
+    /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。
+    pub curve: Box<dyn BoolParamHandle + 'a>,
 }
 
 /// `draw_param_panel`に渡すパラメーター一式。
@@ -114,6 +120,19 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                                 op.ame.end_edit();
                             }
                             waveform_selector(ui, &*op.waveform, i);
+                            knob(ui, &*op.floor, "FLOOR");
+                            let mut op_loop = op.op_loop.value();
+                            if ui.checkbox(&mut op_loop, "LOOP").changed() {
+                                op.op_loop.begin_edit();
+                                op.op_loop.set(op_loop);
+                                op.op_loop.end_edit();
+                            }
+                            let mut curve = op.curve.value();
+                            if ui.checkbox(&mut curve, "CURVE").changed() {
+                                op.curve.begin_edit();
+                                op.curve.set(curve);
+                                op.curve.end_edit();
+                            }
                         });
                     });
                 });

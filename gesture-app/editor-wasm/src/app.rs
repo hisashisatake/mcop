@@ -39,6 +39,19 @@ fn operator_panel<const I: usize>(state: &Rc<RefCell<EditorState>>, dirty: &Rc<C
             set: |s: &mut EditorState, v: bool| s.operators[I].ame = v,
         }),
         waveform: op!(waveform, "Waveform", 0, 255, 0),
+        floor: op!(floor, "Floor", 0, 255, 0),
+        op_loop: Box::new(BoolField {
+            state: state.clone(),
+            dirty: dirty.clone(),
+            get: |s: &EditorState| s.operators[I].op_loop,
+            set: |s: &mut EditorState, v: bool| s.operators[I].op_loop = v,
+        }),
+        curve: Box::new(BoolField {
+            state: state.clone(),
+            dirty: dirty.clone(),
+            get: |s: &EditorState| s.operators[I].curve,
+            set: |s: &mut EditorState, v: bool| s.operators[I].curve = v,
+        }),
     }
 }
 

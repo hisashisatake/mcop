@@ -266,6 +266,9 @@ impl Ym38x6Plugin {
                 velocity_sensitivity: op.vel_sens.value() as u8,
                 waveform: self.operator_waveforms[i],
                 op_fine_tune: op.op_fine_tune.value() as u8,
+                floor: op.floor.value() as u8,
+                loop_enabled: op.op_loop.value() as u8,
+                curve: op.curve.value() as u8,
             }
         });
 

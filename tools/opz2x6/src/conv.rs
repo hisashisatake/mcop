@@ -311,6 +311,9 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 24 },
         waveform: op.ow.min(7),
         op_fine_tune,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。

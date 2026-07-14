@@ -17,6 +17,9 @@ fn sustained_release_patch() -> Ym38x6Patch {
         velocity_sensitivity: 0,
         waveform: 0, // サイン波（サンプル間の段差が小さく、連続性を観測しやすい）
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     Ym38x6Patch {
         operators: [op; 4],

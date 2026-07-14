@@ -198,6 +198,9 @@ impl OpnOperator {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         }
     }
 }

@@ -131,6 +131,9 @@ struct OperatorDto {
     velocity_sensitivity: u8,
     waveform: u8,
     op_fine_tune: u8,
+    floor: u8,
+    loop_enabled: u8,
+    curve: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -193,6 +196,9 @@ impl PatchDto {
                 vel_sens: op.velocity_sensitivity as i32,
                 op_fine_tune: op.op_fine_tune as i32,
                 waveform: op.waveform as i32,
+                floor: op.floor as i32,
+                op_loop: op.loop_enabled != 0,
+                curve: op.curve != 0,
             };
         }
         let ch = &self.channel;
@@ -249,6 +255,9 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
             velocity_sensitivity: op.vel_sens as u8,
             waveform: op.waveform as u8,
             op_fine_tune: op.op_fine_tune as u8,
+            floor: op.floor as u8,
+            loop_enabled: op.op_loop as u8,
+            curve: op.curve as u8,
         }
     });
     let channel = ChannelDto {

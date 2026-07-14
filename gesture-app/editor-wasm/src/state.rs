@@ -17,6 +17,9 @@ pub struct OperatorState {
     pub vel_sens: i32,
     pub op_fine_tune: i32,
     pub waveform: i32,
+    pub floor: i32,
+    pub op_loop: bool,
+    pub curve: bool,
 }
 
 impl Default for OperatorState {
@@ -35,6 +38,9 @@ impl Default for OperatorState {
             vel_sens: 0,
             op_fine_tune: 128,
             waveform: 0,
+            floor: 0,
+            op_loop: false,
+            curve: false,
         }
     }
 }

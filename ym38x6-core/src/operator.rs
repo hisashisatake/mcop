@@ -31,6 +31,15 @@ pub struct OperatorParams {
     /// DT1とはセントで加算される。既存`.38x6`に無い場合は中心128（オフセットなし）。
     #[serde(default = "default_op_fine_tune")]
     pub op_fine_tune: u8,
+    /// ループ時の折り返しの底レベル(0〜255、既定0＝完全開閉)。`sound_core::EgParams::floor`に対応。
+    #[serde(default)]
+    pub floor: u8,
+    /// 0=ワンショット（従来のADSR挙動そのまま）/1=ループ。`sound_core::EgParams::loop_enabled`に対応。
+    #[serde(rename = "loop", default)]
+    pub loop_enabled: u8,
+    /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。`sound_core::EgParams::curve`に対応。
+    #[serde(default)]
+    pub curve: u8,
 }
 
 /// `op_fine_tune`の中心値（オフセットなし）。serde欠落時およびDefaultで使う。
@@ -56,6 +65,9 @@ impl Default for OperatorParams {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: default_op_fine_tune(),
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         }
     }
 }
@@ -195,7 +207,16 @@ impl Operator {
         let ksr_mul = ksr_rate_multiplier(self.params.ksr, note);
         let env_level = self.eg.tick(
             sample_rate,
-            EgParams::classic(self.params.ar, self.params.d1r, self.params.d1l, self.params.d2r, self.params.rr),
+            EgParams {
+                ar: self.params.ar,
+                d1r: self.params.d1r,
+                d1l: self.params.d1l,
+                d2r: self.params.d2r,
+                rr: self.params.rr,
+                floor: self.params.floor,
+                loop_enabled: self.params.loop_enabled,
+                curve: self.params.curve,
+            },
             ksr_mul,
         );
 
@@ -247,6 +268,9 @@ mod tests {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         }
     }
 
@@ -420,5 +444,88 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(op.tick(sr, &wave, 0.0, 69), 0.0);
         }
+    }
+
+    /// floor/loop/curveフィールドを持たない旧`.38x6`のJSONを読み込むと、`#[serde(default)]`により
+    /// 3項目とも0（loop=0＝従来のADSR挙動）で復元されることを確認する（後方互換）。
+    #[test]
+    fn deserializes_legacy_json_without_loop_fields_as_disabled() {
+        let legacy_json = r#"{
+            "tl": 200, "ar": 255, "d1r": 100, "d2r": 80, "d1l": 180, "rr": 150,
+            "mul": 1, "dt1": 128, "ksr": 64, "am_enable": false,
+            "velocity_sensitivity": 0, "waveform": 0
+        }"#;
+        let op: OperatorParams = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(op.floor, 0);
+        assert_eq!(op.loop_enabled, 0);
+        assert_eq!(op.curve, 0);
+        assert_eq!(op.op_fine_tune, 128, "op_fine_tuneも既存の後方互換規則どおり中心128");
+    }
+
+    /// loop=0(既定)の場合、新規追加したfloor/loop/curveフィールドが0でも従来の5段ADSRと
+    /// 完全に同一の出力になることを確認する（既存`.38x6`・コンバーター出力の後方互換担保）。
+    #[test]
+    fn loop_disabled_matches_classic_envelope_exactly() {
+        let sr = 44100.0;
+        let wave = gen_op_sine();
+        let mut classic = fast_params();
+        classic.floor = 0;
+        classic.loop_enabled = 0;
+        classic.curve = 0;
+        let mut op_classic = Operator::new(classic);
+        let mut op_new = Operator::new(classic); // 同一パラメーターの複製（新フィールドは既定と一致）
+        op_classic.note_on(440.0, 127);
+        op_new.note_on(440.0, 127);
+        for _ in 0..5000 {
+            let a = op_classic.tick(sr, &wave, 0.0, 69);
+            let b = op_new.tick(sr, &wave, 0.0, 69);
+            assert_eq!(a, b, "floor=0/loop=0/curve=0 must match the classic ADSR bit-for-bit");
+        }
+    }
+
+    /// OP単位ループEG: loop=1で、そのOPのEG出力（＝モジュレーターなら変調指数）が
+    /// floorとpeakの間を周期的に往復することを確認する（FM特有のうねりの土台）。
+    /// `tick()`は音声波形(サイン)込みの出力を返すため、1音声周期(≈100サンプル@440Hz/44.1kHz)
+    /// より十分長いウィンドウ内の最大振幅を追跡し、サインのゼロクロスとEGループを区別する。
+    #[test]
+    fn loop_enabled_operator_oscillates_between_floor_and_peak() {
+        let sr = 44100.0;
+        let wave = gen_op_sine();
+        let mut params = fast_params();
+        params.ar = 200;
+        params.d1r = 200;
+        // EG出力はdBリニア（-96dB〜0dB）のため、floor=0(完全開閉)ならピーク(≒0dB)⇄
+        // ほぼ無音(≒-96dB)を往復する。中間のfloor値は指数変換で振幅の判別が難しくなるため、
+        // 「往復しているか」を最も明確に検出できる両端(0/1)を使う。
+        params.floor = 0;
+        params.loop_enabled = 1;
+        let mut op = Operator::new(params);
+        op.note_on(440.0, 127);
+
+        // 初回Attack(0→peak)はループの「floor⇄peak往復」ではないため、一度peak付近に
+        // 達するまでをウォームアップとして読み捨ててから、往復のウィンドウ観測を始める。
+        for _ in 0..40000 {
+            if op.tick(sr, &wave, 0.0, 69).abs() >= 0.99 {
+                break;
+            }
+        }
+
+        const WINDOW: usize = 256;
+        let mut chunk_max = Vec::new();
+        let mut cur_max = 0.0f32;
+        for i in 0..40000 {
+            let sample = op.tick(sr, &wave, 0.0, 69).abs();
+            cur_max = cur_max.max(sample);
+            if (i + 1) % WINDOW == 0 {
+                chunk_max.push(cur_max);
+                cur_max = 0.0;
+            }
+        }
+
+        let overall_max = chunk_max.iter().cloned().fold(0.0f32, f32::max);
+        let overall_min = chunk_max.iter().cloned().fold(1.0f32, f32::min);
+        assert!(!op.is_idle(), "loop mode should never become idle on its own");
+        assert!(overall_max > 0.9, "expected windowed peak near 1.0, got {overall_max}");
+        assert!(overall_min < 0.05, "expected windowed trough near silence(floor=0), got {overall_min}");
     }
 }

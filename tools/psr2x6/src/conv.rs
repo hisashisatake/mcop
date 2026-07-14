@@ -253,6 +253,9 @@ impl OpqOperator {
             // 現状はデチューンを×4→DT1に載せるため、追加チューニングはオフセットなし(中心128)。
             // OPQ広レンジデチューンの高忠実変換を実装する際にここを使う。
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         }
     }
 }

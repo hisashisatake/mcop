@@ -122,6 +122,9 @@ fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
         velocity_sensitivity: 0,
         waveform: 32 + np.min(31), // 32〜63 = ノイズ（color=NP）
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     }
 }
 
@@ -162,6 +165,9 @@ fn mix_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
         velocity_sensitivity: 0,
         waveform: 16, // 矩形波（square variant0）
         op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     };
     patch.operators[0] = tone;
     patch.operators[1] = OperatorParams { tl: 0, ..tone };

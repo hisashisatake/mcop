@@ -878,6 +878,9 @@ mod tests {
             velocity_sensitivity,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];
@@ -1023,6 +1026,9 @@ mod tests {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         };
         let make = |op0_sens: u8| {
             let mut patch = Ym38x6Patch::default();
@@ -1067,6 +1073,9 @@ mod tests {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         };
 
         for algorithm in 0u8..8 {
@@ -1108,6 +1117,9 @@ mod tests {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         };
 
         for filter_type in 0u8..3 {
@@ -1156,6 +1168,9 @@ mod tests {
             velocity_sensitivity: 0,
             waveform: 0,
             op_fine_tune: 128,
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];

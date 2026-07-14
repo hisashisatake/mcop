@@ -41,6 +41,16 @@ pub(crate) struct OperatorVstParams {
     pub op_fine_tune: IntParam,
     #[id = "wf"]
     pub waveform: IntParam,
+    /// ループ時の折り返しの底レベル(0〜255、既定0＝完全開閉)。`loop`がOFFの間は無効。
+    #[id = "op_floor"]
+    pub floor: IntParam,
+    /// OP単位ループEG（VCF/VCAのFGと同じLoop/Floor/Curve機構をFMオペレーターEGに開放したもの）。
+    /// OFF(既定)では従来の5段ADSRと完全に同一の挙動になる。
+    #[id = "op_loop"]
+    pub op_loop: BoolParam,
+    /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。
+    #[id = "op_curve"]
+    pub curve: BoolParam,
 }
 
 impl Default for OperatorVstParams {
@@ -65,6 +75,10 @@ impl Default for OperatorVstParams {
             // 中心128＝オフセットなし（±1オクターブ）。DT1で足りない広いデチューン用
             op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
             waveform: IntParam::new("Waveform", 0, IntRange::Linear { min: 0, max: 255 }),
+            // 既定OFF/0＝従来の5段ADSRと完全に同一の挙動（後方互換）。
+            floor: IntParam::new("Op Loop Floor", 0, IntRange::Linear { min: 0, max: 255 }),
+            op_loop: BoolParam::new("Op Loop", false),
+            curve: BoolParam::new("Op Loop Curve", false),
         }
     }
 }

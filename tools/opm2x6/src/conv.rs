@@ -142,6 +142,9 @@ fn convert_op(op: &OpmOpReg, muted: bool) -> OperatorParams {
         velocity_sensitivity: 0,
         waveform: 0,
         op_fine_tune: dt2_to_op_fine_tune(op.dt2),
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
     }
 }
 
