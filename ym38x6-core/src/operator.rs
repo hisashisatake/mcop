@@ -5,17 +5,7 @@
 use crate::mapping::*;
 use crate::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
 use serde::{Deserialize, Serialize};
-use sound_core::WaveTable;
-
-/// OPN系5段階エンベロープ（Attack→Decay1→Decay2→Release、+Idle）。
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum EnvPhase {
-    Attack,
-    Decay1,
-    Decay2,
-    Release,
-    Idle,
-}
+use sound_core::{Eg, EgParams, WaveTable};
 
 /// オペレーター単位パラメーター一式（12個）。NRPN/DAWパラメーターから直接コピー可能。
 /// 基本は全8bit(0〜255)だが、`mul`は0〜255統一の例外（[mapping::mul_to_ratio](crate::mapping::mul_to_ratio)参照）。
@@ -75,8 +65,8 @@ pub struct Operator {
     /// フェーズ3は全Op同一値（Note-On時に一括設定）。フェーズ4のOP単位上書きの土台。
     frequency: f32,
     phase: f32,
-    env_phase: EnvPhase,
-    env_level: f32,
+    /// キーオン連動エンベロープ（`sound_core::Eg`へ統一、KSRはrate_scale経由で適用）。
+    eg: Eg,
     velocity: u8,
     /// 音色LFOによるピッチ変調（セント、全Op共通、3.1.5でChannelが設定）
     tone_lfo_pitch_mod_cents: f32,
@@ -103,8 +93,7 @@ impl Operator {
             params,
             frequency: 440.0,
             phase: 0.0,
-            env_phase: EnvPhase::Idle,
-            env_level: 0.0,
+            eg: Eg::new(),
             velocity: 127,
             tone_lfo_pitch_mod_cents: 0.0,
             tone_lfo_amp_mod: 0.0,
@@ -126,8 +115,7 @@ impl Operator {
         self.frequency = base_frequency;
         self.velocity = velocity;
         self.phase = 0.0;
-        self.env_phase = EnvPhase::Attack;
-        self.env_level = 0.0;
+        self.eg.note_on();
         self.f_number_ratio = 1.0;
         self.noise_lfsr = 1;
         self.noise_accum = 0.0;
@@ -143,8 +131,7 @@ impl Operator {
         self.frequency = base_frequency;
         self.velocity = velocity;
         self.phase = 0.0;
-        self.env_phase = EnvPhase::Attack;
-        // env_level は保持（残響から再アタック）
+        self.eg.retrigger(); // レベルは保持（残響から再アタック）
         self.f_number_ratio = 1.0;
         self.noise_lfsr = 1;
         self.noise_accum = 0.0;
@@ -152,13 +139,11 @@ impl Operator {
     }
 
     pub fn note_off(&mut self) {
-        if self.env_phase != EnvPhase::Idle {
-            self.env_phase = EnvPhase::Release;
-        }
+        self.eg.note_off();
     }
 
     pub fn is_idle(&self) -> bool {
-        self.env_phase == EnvPhase::Idle
+        self.eg.is_idle()
     }
 
     /// 音色LFOによる変調値を設定する（毎サンプル、Channelから呼ばれる）。
@@ -185,42 +170,6 @@ impl Operator {
         self.frequency * self.f_number_ratio * mul_to_ratio(self.params.mul) * 2f32.powf(cents / 1200.0)
     }
 
-    fn tick_envelope(&mut self, sample_rate: f32, note: u8) {
-        let ksr_mul = ksr_rate_multiplier(self.params.ksr, note);
-        // env_level 空間での閾値: d1l=255→1.0（即D2R移行）、d1l=0→0.0（D1Rが全域減衰）
-        let sustain_level = self.params.d1l as f32 / 255.0;
-        match self.env_phase {
-            EnvPhase::Attack => {
-                self.env_level += ar_to_delta(self.params.ar, sample_rate) * ksr_mul;
-                if self.env_level >= 1.0 {
-                    self.env_level = 1.0;
-                    self.env_phase = EnvPhase::Decay1;
-                }
-            }
-            EnvPhase::Decay1 => {
-                self.env_level -= decay_to_delta(self.params.d1r, sample_rate) * ksr_mul;
-                if self.env_level <= sustain_level {
-                    self.env_level = sustain_level;
-                    self.env_phase = EnvPhase::Decay2;
-                }
-            }
-            EnvPhase::Decay2 => {
-                self.env_level -= decay_to_delta(self.params.d2r, sample_rate) * ksr_mul;
-                if self.env_level <= 0.0 {
-                    self.env_level = 0.0; // Idleにはせずキーオン継続中は0に張り付く
-                }
-            }
-            EnvPhase::Release => {
-                self.env_level -= rr_to_delta(self.params.rr, sample_rate) * ksr_mul;
-                if self.env_level <= 0.0 {
-                    self.env_level = 0.0;
-                    self.env_phase = EnvPhase::Idle;
-                }
-            }
-            EnvPhase::Idle => {}
-        }
-    }
-
     /// ノイズ波形（32〜63）の1サンプルを生成する。17bit LFSR（AY-3-8910互換）を
     /// 色(=NP)に応じたクロックレートでサンプル&ホールド更新する。NP小=高レート（広帯域/白）、
     /// NP大=低レート（同値が連続=低域寄り）。ピッチレスのため note 周波数には依存しない。
@@ -240,10 +189,15 @@ impl Operator {
 
     /// `modulation`: FM変調入力（位相オフセット、0.0〜1.0スケール）
     pub fn tick(&mut self, sample_rate: f32, wave: &WaveTable, modulation: f32, note: u8) -> f32 {
-        if self.env_phase == EnvPhase::Idle {
+        if self.eg.is_idle() {
             return 0.0;
         }
-        self.tick_envelope(sample_rate, note);
+        let ksr_mul = ksr_rate_multiplier(self.params.ksr, note);
+        let env_level = self.eg.tick(
+            sample_rate,
+            EgParams::classic(self.params.ar, self.params.d1r, self.params.d1l, self.params.d2r, self.params.rr),
+            ksr_mul,
+        );
 
         let freq = self.effective_frequency();
         self.phase = (self.phase + freq / sample_rate).fract();
@@ -264,7 +218,7 @@ impl Operator {
         let amp_factor = (1.0 - self.tone_lfo_amp_mod).clamp(0.0, 1.0);
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
         // 4.8 = 96.0 / 20.0
-        let env_amp = 10f32.powf(-(1.0 - self.env_level) * 4.8);
+        let env_amp = 10f32.powf(-(1.0 - env_level) * 4.8);
         sample * env_amp * tl_to_gain(eff_tl) * amp_factor
     }
 }
@@ -337,49 +291,46 @@ mod tests {
         assert!(dw > dd * 2.0, "white diff {dw} should far exceed dark diff {dd}");
     }
 
+    /// EG状態機械は`sound_core::Eg`へ統一済み（内部フェーズは公開しない）。
+    /// ここではブラックボックスの出力振幅から、Attack→Decay1→Decay2（0に張り付き、
+    /// Idleにはならない）→note_off→Release→Idleという一連の遷移が保たれていることを検証する
+    /// （fast_paramsはAR/D1R/D2R/RR=255で全区間が数十〜数百サンプルと高速に完了する）。
     #[test]
     fn envelope_transitions_through_phases() {
         let sr = 44100.0;
         let wave = gen_op_sine();
         let mut op = Operator::new(fast_params());
         op.note_on(440.0, 127);
-        assert_eq!(op.env_phase, EnvPhase::Attack);
+        assert!(!op.is_idle());
 
-        // Attack → Decay1
-        for _ in 0..200 {
-            if op.env_phase != EnvPhase::Attack {
-                break;
-            }
-            op.tick(sr, &wave, 0.0, 69);
+        // Attackで一度ピーク付近まで振幅が立ち上がることを確認する。
+        let mut peak = 0.0f32;
+        for _ in 0..50 {
+            peak = peak.max(op.tick(sr, &wave, 0.0, 69).abs());
         }
-        assert_eq!(op.env_phase, EnvPhase::Decay1);
+        assert!(peak > 0.9, "expected attack to reach near-peak amplitude, got {peak}");
 
-        // Decay1 → Decay2
-        for _ in 0..400 {
-            if op.env_phase != EnvPhase::Decay1 {
-                break;
-            }
-            op.tick(sr, &wave, 0.0, 69);
+        // 十分な時間が経過すると、d1l=128のDecay1を経てd2r=255のDecay2で0近くまで
+        // 減衰し（Idleにはならず）張り付く。
+        let mut settled = 0.0f32;
+        for _ in 0..2000 {
+            settled = op.tick(sr, &wave, 0.0, 69).abs();
         }
-        assert_eq!(op.env_phase, EnvPhase::Decay2);
-
-        // Decay2: env_levelが0に張り付き、Idleにはならない
-        for _ in 0..200 {
-            op.tick(sr, &wave, 0.0, 69);
-        }
-        assert_eq!(op.env_phase, EnvPhase::Decay2);
-        assert_eq!(op.env_level, 0.0);
+        assert!(!op.is_idle(), "should still be sounding (Decay2 sticks at 0, not Idle)");
+        assert!(settled < 1e-3, "expected amplitude to have decayed near 0, got {settled}");
 
         // note_off → Release → Idle
         op.note_off();
-        assert_eq!(op.env_phase, EnvPhase::Release);
+        assert!(!op.is_idle(), "should not be idle immediately after note_off (Release just entered)");
+        let mut became_idle = false;
         for _ in 0..200 {
+            op.tick(sr, &wave, 0.0, 69);
             if op.is_idle() {
+                became_idle = true;
                 break;
             }
-            op.tick(sr, &wave, 0.0, 69);
         }
-        assert!(op.is_idle());
+        assert!(became_idle, "expected to reach Idle after Release completes");
     }
 
     #[test]
