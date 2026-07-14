@@ -14,7 +14,8 @@
 （フェーズ7はステップ1「VCO抽象境界の確立」・ステップ2「EG形式の確定とVcf/Vca定義」・
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」・
-ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」完了、次はステップ6「コア実装」）
+ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」・
+ステップ6「コア実装」完了、次はステップ7「VST配線」)
 
 ---
 
@@ -98,13 +99,22 @@
     (c) 音色LFO(tone_lfo.rs)を「チップ内LFO」へ改名（spec表記のみ、コード改名はステップ6）。VCO固有＝VCO
         差し替えで消えるレイヤー帰属を名指しする呼称とした
     → 詳細はspec-sound.mdの「ファンクションジェネレーター」節・「質感LFO」節を参照
-  → ステップ6「コア実装」: `sound-core::Eg`にLoop/Floor/Curveを追加しFG化。ChannelParamsへ
-    `pitch_fg`/`cutoff_fg`/`gain_fg`（各AR/D1R/D1L/D2R/RR/Loop/Floor/Curve、Pitch/Cutoffはバイポーラdepth）と
-    `texture_lfo`（5波形専用8項目）を持たせ、実効値=三層加算（Pitch FGのみCC補正）、Gain FG出力をVcaゲインへ合流、
-    `Filter EG`/`VCA EG`/旧`lfo1`/`lfo2`/`perf_lfo_shape`のserde互換移行。`tone_lfo.rs`をチップ内LFOへ改称。
-    **加えてEG/KSRレート倍率の共通化**（`sound-core::Eg::tick`にレート倍率引数`rate_scale`を追加し、
-    FM側=`ksr_mul`/VCF・VCA=`1.0`を渡す形へ統一。`operator.rs`が独自に持つ複製状態機械`EnvPhase`/`tick_envelope`を
-    削除し`Eg`へ一本化する。既存operator.rsテスト群で「音が1サンプルもズレない」ことを担保しながら進める）（未着手）
+  → ステップ6「コア実装」完了（`sound-core`/`ym38x6-core`に閉じた4コミット、2026-07-14）:
+    (1) `sound-core::Eg`にLoop/Floor/Curve・`retrigger()`（残響レベル保持での再Attack）・
+        `rate_scale`引数を追加。`Vcf`/`Vca`の`process()`を`EgParams`ベースの引数へ変更
+    (2) `operator.rs`が独自に持っていた複製状態機械`EnvPhase`/`tick_envelope`を削除し`sound_core::Eg`
+        （KSRは`rate_scale`として適用）へ一本化。既存テスト群を出力振幅ベースの検証に書き換えて
+        「音が1サンプルもズレない」ことを確認
+    (3) `tone_lfo.rs`を`chip_lfo.rs`（`ToneLfo`→`ChipLfo`）へ改称。JSON上の旧フィールド名
+        （`tone_lfo_freq`等）は`#[serde(rename)]`で維持し既存`.38x6`は無変更で読める
+    (4) `ChannelParams`から`filter_eg_*`/`vca_eg_*`/`perf_lfo_shape`（12個）を削除し、
+        `pitch_fg`/`cutoff_fg`/`gain_fg`（`sound-core::BipolarFg`/`GainFg`、共通EG=`EgParams`）・
+        `texture_lfo`（5波形専用8項目、完全パッチ所有）へ再編。`ChannelParams`に手動`Deserialize`
+        （`ChannelParamsWire`シャドー構造体経由）を実装し、旧`.38x6`ファイルを新スキーマへ自動移行する
+        後方互換レイヤーを追加（回帰テストで検証）。`Ym38x6Engine::set_performance_lfo`ランタイムAPIは
+        質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`tools/wavetest`は新スキーマへ
+        機械的に追従済み（新パラメーターのUI/NRPN露出はステップ7/8）
+    → `cargo test --workspace`で全クレート0 failedを確認
   → ステップ7「VST配線」: CC76/77/78をPitch FGのパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
     新NRPN番地(0,0)(0,1)(0,22)〜(0,33)、DAWパラメーター45個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
   → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのFG(Pitch/Cutoff/Gain)・質感LFO対応、
