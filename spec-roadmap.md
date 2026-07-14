@@ -30,7 +30,7 @@
   → マウスによる2Dジェスチャー入力UIの実装
   → キャリブレーション（C-F-G基準点）の実装
 
-フェーズ2: パフォーマンスLFO（現: チャンネルLFO）・マスターエフェクト実装
+フェーズ2: パフォーマンスLFO（現: FG／質感LFO）・マスターエフェクト実装
   → PerformanceLfo / PerformanceLfoTarget をsound-coreに実装
   → MasterEffects（Reverb/Chorus）をsound-coreに実装
 
@@ -83,33 +83,38 @@
     （波形/Fade/Offsetはパッチ所有・Rate/Delay/Destination/Depthはランタイム専用）を解消し、三層モデル
     （①音色/②パート状態/③ジェスチャー）で再編する設計を確定。LFO×2対称・完全パッチ所有・実効Depth=三層加算・
     Volume→Vca合流を spec-sound.md/spec.md/spec-app.md に明文化（コード変更なし）
-  → ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」【次はここ・設計中】:
-    VCF/VCAのモジュレーション源を「一発(EG)にもループ(LFO)にもなるファンクションジェネレーター」に
-    統一する設計を詰めてspec改訂する（コード実装はステップ6へ）。背景=VCF/VCAはループさせればLFOであり、
-    アナログシンセ的なスイープ/うねりを一次源として持てる。主要論点:
-    (a) sound-core::Egにループモードを追加（D1R⇄D2Rの往復。底値の定義=D1R戻り再利用 or 新規D2L、
-        ノートオフで現在位置からRRへ離脱する連続性）。ADSR形状ループがチャンネルLFO(8波形/Offset)で
-        代替できない具体音を1つ確定してから採否を決める
-    (b) チャンネルLFOのCutoff/Volume行きをVCF/VCA側のファンクションジェネレーターへ合流(統合)するか併存か。
-        Pitch/TL行きはVCF/VCAという帰る家が無くVCO側に残る（TLはFM固有、Pitchは全VCO共通）
-    (c) 音色LFO(tone_lfo.rs、チップ内蔵でVCO固有＝VCO差し替えで消える)の再定義・改名
-        （「TONE LFO」は実態=チップ副次パラメーター以上に重い。opz2x6/opm2x6の写像先波及に注意）
-    → ステップ5で確定したチャンネルLFOのDestination構成を部分的に見直す可能性がある（先に確定させる理由）
-  → ステップ6「コア実装」: ChannelParamsへLFO1/2の全8項目を完全所有させ、実効値=三層加算、
-    Volume行きをVcaゲインへ合流、旧perf_lfo_shapeのserde互換移行。**加えてEG/KSRレート倍率の共通化**
-    （`sound-core::Eg::tick`にレート倍率引数`rate_scale`を追加し、FM側=`ksr_mul`/VCF・VCA=`1.0`を渡す形へ
-    統一。`operator.rs`が独自に持つ複製状態機械`EnvPhase`/`tick_envelope`を削除し`Eg`へ一本化する。
-    既存operator.rsテスト群で「音が1サンプルもズレない」ことを担保しながら進める）（未着手）
-  → ステップ7「VST配線」: CC76/77/78をパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
-    新NRPN番地(0,23〜0,35)、DAWパラメーター37個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
-  → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのLFO2対応、ホイール/VキーのLFO1接続、
-    IPC/editor-wasm追随（未着手）
-  → ステップ9「smf2wav・変換ツール」: LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）
-  → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/LFOデプス等）・
-    velocity→音量「量」（ChannelParams、既定255）・Pitch EG
+  → ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」完了:
+    VCF/VCAのモジュレーション源を「一発(EG)にもループ(LFO)にもなるファンクションジェネレーター(FG)」に
+    統一する設計を確定しspec改訂した（コード実装はステップ6へ）。決着内容:
+    (a) `sound-core::Eg`にLoop/Floor/Curveを追加（既存5段EG＋3項目の拡張、新規部品ではない）。
+        Loop=1でFloor⇄peakをAR/D1Rが独立レートで往復（膝なし）、Curveは線形/サイン風の2択で出力レベルのみ整形、
+        ノートオフで現在位置からRRへ離脱する連続性を持つ。決め手はアシッド風フィルター（開閉非対称スイープ）の
+        A/B検証・実測グラフで、チャンネルLFOのサイン波では出せない固有価値と確認した
+    (b) 3FGスロット（Pitch新規／Cutoff=旧Filter EG／Gain=旧VCA EG）へ集約。チャンネルLFOのCutoff/Volume/Pitch行きは
+        「軌跡で表せる」三角/のこぎり/サイン波の範囲でFGへ畳み、「軌跡で表せない」矩形/台形/S&H/ランダム/カオスの
+        5波形だけを**質感LFO1基**（焼き込み専用・set-and-forget）に隔離した。境界規則「パラメーター化された
+        時間軌跡ならFG、そうでない（生成器/固定波形）なら質感LFO」で重なりゼロに整理。演奏CC(CC1/76/77/78)は
+        Pitch FGへ配線（質感LFOはCC補正を受けない）
+    (c) 音色LFO(tone_lfo.rs)を「チップ内LFO」へ改名（spec表記のみ、コード改名はステップ6）。VCO固有＝VCO
+        差し替えで消えるレイヤー帰属を名指しする呼称とした
+    → 詳細はspec-sound.mdの「ファンクションジェネレーター」節・「質感LFO」節を参照
+  → ステップ6「コア実装」: `sound-core::Eg`にLoop/Floor/Curveを追加しFG化。ChannelParamsへ
+    `pitch_fg`/`cutoff_fg`/`gain_fg`（各AR/D1R/D1L/D2R/RR/Loop/Floor/Curve、Pitch/Cutoffはバイポーラdepth）と
+    `texture_lfo`（5波形専用8項目）を持たせ、実効値=三層加算（Pitch FGのみCC補正）、Gain FG出力をVcaゲインへ合流、
+    `Filter EG`/`VCA EG`/旧`lfo1`/`lfo2`/`perf_lfo_shape`のserde互換移行。`tone_lfo.rs`をチップ内LFOへ改称。
+    **加えてEG/KSRレート倍率の共通化**（`sound-core::Eg::tick`にレート倍率引数`rate_scale`を追加し、
+    FM側=`ksr_mul`/VCF・VCA=`1.0`を渡す形へ統一。`operator.rs`が独自に持つ複製状態機械`EnvPhase`/`tick_envelope`を
+    削除し`Eg`へ一本化する。既存operator.rsテスト群で「音が1サンプルもズレない」ことを担保しながら進める）（未着手）
+  → ステップ7「VST配線」: CC76/77/78をPitch FGのパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
+    新NRPN番地(0,0)(0,1)(0,22)〜(0,33)、DAWパラメーター45個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
+  → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのFG(Pitch/Cutoff/Gain)・質感LFO対応、
+    ホイール/VキーのPitch FG接続、IPC/editor-wasm追随（未着手）
+  → ステップ9「smf2wav・変換ツール」: FG/質感LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）
+  → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/FG Depth等）・
+    velocity→音量「量」（ChannelParams、既定255）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
   → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
-    チャンネルLFOのLFO×2は固定2基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）
+    質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）
 
 フェーズ8: パラメーターUI・音色運用
   → パラメーターUI・音色保存・プリセットライブラリ（.38x6 の書き出しUI）

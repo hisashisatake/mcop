@@ -40,7 +40,7 @@ ym38x6/                  ← ワークスペースルート
   spec.md
   CLAUDE.md
 
-  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・PerformanceLfo〈チャンネルLFO、改称予定〉・MasterEffects）
+  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・Eg（FG=Pitch/Cutoff/Gain共通部品）・PerformanceLfo〈質感LFO、改称予定〉・MasterEffects）
     Cargo.toml
     src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
                              波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
@@ -53,7 +53,7 @@ ym38x6/                  ← ワークスペースルート
     src/waveform.rs        ← ビルトイン32波形生成（OPZ由来サイン8 + ノコギリ/矩形/三角の独自拡張）
     src/mapping.rs         ← パラメーターマッピング関数群
     src/tone_lfo.rs        ← チップ内LFO（旧称「音色LFO」。ファイル名はステップ6で改称予定）
-    src/filter.rs          ← SVF + Filter EG
+    src/filter.rs          ← SVF（Cutoff FGはsound-core::Egを流用、ステップ6で本ファイルは縮小予定）
 
   ym38x6-vst/            ← 38x6 VST3/CLAPプラグイン（nice-plug）
 
@@ -90,7 +90,7 @@ VSTプラグイン:  nice-plug（ym38x6-vstに実装済み）
 ```
 sound-core（モジュレーション/処理層 + VCO抽象）
   VCO抽象トレイト        ← 「ピッチ付き発振源」のインターフェース
-  モジュレーション層      ← チャンネルLFO(LFO1/2)・EG（Pitch/Filter/TVA）・VCF・VCA・表情コントローラー・ルーティング
+  モジュレーション層      ← FG（Pitch/Cutoff/Gain、一発にもループにもなるEG）・質感LFO（5波形専用）・VCF・VCA・表情コントローラー・ルーティング
   MasterEffects          ← Reverb/Chorus（出力後段）
         ▲ implements VCO
         │
@@ -100,7 +100,7 @@ ym38x6-core（VCO実装の一つ＝FM発振源）
 
 **モジュレーションの三層モデル：** モジュレーション層の値は、帰属を①音色（パッチ.38x6）／②パート状態
 （MIDIチャンネル単位のCC）／③ジェスチャー（揮発）の三層に分けて管理する（決め台詞「パッチが定義し、
-CCが補正し、ジェスチャーが今を動かす」）。チャンネルLFO（LFO1/LFO2）をはじめ各モジュレーション量は、
+CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/Gain）・質感LFOをはじめ各モジュレーション量は、
 ①基準値に②③を加算した実効値で作用するため、ホイールを触らなくてもパッチ定義の揺れは鳴る（GM2互換）。
 詳細は[spec-sound.md「モジュレーションの三層モデル」](spec-sound.md#モジュレーションの三層モデル音色パート状態ジェスチャー)を参照。
 
@@ -133,10 +133,9 @@ CCが補正し、ジェスチャーが今を動かす」）。チャンネルLFO
   旧フィルターEGの4段ADSR（`ym38x6-core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
   cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
 - **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（ステップ5）とVCF/VCAファンクション
-  ジェネレーター統合（ステップ5.5）の設計・spec改訂が完了、コア実装ステップ6〜smf2wavステップ9が未実装、
-  手動ワウ・表情ルーティング・velocity→音量「量」・
-  Pitch EGが未実装。これらも**ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、
-  `AudioProcessor`とは別レイヤー。
+  ジェネレーター統合（ステップ5.5、FG=Pitch/Cutoff/Gain＋質感LFOへの再編）の設計・spec改訂が完了、
+  コア実装ステップ6〜smf2wavステップ9が未実装、手動ワウ・表情ルーティング・velocity→音量「量」が未実装。
+  これらも**ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、`AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
   UI・MIDI実装を再利用できる状態を目指す。
 
