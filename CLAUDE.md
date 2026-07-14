@@ -111,6 +111,18 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 | `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
 | `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
 
+### グローバル専用スキル（プロジェクトコード非依存）
+
+以下はこのプロジェクトでよく使うが、プロジェクトのソースコード（tools/等）を呼び出さない汎用Claude技法のため、
+`~/.claude/skills/<name>/SKILL.md` にのみ定義を置き、リポジトリにはコミットしない
+（コミット要否の判断基準は`.claude/skills/`のスキル作成時に参照）。
+
+| スキル | 使い方 | 概要 |
+|---|---|---|
+| `/scope` | `/scope lfo.rsのS&H波形を見せて` | sound-core/ym38x6-coreの信号アルゴリズム（LFO波形・EG/ループEGカーブ・VCF応答等）を実ソースから忠実にJS移植し、Artifactでオシロスコープ風に図示する。設計判断のための波形比較に使う |
+| `/handoff` | `/handoff` | 別PCで作業を継続するための引き継ぎZIPを作成する（CLAUDE.md・settings.json・当該プロジェクトのmemory一式・docs/を定型構成で梱包） |
+| `/handoff-restore` | `/handoff-restore` | 別PCで作られたハンドオフZIPを展開し、memory・docs・skillsを各ディレクトリへ復元する（`/handoff`の逆操作） |
+
 ---
 
 ## コマンド
