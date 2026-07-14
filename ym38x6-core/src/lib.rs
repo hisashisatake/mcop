@@ -1,8 +1,8 @@
 pub mod algorithm;
+pub mod chip_lfo;
 pub mod mapping;
 pub mod operator;
 pub mod preset;
-pub mod tone_lfo;
 pub mod waveform;
 
 use std::collections::HashMap;
@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use sound_core::{
     apply_lfo_modulation, convert_wave_32, EgParams, PerformanceLfo, PerformanceLfoTarget, WaveTable,
 };
-use tone_lfo::{ams_to_depth, pms_to_cents_range, ToneLfo};
+use chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
 use waveform::gen_builtin_waveform;
 
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
@@ -89,17 +89,21 @@ pub struct ChannelParams {
     pub algorithm: u8,
     /// フィードバック深さ(0〜255)。
     pub feedback: u8,
-    /// 音色LFO周波数。
-    pub tone_lfo_freq: u8,
-    /// 音色LFO ピッチ変調深さ。
-    pub tone_lfo_pmd: u8,
-    /// 音色LFO 振幅変調深さ。
-    pub tone_lfo_amd: u8,
-    /// 音色LFO Delay。
-    pub tone_lfo_delay: u8,
-    /// PM感度（音色LFOのピッチ変調感度）。
+    /// チップ内LFO周波数。JSON上の旧名`tone_lfo_freq`を維持する（既存`.38x6`との後方互換）。
+    #[serde(rename = "tone_lfo_freq")]
+    pub chip_lfo_freq: u8,
+    /// チップ内LFO ピッチ変調深さ。JSON上の旧名`tone_lfo_pmd`を維持する。
+    #[serde(rename = "tone_lfo_pmd")]
+    pub chip_lfo_pmd: u8,
+    /// チップ内LFO 振幅変調深さ。JSON上の旧名`tone_lfo_amd`を維持する。
+    #[serde(rename = "tone_lfo_amd")]
+    pub chip_lfo_amd: u8,
+    /// チップ内LFO Delay。JSON上の旧名`tone_lfo_delay`を維持する。
+    #[serde(rename = "tone_lfo_delay")]
+    pub chip_lfo_delay: u8,
+    /// PM感度（チップ内LFOのピッチ変調感度）。
     pub pms: u8,
-    /// AM感度（音色LFOの振幅変調感度）。
+    /// AM感度（チップ内LFOの振幅変調感度）。
     pub ams: u8,
     /// フィルターCutoff(0〜255、spec.md「フィルター」セクション参照)。
     pub filter_cutoff: u8,
@@ -164,10 +168,10 @@ impl Default for ChannelParams {
         Self {
             algorithm: 0,
             feedback: 0,
-            tone_lfo_freq: 0,
-            tone_lfo_pmd: 0,
-            tone_lfo_amd: 0,
-            tone_lfo_delay: 0,
+            chip_lfo_freq: 0,
+            chip_lfo_pmd: 0,
+            chip_lfo_amd: 0,
+            chip_lfo_delay: 0,
             pms: 0,
             ams: 0,
             filter_cutoff: 255,
@@ -246,8 +250,8 @@ struct Channel {
     /// CC7/CC11（Channel Volume × Expression）の積ゲイン（0.0〜1.0、GM2二乗カーブ適用済み）。
     /// VST/smf2wav が `set_channel_volume` で書き込み、LFO音量変調（volume_mod_delta）とは独立。
     channel_gain: f32,
-    /// 音色LFO本体（PMS/AMS×PMD/AMD、spec.md「音色LFO」セクション参照）。
-    tone_lfo: ToneLfo,
+    /// チップ内LFO本体（PMS/AMS×PMD/AMD、spec.md「チップ内LFO」セクション参照）。
+    chip_lfo: ChipLfo,
     /// 4op合成後に適用するVCFセクション（sound-core::VoiceFilter、spec.md「フィルター」セクション参照）。
     vcf: VoiceFilter,
     /// 4op合成後に適用するVCAオーバーレイ（sound-core::VoiceAmp）。
@@ -290,7 +294,7 @@ impl Channel {
             tl_carrier_mod_delta: 0.0,
             cutoff_mod_delta: 0.0,
             channel_gain: 1.0,
-            tone_lfo: ToneLfo::new(),
+            chip_lfo: ChipLfo::new(),
             vcf,
             vca,
         }
@@ -380,21 +384,21 @@ impl Channel {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents);
         }
 
-        // 音色LFO（プリセット・NRPNで設定する音作り用、PMS/AMS×PMD/AMD）
-        let tone_lfo_value = self.tone_lfo.tick(
+        // チップ内LFO（プリセット・NRPNで設定する音作り用、PMS/AMS×PMD/AMD）
+        let chip_lfo_value = self.chip_lfo.tick(
             sample_rate,
-            self.channel_params.tone_lfo_freq,
-            self.channel_params.tone_lfo_delay,
+            self.channel_params.chip_lfo_freq,
+            self.channel_params.chip_lfo_delay,
         );
-        let tone_pitch_mod_cents = tone_lfo_value
+        let chip_pitch_mod_cents = chip_lfo_value
             * pms_to_cents_range(self.channel_params.pms)
-            * (self.channel_params.tone_lfo_pmd as f32 / 255.0);
-        let tone_amp_mod = tone_lfo_value
+            * (self.channel_params.chip_lfo_pmd as f32 / 255.0);
+        let chip_amp_mod = chip_lfo_value
             * ams_to_depth(self.channel_params.ams)
-            * (self.channel_params.tone_lfo_amd as f32 / 255.0);
+            * (self.channel_params.chip_lfo_amd as f32 / 255.0);
         for op in self.operators.iter_mut() {
-            let am = if op.params.am_enable { tone_amp_mod } else { 0.0 };
-            op.set_tone_lfo_modulation(tone_pitch_mod_cents, am);
+            let am = if op.params.am_enable { chip_amp_mod } else { 0.0 };
+            op.set_chip_lfo_modulation(chip_pitch_mod_cents, am);
         }
 
         // アルゴリズム結線に基づく4op合成
@@ -968,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn tone_lfo_modulates_output_amplitude_periodically() {
+    fn chip_lfo_modulates_output_amplitude_periodically() {
         let op_params = OperatorParams {
             tl: 255,
             ar: 255,
@@ -987,9 +991,9 @@ mod tests {
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];
         patch.channel.algorithm = 7; // 全並列
-        patch.channel.tone_lfo_freq = 200; // 速めのLFO（テストを短時間で完結させる）
-        patch.channel.tone_lfo_pmd = 255;
-        patch.channel.tone_lfo_amd = 255;
+        patch.channel.chip_lfo_freq = 200; // 速めのLFO（テストを短時間で完結させる）
+        patch.channel.chip_lfo_pmd = 255;
+        patch.channel.chip_lfo_amd = 255;
         patch.channel.pms = 255;
         patch.channel.ams = 255;
 

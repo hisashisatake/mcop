@@ -73,11 +73,11 @@ pub(crate) fn apply_at_modulation(
 
     let pmd = pressure_for(AtDestination::LfoPmd);
     if pmd > 0 {
-        patch.channel.tone_lfo_pmd = add(patch.channel.tone_lfo_pmd, pmd);
+        patch.channel.chip_lfo_pmd = add(patch.channel.chip_lfo_pmd, pmd);
     }
     let amd = pressure_for(AtDestination::LfoAmd);
     if amd > 0 {
-        patch.channel.tone_lfo_amd = add(patch.channel.tone_lfo_amd, amd);
+        patch.channel.chip_lfo_amd = add(patch.channel.chip_lfo_amd, amd);
     }
     let cutoff = pressure_for(AtDestination::FilterCutoff);
     if cutoff > 0 {

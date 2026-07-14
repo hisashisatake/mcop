@@ -136,10 +136,10 @@ pub(crate) fn create_editor(
                                             set!(params.lfo_fade_mode, ch.perf_lfo_shape.fade_mode as i32);
                                             set!(params.lfo_fade_time, ch.perf_lfo_shape.fade_time as i32);
                                             set!(params.lfo_offset, lfo_offset_to_param(ch.perf_lfo_shape.offset) as i32);
-                                            set!(params.tone_freq, ch.tone_lfo_freq as i32);
-                                            set!(params.tone_pmd, ch.tone_lfo_pmd as i32);
-                                            set!(params.tone_amd, ch.tone_lfo_amd as i32);
-                                            set!(params.tone_delay, ch.tone_lfo_delay as i32);
+                                            set!(params.tone_freq, ch.chip_lfo_freq as i32);
+                                            set!(params.tone_pmd, ch.chip_lfo_pmd as i32);
+                                            set!(params.tone_amd, ch.chip_lfo_amd as i32);
+                                            set!(params.tone_delay, ch.chip_lfo_delay as i32);
                                             set!(params.pms, ch.pms as i32);
                                             set!(params.ams, ch.ams as i32);
                                             set!(params.cutoff, ch.filter_cutoff as i32);

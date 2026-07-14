@@ -180,10 +180,10 @@ pub fn voice_to_patch(voice: &OpmVoice, op_order: OperatorOrder) -> Ym38x6Patch 
             // FL(3-bit, 0-7) → feedback: ×36（mucom2x6と同一スケール、実機FBノイズ再現調整済み）
             feedback: voice.fl.min(7) * 36,
             // LFRQは直接コピー（OPMのLFRQレートテーブルとym38x6は完全一致しないが低優先）
-            tone_lfo_freq: voice.lfrq,
-            tone_lfo_pmd: lfo_depth_to_x6(voice.pmd),
-            tone_lfo_amd: lfo_depth_to_x6(voice.amd),
-            tone_lfo_delay: 0,
+            chip_lfo_freq: voice.lfrq,
+            chip_lfo_pmd: lfo_depth_to_x6(voice.pmd),
+            chip_lfo_amd: lfo_depth_to_x6(voice.amd),
+            chip_lfo_delay: 0,
             pms: pms_to_x6(voice.pms),
             ams: ams_to_x6(voice.ams),
             // フィルターはOPMに相当パラメーターなし → ChannelParams::default()の全開設定を使う

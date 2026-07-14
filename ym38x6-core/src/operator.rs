@@ -68,10 +68,10 @@ pub struct Operator {
     /// キーオン連動エンベロープ（`sound_core::Eg`へ統一、KSRはrate_scale経由で適用）。
     eg: Eg,
     velocity: u8,
-    /// 音色LFOによるピッチ変調（セント、全Op共通、3.1.5でChannelが設定）
-    tone_lfo_pitch_mod_cents: f32,
-    /// 音色LFOによる振幅変調（0.0〜1.0、am_enable時のみ非ゼロ、3.1.5でChannelが設定）
-    tone_lfo_amp_mod: f32,
+    /// チップ内LFOによるピッチ変調（セント、全Op共通、Channelが設定）
+    chip_lfo_pitch_mod_cents: f32,
+    /// チップ内LFOによる振幅変調（0.0〜1.0、am_enable時のみ非ゼロ、Channelが設定）
+    chip_lfo_amp_mod: f32,
     /// パフォーマンスLFO（ビブラート）によるピッチ変調（セント、全Op共通、Channelが毎サンプル設定）
     perf_lfo_pitch_mod_cents: f32,
     /// OP単位F-Number上書き(NRPN Operator F-Number)による周波数比。1.0=上書きなし（Note-Onでリセット）。
@@ -95,8 +95,8 @@ impl Operator {
             phase: 0.0,
             eg: Eg::new(),
             velocity: 127,
-            tone_lfo_pitch_mod_cents: 0.0,
-            tone_lfo_amp_mod: 0.0,
+            chip_lfo_pitch_mod_cents: 0.0,
+            chip_lfo_amp_mod: 0.0,
             perf_lfo_pitch_mod_cents: 0.0,
             f_number_ratio: 1.0,
             is_carrier: false,
@@ -146,10 +146,10 @@ impl Operator {
         self.eg.is_idle()
     }
 
-    /// 音色LFOによる変調値を設定する（毎サンプル、Channelから呼ばれる）。
-    pub fn set_tone_lfo_modulation(&mut self, pitch_cents: f32, amp_mod: f32) {
-        self.tone_lfo_pitch_mod_cents = pitch_cents;
-        self.tone_lfo_amp_mod = amp_mod;
+    /// チップ内LFOによる変調値を設定する（毎サンプル、Channelから呼ばれる）。
+    pub fn set_chip_lfo_modulation(&mut self, pitch_cents: f32, amp_mod: f32) {
+        self.chip_lfo_pitch_mod_cents = pitch_cents;
+        self.chip_lfo_amp_mod = amp_mod;
     }
 
     /// パフォーマンスLFO（ビブラート）によるピッチ変調を設定する（毎サンプル、Channelから呼ばれる）。
@@ -165,7 +165,7 @@ impl Operator {
     fn effective_frequency(&self) -> f32 {
         let cents = dt1_to_cents(self.params.dt1)
             + op_fine_tune_to_cents(self.params.op_fine_tune)
-            + self.tone_lfo_pitch_mod_cents
+            + self.chip_lfo_pitch_mod_cents
             + self.perf_lfo_pitch_mod_cents;
         self.frequency * self.f_number_ratio * mul_to_ratio(self.params.mul) * 2f32.powf(cents / 1200.0)
     }
@@ -215,7 +215,7 @@ impl Operator {
         // キャリアでは無視し、音量はチャンネル側のvelocity_to_volume_gainに一本化する。
         let vel_sens = if self.is_carrier { 0 } else { self.params.velocity_sensitivity };
         let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
-        let amp_factor = (1.0 - self.tone_lfo_amp_mod).clamp(0.0, 1.0);
+        let amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
         // 4.8 = 96.0 / 20.0
         let env_amp = 10f32.powf(-(1.0 - env_level) * 4.8);
@@ -404,18 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn tone_lfo_modulation_affects_frequency_and_amplitude() {
+    fn chip_lfo_modulation_affects_frequency_and_amplitude() {
         let sr = 44100.0;
         let wave = gen_op_sine();
         let mut op = Operator::new(fast_params());
         op.note_on(440.0, 127);
 
         let base = op.effective_frequency();
-        op.set_tone_lfo_modulation(100.0, 0.0);
+        op.set_chip_lfo_modulation(100.0, 0.0);
         let pitched = op.effective_frequency();
         assert!(pitched > base, "positive pitch mod should raise frequency");
 
-        op.set_tone_lfo_modulation(0.0, 1.0);
+        op.set_chip_lfo_modulation(0.0, 1.0);
         // 振幅変調1.0でamp_factor=0 → 出力は常に0
         for _ in 0..10 {
             assert_eq!(op.tick(sr, &wave, 0.0, 69), 0.0);

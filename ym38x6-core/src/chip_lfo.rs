@@ -1,17 +1,18 @@
 // ---------------------------------------------------------------------------
-// 音色LFO（spec.md「音色LFO」セクション参照）
+// チップ内LFO（spec.md「チップ内LFO」セクション参照）
 //
 // プリセット・NRPNで設定する「音作り」用のLFO。波形は三角波固定。
 // PMS/AMSはチャンネルごとの変調感度、PMD/AMDはLFOそのものの深さで、
 // 両者の積が実際の変調量になる。AMはオペレーターごとのAME（OperatorParams::am_enable）
-// でON/OFFする。パフォーマンスLFO（ビブラート/トレモロ）とは完全に独立した別系統。
+// でON/OFFする。演奏系モジュレーション（FG/質感LFO）とは完全に独立した別系統
+// （FMチップ内蔵・パッチ内で完結・VCO差し替えで消えるレイヤー、旧称「音色LFO」）。
 //
 // 数式はすべて初期案（暫定）。CLAUDE.mdのテスト方針に従い、
 // 実装後に音を聴いて係数を調整する。
 // ---------------------------------------------------------------------------
 
-/// 音色LFOの周波数(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
-pub fn tone_lfo_freq_to_hz(freq: u8) -> f32 {
+/// チップ内LFOの周波数(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
+pub fn chip_lfo_freq_to_hz(freq: u8) -> f32 {
     const F_MIN: f32 = 3.0;
     const F_MAX: f32 = 80.0;
     F_MIN * (F_MAX / F_MIN).powf(freq as f32 / 255.0)
@@ -35,7 +36,7 @@ pub fn pms_to_cents_range(pms: u8) -> f32 {
 /// 実機AMS=0と同じ「振幅変調なし」の特殊値。ams=1〜255は実機AMS=1(23.9dB)〜
 /// AMS=3(95.6dB)の理論値を両端アンカーとした指数カーブでdB値を求め、
 /// depth = 1 - 10^(-dB/20) で線形振幅深度に変換する
-/// (operator.rsのamp_factor = (1 - tone_lfo_amp_mod).clamp(0,1)と整合)。
+/// (operator.rsのamp_factor = (1 - chip_lfo_amp_mod).clamp(0,1)と整合)。
 pub fn ams_to_depth(ams: u8) -> f32 {
     const MIN_DB: f32 = 23.9;
     const MAX_DB: f32 = 95.6;
@@ -46,13 +47,13 @@ pub fn ams_to_depth(ams: u8) -> f32 {
     1.0 - 10f32.powf(-db / 20.0)
 }
 
-/// 音色LFO本体：三角波固定（spec.md準拠）+ Delay。
-pub struct ToneLfo {
+/// チップ内LFO本体：三角波固定（spec.md準拠）+ Delay。
+pub struct ChipLfo {
     phase: f32,
     elapsed: f32,
 }
 
-impl ToneLfo {
+impl ChipLfo {
     pub fn new() -> Self {
         Self { phase: 0.0, elapsed: 0.0 }
     }
@@ -72,7 +73,7 @@ impl ToneLfo {
             return 0.0;
         }
 
-        let hz = tone_lfo_freq_to_hz(freq);
+        let hz = chip_lfo_freq_to_hz(freq);
         self.phase = (self.phase + hz / sample_rate).fract();
         if self.phase < 0.5 {
             4.0 * self.phase - 1.0
@@ -82,7 +83,7 @@ impl ToneLfo {
     }
 }
 
-impl Default for ToneLfo {
+impl Default for ChipLfo {
     fn default() -> Self {
         Self::new()
     }
@@ -97,10 +98,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tone_lfo_freq_to_hz_bounds() {
-        assert!((tone_lfo_freq_to_hz(0) - 3.0).abs() < 1e-3);
-        assert!((tone_lfo_freq_to_hz(255) - 80.0).abs() < 1e-2);
-        assert!(tone_lfo_freq_to_hz(255) > tone_lfo_freq_to_hz(0));
+    fn chip_lfo_freq_to_hz_bounds() {
+        assert!((chip_lfo_freq_to_hz(0) - 3.0).abs() < 1e-3);
+        assert!((chip_lfo_freq_to_hz(255) - 80.0).abs() < 1e-2);
+        assert!(chip_lfo_freq_to_hz(255) > chip_lfo_freq_to_hz(0));
     }
 
     #[test]
@@ -139,7 +140,7 @@ mod tests {
     #[test]
     fn delay_holds_output_at_zero() {
         let sr = 44100.0;
-        let mut lfo = ToneLfo::new();
+        let mut lfo = ChipLfo::new();
         // delay=255 → 10秒。1秒分ティックしても出力0のはず
         for _ in 0..44100 {
             assert_eq!(lfo.tick(sr, 128, 255), 0.0);
@@ -149,7 +150,7 @@ mod tests {
     #[test]
     fn triangle_wave_is_periodic_and_bounded() {
         let sr = 44100.0;
-        let mut lfo = ToneLfo::new();
+        let mut lfo = ChipLfo::new();
         let mut min = f32::MAX;
         let mut max = f32::MIN;
         for _ in 0..(sr as usize) {
@@ -165,7 +166,7 @@ mod tests {
     #[test]
     fn note_on_resets_phase_and_elapsed() {
         let sr = 44100.0;
-        let mut lfo = ToneLfo::new();
+        let mut lfo = ChipLfo::new();
         for _ in 0..1000 {
             lfo.tick(sr, 200, 0);
         }
