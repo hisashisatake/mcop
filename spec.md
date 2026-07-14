@@ -26,7 +26,7 @@
 
 フェーズ一覧と現在地は [spec-roadmap.md](spec-roadmap.md) に分離した。
 現在は **フェーズ5：実機音色資産の取り込みと音作り基盤** と **フェーズ7：MC-505風モジュレーション拡張** を並行進行中
-（フェーズ7はチャンネルLFO三層再編の設計＝ステップ5が完了し、次はコア実装＝ステップ6）。
+（フェーズ7はチャンネルLFO三層再編＝ステップ5とVCF/VCAファンクションジェネレーター統合＝ステップ5.5の設計・spec改訂が完了し、次はコア実装＝ステップ6）。
 
 ---
 
@@ -47,12 +47,12 @@ ym38x6/                  ← ワークスペースルート
 
   ym38x6-core/           ← 38x6 FMエンジン実装（sound-coreに依存）
     Cargo.toml
-    src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + 音色LFO + チャンネル管理）
+    src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + チップ内LFO + チャンネル管理）
     src/operator.rs        ← Operator（オシレーター + EG + パラメーター）
     src/algorithm.rs       ← アルゴリズム結線テーブル（ymfm由来）
     src/waveform.rs        ← ビルトイン32波形生成（OPZ由来サイン8 + ノコギリ/矩形/三角の独自拡張）
     src/mapping.rs         ← パラメーターマッピング関数群
-    src/tone_lfo.rs        ← 音色LFO
+    src/tone_lfo.rs        ← チップ内LFO（旧称「音色LFO」。ファイル名はステップ6で改称予定）
     src/filter.rs          ← SVF + Filter EG
 
   ym38x6-vst/            ← 38x6 VST3/CLAPプラグイン（nice-plug）
@@ -132,8 +132,9 @@ CCが補正し、ジェスチャーが今を動かす」）。チャンネルLFO
   （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
   旧フィルターEGの4段ADSR（`ym38x6-core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
   cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
-- **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（設計＝ステップ5完了、
-  コア実装ステップ6〜smf2wavステップ9が未実装）、手動ワウ・表情ルーティング・velocity→音量「量」・
+- **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（ステップ5）とVCF/VCAファンクション
+  ジェネレーター統合（ステップ5.5）の設計・spec改訂が完了、コア実装ステップ6〜smf2wavステップ9が未実装、
+  手動ワウ・表情ルーティング・velocity→音量「量」・
   Pitch EGが未実装。これらも**ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、
   `AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
