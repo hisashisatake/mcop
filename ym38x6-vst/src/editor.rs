@@ -2,11 +2,12 @@ use nice_plug::prelude::*;
 use nice_plug_egui::resizable_window::ResizableWindow;
 use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
 use std::sync::{Arc, Mutex};
-use ym38x6_core::{lfo_offset_to_param, presets_dir, PresetBank, Ym38x6Patch};
+use ym38x6_core::{presets_dir, PresetBank, Ym38x6Patch};
 use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
 
 use crate::param_adapter::{vb, vi};
 use crate::params::{OperatorVstParams, Ym38x6Params};
+use crate::texture_lfo_index_to_lfo_waveform;
 
 pub(crate) struct EditorState {
     pub(crate) preset_bank: PresetBank,
@@ -132,10 +133,13 @@ pub(crate) fn create_editor(
                                             let ch = &preset.patch.channel;
                                             set!(params.algorithm, ch.algorithm as i32);
                                             set!(params.feedback, ch.feedback as i32);
-                                            set!(params.lfo_waveform, ch.perf_lfo_shape.waveform as i32);
-                                            set!(params.lfo_fade_mode, ch.perf_lfo_shape.fade_mode as i32);
-                                            set!(params.lfo_fade_time, ch.perf_lfo_shape.fade_time as i32);
-                                            set!(params.lfo_offset, lfo_offset_to_param(ch.perf_lfo_shape.offset) as i32);
+                                            // 質感LFO: 新5波形パレット(u8)を、対応するDAWノブ(旧8波形enum)の
+                                            // 該当ラベルへ変換して反映する（ステップ7でノブ自体を5波形へ
+                                            // 作り直すまでの暫定、texture_lfo_index_to_lfo_waveform参照）。
+                                            set!(params.lfo_waveform, texture_lfo_index_to_lfo_waveform(ch.texture_lfo.waveform) as i32);
+                                            set!(params.lfo_fade_mode, ch.texture_lfo.fade_mode as i32);
+                                            set!(params.lfo_fade_time, ch.texture_lfo.fade_time as i32);
+                                            set!(params.lfo_offset, ch.texture_lfo.offset as i32);
                                             set!(params.tone_freq, ch.chip_lfo_freq as i32);
                                             set!(params.tone_pmd, ch.chip_lfo_pmd as i32);
                                             set!(params.tone_amd, ch.chip_lfo_amd as i32);
@@ -144,17 +148,20 @@ pub(crate) fn create_editor(
                                             set!(params.ams, ch.ams as i32);
                                             set!(params.cutoff, ch.filter_cutoff as i32);
                                             set!(params.resonance, ch.filter_resonance as i32);
-                                            set!(params.feg_ar, ch.filter_eg_ar as i32);
-                                            set!(params.feg_d1r, ch.filter_eg_d1r as i32);
-                                            set!(params.feg_d1l, ch.filter_eg_d1l as i32);
-                                            set!(params.feg_d2r, ch.filter_eg_d2r as i32);
-                                            set!(params.feg_rr, ch.filter_eg_rr as i32);
-                                            set!(params.feg_depth, ch.filter_eg_depth as i32);
-                                            set!(params.vca_ar, ch.vca_eg_ar as i32);
-                                            set!(params.vca_d1r, ch.vca_eg_d1r as i32);
-                                            set!(params.vca_d1l, ch.vca_eg_d1l as i32);
-                                            set!(params.vca_d2r, ch.vca_eg_d2r as i32);
-                                            set!(params.vca_rr, ch.vca_eg_rr as i32);
+                                            // Cutoff FG/Gain FG: DAWノブはまだloop/floor/curve/バイポーラdepthを
+                                            // 持たないため（ステップ7で追加）、EG本体(ar/d1r/d1l/d2r/rr)と
+                                            // depthの生値のみ反映する。
+                                            set!(params.feg_ar, ch.cutoff_fg.eg.ar as i32);
+                                            set!(params.feg_d1r, ch.cutoff_fg.eg.d1r as i32);
+                                            set!(params.feg_d1l, ch.cutoff_fg.eg.d1l as i32);
+                                            set!(params.feg_d2r, ch.cutoff_fg.eg.d2r as i32);
+                                            set!(params.feg_rr, ch.cutoff_fg.eg.rr as i32);
+                                            set!(params.feg_depth, ch.cutoff_fg.depth as i32);
+                                            set!(params.vca_ar, ch.gain_fg.ar as i32);
+                                            set!(params.vca_d1r, ch.gain_fg.d1r as i32);
+                                            set!(params.vca_d1l, ch.gain_fg.d1l as i32);
+                                            set!(params.vca_d2r, ch.gain_fg.d2r as i32);
+                                            set!(params.vca_rr, ch.gain_fg.rr as i32);
                                             for (i, op) in preset.patch.operators.iter().enumerate() {
                                                 let op_p = &params.operators[i];
                                                 set!(op_p.tl, op.tl as i32);

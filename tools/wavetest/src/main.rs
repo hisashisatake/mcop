@@ -364,11 +364,14 @@ fn build_filter_demo(
     patch.channel.filter_cutoff = demo.cutoff;
     patch.channel.filter_resonance = demo.resonance;
     patch.channel.filter_self_oscillation = demo.self_osc;
-    patch.channel.filter_eg_depth = demo.eg_depth;
-    patch.channel.filter_eg_ar = a;
-    patch.channel.filter_eg_d1r = d;
-    patch.channel.filter_eg_d1l = s;
-    patch.channel.filter_eg_rr = r;
+    // 旧unipolar Filter EG Depth(0〜255) → 新bipolar Cutoff FG Depth(中心128)への変換
+    // （ym38x6-core::lib.rsの後方互換マイグレーションと同じ式、常に開く方向として保つ）。
+    patch.channel.cutoff_fg.depth =
+        (128.0 + demo.eg_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8;
+    patch.channel.cutoff_fg.eg.ar = a;
+    patch.channel.cutoff_fg.eg.d1r = d;
+    patch.channel.cutoff_fg.eg.d1l = s;
+    patch.channel.cutoff_fg.eg.rr = r;
 
     let freq = override_freq
         .unwrap_or_else(|| note_to_freq(demo.octave, demo.note).expect("内蔵の基準音は常に有効"));

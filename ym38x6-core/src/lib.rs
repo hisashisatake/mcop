@@ -64,9 +64,7 @@ pub use preset::{
     PresetEntry, PresetFile, WAVEFORM_MEMORY_BANK,
 };
 use serde::{Deserialize, Serialize};
-use sound_core::{
-    apply_lfo_modulation, convert_wave_32, EgParams, PerformanceLfo, PerformanceLfoTarget, WaveTable,
-};
+use sound_core::{apply_lfo_modulation, convert_wave_32, Eg, PerformanceLfo, PerformanceLfoTarget, WaveTable};
 use chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
 use waveform::gen_builtin_waveform;
 
@@ -74,16 +72,79 @@ use waveform::gen_builtin_waveform;
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
     lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
-    pitch_depth_cents, volume_depth, cutoff_depth, AdsrParams, AudioProcessor, ChorusType, FilterType,
-    LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca,
-    Vcf, Vco, VoiceAmp, VoiceFilter,
+    pitch_depth_cents, volume_depth, cutoff_depth, AdsrParams, AudioProcessor, BipolarFg, ChorusType,
+    EgParams, FilterType, GainFg, LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects,
+    PerformanceLfoShape, ReverbType, Vca, Vcf, Vco, VoiceAmp, VoiceFilter,
 };
 
 // ---------------------------------------------------------------------------
 // パッチ（チャンネル + オペレーター4個分のパラメーター一式）
 // ---------------------------------------------------------------------------
 
+/// 質感LFO（spec-sound.md「質感LFO（5波形専用・焼き込み）」節）。旧「チャンネルLFO」を再編し、
+/// FGのループ（Floor⇄peak）では表せない5波形（矩形/台形/S&H/Random/Chaos）だけを担う、
+/// 焼き込み専用（演奏CCによる補正を受けない）の1基。全項目を`ChannelParams`が所有する。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextureLfo {
+    /// 0=矩形波/1=台形波/2=S&H/3=Random/4=Chaos。
+    pub waveform: u8,
+    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff（`Ym38x6LfoDestination`と同じ並び）。
+    pub destination: u8,
+    pub rate: u8,
+    pub depth: u8,
+    pub delay: u8,
+    /// 0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT。
+    pub fade_mode: u8,
+    pub fade_time: u8,
+    /// 波形の中心シフト(0〜255、中心128＝オフセットなし)。
+    pub offset: u8,
+}
+
+impl Default for TextureLfo {
+    /// 既定Depth=0で鳴らない（旧パッチ挙動と互換の「無効」状態）。
+    fn default() -> Self {
+        Self { waveform: 0, destination: 0, rate: 0, depth: 0, delay: 0, fade_mode: 0, fade_time: 0, offset: 128 }
+    }
+}
+
+/// 質感LFOの5波形インデックス(0〜4)を、内部で再利用する`sound_core::PerformanceLfo`の
+/// 8波形`LfoWaveform`へ写像する（三角/サイン/のこぎりには写像しない＝新エンコーディングの範囲外）。
+fn texture_lfo_waveform_to_engine(waveform: u8) -> LfoWaveform {
+    match waveform {
+        1 => LfoWaveform::Trapezoid,
+        2 => LfoWaveform::SampleHold,
+        3 => LfoWaveform::Random,
+        4 => LfoWaveform::Chaos,
+        _ => LfoWaveform::Square,
+    }
+}
+
+/// [texture_lfo_waveform_to_engine]の逆方向。旧`perf_lfo_shape`からの後方互換マイグレーション専用
+/// （三角/サイン/のこぎりは質感LFOのパレット外のため`None`を返す）。
+fn texture_lfo_waveform_from_engine(waveform: LfoWaveform) -> Option<u8> {
+    match waveform {
+        LfoWaveform::Square => Some(0),
+        LfoWaveform::Trapezoid => Some(1),
+        LfoWaveform::SampleHold => Some(2),
+        LfoWaveform::Random => Some(3),
+        LfoWaveform::Chaos => Some(4),
+        LfoWaveform::Triangle | LfoWaveform::Sine | LfoWaveform::Saw => None,
+    }
+}
+
+/// 質感LFOの波形/Fade/Offset設定を、`sound_core::PerformanceLfo`が受け取る
+/// `PerformanceLfoShape`へ変換する（rate/delay/destination/depthは別途セッターで設定する）。
+fn texture_lfo_to_shape(texture_lfo: TextureLfo) -> PerformanceLfoShape {
+    PerformanceLfoShape {
+        waveform: texture_lfo_waveform_to_engine(texture_lfo.waveform),
+        fade_mode: lfo_fade_mode_from_index(texture_lfo.fade_mode),
+        fade_time: texture_lfo.fade_time,
+        offset: lfo_offset_from_param(texture_lfo.offset),
+    }
+}
+
+/// `ChannelParams`の一部（`chip_lfo_*`等）を除く、チャンネル単位パラメーター一式。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ChannelParams {
     /// アルゴリズム番号(0〜7)。
     pub algorithm: u8,
@@ -113,57 +174,33 @@ pub struct ChannelParams {
     pub filter_type: u8,
     /// Self-Oscillation有効フラグ。
     pub filter_self_oscillation: bool,
-    /// Filter EG AR(0〜255)。
-    pub filter_eg_ar: u8,
-    /// Filter EG D1R(0〜255)。
-    pub filter_eg_d1r: u8,
-    /// Filter EG D1L(0〜255、サステインレベル)。
-    pub filter_eg_d1l: u8,
-    /// Filter EG D2R(0〜255)。4段ADSR時代には無かった段。既定0で旧挙動と等価
-    /// （D1Lで完全サステイン、旧仕様の退化ケース）。
-    #[serde(default)]
-    pub filter_eg_d2r: u8,
-    /// Filter EG RR(0〜255)。
-    pub filter_eg_rr: u8,
-    /// Filter EGがCutoffに与える変調量(0〜255)。
-    pub filter_eg_depth: u8,
-    /// VCA(TVA)オーバーレイ EG AR(0〜255)。既定255（最速）でFM本来のキャリアEGを変えない
-    /// 透過的マクロ・エンベロープ（spec.md「Vca」参照）。
-    #[serde(default = "default_vca_eg_ar")]
-    pub vca_eg_ar: u8,
-    /// VCA EG D1R(0〜255)。既定0（d1l=255のため実質無効）。
-    #[serde(default)]
-    pub vca_eg_d1r: u8,
-    /// VCA EG D1L(0〜255)。既定255（完全サステイン、常時全開）。
-    #[serde(default = "default_vca_eg_d1l")]
-    pub vca_eg_d1l: u8,
-    /// VCA EG D2R(0〜255)。既定0（サステインのまま張り付く）。
-    #[serde(default)]
-    pub vca_eg_d2r: u8,
-    /// VCA EG RR(0〜255)。既定255（最速、note off後すぐ0へ）。
-    #[serde(default = "default_vca_eg_rr")]
-    pub vca_eg_rr: u8,
-    /// パフォーマンスLFOの波形/Fade/Offset設定（sound-core::PerformanceLfoShape）。
-    /// 既定はTriangle/OnIn/fade_time=0/offset=0で、旧来のハードエッジ挙動と等価。
-    #[serde(default)]
-    pub perf_lfo_shape: PerformanceLfoShape,
+    /// Pitch FG（新規）：ピッチ変調の一次源。バイポーラDepth(中心128)で
+    /// キーオン一発のピッチ下降/上昇（シンセタム）とループ時のビブラートの両方を作れる。
+    pub pitch_fg: BipolarFg,
+    /// Cutoff FG（旧Filter EGの後継）：バイポーラDepth化されたカットオフ変調。
+    pub cutoff_fg: BipolarFg,
+    /// Gain FG（旧VCA EGの後継）：Depthなし、Floorが深さ役。
+    pub gain_fg: GainFg,
+    /// 質感LFO（旧チャンネルLFOを5波形に絞って再編、焼き込み専用）。
+    pub texture_lfo: TextureLfo,
 }
 
-fn default_vca_eg_ar() -> u8 {
-    255
+/// `Pitch FG`の既定値（ar=0/d1r=0/d1l=255/d2r=0/rr=255/depth=128/floor=0/loop=0/curve=0）。
+/// spec-sound.mdのJSON例と一致する「無効（変調なし）」状態。
+fn default_pitch_fg() -> BipolarFg {
+    BipolarFg { eg: EgParams { ar: 0, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0 }, depth: 128 }
 }
 
-fn default_vca_eg_d1l() -> u8 {
-    255
-}
-
-fn default_vca_eg_rr() -> u8 {
-    255
+/// `Gain FG`の既定値（ar=255/d1l=255/rr=255、旧`vca_eg_*`の既定と同値）。
+/// アタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となる透過的レイヤー。
+fn default_gain_fg() -> GainFg {
+    EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0 }
 }
 
 impl Default for ChannelParams {
     /// filter_cutoff=255（フィルター全開）/ filter_self_oscillation=true（spec.md準拠）以外は
-    /// すべて0（音色LFO・Filter EGとも無効、アルゴリズム0）。
+    /// すべて0相当（チップ内LFO・Cutoff FGとも無効、アルゴリズム0）。FG3スロット/質感LFOの既定値は
+    /// spec-sound.mdのJSON例（pitch_fg/cutoff_fg/gain_fg/texture_lfo）と厳密に一致させる。
     fn default() -> Self {
         Self {
             algorithm: 0,
@@ -178,19 +215,150 @@ impl Default for ChannelParams {
             filter_resonance: 0,
             filter_type: 0,
             filter_self_oscillation: true,
-            filter_eg_ar: 0,
-            filter_eg_d1r: 0,
-            filter_eg_d1l: 0,
-            filter_eg_d2r: 0,
-            filter_eg_rr: 0,
-            filter_eg_depth: 0,
-            vca_eg_ar: default_vca_eg_ar(),
-            vca_eg_d1r: 0,
-            vca_eg_d1l: default_vca_eg_d1l(),
-            vca_eg_d2r: 0,
-            vca_eg_rr: default_vca_eg_rr(),
-            perf_lfo_shape: PerformanceLfoShape::default(),
+            pitch_fg: default_pitch_fg(),
+            cutoff_fg: BipolarFg::default(),
+            gain_fg: default_gain_fg(),
+            texture_lfo: TextureLfo::default(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ChannelParamsの後方互換Deserialize（旧filter_eg_*/vca_eg_*/perf_lfo_shapeからの移行）
+// ---------------------------------------------------------------------------
+
+/// `ChannelParams`のDeserialize専用シャドー構造体。新スキーマ（`pitch_fg`等）と
+/// 旧スキーマ（`filter_eg_*`等）の両方を任意（`Option`）で受け取り、`From`実装で
+/// 新スキーマを優先しつつ、無ければ旧フィールドから移行構築する。
+#[derive(Deserialize)]
+struct ChannelParamsWire {
+    algorithm: u8,
+    feedback: u8,
+    #[serde(rename = "tone_lfo_freq")]
+    chip_lfo_freq: u8,
+    #[serde(rename = "tone_lfo_pmd")]
+    chip_lfo_pmd: u8,
+    #[serde(rename = "tone_lfo_amd")]
+    chip_lfo_amd: u8,
+    #[serde(rename = "tone_lfo_delay")]
+    chip_lfo_delay: u8,
+    pms: u8,
+    ams: u8,
+    filter_cutoff: u8,
+    filter_resonance: u8,
+    filter_type: u8,
+    filter_self_oscillation: bool,
+
+    // 新スキーマ（あれば最優先）
+    #[serde(default)]
+    pitch_fg: Option<BipolarFg>,
+    #[serde(default)]
+    cutoff_fg: Option<BipolarFg>,
+    #[serde(default)]
+    gain_fg: Option<GainFg>,
+    #[serde(default)]
+    texture_lfo: Option<TextureLfo>,
+
+    // 旧スキーマ（新スキーマが無い場合のみ移行元として使う）
+    #[serde(default)]
+    filter_eg_ar: Option<u8>,
+    #[serde(default)]
+    filter_eg_d1r: Option<u8>,
+    #[serde(default)]
+    filter_eg_d1l: Option<u8>,
+    #[serde(default)]
+    filter_eg_d2r: Option<u8>,
+    #[serde(default)]
+    filter_eg_rr: Option<u8>,
+    #[serde(default)]
+    filter_eg_depth: Option<u8>,
+    #[serde(default)]
+    vca_eg_ar: Option<u8>,
+    #[serde(default)]
+    vca_eg_d1r: Option<u8>,
+    #[serde(default)]
+    vca_eg_d1l: Option<u8>,
+    #[serde(default)]
+    vca_eg_d2r: Option<u8>,
+    #[serde(default)]
+    vca_eg_rr: Option<u8>,
+    #[serde(default)]
+    perf_lfo_shape: Option<PerformanceLfoShape>,
+}
+
+impl From<ChannelParamsWire> for ChannelParams {
+    fn from(wire: ChannelParamsWire) -> Self {
+        let cutoff_fg = wire.cutoff_fg.unwrap_or_else(|| {
+            // 旧unipolar Filter EG Depth(0〜255) → 新bipolar Depth(中心128)。
+            // 「常に開く方向」だった旧挙動を128超側の半分として保つ変換式。
+            let old_depth = wire.filter_eg_depth.unwrap_or(0);
+            BipolarFg {
+                eg: EgParams {
+                    ar: wire.filter_eg_ar.unwrap_or(0),
+                    d1r: wire.filter_eg_d1r.unwrap_or(0),
+                    d1l: wire.filter_eg_d1l.unwrap_or(0),
+                    d2r: wire.filter_eg_d2r.unwrap_or(0),
+                    rr: wire.filter_eg_rr.unwrap_or(0),
+                    floor: 0,
+                    loop_enabled: 0,
+                    curve: 0,
+                },
+                depth: (128.0 + old_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
+            }
+        });
+        let gain_fg = wire.gain_fg.unwrap_or_else(|| EgParams {
+            ar: wire.vca_eg_ar.unwrap_or(255),
+            d1r: wire.vca_eg_d1r.unwrap_or(0),
+            d1l: wire.vca_eg_d1l.unwrap_or(255),
+            d2r: wire.vca_eg_d2r.unwrap_or(0),
+            rr: wire.vca_eg_rr.unwrap_or(255),
+            floor: 0,
+            loop_enabled: 0,
+            curve: 0,
+        });
+        let texture_lfo = wire.texture_lfo.unwrap_or_else(|| match wire.perf_lfo_shape {
+            Some(shape) => match texture_lfo_waveform_from_engine(shape.waveform) {
+                // 質感LFOの5波形パレットに該当する場合のみ波形/Fade/Offsetを移行する。
+                // rate/depth/destinationは旧スキーマではランタイム専用でファイルに保存されて
+                // いなかったため既定（無効）のままとする。
+                Some(waveform) => TextureLfo {
+                    waveform,
+                    fade_mode: shape.fade_mode as u8,
+                    fade_time: shape.fade_time,
+                    offset: lfo_offset_to_param(shape.offset),
+                    ..TextureLfo::default()
+                },
+                None => TextureLfo::default(),
+            },
+            None => TextureLfo::default(),
+        });
+        Self {
+            algorithm: wire.algorithm,
+            feedback: wire.feedback,
+            chip_lfo_freq: wire.chip_lfo_freq,
+            chip_lfo_pmd: wire.chip_lfo_pmd,
+            chip_lfo_amd: wire.chip_lfo_amd,
+            chip_lfo_delay: wire.chip_lfo_delay,
+            pms: wire.pms,
+            ams: wire.ams,
+            filter_cutoff: wire.filter_cutoff,
+            filter_resonance: wire.filter_resonance,
+            filter_type: wire.filter_type,
+            filter_self_oscillation: wire.filter_self_oscillation,
+            pitch_fg: wire.pitch_fg.unwrap_or_else(default_pitch_fg),
+            cutoff_fg,
+            gain_fg,
+            texture_lfo,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ChannelParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ChannelParamsWire::deserialize(deserializer).map(Into::into)
     }
 }
 
@@ -218,6 +386,19 @@ pub enum Ym38x6LfoDestination {
     Cutoff,
 }
 
+impl Ym38x6LfoDestination {
+    /// 0〜255からの変換（質感LFOの`Destination`フィールド用、`FilterType::from_u8`と同じ慣習）。
+    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3以上=Cutoff。
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Volume,
+            2 => Self::TlCarrier,
+            3 => Self::Cutoff,
+            _ => Self::Pitch,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // チャンネル（4オペレーター + アルゴリズム結線）
 // ---------------------------------------------------------------------------
@@ -236,8 +417,9 @@ struct Channel {
     /// OP単位キーオン/オフでのリトリガー用に保持するNote-On時のベロシティ。
     velocity: u8,
     perf_lfo: PerformanceLfo,
-    lfo_destination: Ym38x6LfoDestination,
-    lfo_depth: f32,
+    /// Pitch FG（新規）のキーオン連動エンベロープ。バイポーラDepthで`channel_params.pitch_fg`から
+    /// ピッチ変調セントを作る（spec-sound.md「ファンクションジェネレーター」節）。
+    pitch_fg_eg: Eg,
     pitch_mod_cents: f32,
     /// MIDIピッチベンド/RPN0によるピッチオフセット（セント、毎tickでpitch_mod_centsに加算）。
     /// パフォーマンスLFO（pitch_mod_cents）が毎tick上書きされるのと独立に保持する。
@@ -274,8 +456,12 @@ impl Channel {
         vcf.note_on();
         let mut vca = VoiceAmp::new();
         vca.note_on();
+        let mut pitch_fg_eg = Eg::new();
+        pitch_fg_eg.note_on();
         let mut perf_lfo = PerformanceLfo::new();
-        perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        perf_lfo.set_rate(patch.channel.texture_lfo.rate);
+        perf_lfo.set_delay(patch.channel.texture_lfo.delay);
+        perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
         perf_lfo.note_on();
         Self {
             operators,
@@ -286,8 +472,7 @@ impl Channel {
             base_frequency: frequency,
             velocity,
             perf_lfo,
-            lfo_destination: Ym38x6LfoDestination::default(),
-            lfo_depth: 0.0,
+            pitch_fg_eg,
             pitch_mod_cents: 0.0,
             bend_cents: 0.0,
             volume_mod_delta: 0.0,
@@ -319,21 +504,11 @@ impl Channel {
         self.velocity = velocity;
         self.vcf.note_on();
         self.vca.note_on();
-        self.perf_lfo.set_shape(patch.channel.perf_lfo_shape);
+        self.pitch_fg_eg.note_on();
+        self.perf_lfo.set_rate(patch.channel.texture_lfo.rate);
+        self.perf_lfo.set_delay(patch.channel.texture_lfo.delay);
+        self.perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
         self.perf_lfo.note_on();
-    }
-
-    fn set_performance_lfo(
-        &mut self,
-        rate: u8,
-        delay: u8,
-        destination: Ym38x6LfoDestination,
-        depth: f32,
-    ) {
-        self.perf_lfo.set_rate(rate);
-        self.perf_lfo.set_delay(delay);
-        self.lfo_destination = destination;
-        self.lfo_depth = depth;
     }
 
     fn note_off(&mut self) {
@@ -342,6 +517,7 @@ impl Channel {
         }
         self.vcf.note_off();
         self.vca.note_off();
+        self.pitch_fg_eg.note_off();
         self.perf_lfo.note_off();
     }
 
@@ -364,24 +540,35 @@ impl Channel {
             return 0.0;
         }
 
-        // パフォーマンスLFO（ビブラート/トレモロ/TLキャリア一括）
-        let lfo_value = self.perf_lfo.tick(sample_rate);
-        match self.lfo_destination {
+        // 質感LFO（5波形専用・焼き込み、旧パフォーマンスLFO）。CC層を持たないため
+        // 各destinationの実単位への変換はcc1=0固定でpitch_depth_cents/volume_depth/cutoff_depthを
+        // 再利用する（それらは元々CC77(ベース)+CC1(加算)を取る関数で、cc1=0なら実質ベース値のみ）。
+        let texture_lfo_value = self.perf_lfo.tick(sample_rate);
+        let texture_lfo = self.channel_params.texture_lfo;
+        match Ym38x6LfoDestination::from_u8(texture_lfo.destination) {
             Ym38x6LfoDestination::Pitch => {
-                apply_lfo_modulation(lfo_value, LfoDestination::Pitch, self.lfo_depth, self);
+                let cents = pitch_depth_cents(texture_lfo.depth, 0, 0);
+                apply_lfo_modulation(texture_lfo_value, LfoDestination::Pitch, cents, self);
             }
             Ym38x6LfoDestination::Volume => {
-                apply_lfo_modulation(lfo_value, LfoDestination::Volume, self.lfo_depth, self);
+                let depth = volume_depth(texture_lfo.depth, 0);
+                apply_lfo_modulation(texture_lfo_value, LfoDestination::Volume, depth, self);
             }
             Ym38x6LfoDestination::TlCarrier => {
-                self.tl_carrier_mod_delta = lfo_value * self.lfo_depth;
+                self.tl_carrier_mod_delta = texture_lfo_value * volume_depth(texture_lfo.depth, 0);
             }
             Ym38x6LfoDestination::Cutoff => {
-                self.cutoff_mod_delta = lfo_value * self.lfo_depth;
+                self.cutoff_mod_delta = texture_lfo_value * cutoff_depth(texture_lfo.depth, 0);
             }
         }
+
+        // Pitch FG（新規）：ループ可能EGでビブラート/シンセタムを作る一次源。
+        // バイポーラDepth(中心128)で±1200セント(1オクターブ)までピッチを揺らす。
+        let pitch_fg = self.channel_params.pitch_fg;
+        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, 1.0);
+        let pitch_fg_cents = pitch_fg_out * (pitch_fg.depth as f32 - 128.0) / 128.0 * 1200.0;
         for op in self.operators.iter_mut() {
-            op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents);
+            op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
         }
 
         // チップ内LFO（プリセット・NRPNで設定する音作り用、PMS/AMS×PMD/AMD）
@@ -439,14 +626,12 @@ impl Channel {
         let velocity_gain = velocity_to_volume_gain(self.velocity);
         let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain * self.channel_gain;
 
-        // VCF（4op合成後） + VCA（TVAオーバーレイ）
+        // VCF（4op合成後、Cutoff FG） + VCA（TVAオーバーレイ、Gain FG）
         let cp = &self.channel_params;
-        // 拡張Destination=CutoffのLFO変調を基準Cutoffへ加算してからVcfへ渡す
-        // （Filter EG Depthはvcf.process内部でこの基準値をさらにキーオン一発で変調する）。
+        // 拡張Destination=Cutoffの質感LFO変調を基準Cutoffへ加算してからVcfへ渡す
+        // （Cutoff FG Depthはvcf.process内部でこの基準値をさらにキーオン一発/ループで変調する）。
         let modulated_cutoff =
             (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
-        let filter_eg_params =
-            EgParams::classic(cp.filter_eg_ar, cp.filter_eg_d1r, cp.filter_eg_d1l, cp.filter_eg_d2r, cp.filter_eg_rr);
         let filtered = self.vcf.process(
             dry,
             sample_rate,
@@ -454,12 +639,10 @@ impl Channel {
             cp.filter_resonance,
             FilterType::from_u8(cp.filter_type),
             cp.filter_self_oscillation,
-            filter_eg_params,
-            cp.filter_eg_depth,
+            cp.cutoff_fg.eg,
+            cp.cutoff_fg.depth,
         );
-        let vca_eg_params =
-            EgParams::classic(cp.vca_eg_ar, cp.vca_eg_d1r, cp.vca_eg_d1l, cp.vca_eg_d2r, cp.vca_eg_rr);
-        self.vca.process(filtered, sample_rate, vca_eg_params)
+        self.vca.process(filtered, sample_rate, cp.gain_fg)
     }
 }
 
@@ -538,12 +721,14 @@ impl Ym38x6Engine {
     }
 
     /// 発音中チャンネルのチャンネルパラメーターを更新する（DAWオートメーション/NRPN用）。
-    /// `perf_lfo_shape`（波形/Fade/Offset）は他フィールドと同様にリアルタイムで`perf_lfo`へ
-    /// 伝播する（note_on/retriggerでのみ適用される旧仕様から変更、発音中でもVSTのNRPN/DAW
-    /// パラメーター変更が効くようにするため）。
+    /// `texture_lfo`（rate/delay/波形/Fade/Offset/destination/depth）は他フィールドと同様に
+    /// リアルタイムで`perf_lfo`へ伝播する（旧仕様のrate/delay/destination/depthランタイム専用
+    /// API=`set_performance_lfo`は廃止、質感LFOは完全にパッチ所有になったため）。
     pub fn set_channel_params(&mut self, channel: usize, params: ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.perf_lfo.set_shape(params.perf_lfo_shape);
+            ch.perf_lfo.set_rate(params.texture_lfo.rate);
+            ch.perf_lfo.set_delay(params.texture_lfo.delay);
+            ch.perf_lfo.set_shape(texture_lfo_to_shape(params.texture_lfo));
             ch.channel_params = params;
         }
     }
@@ -583,21 +768,6 @@ impl Ym38x6Engine {
     pub fn set_user_wave(&mut self, slot: u8, input: &[i8; 32]) {
         assert!(slot >= 8, "slots 0-7 are reserved for builtin waves");
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));
-    }
-
-    /// 指定チャンネルのパフォーマンスLFO（Rate/Delay/Destination/Depth）を設定する。
-    /// 波形/Fade/Offsetは`ChannelParams.perf_lfo_shape`（`set_channel_params`）側で扱う。
-    pub fn set_performance_lfo(
-        &mut self,
-        channel: usize,
-        rate: u8,
-        delay: u8,
-        destination: Ym38x6LfoDestination,
-        depth: f32,
-    ) {
-        if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.set_performance_lfo(rate, delay, destination, depth);
-        }
     }
 
 }
@@ -948,11 +1118,10 @@ mod tests {
             patch.channel.filter_cutoff = 64;
             patch.channel.filter_resonance = 255;
             patch.channel.filter_self_oscillation = true;
-            patch.channel.filter_eg_ar = 200;
-            patch.channel.filter_eg_d1r = 150;
-            patch.channel.filter_eg_d1l = 128;
-            patch.channel.filter_eg_rr = 150;
-            patch.channel.filter_eg_depth = 255;
+            patch.channel.cutoff_fg = BipolarFg {
+                eg: EgParams { ar: 200, d1r: 150, d1l: 128, d2r: 0, rr: 150, floor: 0, loop_enabled: 0, curve: 0 },
+                depth: 255,
+            };
 
             let mut engine = Ym38x6Engine::new(44100.0);
             let ch = 0;
@@ -1070,5 +1239,127 @@ mod tests {
         let peak = buf.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
         // MIDI ch1（id=128）は gain=1.0 のまま → 出力が残る
         assert!(peak > 0.0, "MIDI ch1 should still produce sound after silencing ch0");
+    }
+
+    /// 旧`filter_eg_*`/`vca_eg_*`/`perf_lfo_shape`を持つ旧`.38x6`相当のJSONが、
+    /// 新スキーマ（`cutoff_fg`/`gain_fg`/`texture_lfo`）へ正しく移行読み込みされることを確認する
+    /// （後方互換マイグレーション、spec-sound.md「実装状況」節の「後方互換規則」参照）。
+    #[test]
+    fn channel_params_deserializes_old_schema_with_migration() {
+        let old_json = r#"{
+            "algorithm": 4,
+            "feedback": 100,
+            "tone_lfo_freq": 10,
+            "tone_lfo_pmd": 20,
+            "tone_lfo_amd": 30,
+            "tone_lfo_delay": 0,
+            "pms": 5,
+            "ams": 6,
+            "filter_cutoff": 200,
+            "filter_resonance": 50,
+            "filter_type": 0,
+            "filter_self_oscillation": false,
+            "filter_eg_ar": 111,
+            "filter_eg_d1r": 122,
+            "filter_eg_d1l": 133,
+            "filter_eg_d2r": 144,
+            "filter_eg_rr": 155,
+            "filter_eg_depth": 255,
+            "vca_eg_ar": 200,
+            "vca_eg_d1r": 10,
+            "vca_eg_d1l": 220,
+            "vca_eg_d2r": 5,
+            "vca_eg_rr": 210,
+            "perf_lfo_shape": { "waveform": "Square", "fade_mode": "OnIn", "fade_time": 40, "offset": 0 }
+        }"#;
+
+        let params: ChannelParams = serde_json::from_str(old_json).expect("should deserialize old schema");
+
+        assert_eq!(params.algorithm, 4);
+        assert_eq!(params.feedback, 100);
+        assert_eq!(params.chip_lfo_freq, 10);
+
+        // Cutoff FG: filter_eg_*から直接コピー、depthはunipolar(255)→bipolar(128+255*128/255=256→clamp255)。
+        assert_eq!(params.cutoff_fg.eg.ar, 111);
+        assert_eq!(params.cutoff_fg.eg.d1r, 122);
+        assert_eq!(params.cutoff_fg.eg.d1l, 133);
+        assert_eq!(params.cutoff_fg.eg.d2r, 144);
+        assert_eq!(params.cutoff_fg.eg.rr, 155);
+        assert_eq!(params.cutoff_fg.eg.loop_enabled, 0);
+        assert_eq!(params.cutoff_fg.eg.floor, 0);
+        assert_eq!(params.cutoff_fg.depth, 255);
+
+        // Gain FG: vca_eg_*から直接コピー（depthフィールドなし）。
+        assert_eq!(params.gain_fg.ar, 200);
+        assert_eq!(params.gain_fg.d1r, 10);
+        assert_eq!(params.gain_fg.d1l, 220);
+        assert_eq!(params.gain_fg.d2r, 5);
+        assert_eq!(params.gain_fg.rr, 210);
+
+        // Pitch FG: 旧スキーマに対応データが無いため常にデフォルト。
+        assert_eq!(params.pitch_fg, default_pitch_fg());
+
+        // 質感LFO: perf_lfo_shape.waveform=Squareは新5波形パレットに該当するので移行される。
+        // destination/rate/depthは旧スキーマに保存されていなかったため既定(0)のまま。
+        assert_eq!(params.texture_lfo.waveform, 0);
+        assert_eq!(params.texture_lfo.fade_mode, 0);
+        assert_eq!(params.texture_lfo.fade_time, 40);
+        assert_eq!(params.texture_lfo.offset, 128);
+        assert_eq!(params.texture_lfo.destination, 0);
+        assert_eq!(params.texture_lfo.rate, 0);
+        assert_eq!(params.texture_lfo.depth, 0);
+    }
+
+    /// 旧`perf_lfo_shape.waveform`が新質感LFOのパレット外（Triangle/Sine/Saw）だった場合は、
+    /// 移行先を`.38x6`ファイル単体からは判定できないため、質感LFOのデフォルト（無効）へ
+    /// フォールバックする（既知の制約、旧スキーマではdepth/rateも保存されておらず実害は小さい）。
+    #[test]
+    fn channel_params_old_schema_out_of_palette_waveform_falls_back_to_default_texture_lfo() {
+        let old_json = r#"{
+            "algorithm": 0,
+            "feedback": 0,
+            "tone_lfo_freq": 0,
+            "tone_lfo_pmd": 0,
+            "tone_lfo_amd": 0,
+            "tone_lfo_delay": 0,
+            "pms": 0,
+            "ams": 0,
+            "filter_cutoff": 255,
+            "filter_resonance": 0,
+            "filter_type": 0,
+            "filter_self_oscillation": true,
+            "filter_eg_ar": 0,
+            "filter_eg_d1r": 0,
+            "filter_eg_d1l": 0,
+            "filter_eg_d2r": 0,
+            "filter_eg_rr": 0,
+            "filter_eg_depth": 0,
+            "vca_eg_ar": 255,
+            "vca_eg_d1r": 0,
+            "vca_eg_d1l": 255,
+            "vca_eg_d2r": 0,
+            "vca_eg_rr": 255,
+            "perf_lfo_shape": { "waveform": "Sine", "fade_mode": "OnIn", "fade_time": 0, "offset": 0 }
+        }"#;
+
+        let params: ChannelParams = serde_json::from_str(old_json).expect("should deserialize old schema");
+        assert_eq!(params.texture_lfo, TextureLfo::default());
+    }
+
+    /// 新スキーマ（`cutoff_fg`/`gain_fg`/`texture_lfo`を含むJSON）はそのまま読み込め、
+    /// シリアライズ→デシリアライズの往復でも値が保たれる。
+    #[test]
+    fn channel_params_new_schema_round_trips() {
+        let mut params = ChannelParams::default();
+        params.pitch_fg.depth = 200;
+        params.cutoff_fg.eg.loop_enabled = 1;
+        params.cutoff_fg.eg.floor = 64;
+        params.gain_fg.curve = 1;
+        params.texture_lfo.waveform = 4;
+        params.texture_lfo.depth = 128;
+
+        let json = serde_json::to_string(&params).expect("serialize");
+        let round_tripped: ChannelParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(params, round_tripped);
     }
 }

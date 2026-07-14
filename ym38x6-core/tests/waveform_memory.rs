@@ -8,10 +8,7 @@
 //! 完全無音」という厳密値の断定はできない（フィルターの内部状態でわずかに尾を引く）。
 //! そのためLFO系は「振幅が周期的に大きく変動する」ことをピーク比較で検証する。
 
-use ym38x6_core::{
-    waveform_memory_patch, AdsrParams, LfoFadeMode, LfoWaveform, PerformanceLfoShape, Vco,
-    Ym38x6Engine, Ym38x6LfoDestination,
-};
+use ym38x6_core::{waveform_memory_patch, AdsrParams, TextureLfo, Vco, Ym38x6Engine};
 
 /// 即アタック・無減衰・無限サスティンのADSR（出力レベルを1.0付近で保持し、
 /// オシレーター波形とLFOの効果を観測しやすくする）。
@@ -26,21 +23,21 @@ fn window_peaks(buf: &[f32], window: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Destination=Volume・矩形波・Depth=1.0のパフォーマンスLFOをかけると、
+/// Destination=Volume・矩形波・Depth=255（最大）の質感LFOをかけると、
 /// 実効音量がLFOの半周期ごとに大きく上下し、振幅が周期的に変動する。
 #[test]
-fn performance_lfo_volume_destination_modulates_amplitude() {
+fn texture_lfo_volume_destination_modulates_amplitude() {
     let sample_rate = 44100.0;
     let mut engine = Ym38x6Engine::new(sample_rate);
     let ch = 0;
     // 矩形波（waveform=3）は振幅が常に±1付近なので、振幅変動はLFOの効果として観測できる。
     let mut patch = waveform_memory_patch(3, sustained_adsr());
-    // LFO波形も矩形にして、変動の有無をよりくっきり観測できるようにする。
-    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Square;
+    // 質感LFO波形も矩形(0)、destination=1(Volume)、rate=255（20Hz、最速）でバッファ内に
+    // 複数周期が収まるようにし、depth=255（最大）で振幅を大きく揺らす。
+    patch.channel.texture_lfo =
+        TextureLfo { waveform: 0, destination: 1, rate: 255, depth: 255, ..TextureLfo::default() };
     engine.set_patch(patch);
     engine.note_on(ch, 220.0, 127);
-    // rate=255（20Hz、最速）でバッファ内に複数周期が収まるようにする。
-    engine.set_performance_lfo(ch, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
 
     // アタックを終えて出力が安定するまでウォームアップ
     let mut warmup = vec![0.0f32; 200];
@@ -60,25 +57,27 @@ fn performance_lfo_volume_destination_modulates_amplitude() {
     );
 }
 
-/// パッチの`ChannelParams.perf_lfo_shape`がnote_on時にPerformanceLfoへ反映されることを
+/// パッチの`ChannelParams.texture_lfo`がnote_on時にPerformanceLfoへ反映されることを
 /// end-to-endで確認する。fade_timeだけが異なる2エンジンを同条件で鳴らし、出力が違うことで
 /// 「patchのfade_timeが実際に効いている」ことを示す（filter/VCA由来の他の変動と混同しないよう、
 /// 絶対的な振幅閾値ではなく差分の有無で判定する）。
 #[test]
-fn performance_lfo_shape_from_patch_is_applied_at_note_on() {
+fn texture_lfo_shape_from_patch_is_applied_at_note_on() {
     let sample_rate = 44100.0;
     let render_with_fade_time = |fade_time: u8| {
         let mut engine = Ym38x6Engine::new(sample_rate);
         let mut patch = waveform_memory_patch(3, sustained_adsr()); // 矩形波（振幅±1で変動が見やすい）
-        patch.channel.perf_lfo_shape = PerformanceLfoShape {
-            waveform: LfoWaveform::Square,
-            fade_mode: LfoFadeMode::OnIn,
+        patch.channel.texture_lfo = TextureLfo {
+            waveform: 0,     // 矩形波
+            destination: 1,  // Volume
+            rate: 255,
+            depth: 255,
+            fade_mode: 0,    // ON-IN
             fade_time,
-            offset: 0,
+            ..TextureLfo::default()
         };
         engine.set_patch(patch);
         engine.note_on(0, 220.0, 127);
-        engine.set_performance_lfo(0, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
 
         let mut warmup = vec![0.0f32; 200];
         engine.render(&mut warmup, 1);
@@ -93,30 +92,30 @@ fn performance_lfo_shape_from_patch_is_applied_at_note_on() {
     let differs = long_fade.iter().zip(no_fade.iter()).any(|(a, b)| (a - b).abs() > 1e-3);
     assert!(
         differs,
-        "patchのperf_lfo_shape.fade_timeが反映されていれば、fade_time違いで出力が変わるはず"
+        "patchのtexture_lfo.fade_timeが反映されていれば、fade_time違いで出力が変わるはず"
     );
 }
 
-/// `set_channel_params`で`perf_lfo_shape`を変更すると、note_on済みの発音中ボイスにも
+/// `set_channel_params`で`texture_lfo`を変更すると、note_on済みの発音中ボイスにも
 /// 次ブロックからリアルタイムに反映される（VSTのNRPN/DAWパラメーター変更が発音中ノートへ
-/// 効くことを保証する。旧仕様はnote_on/retriggerでしか適用されなかった）。
+/// 効くことを保証する）。
 #[test]
-fn performance_lfo_shape_updates_live_via_set_channel_params() {
+fn texture_lfo_shape_updates_live_via_set_channel_params() {
     let sample_rate = 44100.0;
-    let render = |switch_to_square: bool| {
+    let render = |switch_waveform: bool| {
         let mut engine = Ym38x6Engine::new(sample_rate);
         let mut patch = waveform_memory_patch(3, sustained_adsr());
-        patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
+        patch.channel.texture_lfo =
+            TextureLfo { waveform: 0, destination: 1, rate: 255, depth: 255, ..TextureLfo::default() };
         engine.set_patch(patch);
         engine.note_on(0, 220.0, 127);
-        engine.set_performance_lfo(0, 255, 0, Ym38x6LfoDestination::Volume, 1.0);
 
         let mut warmup = vec![0.0f32; 200];
         engine.render(&mut warmup, 1);
 
-        if switch_to_square {
+        if switch_waveform {
             let mut updated = patch.channel;
-            updated.perf_lfo_shape.waveform = LfoWaveform::Square;
+            updated.texture_lfo.waveform = 1; // 矩形波→台形波へ切替
             engine.set_channel_params(0, updated);
         }
 
@@ -187,29 +186,29 @@ fn set_patch_live_updates_active_channel_but_set_patch_does_not() {
     );
 }
 
-/// Destination=Pitch・Depth>0のパフォーマンスLFOは実効周波数を揺らすため、
-/// Depth=0の場合と出力波形が乖離する。
+/// Destination=Pitch・Depth>0の質感LFOは実効周波数を揺らすため、Depth=0の場合と出力波形が乖離する。
 #[test]
-fn performance_lfo_pitch_destination_shifts_output() {
+fn texture_lfo_pitch_destination_shifts_output() {
     let sample_rate = 44100.0;
 
     let mut patch = waveform_memory_patch(0, sustained_adsr());
-    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
+    patch.channel.texture_lfo =
+        TextureLfo { waveform: 0, destination: 0, rate: 220, depth: 0, ..TextureLfo::default() };
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
     engine_flat.set_patch(patch);
     engine_flat.note_on(0, 440.0, 127);
-    engine_flat.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Pitch, 0.0);
     let mut warm_flat = vec![0.0f32; 200];
     engine_flat.render(&mut warm_flat, 1);
     let mut buf_flat = vec![0.0f32; 400];
     engine_flat.render(&mut buf_flat, 1);
 
+    // depth=255（質感LFOの最大値）の大きめのビブラート
+    let mut patch_mod = patch;
+    patch_mod.channel.texture_lfo.depth = 255;
     let mut engine_mod = Ym38x6Engine::new(sample_rate);
-    engine_mod.set_patch(patch);
+    engine_mod.set_patch(patch_mod);
     engine_mod.note_on(0, 440.0, 127);
-    // ±1200セント（±1オクターブ）の大きめのビブラート
-    engine_mod.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Pitch, 1200.0);
     let mut warm_mod = vec![0.0f32; 200];
     engine_mod.render(&mut warm_mod, 1);
     let mut buf_mod = vec![0.0f32; 400];
@@ -223,27 +222,28 @@ fn performance_lfo_pitch_destination_shifts_output() {
 /// 音色（倍音構成）を持続的に変化させる。波形は矩形（倍音豊富でカットオフの効果が
 /// 出やすい）、基準Cutoffを低め(80)にしておき、LFOなし/ありの出力波形が異なることを確認する。
 #[test]
-fn performance_lfo_cutoff_destination_shifts_output() {
+fn texture_lfo_cutoff_destination_shifts_output() {
     let sample_rate = 44100.0;
 
     let mut patch = waveform_memory_patch(3, sustained_adsr());
-    patch.channel.perf_lfo_shape.waveform = LfoWaveform::Sine;
     patch.channel.filter_cutoff = 80;
+    patch.channel.texture_lfo =
+        TextureLfo { waveform: 0, destination: 3, rate: 220, depth: 0, ..TextureLfo::default() };
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
     engine_flat.set_patch(patch);
     engine_flat.note_on(0, 220.0, 127);
-    engine_flat.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Cutoff, 0.0);
     let mut warm_flat = vec![0.0f32; 200];
     engine_flat.render(&mut warm_flat, 1);
     let mut buf_flat = vec![0.0f32; 400];
     engine_flat.render(&mut buf_flat, 1);
 
-    let mut engine_mod = Ym38x6Engine::new(sample_rate);
-    engine_mod.set_patch(patch);
-    engine_mod.note_on(0, 220.0, 127);
     // 基準Cutoff(80)を中心に±150の大きめのオートワウ
-    engine_mod.set_performance_lfo(0, 220, 0, Ym38x6LfoDestination::Cutoff, 150.0);
+    let mut patch_mod = patch;
+    patch_mod.channel.texture_lfo.depth = 150;
+    let mut engine_mod = Ym38x6Engine::new(sample_rate);
+    engine_mod.set_patch(patch_mod);
+    engine_mod.note_on(0, 220.0, 127);
     let mut warm_mod = vec![0.0f32; 200];
     engine_mod.render(&mut warm_mod, 1);
     let mut buf_mod = vec![0.0f32; 400];

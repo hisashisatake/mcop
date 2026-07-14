@@ -17,9 +17,14 @@ pub fn cutoff_to_hz(cutoff: u8) -> f32 {
     F_MIN * (F_MAX / F_MIN).powf(cutoff as f32 / 255.0)
 }
 
-/// 実効Cutoff = clamp(Cutoffベース値 + Filter EG出力 × Filter EG Depth, 0, 255)
+/// 実効Cutoff = clamp(Cutoffベース値 + Cutoff FG出力 × (Depth-128)/128 × 255, 0, 255)
+///
+/// Depthはバイポーラ（0〜255、中心128＝変調なし）。Depth=255で最大+255（全域を開く方向）、
+/// Depth=0で最大-255（全域を閉じる方向）まで振れる、旧unipolar式（`eg_output(0〜1) ×
+/// depth(0〜255)`、最大255）と同じ振れ幅を維持する係数。
 pub fn effective_cutoff(base_cutoff: u8, eg_output: f32, depth: u8) -> u8 {
-    (base_cutoff as f32 + eg_output * depth as f32)
+    let bipolar = (depth as f32 - 128.0) / 128.0;
+    (base_cutoff as f32 + eg_output * bipolar * 255.0)
         .round()
         .clamp(0.0, 255.0) as u8
 }
@@ -202,10 +207,26 @@ mod tests {
     }
 
     #[test]
+    fn effective_cutoff_bipolar_depth_center_is_no_op() {
+        // depth=128（中心）はEG出力に関わらず無変調。
+        assert_eq!(effective_cutoff(100, 1.0, 128), 100);
+        assert_eq!(effective_cutoff(100, 0.5, 128), 100);
+    }
+
+    #[test]
+    fn effective_cutoff_bipolar_depth_opens_and_closes() {
+        // depth>128は開く方向（+）、depth<128は閉じる方向（-）。
+        let opened = effective_cutoff(100, 1.0, 255);
+        let closed = effective_cutoff(100, 1.0, 0);
+        assert!(opened > 100, "depth=255 should open the cutoff upward, got {opened}");
+        assert!(closed < 100, "depth=0 should close the cutoff downward, got {closed}");
+    }
+
+    #[test]
     fn effective_cutoff_clamps() {
         assert_eq!(effective_cutoff(200, 1.0, 255), 255);
         assert_eq!(effective_cutoff(0, 0.0, 255), 0);
-        assert_eq!(effective_cutoff(100, 1.0, 100), 200);
+        assert_eq!(effective_cutoff(100, 1.0, 0), 0);
         assert_eq!(effective_cutoff(0, -1.0, 255), 0);
     }
 

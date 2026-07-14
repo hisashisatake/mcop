@@ -1,8 +1,33 @@
 use serde::{Deserialize, Serialize};
 use ym38x6_core::{
-    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
-    ChannelParams, OperatorParams, PerformanceLfoShape, Preset, Ym38x6Patch,
+    BipolarFg, ChannelParams, EgParams, LfoWaveform, OperatorParams, Preset, TextureLfo, Ym38x6Patch,
 };
+
+/// フロントエンドの質感LFO波形インデックス(旧8波形、`lfo_waveform_from_index`と同じ規約)を、
+/// `TextureLfo`の新5波形パレット(0〜4)へ写像する（パレット外のTriangle/Sine/Sawは矩形へ
+/// フォールバック。ym38x6-vstの`lfo_waveform_to_texture_lfo_index`と同じ考え方）。
+fn perf_lfo_waveform_to_texture_lfo_index(waveform: u8) -> u8 {
+    match ym38x6_core::lfo_waveform_from_index(waveform) {
+        LfoWaveform::Square => 0,
+        LfoWaveform::Trapezoid => 1,
+        LfoWaveform::SampleHold => 2,
+        LfoWaveform::Random => 3,
+        LfoWaveform::Chaos => 4,
+        LfoWaveform::Triangle | LfoWaveform::Sine | LfoWaveform::Saw => 0,
+    }
+}
+
+/// [perf_lfo_waveform_to_texture_lfo_index]の逆方向。DTOへ書き戻す際に使う。
+fn texture_lfo_index_to_perf_lfo_waveform(index: u8) -> u8 {
+    let waveform = match index {
+        1 => LfoWaveform::Trapezoid,
+        2 => LfoWaveform::SampleHold,
+        3 => LfoWaveform::Random,
+        4 => LfoWaveform::Chaos,
+        _ => LfoWaveform::Square,
+    };
+    waveform as u8
+}
 
 /// フロントエンドから渡される/返すオペレーター単位パラメーター（`OperatorParams`のDTO）。
 #[derive(Deserialize, Serialize)]
@@ -129,23 +154,40 @@ impl From<ChannelParamsDto> for ChannelParams {
             filter_resonance: dto.filter_resonance,
             filter_type: dto.filter_type,
             filter_self_oscillation: dto.filter_self_oscillation,
-            filter_eg_ar: dto.filter_eg_ar,
-            filter_eg_d1r: dto.filter_eg_d1r,
-            filter_eg_d1l: dto.filter_eg_d1l,
-            filter_eg_d2r: dto.filter_eg_d2r,
-            filter_eg_rr: dto.filter_eg_rr,
-            filter_eg_depth: dto.filter_eg_depth,
-            vca_eg_ar: dto.vca_eg_ar,
-            vca_eg_d1r: dto.vca_eg_d1r,
-            vca_eg_d1l: dto.vca_eg_d1l,
-            vca_eg_d2r: dto.vca_eg_d2r,
-            vca_eg_rr: dto.vca_eg_rr,
-            perf_lfo_shape: PerformanceLfoShape {
-                waveform: lfo_waveform_from_index(dto.perf_lfo_waveform),
-                fade_mode: lfo_fade_mode_from_index(dto.perf_lfo_fade_mode),
-                fade_time: dto.perf_lfo_fade_time,
-                offset: lfo_offset_from_param(dto.perf_lfo_offset),
+            // Cutoff FG/Gain FG: DTOはまだloop/floor/curve/バイポーラdepthを持たないため
+            // （ステップ8でgesture-appのFGエディタUIを追加するまで）、EG本体と旧unipolar
+            // depthの変換のみ反映する。Pitch FGはDTOに対応データが無いためデフォルト。
+            cutoff_fg: BipolarFg {
+                eg: EgParams {
+                    ar: dto.filter_eg_ar,
+                    d1r: dto.filter_eg_d1r,
+                    d1l: dto.filter_eg_d1l,
+                    d2r: dto.filter_eg_d2r,
+                    rr: dto.filter_eg_rr,
+                    floor: 0,
+                    loop_enabled: 0,
+                    curve: 0,
+                },
+                depth: (128.0 + dto.filter_eg_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
             },
+            gain_fg: EgParams {
+                ar: dto.vca_eg_ar,
+                d1r: dto.vca_eg_d1r,
+                d1l: dto.vca_eg_d1l,
+                d2r: dto.vca_eg_d2r,
+                rr: dto.vca_eg_rr,
+                floor: 0,
+                loop_enabled: 0,
+                curve: 0,
+            },
+            texture_lfo: TextureLfo {
+                waveform: perf_lfo_waveform_to_texture_lfo_index(dto.perf_lfo_waveform),
+                fade_mode: dto.perf_lfo_fade_mode,
+                fade_time: dto.perf_lfo_fade_time,
+                offset: dto.perf_lfo_offset,
+                ..TextureLfo::default()
+            },
+            pitch_fg: BipolarFg::default(),
         }
     }
 }
@@ -165,21 +207,21 @@ impl From<ChannelParams> for ChannelParamsDto {
             filter_resonance: ch.filter_resonance,
             filter_type: ch.filter_type,
             filter_self_oscillation: ch.filter_self_oscillation,
-            filter_eg_ar: ch.filter_eg_ar,
-            filter_eg_d1r: ch.filter_eg_d1r,
-            filter_eg_d1l: ch.filter_eg_d1l,
-            filter_eg_d2r: ch.filter_eg_d2r,
-            filter_eg_rr: ch.filter_eg_rr,
-            filter_eg_depth: ch.filter_eg_depth,
-            vca_eg_ar: ch.vca_eg_ar,
-            vca_eg_d1r: ch.vca_eg_d1r,
-            vca_eg_d1l: ch.vca_eg_d1l,
-            vca_eg_d2r: ch.vca_eg_d2r,
-            vca_eg_rr: ch.vca_eg_rr,
-            perf_lfo_waveform: ch.perf_lfo_shape.waveform as u8,
-            perf_lfo_fade_mode: ch.perf_lfo_shape.fade_mode as u8,
-            perf_lfo_fade_time: ch.perf_lfo_shape.fade_time,
-            perf_lfo_offset: lfo_offset_to_param(ch.perf_lfo_shape.offset),
+            filter_eg_ar: ch.cutoff_fg.eg.ar,
+            filter_eg_d1r: ch.cutoff_fg.eg.d1r,
+            filter_eg_d1l: ch.cutoff_fg.eg.d1l,
+            filter_eg_d2r: ch.cutoff_fg.eg.d2r,
+            filter_eg_rr: ch.cutoff_fg.eg.rr,
+            filter_eg_depth: ch.cutoff_fg.depth,
+            vca_eg_ar: ch.gain_fg.ar,
+            vca_eg_d1r: ch.gain_fg.d1r,
+            vca_eg_d1l: ch.gain_fg.d1l,
+            vca_eg_d2r: ch.gain_fg.d2r,
+            vca_eg_rr: ch.gain_fg.rr,
+            perf_lfo_waveform: texture_lfo_index_to_perf_lfo_waveform(ch.texture_lfo.waveform),
+            perf_lfo_fade_mode: ch.texture_lfo.fade_mode,
+            perf_lfo_fade_time: ch.texture_lfo.fade_time,
+            perf_lfo_offset: ch.texture_lfo.offset,
         }
     }
 }

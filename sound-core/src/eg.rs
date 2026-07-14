@@ -85,6 +85,31 @@ impl EgParams {
 }
 
 // ---------------------------------------------------------------------------
+// FG（ファンクションジェネレーター）スロットの型（spec-sound.md「ファンクションジェネレーター」節）
+// ---------------------------------------------------------------------------
+
+/// Gain FG（旧VCA EG後継）のパラメーター一式。音量に負値は無いためDepthを持たず、
+/// `EgParams`と完全に同じ形（ar/d1r/d1l/d2r/rr/floor/loop/curve）のため新規の別型を作らず
+/// そのままエイリアスする。
+pub type GainFg = EgParams;
+
+/// Pitch FG／Cutoff FGのパラメーター一式。共通のループ可能EG（`EgParams`）に、
+/// バイポーラDepth（0〜255、中心128＝変調なし）を足したもの。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BipolarFg {
+    #[serde(flatten)]
+    pub eg: EgParams,
+    /// バイポーラDepth（0〜255、中心128＝変調なし、128超＝＋方向、128未満＝−方向）。
+    pub depth: u8,
+}
+
+impl Default for BipolarFg {
+    fn default() -> Self {
+        Self { eg: EgParams::default(), depth: 128 }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 5段OPM形式のキーオン連動EG状態機械（+ Loop/Floor/Curve拡張）
 // ---------------------------------------------------------------------------
 
