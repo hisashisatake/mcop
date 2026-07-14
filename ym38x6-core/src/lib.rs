@@ -64,7 +64,9 @@ pub use preset::{
     PresetEntry, PresetFile, WAVEFORM_MEMORY_BANK,
 };
 use serde::{Deserialize, Serialize};
-use sound_core::{apply_lfo_modulation, convert_wave_32, PerformanceLfo, PerformanceLfoTarget, WaveTable};
+use sound_core::{
+    apply_lfo_modulation, convert_wave_32, EgParams, PerformanceLfo, PerformanceLfoTarget, WaveTable,
+};
 use tone_lfo::{ams_to_depth, pms_to_cents_range, ToneLfo};
 use waveform::gen_builtin_waveform;
 
@@ -439,6 +441,8 @@ impl Channel {
         // （Filter EG Depthはvcf.process内部でこの基準値をさらにキーオン一発で変調する）。
         let modulated_cutoff =
             (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
+        let filter_eg_params =
+            EgParams::classic(cp.filter_eg_ar, cp.filter_eg_d1r, cp.filter_eg_d1l, cp.filter_eg_d2r, cp.filter_eg_rr);
         let filtered = self.vcf.process(
             dry,
             sample_rate,
@@ -446,14 +450,12 @@ impl Channel {
             cp.filter_resonance,
             FilterType::from_u8(cp.filter_type),
             cp.filter_self_oscillation,
-            cp.filter_eg_ar,
-            cp.filter_eg_d1r,
-            cp.filter_eg_d1l,
-            cp.filter_eg_d2r,
-            cp.filter_eg_rr,
+            filter_eg_params,
             cp.filter_eg_depth,
         );
-        self.vca.process(filtered, sample_rate, cp.vca_eg_ar, cp.vca_eg_d1r, cp.vca_eg_d1l, cp.vca_eg_d2r, cp.vca_eg_rr)
+        let vca_eg_params =
+            EgParams::classic(cp.vca_eg_ar, cp.vca_eg_d1r, cp.vca_eg_d1l, cp.vca_eg_d2r, cp.vca_eg_rr);
+        self.vca.process(filtered, sample_rate, vca_eg_params)
     }
 }
 

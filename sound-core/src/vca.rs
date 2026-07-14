@@ -2,14 +2,14 @@
 // Vca（ボイス単位のTVAオーバーレイ）
 // ---------------------------------------------------------------------------
 
-use crate::eg::Eg;
+use crate::eg::{Eg, EgParams};
 
 /// ボイス単位のTVA（Total Voice Amplitude）オーバーレイの共通インターフェース。
 /// キーオン連動EG（5段OPM形式）でゲインを乗算する。
 pub trait Vca: Send {
     fn note_on(&mut self);
     fn note_off(&mut self);
-    fn process(&mut self, input: f32, sample_rate: f32, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) -> f32;
+    fn process(&mut self, input: f32, sample_rate: f32, params: EgParams) -> f32;
 }
 
 /// ボイス単位のTVAオーバーレイ（キーオン連動EGでゲインを乗算する）。
@@ -41,8 +41,8 @@ impl Vca for VoiceAmp {
         self.eg.note_off();
     }
 
-    fn process(&mut self, input: f32, sample_rate: f32, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) -> f32 {
-        let gain = self.eg.tick(sample_rate, ar, d1r, d1l, d2r, rr);
+    fn process(&mut self, input: f32, sample_rate: f32, params: EgParams) -> f32 {
+        let gain = self.eg.tick(sample_rate, params, 1.0);
         input * gain
     }
 }
@@ -61,9 +61,10 @@ mod tests {
         let mut vca = VoiceAmp::new();
         vca.note_on();
         // ar=255（最速）、d1l=255（完全サステイン）：数百サンプルでほぼ1.0に到達する
+        let params = EgParams::classic(255, 0, 255, 0, 255);
         let mut out = 0.0;
         for _ in 0..500 {
-            out = vca.process(1.0, sr, 255, 0, 255, 0, 255);
+            out = vca.process(1.0, sr, params);
         }
         assert!((out - 1.0).abs() < 1e-3, "expected near-unity gain, got {out}");
     }

@@ -22,7 +22,7 @@ pub mod vco;
 pub use vco::{AudioProcessor, Vco};
 
 pub mod eg;
-pub use eg::Eg;
+pub use eg::{Eg, EgParams};
 
 pub mod vcf;
 pub use vcf::{cutoff_to_hz, effective_cutoff, FilterType, Svf, Vcf, VoiceFilter};

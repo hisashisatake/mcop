@@ -8,7 +8,7 @@
 // 実装後に音を聴いて係数を調整する。
 // ---------------------------------------------------------------------------
 
-use crate::eg::Eg;
+use crate::eg::{Eg, EgParams};
 
 /// Cutoff(0〜255)→Hz（対数、0≒20Hz、255≒20kHz、暫定）。
 pub fn cutoff_to_hz(cutoff: u8) -> f32 {
@@ -136,11 +136,7 @@ pub trait Vcf: Send {
         resonance: u8,
         filter_type: FilterType,
         self_oscillation: bool,
-        eg_ar: u8,
-        eg_d1r: u8,
-        eg_d1l: u8,
-        eg_d2r: u8,
-        eg_rr: u8,
+        eg_params: EgParams,
         eg_depth: u8,
     ) -> f32;
 }
@@ -180,14 +176,10 @@ impl Vcf for VoiceFilter {
         resonance: u8,
         filter_type: FilterType,
         self_oscillation: bool,
-        eg_ar: u8,
-        eg_d1r: u8,
-        eg_d1l: u8,
-        eg_d2r: u8,
-        eg_rr: u8,
+        eg_params: EgParams,
         eg_depth: u8,
     ) -> f32 {
-        let eg_level = self.cutoff_eg.tick(sample_rate, eg_ar, eg_d1r, eg_d1l, eg_d2r, eg_rr);
+        let eg_level = self.cutoff_eg.tick(sample_rate, eg_params, 1.0);
         let cutoff = effective_cutoff(base_cutoff, eg_level, eg_depth);
         let cutoff_hz = cutoff_to_hz(cutoff);
         self.svf.process(input, sample_rate, cutoff_hz, resonance, self_oscillation, filter_type)
