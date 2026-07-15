@@ -8,7 +8,8 @@
 //! - `--bank` の既定は `WAVEFORM_MEMORY_BANK + 1`。
 //! - 出力は `<output_dir>/b<bank>.38x6`（slot 0-127 は Bank N、128-255 は Bank N+1）。
 //! - 全AR=0のスロットは除外する。
-//! - `--wav` を指定すると `<output_dir>/wav/slotNNN.wav` へ試聴用WAVを出力する。
+//! - `--wav` を指定すると `<output_dir>/wav/slotNNN_<name>.wav` へ試聴用WAVを出力する
+//!   （nameは音色名。半角カナは全角カナに変換し、ファイル名に使えない文字は`_`に置換）。
 //! - `--on <秒>` でキーオン時間（既定 4.0 秒）を指定する。
 //! - `--octave <N>` でオクターブ（既定 4）を指定する。
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
@@ -272,7 +273,14 @@ fn render_wavs(
         engine.render(&mut tail, 1);
         samples.extend_from_slice(&tail);
 
-        let path = wav_dir.join(format!("slot{:03}.wav", nv.slot));
+        let full_name = mucom88::halfwidth_kana_to_fullwidth(&nv.name);
+        let safe = mucom88::sanitize_filename_keep_japanese(&full_name);
+        let filename = if safe.is_empty() {
+            format!("slot{:03}.wav", nv.slot)
+        } else {
+            format!("slot{:03}_{safe}.wav", nv.slot)
+        };
+        let path = wav_dir.join(filename);
         write_wav_mono16(&path, &samples, SR as u32)
             .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", path.display()))?;
     }

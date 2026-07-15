@@ -113,6 +113,94 @@ fn decode_name(bytes: &[u8], slot: usize) -> String {
     }
 }
 
+/// 半角カナ(U+FF61〜FF9F)の基本字形1文字 → 全角カナの基本字形。濁点/半濁点を持たない文字。
+fn halfwidth_kana_base(c: char) -> Option<char> {
+    Some(match c {
+        '｡' => '。', '｢' => '「', '｣' => '」', '､' => '、', '･' => '・',
+        'ｦ' => 'ヲ', 'ｧ' => 'ァ', 'ｨ' => 'ィ', 'ｩ' => 'ゥ', 'ｪ' => 'ェ', 'ｫ' => 'ォ',
+        'ｬ' => 'ャ', 'ｭ' => 'ュ', 'ｮ' => 'ョ', 'ｯ' => 'ッ', 'ｰ' => 'ー',
+        'ｱ' => 'ア', 'ｲ' => 'イ', 'ｳ' => 'ウ', 'ｴ' => 'エ', 'ｵ' => 'オ',
+        'ｶ' => 'カ', 'ｷ' => 'キ', 'ｸ' => 'ク', 'ｹ' => 'ケ', 'ｺ' => 'コ',
+        'ｻ' => 'サ', 'ｼ' => 'シ', 'ｽ' => 'ス', 'ｾ' => 'セ', 'ｿ' => 'ソ',
+        'ﾀ' => 'タ', 'ﾁ' => 'チ', 'ﾂ' => 'ツ', 'ﾃ' => 'テ', 'ﾄ' => 'ト',
+        'ﾅ' => 'ナ', 'ﾆ' => 'ニ', 'ﾇ' => 'ヌ', 'ﾈ' => 'ネ', 'ﾉ' => 'ノ',
+        'ﾊ' => 'ハ', 'ﾋ' => 'ヒ', 'ﾌ' => 'フ', 'ﾍ' => 'ヘ', 'ﾎ' => 'ホ',
+        'ﾏ' => 'マ', 'ﾐ' => 'ミ', 'ﾑ' => 'ム', 'ﾒ' => 'メ', 'ﾓ' => 'モ',
+        'ﾔ' => 'ヤ', 'ﾕ' => 'ユ', 'ﾖ' => 'ヨ',
+        'ﾗ' => 'ラ', 'ﾘ' => 'リ', 'ﾙ' => 'ル', 'ﾚ' => 'レ', 'ﾛ' => 'ロ',
+        'ﾜ' => 'ワ', 'ﾝ' => 'ン',
+        _ => return None,
+    })
+}
+
+/// 全角カナの基本字形 → 濁点付き字形（ｶﾞ→ガ等）。結合できない文字は`None`。
+fn to_voiced(c: char) -> Option<char> {
+    Some(match c {
+        'カ' => 'ガ', 'キ' => 'ギ', 'ク' => 'グ', 'ケ' => 'ゲ', 'コ' => 'ゴ',
+        'サ' => 'ザ', 'シ' => 'ジ', 'ス' => 'ズ', 'セ' => 'ゼ', 'ソ' => 'ゾ',
+        'タ' => 'ダ', 'チ' => 'ヂ', 'ツ' => 'ヅ', 'テ' => 'デ', 'ト' => 'ド',
+        'ハ' => 'バ', 'ヒ' => 'ビ', 'フ' => 'ブ', 'ヘ' => 'ベ', 'ホ' => 'ボ',
+        'ウ' => 'ヴ',
+        _ => return None,
+    })
+}
+
+/// 全角カナの基本字形 → 半濁点付き字形（ﾊﾟ→パ等）。ハ行のみ。
+fn to_semivoiced(c: char) -> Option<char> {
+    Some(match c {
+        'ハ' => 'パ', 'ヒ' => 'ピ', 'フ' => 'プ', 'ヘ' => 'ペ', 'ホ' => 'ポ',
+        _ => return None,
+    })
+}
+
+/// 半角カナ（濁点ﾞ/半濁点ﾟの組み合わせ含む）を全角カナへ変換する。
+/// MUCOM88音色名（`decode_name`が返す文字列）はShift-JIS半角カナのまま保持されるため、
+/// ファイル名等で読みやすい全角表記にしたい場合にこの関数を通す。
+/// 半角カナ以外の文字（ASCII等）はそのまま通す。
+pub fn halfwidth_kana_to_fullwidth(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(base) = halfwidth_kana_base(c) {
+            let next = chars.get(i + 1).copied();
+            if next == Some('\u{FF9E}') {
+                if let Some(v) = to_voiced(base) {
+                    out.push(v);
+                    i += 2;
+                    continue;
+                }
+            } else if next == Some('\u{FF9F}') {
+                if let Some(v) = to_semivoiced(base) {
+                    out.push(v);
+                    i += 2;
+                    continue;
+                }
+            }
+            out.push(base);
+        } else if c == '\u{FF9E}' {
+            out.push('゛'); // 単独濁点（結合先が無い場合）
+        } else if c == '\u{FF9F}' {
+            out.push('゜'); // 単独半濁点
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// ファイル名に使えない文字（Windowsの予約文字）を`_`へ置換する。日本語文字はそのまま保持する
+/// （opz2x6の`sanitize_filename`はASCII英数字以外を全て`_`にするため、全角カナ音色名には使えない）。
+pub fn sanitize_filename_keep_japanese(name: &str) -> String {
+    name.chars()
+        .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +289,31 @@ mod tests {
         dat[0..SLOT_SIZE].copy_from_slice(&s);
         let voices = parse_voice_dat(&dat).unwrap();
         assert_eq!(voices[0].name, "ﾄﾞﾗﾑ");
+    }
+
+    #[test]
+    fn halfwidth_kana_voiced_and_semivoiced_combine() {
+        // ﾄﾞﾗﾑ(半角) → ドラム(全角)。濁点ﾞは直前の基本字形と結合する。
+        assert_eq!(halfwidth_kana_to_fullwidth("ﾄﾞﾗﾑ"), "ドラム");
+        // ﾊﾟｰｶｯｼｮﾝ(半角) → パーカッション(全角)。半濁点ﾟ・促音ｯ・拗音ｮも変換対象。
+        assert_eq!(halfwidth_kana_to_fullwidth("ﾊﾟｰｶｯｼｮﾝ"), "パーカッション");
+    }
+
+    #[test]
+    fn halfwidth_kana_non_combinable_dakuten_stays_standalone() {
+        // 結合できない文字(ｱ)に続く濁点は単独の濁点記号として残す
+        assert_eq!(halfwidth_kana_to_fullwidth("ｱﾞ"), "ア゛");
+    }
+
+    #[test]
+    fn halfwidth_kana_ascii_passthrough() {
+        assert_eq!(halfwidth_kana_to_fullwidth("dgt1"), "dgt1");
+        assert_eq!(halfwidth_kana_to_fullwidth("FB10 ｶﾞｸﾞ"), "FB10 ガグ");
+    }
+
+    #[test]
+    fn sanitize_filename_keeps_japanese_replaces_reserved_chars() {
+        assert_eq!(sanitize_filename_keep_japanese("ドラム"), "ドラム");
+        assert_eq!(sanitize_filename_keep_japanese("A/B:C"), "A_B_C");
     }
 }
