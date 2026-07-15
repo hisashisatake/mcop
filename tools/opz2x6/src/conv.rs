@@ -144,8 +144,8 @@ fn det_to_x6(det: u8) -> u8 {
 /// 出典: https://mgregory22.me/tx81z/freqratios.html （TX81Zの周波数比を実測でリバースエンジニアリング。
 /// 著者自身「端数に説明のつかない周期誤差が残る」と明記しており完全な精度は無いが、
 /// 旧実装より大幅に正確）。
-/// fine(0-15、TX81Zの別パラメーターだがVMEMダンプには含まれないため常に0として扱う)は
-/// `order = order_base + fine` として加算される。
+/// fine(0-15、TX81Zの別パラメーター)は`order = order_base + fine`として加算される
+/// （VMEMのACED拡張領域のOPWバイト下位4bitから取得。parse.rs参照）。
 const COARSE_TO_GROUP: [(u8, u16); 64] = [
     (0, 0), (1, 0), (2, 0), (3, 0), (0, 8), (1, 8), (2, 8), (3, 8), (0, 24), (1, 24),
     (0, 40), (2, 24), (3, 24), (0, 56), (1, 40), (2, 40), (0, 72), (3, 40), (1, 56), (0, 88),
@@ -164,17 +164,23 @@ const FREQ_RATIO_COEFFS: [(f32, f32); 4] = [
     (0.87, 0.108105),
 ];
 
-/// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref共通で使う変換の核。
+/// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref共通で使う変換の核（fine=0固定）。
 pub fn coarse_to_ratio(coarse: u8) -> f32 {
-    let (group, order_base) = COARSE_TO_GROUP[coarse.min(63) as usize];
-    let (base, step) = FREQ_RATIO_COEFFS[group as usize];
-    base + step * order_base as f32
+    coarse_fine_to_ratio(coarse, 0)
 }
 
-/// TX81Z FREQ (0-63) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+/// TX81Z FREQ coarse(0-63) + fine(0-15) → 周波数比率(ratio)。
+/// `order = order_base + fine`として加算する([COARSE_TO_GROUP]のコメント参照)。
+pub fn coarse_fine_to_ratio(coarse: u8, fine: u8) -> f32 {
+    let (group, order_base) = COARSE_TO_GROUP[coarse.min(63) as usize];
+    let (base, step) = FREQ_RATIO_COEFFS[group as usize];
+    base + step * (order_base + fine.min(15) as u16) as f32
+}
+
+/// TX81Z FREQ (0-63) + fine(0-15) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
 /// 最近傍の整数 MUL を選び、差分セントを op_fine_tune に写像する。
-pub fn freq_to_mul_fine(freq: u8) -> (u8, u8) {
-    let ratio = coarse_to_ratio(freq);
+pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
+    let ratio = coarse_fine_to_ratio(freq, fine);
 
     // 最近傍の整数MUL（対数空間距離）
     let mut best_mul = 0u8;
@@ -282,7 +288,7 @@ fn fb_to_x6(fb: u8) -> u8 {
 
 fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions) -> OperatorParams {
     let mod_tl_cap = opts.mod_tl_cap;
-    let (mul, op_fine_tune) = freq_to_mul_fine(op.freq);
+    let (mul, op_fine_tune) = freq_to_mul_fine(op.freq, op.fine);
 
     // EGT=1 のとき D2R を強制的に高値にしてリリース挙動を作る
     // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
@@ -543,17 +549,30 @@ mod tests {
     #[test]
     fn freq_integer_mul_gives_center_fine() {
         // FREQ 4 = 1.0x (MUL=1), FREQ 8 = 2.0x (MUL=2) etc. → op_fine_tune=128
-        let (m, oft) = freq_to_mul_fine(4);
+        let (m, oft) = freq_to_mul_fine(4, 0);
         assert_eq!(m, 1);
         assert_eq!(oft, 128);
 
-        let (m, oft) = freq_to_mul_fine(8);
+        let (m, oft) = freq_to_mul_fine(8, 0);
         assert_eq!(m, 2);
         assert_eq!(oft, 128);
 
-        let (m, oft) = freq_to_mul_fine(0); // 0.5x
+        let (m, oft) = freq_to_mul_fine(0, 0); // 0.5x
         assert_eq!(m, 0);
         assert_eq!(oft, 128);
+    }
+
+    #[test]
+    fn freq_to_mul_fine_nonzero_fine_shifts_op_fine_tune() {
+        // FREQ=4(ratio 1.0, group0, order_base=8, step=0.0625)。
+        // fine=4 → order=12 → ratio=0.5+0.0625*12=1.25 → 対数距離ではMUL=1が最近傍のまま
+        // (log2(1.25/1)≈0.322 < log2(1.25/2)の絶対値≈0.678)。
+        // 差分 log2(1.25)*1200≈386¢分、op_fine_tuneがfine=0時より上昇するはず。
+        let (m0, oft0) = freq_to_mul_fine(4, 0);
+        let (m4, oft4) = freq_to_mul_fine(4, 4);
+        assert_eq!(m0, 1);
+        assert_eq!(m4, 1);
+        assert!(oft4 > oft0, "fine増加で比率が上がりop_fine_tuneも増えるはず: oft0={oft0} oft4={oft4}");
     }
 
     #[test]
@@ -591,6 +610,17 @@ mod tests {
         assert!((coarse_to_ratio(13) - 4.00).abs() < 1e-3);
         assert!((coarse_to_ratio(22) - 7.00).abs() < 1e-3); // 旧実装は7.937(+13.4%誤差)だった
         assert!((coarse_to_ratio(25) - 8.00).abs() < 1e-3);
+    }
+
+    #[test]
+    fn coarse_fine_to_ratio_adds_fine_as_order_offset() {
+        // FREQ=4: group0(base=0.50,step=0.0625), order_base=8 → fine=0で1.0
+        assert!((coarse_fine_to_ratio(4, 0) - 1.00).abs() < 1e-3);
+        // fine=1刻みでorderが+1、step分(0.0625)だけratioが増える
+        assert!((coarse_fine_to_ratio(4, 1) - 1.0625).abs() < 1e-3);
+        assert!((coarse_fine_to_ratio(4, 15) - (1.0 + 0.0625 * 15.0)).abs() < 1e-3);
+        // fine>15はclampされ、16も15と同じ結果になる
+        assert!((coarse_fine_to_ratio(4, 16) - coarse_fine_to_ratio(4, 15)).abs() < 1e-6);
     }
 
     #[test]

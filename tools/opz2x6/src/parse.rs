@@ -119,6 +119,8 @@ pub struct OpzOpData {
     pub freq: u8,  // Frequency Coarse 0-63
     pub det: u8,   // Detune 0-6 (3=中心)
     pub ow: u8,    // Operator Waveform 0-7 (ACEDより取得、未設定=0)
+    pub fine: u8,  // Frequency Fine 0-15 (ACEDのOPWバイト下位4bitより取得。VMEMのみ対応、
+                   // VCED単体+ACED拡張ファイルの5byte/opストライド内での位置は未検証のため常に0)
     pub egsft: u8, // EG Shift 0-3: 0=off(96dB), 1=48dB, 2=24dB, 3=12dB（ACEDより取得、未設定=0。
                    // EGの減衰レンジを指定幅へ圧縮する。manual p20/p75、VMEM addr73等 bits5-4）
 }
@@ -231,6 +233,7 @@ fn parse_op(data: &[u8], base: usize) -> OpzOpData {
         freq: get(data, base + F_FREQ),
         det:  get(data, base + F_DET),
         ow:   0,
+        fine: 0, // VCED単体+ACED拡張ファイルでのfine位置は未検証のため常に0
         egsft: 0, // ACED領域から後で上書き
     }
 }
@@ -291,6 +294,7 @@ fn parse_vmem_op(data: &[u8], base: usize) -> OpzOpData {
         freq: get(data, base + VM_FREQ) & 0x3F,
         det:  b9 & 0x07, // DBT(0-6): 3=中心、0=最大負デチューン
         ow:   0, // ACED領域から後で上書き
+        fine: 0, // ACED領域から後で上書き
         egsft: 0, // ACED領域から後で上書き
     }
 }
@@ -323,6 +327,7 @@ fn parse_vmem_voice(data: &[u8], number: u32) -> Option<OpzVoice> {
     };
 
     // ACED OPW（オペレーター波形）: bits[6:4] of each OPW byte
+    // FINE（周波数微調整）: 同バイトの bits[3:0]（manual p75: "0 WAVE FORM  FINE"）
     // VMEM OP順(4/2/3/1) と ACED addr の対応:
     //   OP4→addr74, OP2→addr76, OP3→addr78, OP1→addr80
     if data.len() > VMEM_ACED_OP1_OPW {
@@ -330,6 +335,10 @@ fn parse_vmem_voice(data: &[u8], number: u32) -> Option<OpzVoice> {
         v.ops[1].ow = (get(data, VMEM_ACED_OP3_OPW) >> 4) & 0x07;
         v.ops[2].ow = (get(data, VMEM_ACED_OP2_OPW) >> 4) & 0x07;
         v.ops[3].ow = (get(data, VMEM_ACED_OP1_OPW) >> 4) & 0x07;
+        v.ops[0].fine = get(data, VMEM_ACED_OP4_OPW) & 0x0F;
+        v.ops[1].fine = get(data, VMEM_ACED_OP3_OPW) & 0x0F;
+        v.ops[2].fine = get(data, VMEM_ACED_OP2_OPW) & 0x0F;
+        v.ops[3].fine = get(data, VMEM_ACED_OP1_OPW) & 0x0F;
         // ACED EGSFT（EGシフト）: OPWバイトの1つ手前 addr73/77/75/79 の bits[5:4]
         // （manual p75: "0 0 EGSFT FIX FIXRG"。0=off(96dB), 1=48dB, 2=24dB, 3=12dB）
         v.ops[0].egsft = (get(data, VMEM_ACED_OP4_OPW - 1) >> 4) & 0x03;
@@ -600,6 +609,20 @@ mod tests {
         assert_eq!(v.ops[1].ow, 2); // ops[1]=OP3 OPW=2
         assert_eq!(v.ops[2].ow, 0); // ops[2]=OP2 OPW=0
         assert_eq!(v.ops[3].ow, 0); // ops[3]=OP1 OPW=0
+    }
+
+    #[test]
+    fn vmem_aced_fine_applied() {
+        let mut data = vec![0u8; VMEM_VOICE_LEN];
+        // OP4: OPW=1(bits6-4), FINE=9(bits3-0) at addr74 → 0b0_001_1001 = 0x19
+        data[VMEM_ACED_OP4_OPW] = 0x19;
+        // OP1: OPW=0, FINE=15 at addr80 → 0x0F
+        data[VMEM_ACED_OP1_OPW] = 0x0F;
+        let v = parse_vmem_voice(&data, 0).unwrap();
+        assert_eq!(v.ops[0].ow, 1);
+        assert_eq!(v.ops[0].fine, 9); // ops[0]=OP4
+        assert_eq!(v.ops[1].fine, 0); // ops[1]=OP3 (未設定)
+        assert_eq!(v.ops[3].fine, 15); // ops[3]=OP1
     }
 
     #[test]
