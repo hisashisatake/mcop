@@ -14,6 +14,8 @@
 //! - `--octave <N>` でオクターブ（既定 4）を指定する。
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
 //! - `--voice <N>` を指定すると WAV 出力をその音色番号（0始まり）1件のみに絞る。
+//! - `--wav-prefix <str>` で WAV ファイル名の先頭に付ける文字列を指定する
+//!   （例: `--wav-prefix A_` → `A_000_GrandPiano.wav`。複数バンクを同じwav/に出す際の識別用）。
 //! - `--mod-cap <N>` でモジュレーター TL の天井を指定する（既定 180）。実機のOUTをそのまま
 //!   反映する天井なしは2026-07-02の聴感検証でノイジーと判明したため、既定で天井をかける。
 //!   `--mod-cap 255` で実質天井なし（診断用、通常は使わない）。
@@ -71,6 +73,7 @@ struct Args {
     split: bool,
     wav: bool,
     wav_cfg: WavConfig,
+    wav_prefix: String,
     voice_filter: Option<usize>,
     opts: conv::ConvOptions,
     smf: Option<PathBuf>,
@@ -99,6 +102,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut octave: i32 = 4;
     let mut note = "C".to_string();
     let mut voice_filter: Option<usize> = None;
+    let mut wav_prefix = String::new();
     let mut mod_cap: Option<u8> = Some(conv::DEFAULT_MOD_TL_CAP);
     let mut fb_override: Option<u8> = None;
     let mut ksr_override: Option<u8> = None;
@@ -135,6 +139,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--voice" => {
                 let v = args.get(i + 1).ok_or("--voice に値がありません")?;
                 voice_filter = Some(v.parse::<usize>().map_err(|_| format!("--voice の値が不正: {v}"))?);
+                i += 2;
+            }
+            "--wav-prefix" => {
+                let v = args.get(i + 1).ok_or("--wav-prefix に値がありません")?;
+                wav_prefix = v.to_string();
                 i += 2;
             }
             "--mod-cap" => {
@@ -186,6 +195,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(Args {
         input, output_dir, bank, split, wav,
         wav_cfg: WavConfig { on_secs, off_secs: 1.5, frequency },
+        wav_prefix,
         voice_filter,
         opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain, filter_cutoff },
         smf,
@@ -224,7 +234,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 
     if args.wav {
-        render_wavs(&voices, &args.output_dir, &args.wav_cfg, args.voice_filter, args.opts)?;
+        render_wavs(&voices, &args.output_dir, &args.wav_cfg, &args.wav_prefix, args.voice_filter, args.opts)?;
     }
 
     if args.split {
@@ -267,12 +277,13 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 /// 各音色を WAV（mono 44.1kHz 16bit）へレンダリングする（試聴用）。
-/// ファイル名は `<NNN>_<name>.wav`（NNN=音色番号0始まり）。
+/// ファイル名は `<prefix><NNN>_<name>.wav`（NNN=音色番号0始まり、prefixは`--wav-prefix`指定時のみ）。
 /// `voice_filter` が `Some(N)` のときは音色番号 N の1件のみを出力する。
 fn render_wavs(
     voices: &[parse::OpzVoice],
     output_dir: &Path,
     cfg: &WavConfig,
+    prefix: &str,
     voice_filter: Option<usize>,
     opts: conv::ConvOptions,
 ) -> Result<(), String> {
@@ -310,9 +321,9 @@ fn render_wavs(
 
         let safe = parse::sanitize_filename(&voice.name);
         let filename = if safe.is_empty() {
-            format!("{idx:03}.wav")
+            format!("{prefix}{idx:03}.wav")
         } else {
-            format!("{idx:03}_{safe}.wav")
+            format!("{prefix}{idx:03}_{safe}.wav")
         };
         // ピーク正規化: -6dBFS（0.5）を目標。無音に近い場合はスキップ。
         let peak = buf.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
