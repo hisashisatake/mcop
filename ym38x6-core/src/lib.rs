@@ -191,10 +191,13 @@ fn default_pitch_fg() -> BipolarFg {
     BipolarFg { eg: EgParams { ar: 0, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0 }, depth: 128 }
 }
 
-/// `Gain FG`の既定値（ar=255/d1l=255/rr=255、旧`vca_eg_*`の既定と同値）。
-/// アタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となる透過的レイヤー。
+/// `Gain FG`の既定値（ar=255/d1l=255/rr=0）。アタックは数サンプルで完了しゲイン1.0に張り付く。
+/// リリースは最遅(rr=0≈284.9秒＝実質ゲートを閉じない)にして、離鍵後の減衰を各オペレーターの
+/// 本来のRRに委ねる（VCAが全チャンネルを速いRRで閉じるとキャリアのリリース尾を打ち消す＝瞬断の原因。
+/// 発音終了時のチャンネル回収はオペレーターのidle判定のみで行うためVCAを閉じなくても安全）。
+/// 旧既定はrr=255だったが、速いリリースは「透過的」ではなくFM本来のEGへの二重EG化になっていた。
 fn default_gain_fg() -> GainFg {
-    EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0 }
+    EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 0, floor: 0, loop_enabled: 0, curve: 0 }
 }
 
 impl Default for ChannelParams {
@@ -311,7 +314,9 @@ impl From<ChannelParamsWire> for ChannelParams {
             d1r: wire.vca_eg_d1r.unwrap_or(0),
             d1l: wire.vca_eg_d1l.unwrap_or(255),
             d2r: wire.vca_eg_d2r.unwrap_or(0),
-            rr: wire.vca_eg_rr.unwrap_or(255),
+            // 未指定時は透過既定(rr=0=最遅)へ。旧既定255は離鍵で全チャンネルを8.71msで
+            // 閉じ、オペレーター本来のリリース尾を打ち消していた（default_gain_fg参照）。
+            rr: wire.vca_eg_rr.unwrap_or(0),
             floor: 0,
             loop_enabled: 0,
             curve: 0,
