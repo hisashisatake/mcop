@@ -99,11 +99,23 @@ pub fn tl_opn_to_x6(tl: u8) -> u8 {
     (127 - tl.min(127)) * 2
 }
 
-/// Sustain Level: OPN（0=減衰なし, 15=ほぼ無音）→ 38x6（0=ほぼ無音, 255=フルレベル）。
-/// 極性反転: `(15 - sl) * 17`。
+/// Sustain Level: OPN（減衰量 0=減衰なし/フルレベル, 15=ほぼ無音、3dB/step+15で-93dBジャンプ）
+/// → 38x6（0=ほぼ無音, 255=フルレベル）。
+///
+/// **【2026-07-15 dB線形へ修正】** 旧実装は`(15-sl)*17`という**レジスタ段差の線形写像**だった。
+/// 38x6エンジンのD1LはdBリニア（`ym38x6-core/operator.rs`: `env_amp=10^(-(1-d1l/255)*4.8)`、
+/// 96dBスパン）で解釈されるため、1ステップ=17/255×96dB≈6.4dB相当に化けてしまい、実機の
+/// 3dB/stepの倍以上の速さで沈む写像になっていた（中間SL値の音色が実機より痩せる/消える）。
+/// opz2x6のD1L極性反転バグ（[[project_opz2x6_d1l_polarity_bug]]）と同根の意味論不一致で、
+/// エンジンが2026-06-16 13:39(2c654a9)にdBリニア化された**直後**（同日13:05）に書かれた
+/// このファイルが追従できていなかった。opm2x6と同じdB線形式に統一する。
 #[inline]
 pub fn sl_opn_to_x6(sl: u8) -> u8 {
-    (15 - sl.min(15)) * 17
+    // OPNのslは既に「減衰量」極性（0=減衰なし,15=ほぼ無音）でopm2x6のreg引数と同じ意味論
+    // （opz2x6のパネル値のような反転は不要）。そのままdB線形カーブへ通す。
+    let reg = sl.min(15);
+    let db: f32 = if reg >= 15 { -93.0 } else { -(3.0 * reg as f32) };
+    (255.0 * (1.0 + db / 93.0)).round() as u8
 }
 
 /// OPN DT1（3bit, 0〜7）→ 38x6 dt1（8bit, 中心128=±0, ±50セント）。
@@ -289,6 +301,17 @@ mod tests {
     fn sl_polarity_inverts() {
         assert_eq!(sl_opn_to_x6(0), 255);
         assert_eq!(sl_opn_to_x6(15), 0);
+    }
+
+    #[test]
+    fn sl_mid_values_follow_db_linear_curve_not_stair_step() {
+        // 【2026-07-15回帰】旧`(15-sl)*17`の段差線形だとsl=4→187, sl=8→119になり、
+        // エンジンのdBリニア解釈(96dBスパン)では実機の2倍以上速く沈む誤った音量になっていた。
+        assert_eq!(sl_opn_to_x6(4), 222); // -12dB → 255*(1-12/93)
+        assert_eq!(sl_opn_to_x6(8), 189); // -24dB → 255*(1-24/93)
+        assert_eq!(sl_opn_to_x6(14), 140); // -42dB → 255*(1-42/93)
+        assert_ne!(sl_opn_to_x6(4), 187);
+        assert_ne!(sl_opn_to_x6(8), 119);
     }
 
     #[test]
