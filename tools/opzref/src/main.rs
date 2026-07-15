@@ -171,7 +171,11 @@ fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8) {
     // ymfmは0x120偽レジスタへ格納し compute_volume で env_attenuation >> eg_shift を適用する。
     opz.write(op_reg(0xc0, slot), 0x20 | ((op.egsft & 0x03) << 6));
     // 0xe0: D1L(7-4) | RR(3-0)
-    opz.write(op_reg(0xe0, slot), ((op.d1l & 0x0f) << 4) | (op.rr & 0x0f));
+    // 【2026-07-15 極性修正】sysexのD1Lはパネル極性(15=フルサステイン)、チップレジスタは
+    // 減衰量極性(15=-93dB)なので 15-panel で反転してから書く。旧実装はパネル値を直書きしており、
+    // opz2x6のsl_to_x6と同じ反転を共有＝比較しても差が出ない「オラクル汚染」状態だった
+    // (opz2x6::conv::sl_to_x6のコメント参照)。
+    opz.write(op_reg(0xe0, slot), ((15 - (op.d1l & 0x0f)) << 4) | (op.rr & 0x0f));
     // 0x40 alt (data bit7=1): waveform(6-4) | fine(3-0)
     opz.write(op_reg(0x40, slot), 0x80 | ((op.ow & 0x07) << 4) | (fine & 0x0f));
 }

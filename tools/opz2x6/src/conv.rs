@@ -106,21 +106,30 @@ fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     }
 }
 
-/// D1L/SL（OPM型 4-bit 0-15）→ 38x6 D1L。
+/// D1L/SL（TX81Zパネル値 4-bit 0-15）→ 38x6 D1L。
 ///
-/// reg はサスティンレベルの減衰量（reg=0で0dB=減衰なし、reg=15で-93dB≈無音、reg<15は3dB/step）。
-/// **キャリア**は 38x6 オペレーターの sustain_level(=`d1l/255` リニア振幅, operator.rs) に合わせて
-/// dB をリニア振幅 10^(db/20) に変換する。旧実装は dB を線形に 0-255 へ写していたため、中間 reg
-/// （例 reg=13=-39dB）が 0.58(≈-4.7dB) の高い保持レベルになり、撥弦/打鍵系のキャリアが減衰せず
-/// 静的化していた（撥弦が「鳴りっぱなし」になる）。
-/// **モジュレーター**は音色（明るさ）維持のため従来の dB 線形写像のまま。端点(reg=0→255, reg=15→0)は両者一致。
-fn sl_to_x6(reg: u8, is_carrier: bool) -> u8 {
+/// **【2026-07-15 極性修正】** sysex(VCED/VMEM)のD1Lは**パネル極性**（panel=15でフルサステイン、
+/// panel=0で無音まで減衰）であり、OPMレジスタ極性（reg=15で-93dB）とは天地逆。
+/// 旧実装はopm2x6のレジスタ用式をパネル値にそのまま流用しており全音色で反転していた
+/// （ファクトリーバンクの持続系音色SynString/FrenchHorn/Alarm CallはすべてD1L=15、
+/// 減衰系GrandPianoはD1L=0＝レジスタ極性だと弦・ホルンが即死する不合理な解釈になる）。
+/// 冒頭で `reg = 15 - panel` に変換してから既存のレジスタ極性カーブに通す。
+/// opzref(main.rs)のレジスタ直書きにも同じ反転が必要（オラクル汚染回避のため同時修正）。
+///
+/// reg（変換後）はサスティンレベルの減衰量（reg=0で0dB=減衰なし、reg=15で-93dB≈無音、3dB/step）。
+///
+/// **【2026-07-15 dB線形写像へ再統一】** 38x6エンジンのEGレベルは**dBリニア**
+/// （operator.rs: `env_amp = 10^(-(1-level)*4.8)`、level=d1l/255でlevel 0.5=-48dB）なので、
+/// dBを線形に0-255へ写す。旧実装はキャリアのみ「d1l=リニア振幅」という誤った前提で
+/// `10^(db/20)*255` を返しており、-6dB保持のつもりの値がエンジン解釈で-48dB（ほぼ無音）に
+/// なっていた（LiteHarpsiキャリアがプチノイズ化した直接原因）。
+/// なお過去に一度dB線形へ修正して「聴感で不自然」と撤回した経緯があるが、
+/// その聴感判断はD1L極性反転バグ（上記）がある状態で行われたもので汚染されていた。
+/// 極性修正とセットで再統一する。キャリア/モジュレーターの区別は不要になった。
+fn sl_to_x6(panel: u8) -> u8 {
+    let reg = 15 - panel.min(15);
     let db: f32 = if reg >= 15 { -93.0 } else { -(3.0 * reg as f32) };
-    if is_carrier {
-        (10f32.powf(db / 20.0) * 255.0).round() as u8
-    } else {
-        (255.0 * (1.0 + db / 93.0)).round() as u8
-    }
+    (255.0 * (1.0 + db / 93.0)).round() as u8
 }
 
 /// TX81Z DET (0-6, 3=中心) → 38x6 dt1（中心128）。
@@ -299,7 +308,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         ar: ar_to_x6(op.ar, op.rs),
         d1r: opm_rate_to_x6(op.d1r, op.rs),
         d2r: opm_rate_to_x6(d2r, op.rs),
-        d1l: sl_to_x6(op.d1l, is_carrier),
+        d1l: sl_to_x6(op.d1l),
         rr: rr_to_x6(op.rr, op.rs),
         mul,
         dt1: det_to_x6(op.det),
@@ -576,17 +585,29 @@ mod tests {
     }
 
     #[test]
-    fn sl_to_x6_carrier_linear_amplitude() {
-        // キャリア: 端点は不変
-        assert_eq!(sl_to_x6(0, true), 255); // 0dB=減衰なし=フル保持
-        assert_eq!(sl_to_x6(15, true), 0);  // -93dB≈無音
-        // reg=13(-39dB)はリニア振幅 0.0112 → 約3（撥弦キャリアが静的化していた回帰テスト）
-        assert_eq!(sl_to_x6(13, true), 3);
-        // モジュレーターは従来の dB 線形写像（音色維持）: reg=13 は 148 のまま
-        assert_eq!(sl_to_x6(13, false), 148);
-        // 端点はキャリア/モジュレーターで一致
-        assert_eq!(sl_to_x6(0, false), 255);
-        assert_eq!(sl_to_x6(15, false), 0);
+    fn sl_to_x6_panel_polarity_db_linear() {
+        // 【2026-07-15 極性修正+dB線形統一】引数はパネル極性: panel=15がフルサステイン、
+        // panel=0が無音まで減衰。ファクトリーバンクの持続系音色(SynString/FrenchHorn/Alarm Call)は
+        // D1L=15、減衰系(GrandPiano)はD1L=0 — この向きが正。
+        assert_eq!(sl_to_x6(15), 255); // フルサステイン(reg=0, 0dB)
+        assert_eq!(sl_to_x6(0), 0);    // 無音まで減衰(reg=15, -93dB)
+        // dB線形写像: panel=2(reg=13, -39dB) → 255*(1-39/93) = 148
+        assert_eq!(sl_to_x6(2), 148);
+        // LiteHarpsiキャリア回帰: panel=13(reg=2, -6dB) → 255*(1-6/93) = 239。
+        // エンジンのdBリニアEG解釈で-(1-239/255)*96 ≈ -6dB(振幅0.5)となり正しく保持される。
+        // 旧リニア振幅写像は128を返し、エンジン解釈で-48dB(ほぼ無音)=プチノイズ化していた。
+        assert_eq!(sl_to_x6(13), 239);
+        // panel>15の防御(clamp): 16は15と同じ
+        assert_eq!(sl_to_x6(16), sl_to_x6(15));
+    }
+
+    #[test]
+    fn sl_to_x6_sustain_idiom_survives() {
+        // Alarm Call回帰: D1R=31 + D1L=15(パネル)は4op機の定番「ディケイスキップ=純サステイン」
+        // イディオム。旧極性では「最速で-93dBへ」に化けて9msのプチノイズになっていた。
+        let op = OpzOpData { d1l: 15, d1r: 31, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
+        let p = convert_op(&op, true, 0, ConvOptions::default());
+        assert_eq!(p.d1l, 255, "パネルD1L=15はフルサステインに写像されるべき");
     }
 
     #[test]
