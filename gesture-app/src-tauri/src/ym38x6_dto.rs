@@ -1,33 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ym38x6_core::{
-    BipolarFg, ChannelParams, EgParams, LfoWaveform, OperatorParams, Preset, TextureLfo, Ym38x6Patch,
-};
-
-/// フロントエンドの質感LFO波形インデックス(旧8波形、`lfo_waveform_from_index`と同じ規約)を、
-/// `TextureLfo`の新5波形パレット(0〜4)へ写像する（パレット外のTriangle/Sine/Sawは矩形へ
-/// フォールバック。ym38x6-vstの`lfo_waveform_to_texture_lfo_index`と同じ考え方）。
-fn perf_lfo_waveform_to_texture_lfo_index(waveform: u8) -> u8 {
-    match ym38x6_core::lfo_waveform_from_index(waveform) {
-        LfoWaveform::Square => 0,
-        LfoWaveform::Trapezoid => 1,
-        LfoWaveform::SampleHold => 2,
-        LfoWaveform::Random => 3,
-        LfoWaveform::Chaos => 4,
-        LfoWaveform::Triangle | LfoWaveform::Sine | LfoWaveform::Saw => 0,
-    }
-}
-
-/// [perf_lfo_waveform_to_texture_lfo_index]の逆方向。DTOへ書き戻す際に使う。
-fn texture_lfo_index_to_perf_lfo_waveform(index: u8) -> u8 {
-    let waveform = match index {
-        1 => LfoWaveform::Trapezoid,
-        2 => LfoWaveform::SampleHold,
-        3 => LfoWaveform::Random,
-        4 => LfoWaveform::Chaos,
-        _ => LfoWaveform::Square,
-    };
-    waveform as u8
-}
+use ym38x6_core::{BipolarFg, ChannelParams, EgParams, OperatorParams, Preset, TextureLfo, Ym38x6Patch};
 
 /// フロントエンドから渡される/返すオペレーター単位パラメーター（`OperatorParams`のDTO）。
 #[derive(Deserialize, Serialize)]
@@ -119,43 +91,105 @@ impl From<OperatorParams> for OperatorParamsDto {
 pub struct ChannelParamsDto {
     pub algorithm: u8,
     pub feedback: u8,
-    pub tone_lfo_freq: u8,
-    pub tone_lfo_pmd: u8,
-    pub tone_lfo_amd: u8,
-    pub tone_lfo_delay: u8,
+    pub chip_lfo_freq: u8,
+    pub chip_lfo_pmd: u8,
+    pub chip_lfo_amd: u8,
+    pub chip_lfo_delay: u8,
     pub pms: u8,
     pub ams: u8,
     pub filter_cutoff: u8,
     pub filter_resonance: u8,
     pub filter_type: u8,
     pub filter_self_oscillation: bool,
-    pub filter_eg_ar: u8,
-    pub filter_eg_d1r: u8,
-    pub filter_eg_d1l: u8,
-    pub filter_eg_d2r: u8,
-    pub filter_eg_rr: u8,
-    pub filter_eg_depth: u8,
-    pub vca_eg_ar: u8,
-    pub vca_eg_d1r: u8,
-    pub vca_eg_d1l: u8,
-    pub vca_eg_d2r: u8,
-    pub vca_eg_rr: u8,
-    /// パフォーマンスLFOの波形/Fade/Offset（`ChannelParams.perf_lfo_shape`のDTO表現）。
-    /// waveform/fade_modeは宣言順インデックス、offsetは中心128（オフセットなし）の
-    /// 0〜255表現（ym38x6-vstのDAWパラメーターと同じ規約、`lfo_offset_from_param`/
-    /// `lfo_offset_to_param`で相互変換する）。未送信の古いフロントエンドでも
-    /// 旧来のハードエッジ挙動と等価な既定値になる。
+    // Pitch FG（新規、共通EG＋バイポーラDepth）。未送信の古いフロントエンドでも
+    // ym38x6-core::default_pitch_fg()相当の「無効」状態になる。
     #[serde(default)]
-    pub perf_lfo_waveform: u8,
+    pub pitch_fg_ar: u8,
     #[serde(default)]
-    pub perf_lfo_fade_mode: u8,
+    pub pitch_fg_d1r: u8,
+    #[serde(default = "default_pitch_fg_d1l")]
+    pub pitch_fg_d1l: u8,
     #[serde(default)]
-    pub perf_lfo_fade_time: u8,
-    #[serde(default = "default_perf_lfo_offset")]
-    pub perf_lfo_offset: u8,
+    pub pitch_fg_d2r: u8,
+    #[serde(default = "default_pitch_fg_rr")]
+    pub pitch_fg_rr: u8,
+    #[serde(default = "default_bipolar_depth")]
+    pub pitch_fg_depth: u8,
+    #[serde(default)]
+    pub pitch_fg_floor: u8,
+    #[serde(default)]
+    pub pitch_fg_delay: u8,
+    #[serde(default)]
+    pub pitch_fg_loop: u8,
+    #[serde(default)]
+    pub pitch_fg_curve: u8,
+    // Cutoff FG（旧Filter EG。depthはバイポーラの直接値、旧unipolar変換式は撤去済み）。
+    pub cutoff_fg_ar: u8,
+    pub cutoff_fg_d1r: u8,
+    pub cutoff_fg_d1l: u8,
+    pub cutoff_fg_d2r: u8,
+    pub cutoff_fg_rr: u8,
+    #[serde(default = "default_bipolar_depth")]
+    pub cutoff_fg_depth: u8,
+    #[serde(default)]
+    pub cutoff_fg_floor: u8,
+    #[serde(default)]
+    pub cutoff_fg_delay: u8,
+    #[serde(default)]
+    pub cutoff_fg_loop: u8,
+    #[serde(default)]
+    pub cutoff_fg_curve: u8,
+    // Gain FG（旧VCA EG。音量に負値は無いためDepthを持たずFloorが深さ役）。
+    pub gain_fg_ar: u8,
+    pub gain_fg_d1r: u8,
+    pub gain_fg_d1l: u8,
+    pub gain_fg_d2r: u8,
+    pub gain_fg_rr: u8,
+    #[serde(default)]
+    pub gain_fg_floor: u8,
+    #[serde(default)]
+    pub gain_fg_delay: u8,
+    #[serde(default)]
+    pub gain_fg_loop: u8,
+    #[serde(default)]
+    pub gain_fg_curve: u8,
+    /// 質感LFO全項目（`ChannelParams.texture_lfo`のDTO表現）。waveform/fade_modeは宣言順
+    /// インデックス（waveform=0〜4の直接値、旧8波形経由の変換は撤去済み）、destinationは
+    /// 0=Pitch/1=Volume/2=TL/3=Cutoff、offsetは中心128（オフセットなし）の0〜255表現。
+    /// rate/depth/delay/destinationは旧DTOでは往復で破棄されていたが、エディタ経由の
+    /// send_patchでも実際に反映されるようここで保持する（main.jsのランタイム制御が
+    /// 書いた値をエディタが上書きしないようにする役割も兼ねる）。
+    #[serde(default)]
+    pub texture_lfo_waveform: u8,
+    #[serde(default)]
+    pub texture_lfo_destination: u8,
+    #[serde(default)]
+    pub texture_lfo_rate: u8,
+    #[serde(default)]
+    pub texture_lfo_depth: u8,
+    #[serde(default)]
+    pub texture_lfo_delay: u8,
+    #[serde(default)]
+    pub texture_lfo_fade_mode: u8,
+    #[serde(default)]
+    pub texture_lfo_fade_time: u8,
+    #[serde(default = "default_texture_lfo_offset")]
+    pub texture_lfo_offset: u8,
 }
 
-fn default_perf_lfo_offset() -> u8 {
+fn default_bipolar_depth() -> u8 {
+    128
+}
+
+fn default_pitch_fg_d1l() -> u8 {
+    255
+}
+
+fn default_pitch_fg_rr() -> u8 {
+    255
+}
+
+fn default_texture_lfo_offset() -> u8 {
     128
 }
 
@@ -164,52 +198,65 @@ impl From<ChannelParamsDto> for ChannelParams {
         Self {
             algorithm: dto.algorithm,
             feedback: dto.feedback,
-            chip_lfo_freq: dto.tone_lfo_freq,
-            chip_lfo_pmd: dto.tone_lfo_pmd,
-            chip_lfo_amd: dto.tone_lfo_amd,
-            chip_lfo_delay: dto.tone_lfo_delay,
+            chip_lfo_freq: dto.chip_lfo_freq,
+            chip_lfo_pmd: dto.chip_lfo_pmd,
+            chip_lfo_amd: dto.chip_lfo_amd,
+            chip_lfo_delay: dto.chip_lfo_delay,
             pms: dto.pms,
             ams: dto.ams,
             filter_cutoff: dto.filter_cutoff,
             filter_resonance: dto.filter_resonance,
             filter_type: dto.filter_type,
             filter_self_oscillation: dto.filter_self_oscillation,
-            // Cutoff FG/Gain FG: DTOはまだloop/floor/curve/バイポーラdepthを持たないため
-            // （ステップ8でgesture-appのFGエディタUIを追加するまで）、EG本体と旧unipolar
-            // depthの変換のみ反映する。Pitch FGはDTOに対応データが無いためデフォルト。
+            pitch_fg: BipolarFg {
+                eg: EgParams {
+                    ar: dto.pitch_fg_ar,
+                    d1r: dto.pitch_fg_d1r,
+                    d1l: dto.pitch_fg_d1l,
+                    d2r: dto.pitch_fg_d2r,
+                    rr: dto.pitch_fg_rr,
+                    floor: dto.pitch_fg_floor,
+                    loop_enabled: dto.pitch_fg_loop,
+                    curve: dto.pitch_fg_curve,
+                    delay: dto.pitch_fg_delay,
+                },
+                depth: dto.pitch_fg_depth,
+            },
             cutoff_fg: BipolarFg {
                 eg: EgParams {
-                    ar: dto.filter_eg_ar,
-                    d1r: dto.filter_eg_d1r,
-                    d1l: dto.filter_eg_d1l,
-                    d2r: dto.filter_eg_d2r,
-                    rr: dto.filter_eg_rr,
-                    floor: 0,
-                    loop_enabled: 0,
-                    curve: 0,
-                    delay: 0,
+                    ar: dto.cutoff_fg_ar,
+                    d1r: dto.cutoff_fg_d1r,
+                    d1l: dto.cutoff_fg_d1l,
+                    d2r: dto.cutoff_fg_d2r,
+                    rr: dto.cutoff_fg_rr,
+                    floor: dto.cutoff_fg_floor,
+                    loop_enabled: dto.cutoff_fg_loop,
+                    curve: dto.cutoff_fg_curve,
+                    delay: dto.cutoff_fg_delay,
                 },
-                depth: (128.0 + dto.filter_eg_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
+                depth: dto.cutoff_fg_depth,
             },
             gain_fg: EgParams {
-                ar: dto.vca_eg_ar,
-                d1r: dto.vca_eg_d1r,
-                d1l: dto.vca_eg_d1l,
-                d2r: dto.vca_eg_d2r,
-                rr: dto.vca_eg_rr,
-                floor: 0,
-                loop_enabled: 0,
-                curve: 0,
-                delay: 0,
+                ar: dto.gain_fg_ar,
+                d1r: dto.gain_fg_d1r,
+                d1l: dto.gain_fg_d1l,
+                d2r: dto.gain_fg_d2r,
+                rr: dto.gain_fg_rr,
+                floor: dto.gain_fg_floor,
+                loop_enabled: dto.gain_fg_loop,
+                curve: dto.gain_fg_curve,
+                delay: dto.gain_fg_delay,
             },
             texture_lfo: TextureLfo {
-                waveform: perf_lfo_waveform_to_texture_lfo_index(dto.perf_lfo_waveform),
-                fade_mode: dto.perf_lfo_fade_mode,
-                fade_time: dto.perf_lfo_fade_time,
-                offset: dto.perf_lfo_offset,
-                ..TextureLfo::default()
+                waveform: dto.texture_lfo_waveform,
+                destination: dto.texture_lfo_destination,
+                rate: dto.texture_lfo_rate,
+                depth: dto.texture_lfo_depth,
+                delay: dto.texture_lfo_delay,
+                fade_mode: dto.texture_lfo_fade_mode,
+                fade_time: dto.texture_lfo_fade_time,
+                offset: dto.texture_lfo_offset,
             },
-            pitch_fg: BipolarFg::default(),
         }
     }
 }
@@ -219,31 +266,53 @@ impl From<ChannelParams> for ChannelParamsDto {
         Self {
             algorithm: ch.algorithm,
             feedback: ch.feedback,
-            tone_lfo_freq: ch.chip_lfo_freq,
-            tone_lfo_pmd: ch.chip_lfo_pmd,
-            tone_lfo_amd: ch.chip_lfo_amd,
-            tone_lfo_delay: ch.chip_lfo_delay,
+            chip_lfo_freq: ch.chip_lfo_freq,
+            chip_lfo_pmd: ch.chip_lfo_pmd,
+            chip_lfo_amd: ch.chip_lfo_amd,
+            chip_lfo_delay: ch.chip_lfo_delay,
             pms: ch.pms,
             ams: ch.ams,
             filter_cutoff: ch.filter_cutoff,
             filter_resonance: ch.filter_resonance,
             filter_type: ch.filter_type,
             filter_self_oscillation: ch.filter_self_oscillation,
-            filter_eg_ar: ch.cutoff_fg.eg.ar,
-            filter_eg_d1r: ch.cutoff_fg.eg.d1r,
-            filter_eg_d1l: ch.cutoff_fg.eg.d1l,
-            filter_eg_d2r: ch.cutoff_fg.eg.d2r,
-            filter_eg_rr: ch.cutoff_fg.eg.rr,
-            filter_eg_depth: ch.cutoff_fg.depth,
-            vca_eg_ar: ch.gain_fg.ar,
-            vca_eg_d1r: ch.gain_fg.d1r,
-            vca_eg_d1l: ch.gain_fg.d1l,
-            vca_eg_d2r: ch.gain_fg.d2r,
-            vca_eg_rr: ch.gain_fg.rr,
-            perf_lfo_waveform: texture_lfo_index_to_perf_lfo_waveform(ch.texture_lfo.waveform),
-            perf_lfo_fade_mode: ch.texture_lfo.fade_mode,
-            perf_lfo_fade_time: ch.texture_lfo.fade_time,
-            perf_lfo_offset: ch.texture_lfo.offset,
+            pitch_fg_ar: ch.pitch_fg.eg.ar,
+            pitch_fg_d1r: ch.pitch_fg.eg.d1r,
+            pitch_fg_d1l: ch.pitch_fg.eg.d1l,
+            pitch_fg_d2r: ch.pitch_fg.eg.d2r,
+            pitch_fg_rr: ch.pitch_fg.eg.rr,
+            pitch_fg_depth: ch.pitch_fg.depth,
+            pitch_fg_floor: ch.pitch_fg.eg.floor,
+            pitch_fg_delay: ch.pitch_fg.eg.delay,
+            pitch_fg_loop: ch.pitch_fg.eg.loop_enabled,
+            pitch_fg_curve: ch.pitch_fg.eg.curve,
+            cutoff_fg_ar: ch.cutoff_fg.eg.ar,
+            cutoff_fg_d1r: ch.cutoff_fg.eg.d1r,
+            cutoff_fg_d1l: ch.cutoff_fg.eg.d1l,
+            cutoff_fg_d2r: ch.cutoff_fg.eg.d2r,
+            cutoff_fg_rr: ch.cutoff_fg.eg.rr,
+            cutoff_fg_depth: ch.cutoff_fg.depth,
+            cutoff_fg_floor: ch.cutoff_fg.eg.floor,
+            cutoff_fg_delay: ch.cutoff_fg.eg.delay,
+            cutoff_fg_loop: ch.cutoff_fg.eg.loop_enabled,
+            cutoff_fg_curve: ch.cutoff_fg.eg.curve,
+            gain_fg_ar: ch.gain_fg.ar,
+            gain_fg_d1r: ch.gain_fg.d1r,
+            gain_fg_d1l: ch.gain_fg.d1l,
+            gain_fg_d2r: ch.gain_fg.d2r,
+            gain_fg_rr: ch.gain_fg.rr,
+            gain_fg_floor: ch.gain_fg.floor,
+            gain_fg_delay: ch.gain_fg.delay,
+            gain_fg_loop: ch.gain_fg.loop_enabled,
+            gain_fg_curve: ch.gain_fg.curve,
+            texture_lfo_waveform: ch.texture_lfo.waveform,
+            texture_lfo_destination: ch.texture_lfo.destination,
+            texture_lfo_rate: ch.texture_lfo.rate,
+            texture_lfo_depth: ch.texture_lfo.depth,
+            texture_lfo_delay: ch.texture_lfo.delay,
+            texture_lfo_fade_mode: ch.texture_lfo.fade_mode,
+            texture_lfo_fade_time: ch.texture_lfo.fade_time,
+            texture_lfo_offset: ch.texture_lfo.offset,
         }
     }
 }

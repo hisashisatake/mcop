@@ -3,7 +3,7 @@ use nice_plug_egui::resizable_window::ResizableWindow;
 use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
 use std::sync::{Arc, Mutex};
 use ym38x6_core::{presets_dir, PresetBank, Ym38x6Patch};
-use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
+use ym38x6_ui::{draw_param_panel, BipolarFgPanelParams, FgEgPanelParams, OperatorPanelParams, PanelParams};
 
 use crate::param_adapter::{vb, vi};
 use crate::params::{OperatorVstParams, Ym38x6Params};
@@ -45,34 +45,62 @@ fn build_panel_params<'a>(
     PanelParams {
         algorithm: vi(&params.algorithm, setter),
         feedback: vi(&params.feedback, setter),
-        lfo_rate: vi(&params.texture_lfo_rate, setter),
-        lfo_depth: vi(&params.texture_lfo_depth, setter),
-        lfo_delay: vi(&params.texture_lfo_delay, setter),
+        texture_lfo_rate: vi(&params.texture_lfo_rate, setter),
+        texture_lfo_depth: vi(&params.texture_lfo_depth, setter),
+        texture_lfo_delay: vi(&params.texture_lfo_delay, setter),
         // 質感LFOの5波形パレット(0〜4)へ直接対応する（ym38x6-ui::LFO_WAVEFORM_NAMESも
         // 5波形に修正済み。旧8波形経由の変換は不要）。
-        lfo_waveform: vi(&params.texture_lfo_waveform, setter),
-        lfo_fade_mode: vi(&params.texture_lfo_fade_mode, setter),
-        lfo_fade_time: vi(&params.texture_lfo_fade_time, setter),
-        lfo_offset: vi(&params.texture_lfo_offset, setter),
-        tone_freq: vi(&params.chip_lfo_freq, setter),
-        tone_pmd: vi(&params.chip_lfo_pmd, setter),
-        tone_amd: vi(&params.chip_lfo_amd, setter),
-        tone_delay: vi(&params.chip_lfo_delay, setter),
+        texture_lfo_waveform: vi(&params.texture_lfo_waveform, setter),
+        texture_lfo_fade_mode: vi(&params.texture_lfo_fade_mode, setter),
+        texture_lfo_fade_time: vi(&params.texture_lfo_fade_time, setter),
+        texture_lfo_offset: vi(&params.texture_lfo_offset, setter),
+        chip_lfo_freq: vi(&params.chip_lfo_freq, setter),
+        chip_lfo_pmd: vi(&params.chip_lfo_pmd, setter),
+        chip_lfo_amd: vi(&params.chip_lfo_amd, setter),
+        chip_lfo_delay: vi(&params.chip_lfo_delay, setter),
         pms: vi(&params.pms, setter),
         ams: vi(&params.ams, setter),
+        pitch_fg: BipolarFgPanelParams {
+            eg: FgEgPanelParams {
+                ar: vi(&params.pitch_fg_ar, setter),
+                d1r: vi(&params.pitch_fg_d1r, setter),
+                d1l: vi(&params.pitch_fg_d1l, setter),
+                d2r: vi(&params.pitch_fg_d2r, setter),
+                rr: vi(&params.pitch_fg_rr, setter),
+                floor: vi(&params.pitch_fg_floor, setter),
+                delay: vi(&params.pitch_fg_delay, setter),
+                loop_enabled: vb(&params.pitch_fg_loop, setter),
+                curve: vb(&params.pitch_fg_curve, setter),
+            },
+            depth: vi(&params.pitch_fg_depth, setter),
+        },
         cutoff: vi(&params.cutoff, setter),
         resonance: vi(&params.resonance, setter),
-        feg_ar: vi(&params.cutoff_fg_ar, setter),
-        feg_d1r: vi(&params.cutoff_fg_d1r, setter),
-        feg_d1l: vi(&params.cutoff_fg_d1l, setter),
-        feg_d2r: vi(&params.cutoff_fg_d2r, setter),
-        feg_rr: vi(&params.cutoff_fg_rr, setter),
-        feg_depth: vi(&params.cutoff_fg_depth, setter),
-        vca_ar: vi(&params.gain_fg_ar, setter),
-        vca_d1r: vi(&params.gain_fg_d1r, setter),
-        vca_d1l: vi(&params.gain_fg_d1l, setter),
-        vca_d2r: vi(&params.gain_fg_d2r, setter),
-        vca_rr: vi(&params.gain_fg_rr, setter),
+        cutoff_fg: BipolarFgPanelParams {
+            eg: FgEgPanelParams {
+                ar: vi(&params.cutoff_fg_ar, setter),
+                d1r: vi(&params.cutoff_fg_d1r, setter),
+                d1l: vi(&params.cutoff_fg_d1l, setter),
+                d2r: vi(&params.cutoff_fg_d2r, setter),
+                rr: vi(&params.cutoff_fg_rr, setter),
+                floor: vi(&params.cutoff_fg_floor, setter),
+                delay: vi(&params.cutoff_fg_delay, setter),
+                loop_enabled: vb(&params.cutoff_fg_loop, setter),
+                curve: vb(&params.cutoff_fg_curve, setter),
+            },
+            depth: vi(&params.cutoff_fg_depth, setter),
+        },
+        gain_fg: FgEgPanelParams {
+            ar: vi(&params.gain_fg_ar, setter),
+            d1r: vi(&params.gain_fg_d1r, setter),
+            d1l: vi(&params.gain_fg_d1l, setter),
+            d2r: vi(&params.gain_fg_d2r, setter),
+            rr: vi(&params.gain_fg_rr, setter),
+            floor: vi(&params.gain_fg_floor, setter),
+            delay: vi(&params.gain_fg_delay, setter),
+            loop_enabled: vb(&params.gain_fg_loop, setter),
+            curve: vb(&params.gain_fg_curve, setter),
+        },
         rev_send: vi(&params.rev_send, setter),
         reverb_type: vi(&params.reverb_type, setter),
         cho_send: vi(&params.cho_send, setter),

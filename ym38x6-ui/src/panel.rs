@@ -1,6 +1,6 @@
 use crate::algorithm_diagram::algorithm_diagram;
 use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
-use crate::knob::knob;
+use crate::knob::{bool_checkbox, knob};
 use crate::param_handle::{BoolParamHandle, IntParamHandle};
 use crate::selector::{
     enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES,
@@ -33,42 +33,77 @@ pub struct OperatorPanelParams<'a> {
     pub eg_shift: Box<dyn IntParamHandle + 'a>,
 }
 
+/// ファンクションジェネレーター（Pitch/Cutoff/Gain FG共通）のループ可能EGパラメーター一式。
+/// `sound_core::eg::EgParams`と1:1対応する（新規の別部品を作らない設計、spec-sound.md参照）。
+pub struct FgEgPanelParams<'a> {
+    pub ar: Box<dyn IntParamHandle + 'a>,
+    pub d1r: Box<dyn IntParamHandle + 'a>,
+    pub d1l: Box<dyn IntParamHandle + 'a>,
+    pub d2r: Box<dyn IntParamHandle + 'a>,
+    pub rr: Box<dyn IntParamHandle + 'a>,
+    /// ループ時の折り返しの底レベル(0〜255、既定0＝完全開閉)。
+    pub floor: Box<dyn IntParamHandle + 'a>,
+    /// キーオンからAR開始までの遅延(0〜255、既定0＝遅延なし)。
+    pub delay: Box<dyn IntParamHandle + 'a>,
+    /// 0=ワンショット／1=ループ。
+    pub loop_enabled: Box<dyn BoolParamHandle + 'a>,
+    /// 0=線形（角の立つ三角）／1=サイン風（レイズドコサインで角を丸める）。
+    pub curve: Box<dyn BoolParamHandle + 'a>,
+}
+
+impl FgEgPanelParams<'_> {
+    fn to_eg_params(&self) -> EgParams {
+        EgParams {
+            ar: self.ar.value() as u8,
+            d1r: self.d1r.value() as u8,
+            d1l: self.d1l.value() as u8,
+            d2r: self.d2r.value() as u8,
+            rr: self.rr.value() as u8,
+            floor: self.floor.value() as u8,
+            loop_enabled: self.loop_enabled.value() as u8,
+            curve: self.curve.value() as u8,
+            delay: self.delay.value() as u8,
+        }
+    }
+}
+
+/// Pitch FG（新規）／Cutoff FG（旧Filter EG）に共通の「共通EG＋バイポーラDepth」一式。
+pub struct BipolarFgPanelParams<'a> {
+    pub eg: FgEgPanelParams<'a>,
+    /// バイポーラDepth（0〜255、中心128＝変調なし、128超＝＋方向、128未満＝−方向）。
+    pub depth: Box<dyn IntParamHandle + 'a>,
+}
+
 /// `draw_param_panel`に渡すパラメーター一式。
-/// OPERATOR / CHANNEL / PERF LFO / TONE LFO / FILTER / MASTER EFFECTの全グリッドを含む。
+/// OPERATOR / CHANNEL / TEXTURE LFO / CHIP LFO / PITCH FG / CUTOFF FG / GAIN FG / MASTER EFFECT
+/// の全グリッドを含む。
 pub struct PanelParams<'a> {
     // CHANNEL
     pub algorithm: Box<dyn IntParamHandle + 'a>,
     pub feedback: Box<dyn IntParamHandle + 'a>,
-    // PERF LFO
-    pub lfo_rate: Box<dyn IntParamHandle + 'a>,
-    pub lfo_depth: Box<dyn IntParamHandle + 'a>,
-    pub lfo_delay: Box<dyn IntParamHandle + 'a>,
-    pub lfo_waveform: Box<dyn IntParamHandle + 'a>,
-    pub lfo_fade_mode: Box<dyn IntParamHandle + 'a>,
-    pub lfo_fade_time: Box<dyn IntParamHandle + 'a>,
-    pub lfo_offset: Box<dyn IntParamHandle + 'a>,
-    // TONE LFO
-    pub tone_freq: Box<dyn IntParamHandle + 'a>,
-    pub tone_pmd: Box<dyn IntParamHandle + 'a>,
-    pub tone_amd: Box<dyn IntParamHandle + 'a>,
-    pub tone_delay: Box<dyn IntParamHandle + 'a>,
+    // TEXTURE LFO（旧PERF LFO。5波形専用・焼き込み専用）
+    pub texture_lfo_rate: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_depth: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_delay: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_waveform: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_fade_mode: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_fade_time: Box<dyn IntParamHandle + 'a>,
+    pub texture_lfo_offset: Box<dyn IntParamHandle + 'a>,
+    // CHIP LFO（旧TONE LFO。チップ内LFO、VCO差し替えで消えるレイヤー）
+    pub chip_lfo_freq: Box<dyn IntParamHandle + 'a>,
+    pub chip_lfo_pmd: Box<dyn IntParamHandle + 'a>,
+    pub chip_lfo_amd: Box<dyn IntParamHandle + 'a>,
+    pub chip_lfo_delay: Box<dyn IntParamHandle + 'a>,
     pub pms: Box<dyn IntParamHandle + 'a>,
     pub ams: Box<dyn IntParamHandle + 'a>,
-    // FILTER
+    // PITCH FG（新規）
+    pub pitch_fg: BipolarFgPanelParams<'a>,
+    // FILTER（CUTOFF FG、旧Filter EG）
     pub cutoff: Box<dyn IntParamHandle + 'a>,
     pub resonance: Box<dyn IntParamHandle + 'a>,
-    pub feg_ar: Box<dyn IntParamHandle + 'a>,
-    pub feg_d1r: Box<dyn IntParamHandle + 'a>,
-    pub feg_d1l: Box<dyn IntParamHandle + 'a>,
-    pub feg_d2r: Box<dyn IntParamHandle + 'a>,
-    pub feg_rr: Box<dyn IntParamHandle + 'a>,
-    pub feg_depth: Box<dyn IntParamHandle + 'a>,
-    // VCA (TVAオーバーレイ)
-    pub vca_ar: Box<dyn IntParamHandle + 'a>,
-    pub vca_d1r: Box<dyn IntParamHandle + 'a>,
-    pub vca_d1l: Box<dyn IntParamHandle + 'a>,
-    pub vca_d2r: Box<dyn IntParamHandle + 'a>,
-    pub vca_rr: Box<dyn IntParamHandle + 'a>,
+    pub cutoff_fg: BipolarFgPanelParams<'a>,
+    // VCA（GAIN FG、旧VCA EG。音量に負値は無いためDepthを持たずFloorが深さ役）
+    pub gain_fg: FgEgPanelParams<'a>,
     // MASTER EFFECT
     pub rev_send: Box<dyn IntParamHandle + 'a>,
     pub reverb_type: Box<dyn IntParamHandle + 'a>,
@@ -83,9 +118,28 @@ pub struct PanelParams<'a> {
     pub operators: [OperatorPanelParams<'a>; 4],
 }
 
-/// パラメーターグリッド（OP1〜4 / CHANNEL・PERF LFO・TONE LFO / FILTER・MASTER EFFECT）を描画する。
-/// 縦スクロールエリアを内部に含む。PRESETSサイドバー・ウィンドウ枠（ResizableWindow等）・
-/// 外側のCentralPanelは呼び出し側（ホスト）が用意すること。
+/// FG共通EG（AR/D1R/D1L/D2R/RR/FLOOR/DLY + LOOP/CURVEチェック）をノブ列として描く。
+/// `depth`が`Some`ならバイポーラDepthノブ（`label`+"DEP"、中心128±方向）も並べる
+/// （Pitch/Cutoff FG向け。Gain FGはDepthを持たないため`None`で呼ぶ）。
+fn fg_eg_knobs(ui: &mut egui::Ui, prefix: &str, eg: &FgEgPanelParams, depth: Option<&dyn IntParamHandle>) {
+    knob(ui, &*eg.ar, &format!("{prefix}AR"));
+    knob(ui, &*eg.d1r, &format!("{prefix}D1R"));
+    knob(ui, &*eg.d1l, &format!("{prefix}D1L"));
+    knob(ui, &*eg.d2r, &format!("{prefix}D2R"));
+    knob(ui, &*eg.rr, &format!("{prefix}RR"));
+    if let Some(depth) = depth {
+        knob(ui, depth, &format!("{prefix}DEP\u{00b1}"));
+    }
+    knob(ui, &*eg.floor, &format!("{prefix}FLOOR"));
+    knob(ui, &*eg.delay, &format!("{prefix}DLY"));
+    bool_checkbox(ui, &*eg.loop_enabled, "LOOP");
+    bool_checkbox(ui, &*eg.curve, "CURVE");
+}
+
+/// パラメーターグリッド（OP1〜4 / CHANNEL・TEXTURE LFO・CHIP LFO / PITCH FG / CUTOFF FG・
+/// GAIN FG / MASTER EFFECT）を描画する。縦スクロールエリアを内部に含む。
+/// PRESETSサイドバー・ウィンドウ枠（ResizableWindow等）・外側のCentralPanelは呼び出し側
+/// （ホスト）が用意すること。
 pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む。最優先で上に表示） ----
@@ -122,26 +176,11 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                             knob(ui, &*op.ksr, "KSR");
                             knob(ui, &*op.vel_sens, "VEL");
                             knob(ui, &*op.op_fine_tune, "FINE");
-                            let mut am = op.ame.value();
-                            if ui.checkbox(&mut am, "AM").changed() {
-                                op.ame.begin_edit();
-                                op.ame.set(am);
-                                op.ame.end_edit();
-                            }
+                            bool_checkbox(ui, &*op.ame, "AM");
                             waveform_selector(ui, &*op.waveform, i);
                             knob(ui, &*op.floor, "FLOOR");
-                            let mut op_loop = op.op_loop.value();
-                            if ui.checkbox(&mut op_loop, "LOOP").changed() {
-                                op.op_loop.begin_edit();
-                                op.op_loop.set(op_loop);
-                                op.op_loop.end_edit();
-                            }
-                            let mut curve = op.curve.value();
-                            if ui.checkbox(&mut curve, "CURVE").changed() {
-                                op.curve.begin_edit();
-                                op.curve.set(curve);
-                                op.curve.end_edit();
-                            }
+                            bool_checkbox(ui, &*op.op_loop, "LOOP");
+                            bool_checkbox(ui, &*op.curve, "CURVE");
                             knob(ui, &*op.eg_shift, "EGSFT");
                         });
                     });
@@ -149,7 +188,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             });
         }
 
-        // ---- チャンネル固有 / パフォーマンスLFO / トーンLFO（横一列） ----
+        // ---- チャンネル固有 / 質感LFO / チップ内LFO（横一列） ----
         ui.horizontal(|ui| {
             ui.group(|ui| {
                 ui.vertical(|ui| {
@@ -166,27 +205,27 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
 
             ui.group(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("PERF LFO").strong());
+                    ui.label(egui::RichText::new("TEXTURE LFO").strong());
                     ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.lfo_rate, "L.RATE");
-                        knob(ui, &*params.lfo_depth, "L.DEP");
-                        knob(ui, &*params.lfo_delay, "L.DLY");
-                        enum_selector(ui, &*params.lfo_waveform, "L.WAVE", &LFO_WAVEFORM_NAMES, 2);
-                        enum_selector(ui, &*params.lfo_fade_mode, "L.FADE", &LFO_FADE_MODE_NAMES, 3);
-                        knob(ui, &*params.lfo_fade_time, "L.F.TM");
-                        knob(ui, &*params.lfo_offset, "L.OFS");
+                        knob(ui, &*params.texture_lfo_rate, "TX.RATE");
+                        knob(ui, &*params.texture_lfo_depth, "TX.DEP");
+                        knob(ui, &*params.texture_lfo_delay, "TX.DLY");
+                        enum_selector(ui, &*params.texture_lfo_waveform, "TX.WAVE", &LFO_WAVEFORM_NAMES, 2);
+                        enum_selector(ui, &*params.texture_lfo_fade_mode, "TX.FADE", &LFO_FADE_MODE_NAMES, 3);
+                        knob(ui, &*params.texture_lfo_fade_time, "TX.F.TM");
+                        knob(ui, &*params.texture_lfo_offset, "TX.OFS");
                     });
                 });
             });
 
             ui.group(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("TONE LFO").strong());
+                    ui.label(egui::RichText::new("CHIP LFO").strong());
                     ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.tone_freq, "T.FRQ");
-                        knob(ui, &*params.tone_pmd, "T.PMD");
-                        knob(ui, &*params.tone_amd, "T.AMD");
-                        knob(ui, &*params.tone_delay, "T.DLY");
+                        knob(ui, &*params.chip_lfo_freq, "CH.FRQ");
+                        knob(ui, &*params.chip_lfo_pmd, "CH.PMD");
+                        knob(ui, &*params.chip_lfo_amd, "CH.AMD");
+                        knob(ui, &*params.chip_lfo_delay, "CH.DLY");
                         knob(ui, &*params.pms, "PMS");
                         knob(ui, &*params.ams, "AMS");
                     });
@@ -194,60 +233,42 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             });
         });
 
-        // ---- フィルター ----
+        // ---- PITCH FG（新規） ----
         ui.group(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("FILTER").strong());
+                ui.label(egui::RichText::new("PITCH FG").strong());
                 ui.horizontal(|ui| {
-                    eg_preview(
-                        ui,
-                        EgAmplitudeMapping::AmplitudeLinear,
-                        255,
-                        EgParams::classic(
-                            params.feg_ar.value() as u8,
-                            params.feg_d1r.value() as u8,
-                            params.feg_d1l.value() as u8,
-                            params.feg_d2r.value() as u8,
-                            params.feg_rr.value() as u8,
-                        ),
-                    );
+                    eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.pitch_fg.eg.to_eg_params());
                     ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.cutoff, "CUT");
-                        knob(ui, &*params.resonance, "RES");
-                        knob(ui, &*params.feg_ar, "F.AR");
-                        knob(ui, &*params.feg_d1r, "F.D1R");
-                        knob(ui, &*params.feg_d1l, "F.D1L");
-                        knob(ui, &*params.feg_d2r, "F.D2R");
-                        knob(ui, &*params.feg_rr, "F.RR");
-                        knob(ui, &*params.feg_depth, "F.DEP");
+                        fg_eg_knobs(ui, "P.", &params.pitch_fg.eg, Some(&*params.pitch_fg.depth));
                     });
                 });
             });
         });
 
-        // ---- VCA（TVAオーバーレイ） ----
+        // ---- CUTOFF FG（旧Filter EG） ----
         ui.group(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("VCA").strong());
+                ui.label(egui::RichText::new("CUTOFF FG").strong());
                 ui.horizontal(|ui| {
-                    eg_preview(
-                        ui,
-                        EgAmplitudeMapping::AmplitudeLinear,
-                        255,
-                        EgParams::classic(
-                            params.vca_ar.value() as u8,
-                            params.vca_d1r.value() as u8,
-                            params.vca_d1l.value() as u8,
-                            params.vca_d2r.value() as u8,
-                            params.vca_rr.value() as u8,
-                        ),
-                    );
+                    eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.cutoff_fg.eg.to_eg_params());
                     ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.vca_ar, "V.AR");
-                        knob(ui, &*params.vca_d1r, "V.D1R");
-                        knob(ui, &*params.vca_d1l, "V.D1L");
-                        knob(ui, &*params.vca_d2r, "V.D2R");
-                        knob(ui, &*params.vca_rr, "V.RR");
+                        knob(ui, &*params.cutoff, "CUT");
+                        knob(ui, &*params.resonance, "RES");
+                        fg_eg_knobs(ui, "F.", &params.cutoff_fg.eg, Some(&*params.cutoff_fg.depth));
+                    });
+                });
+            });
+        });
+
+        // ---- GAIN FG（旧VCA EG） ----
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("GAIN FG").strong());
+                ui.horizontal(|ui| {
+                    eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.gain_fg.to_eg_params());
+                    ui.horizontal_wrapped(|ui| {
+                        fg_eg_knobs(ui, "V.", &params.gain_fg, None);
                     });
                 });
             });

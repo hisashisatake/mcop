@@ -1,9 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
+use ym38x6_ui::{draw_param_panel, BipolarFgPanelParams, FgEgPanelParams, OperatorPanelParams, PanelParams};
 
-use crate::handle::{int_field, op_int_field, BoolField, IntField};
+use crate::handle::{bool_field, int_field, op_int_field, BoolField, IntField};
 use crate::ipc;
 use crate::keyboard;
 use crate::state::EditorState;
@@ -62,35 +62,68 @@ fn build_panel_params(state: &Rc<RefCell<EditorState>>, dirty: &Rc<Cell<bool>>) 
             int_field!(state, dirty, $field, $name, $min, $max, $default)
         };
     }
+    macro_rules! chb {
+        ($field:ident) => {
+            bool_field!(state, dirty, $field)
+        };
+    }
     PanelParams {
         algorithm: ch!(algorithm, "Algorithm", 0, 7, 0),
         feedback: ch!(feedback, "Feedback", 0, 255, 0),
-        lfo_rate: ch!(lfo_rate, "Perf LFO Rate", 0, 255, 0),
-        lfo_depth: ch!(lfo_depth, "Perf LFO Depth", 0, 255, 0),
-        lfo_delay: ch!(lfo_delay, "Perf LFO Delay", 0, 255, 0),
-        lfo_waveform: ch!(lfo_waveform, "Perf LFO Waveform", 0, 7, 0),
-        lfo_fade_mode: ch!(lfo_fade_mode, "Perf LFO Fade Mode", 0, 3, 0),
-        lfo_fade_time: ch!(lfo_fade_time, "Perf LFO Fade Time", 0, 255, 0),
-        lfo_offset: ch!(lfo_offset, "Perf LFO Offset", 0, 255, 128),
-        tone_freq: ch!(tone_freq, "Tone LFO Freq", 0, 255, 0),
-        tone_pmd: ch!(tone_pmd, "Tone LFO PMD", 0, 255, 0),
-        tone_amd: ch!(tone_amd, "Tone LFO AMD", 0, 255, 0),
-        tone_delay: ch!(tone_delay, "Tone LFO Delay", 0, 255, 0),
+        texture_lfo_rate: ch!(texture_lfo_rate, "Texture LFO Rate", 0, 255, 0),
+        texture_lfo_depth: ch!(texture_lfo_depth, "Texture LFO Depth", 0, 255, 0),
+        texture_lfo_delay: ch!(texture_lfo_delay, "Texture LFO Delay", 0, 255, 0),
+        texture_lfo_waveform: ch!(texture_lfo_waveform, "Texture LFO Waveform", 0, 4, 0),
+        texture_lfo_fade_mode: ch!(texture_lfo_fade_mode, "Texture LFO Fade Mode", 0, 3, 0),
+        texture_lfo_fade_time: ch!(texture_lfo_fade_time, "Texture LFO Fade Time", 0, 255, 0),
+        texture_lfo_offset: ch!(texture_lfo_offset, "Texture LFO Offset", 0, 255, 128),
+        chip_lfo_freq: ch!(chip_lfo_freq, "Chip LFO Freq", 0, 255, 0),
+        chip_lfo_pmd: ch!(chip_lfo_pmd, "Chip LFO PMD", 0, 255, 0),
+        chip_lfo_amd: ch!(chip_lfo_amd, "Chip LFO AMD", 0, 255, 0),
+        chip_lfo_delay: ch!(chip_lfo_delay, "Chip LFO Delay", 0, 255, 0),
         pms: ch!(pms, "PMS", 0, 255, 0),
         ams: ch!(ams, "AMS", 0, 255, 0),
+        pitch_fg: BipolarFgPanelParams {
+            eg: FgEgPanelParams {
+                ar: ch!(pitch_fg_ar, "Pitch FG AR", 0, 255, 0),
+                d1r: ch!(pitch_fg_d1r, "Pitch FG D1R", 0, 255, 0),
+                d1l: ch!(pitch_fg_d1l, "Pitch FG D1L", 0, 255, 255),
+                d2r: ch!(pitch_fg_d2r, "Pitch FG D2R", 0, 255, 0),
+                rr: ch!(pitch_fg_rr, "Pitch FG RR", 0, 255, 255),
+                floor: ch!(pitch_fg_floor, "Pitch FG Floor", 0, 255, 0),
+                delay: ch!(pitch_fg_delay, "Pitch FG Delay", 0, 255, 0),
+                loop_enabled: chb!(pitch_fg_loop),
+                curve: chb!(pitch_fg_curve),
+            },
+            depth: ch!(pitch_fg_depth, "Pitch FG Depth", 0, 255, 128),
+        },
         cutoff: ch!(cutoff, "Filter Cutoff", 0, 255, 255),
         resonance: ch!(resonance, "Filter Resonance", 0, 255, 0),
-        feg_ar: ch!(feg_ar, "Filter EG AR", 0, 255, 0),
-        feg_d1r: ch!(feg_d1r, "Filter EG D1R", 0, 255, 0),
-        feg_d1l: ch!(feg_d1l, "Filter EG D1L", 0, 255, 0),
-        feg_d2r: ch!(feg_d2r, "Filter EG D2R", 0, 255, 0),
-        feg_rr: ch!(feg_rr, "Filter EG RR", 0, 255, 0),
-        feg_depth: ch!(feg_depth, "Filter EG Depth", 0, 255, 0),
-        vca_ar: ch!(vca_ar, "VCA EG AR", 0, 255, 255),
-        vca_d1r: ch!(vca_d1r, "VCA EG D1R", 0, 255, 0),
-        vca_d1l: ch!(vca_d1l, "VCA EG D1L", 0, 255, 255),
-        vca_d2r: ch!(vca_d2r, "VCA EG D2R", 0, 255, 0),
-        vca_rr: ch!(vca_rr, "VCA EG RR", 0, 255, 255),
+        cutoff_fg: BipolarFgPanelParams {
+            eg: FgEgPanelParams {
+                ar: ch!(cutoff_fg_ar, "Cutoff FG AR", 0, 255, 0),
+                d1r: ch!(cutoff_fg_d1r, "Cutoff FG D1R", 0, 255, 0),
+                d1l: ch!(cutoff_fg_d1l, "Cutoff FG D1L", 0, 255, 0),
+                d2r: ch!(cutoff_fg_d2r, "Cutoff FG D2R", 0, 255, 0),
+                rr: ch!(cutoff_fg_rr, "Cutoff FG RR", 0, 255, 0),
+                floor: ch!(cutoff_fg_floor, "Cutoff FG Floor", 0, 255, 0),
+                delay: ch!(cutoff_fg_delay, "Cutoff FG Delay", 0, 255, 0),
+                loop_enabled: chb!(cutoff_fg_loop),
+                curve: chb!(cutoff_fg_curve),
+            },
+            depth: ch!(cutoff_fg_depth, "Cutoff FG Depth", 0, 255, 128),
+        },
+        gain_fg: FgEgPanelParams {
+            ar: ch!(gain_fg_ar, "Gain FG AR", 0, 255, 255),
+            d1r: ch!(gain_fg_d1r, "Gain FG D1R", 0, 255, 0),
+            d1l: ch!(gain_fg_d1l, "Gain FG D1L", 0, 255, 255),
+            d2r: ch!(gain_fg_d2r, "Gain FG D2R", 0, 255, 0),
+            rr: ch!(gain_fg_rr, "Gain FG RR", 0, 255, 0),
+            floor: ch!(gain_fg_floor, "Gain FG Floor", 0, 255, 0),
+            delay: ch!(gain_fg_delay, "Gain FG Delay", 0, 255, 0),
+            loop_enabled: chb!(gain_fg_loop),
+            curve: chb!(gain_fg_curve),
+        },
         rev_send: ch!(rev_send, "Reverb Send", 0, 255, 0),
         reverb_type: ch!(reverb_type, "Reverb Type", 0, 7, 3),
         cho_send: ch!(cho_send, "Chorus Send", 0, 255, 0),

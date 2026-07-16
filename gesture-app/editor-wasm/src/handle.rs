@@ -95,5 +95,18 @@ macro_rules! op_int_field {
     };
 }
 
+/// チャンネル単位boolフィールド用の`Box<dyn BoolParamHandle>`を組み立てる（Loop/Curve等）。
+macro_rules! bool_field {
+    ($state:expr, $dirty:expr, $field:ident) => {
+        Box::new(BoolField {
+            state: $state.clone(),
+            dirty: $dirty.clone(),
+            get: |s: &EditorState| s.$field,
+            set: |s: &mut EditorState, v: bool| s.$field = v,
+        }) as Box<dyn ym38x6_ui::BoolParamHandle>
+    };
+}
+
+pub(crate) use bool_field;
 pub(crate) use int_field;
 pub(crate) use op_int_field;

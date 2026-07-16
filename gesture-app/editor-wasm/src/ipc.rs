@@ -141,33 +141,93 @@ struct OperatorDto {
 struct ChannelDto {
     algorithm: u8,
     feedback: u8,
-    tone_lfo_freq: u8,
-    tone_lfo_pmd: u8,
-    tone_lfo_amd: u8,
-    tone_lfo_delay: u8,
+    chip_lfo_freq: u8,
+    chip_lfo_pmd: u8,
+    chip_lfo_amd: u8,
+    chip_lfo_delay: u8,
     pms: u8,
     ams: u8,
     filter_cutoff: u8,
     filter_resonance: u8,
     filter_type: u8,
     filter_self_oscillation: bool,
-    filter_eg_ar: u8,
-    filter_eg_d1r: u8,
-    filter_eg_d1l: u8,
-    filter_eg_d2r: u8,
-    filter_eg_rr: u8,
-    filter_eg_depth: u8,
-    vca_eg_ar: u8,
-    vca_eg_d1r: u8,
-    vca_eg_d1l: u8,
-    vca_eg_d2r: u8,
-    vca_eg_rr: u8,
-    // 宣言順インデックス(waveform=0〜7、fade_mode=0〜3)。offsetは中心128＝オフセットなし
-    // （ym38x6_dto::ChannelParamsDtoと同じ表現、src-tauri側でLfoWaveform/i8へ変換する）。
-    perf_lfo_waveform: u8,
-    perf_lfo_fade_mode: u8,
-    perf_lfo_fade_time: u8,
-    perf_lfo_offset: u8,
+    // Pitch FG（新規、共通EG＋バイポーラDepth）。
+    #[serde(default)]
+    pitch_fg_ar: u8,
+    #[serde(default)]
+    pitch_fg_d1r: u8,
+    #[serde(default)]
+    pitch_fg_d1l: u8,
+    #[serde(default)]
+    pitch_fg_d2r: u8,
+    #[serde(default)]
+    pitch_fg_rr: u8,
+    #[serde(default = "default_bipolar_depth")]
+    pitch_fg_depth: u8,
+    #[serde(default)]
+    pitch_fg_floor: u8,
+    #[serde(default)]
+    pitch_fg_delay: u8,
+    #[serde(default)]
+    pitch_fg_loop: u8,
+    #[serde(default)]
+    pitch_fg_curve: u8,
+    // Cutoff FG（旧Filter EG。depthはバイポーラの直接値）。
+    cutoff_fg_ar: u8,
+    cutoff_fg_d1r: u8,
+    cutoff_fg_d1l: u8,
+    cutoff_fg_d2r: u8,
+    cutoff_fg_rr: u8,
+    #[serde(default = "default_bipolar_depth")]
+    cutoff_fg_depth: u8,
+    #[serde(default)]
+    cutoff_fg_floor: u8,
+    #[serde(default)]
+    cutoff_fg_delay: u8,
+    #[serde(default)]
+    cutoff_fg_loop: u8,
+    #[serde(default)]
+    cutoff_fg_curve: u8,
+    // Gain FG（旧VCA EG。音量に負値は無いためDepthを持たずFloorが深さ役）。
+    gain_fg_ar: u8,
+    gain_fg_d1r: u8,
+    gain_fg_d1l: u8,
+    gain_fg_d2r: u8,
+    gain_fg_rr: u8,
+    #[serde(default)]
+    gain_fg_floor: u8,
+    #[serde(default)]
+    gain_fg_delay: u8,
+    #[serde(default)]
+    gain_fg_loop: u8,
+    #[serde(default)]
+    gain_fg_curve: u8,
+    // 質感LFO（旧パフォーマンスLFO。宣言順インデックス waveform=0〜4/fade_mode=0〜3、
+    // destinationは0=Pitch/1=Volume/2=TL/3=Cutoff。offsetは中心128＝オフセットなし）。
+    #[serde(default)]
+    texture_lfo_waveform: u8,
+    #[serde(default)]
+    texture_lfo_destination: u8,
+    #[serde(default)]
+    texture_lfo_rate: u8,
+    #[serde(default)]
+    texture_lfo_depth: u8,
+    #[serde(default)]
+    texture_lfo_delay: u8,
+    #[serde(default)]
+    texture_lfo_fade_mode: u8,
+    #[serde(default)]
+    texture_lfo_fade_time: u8,
+    #[serde(default = "default_texture_lfo_offset")]
+    texture_lfo_offset: u8,
+}
+
+fn default_bipolar_depth() -> u8 {
+    128
+}
+
+fn default_texture_lfo_offset() -> u8 {
+    128
 }
 
 #[derive(Serialize, Deserialize)]
@@ -178,9 +238,6 @@ struct PatchDto {
 
 impl PatchDto {
     /// 受信したパッチ内容を`EditorState`へ書き込む（プリセット選択時の同期に使う）。
-    /// Perf LFOのRate/Depth/Delayはパッチに含まれないため変更しない
-    /// （main.jsのホイール/Vキー制御とは別系統という既存方針のまま）。
-    /// Waveform/Fade Mode/Fade Time/Offsetは`perf_lfo_shape`としてパッチに含まれるため反映する。
     fn apply_to(&self, state: &mut EditorState) {
         for (i, op) in self.operators.iter().enumerate() {
             state.operators[i] = crate::state::OperatorState {
@@ -206,31 +263,53 @@ impl PatchDto {
         let ch = &self.channel;
         state.algorithm = ch.algorithm as i32;
         state.feedback = ch.feedback as i32;
-        state.tone_freq = ch.tone_lfo_freq as i32;
-        state.tone_pmd = ch.tone_lfo_pmd as i32;
-        state.tone_amd = ch.tone_lfo_amd as i32;
-        state.tone_delay = ch.tone_lfo_delay as i32;
+        state.chip_lfo_freq = ch.chip_lfo_freq as i32;
+        state.chip_lfo_pmd = ch.chip_lfo_pmd as i32;
+        state.chip_lfo_amd = ch.chip_lfo_amd as i32;
+        state.chip_lfo_delay = ch.chip_lfo_delay as i32;
         state.pms = ch.pms as i32;
         state.ams = ch.ams as i32;
+        state.pitch_fg_ar = ch.pitch_fg_ar as i32;
+        state.pitch_fg_d1r = ch.pitch_fg_d1r as i32;
+        state.pitch_fg_d1l = ch.pitch_fg_d1l as i32;
+        state.pitch_fg_d2r = ch.pitch_fg_d2r as i32;
+        state.pitch_fg_rr = ch.pitch_fg_rr as i32;
+        state.pitch_fg_depth = ch.pitch_fg_depth as i32;
+        state.pitch_fg_floor = ch.pitch_fg_floor as i32;
+        state.pitch_fg_delay = ch.pitch_fg_delay as i32;
+        state.pitch_fg_loop = ch.pitch_fg_loop != 0;
+        state.pitch_fg_curve = ch.pitch_fg_curve != 0;
         state.cutoff = ch.filter_cutoff as i32;
         state.resonance = ch.filter_resonance as i32;
         state.filter_type = ch.filter_type as i32;
         state.filter_self_oscillation = ch.filter_self_oscillation;
-        state.feg_ar = ch.filter_eg_ar as i32;
-        state.feg_d1r = ch.filter_eg_d1r as i32;
-        state.feg_d1l = ch.filter_eg_d1l as i32;
-        state.feg_d2r = ch.filter_eg_d2r as i32;
-        state.feg_rr = ch.filter_eg_rr as i32;
-        state.feg_depth = ch.filter_eg_depth as i32;
-        state.vca_ar = ch.vca_eg_ar as i32;
-        state.vca_d1r = ch.vca_eg_d1r as i32;
-        state.vca_d1l = ch.vca_eg_d1l as i32;
-        state.vca_d2r = ch.vca_eg_d2r as i32;
-        state.vca_rr = ch.vca_eg_rr as i32;
-        state.lfo_waveform = ch.perf_lfo_waveform as i32;
-        state.lfo_fade_mode = ch.perf_lfo_fade_mode as i32;
-        state.lfo_fade_time = ch.perf_lfo_fade_time as i32;
-        state.lfo_offset = ch.perf_lfo_offset as i32;
+        state.cutoff_fg_ar = ch.cutoff_fg_ar as i32;
+        state.cutoff_fg_d1r = ch.cutoff_fg_d1r as i32;
+        state.cutoff_fg_d1l = ch.cutoff_fg_d1l as i32;
+        state.cutoff_fg_d2r = ch.cutoff_fg_d2r as i32;
+        state.cutoff_fg_rr = ch.cutoff_fg_rr as i32;
+        state.cutoff_fg_depth = ch.cutoff_fg_depth as i32;
+        state.cutoff_fg_floor = ch.cutoff_fg_floor as i32;
+        state.cutoff_fg_delay = ch.cutoff_fg_delay as i32;
+        state.cutoff_fg_loop = ch.cutoff_fg_loop != 0;
+        state.cutoff_fg_curve = ch.cutoff_fg_curve != 0;
+        state.gain_fg_ar = ch.gain_fg_ar as i32;
+        state.gain_fg_d1r = ch.gain_fg_d1r as i32;
+        state.gain_fg_d1l = ch.gain_fg_d1l as i32;
+        state.gain_fg_d2r = ch.gain_fg_d2r as i32;
+        state.gain_fg_rr = ch.gain_fg_rr as i32;
+        state.gain_fg_floor = ch.gain_fg_floor as i32;
+        state.gain_fg_delay = ch.gain_fg_delay as i32;
+        state.gain_fg_loop = ch.gain_fg_loop != 0;
+        state.gain_fg_curve = ch.gain_fg_curve != 0;
+        state.texture_lfo_waveform = ch.texture_lfo_waveform as i32;
+        state.texture_lfo_destination = ch.texture_lfo_destination as i32;
+        state.texture_lfo_rate = ch.texture_lfo_rate as i32;
+        state.texture_lfo_depth = ch.texture_lfo_depth as i32;
+        state.texture_lfo_delay = ch.texture_lfo_delay as i32;
+        state.texture_lfo_fade_mode = ch.texture_lfo_fade_mode as i32;
+        state.texture_lfo_fade_time = ch.texture_lfo_fade_time as i32;
+        state.texture_lfo_offset = ch.texture_lfo_offset as i32;
     }
 }
 
@@ -266,31 +345,53 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
     let channel = ChannelDto {
         algorithm: state.algorithm as u8,
         feedback: state.feedback as u8,
-        tone_lfo_freq: state.tone_freq as u8,
-        tone_lfo_pmd: state.tone_pmd as u8,
-        tone_lfo_amd: state.tone_amd as u8,
-        tone_lfo_delay: state.tone_delay as u8,
+        chip_lfo_freq: state.chip_lfo_freq as u8,
+        chip_lfo_pmd: state.chip_lfo_pmd as u8,
+        chip_lfo_amd: state.chip_lfo_amd as u8,
+        chip_lfo_delay: state.chip_lfo_delay as u8,
         pms: state.pms as u8,
         ams: state.ams as u8,
+        pitch_fg_ar: state.pitch_fg_ar as u8,
+        pitch_fg_d1r: state.pitch_fg_d1r as u8,
+        pitch_fg_d1l: state.pitch_fg_d1l as u8,
+        pitch_fg_d2r: state.pitch_fg_d2r as u8,
+        pitch_fg_rr: state.pitch_fg_rr as u8,
+        pitch_fg_depth: state.pitch_fg_depth as u8,
+        pitch_fg_floor: state.pitch_fg_floor as u8,
+        pitch_fg_delay: state.pitch_fg_delay as u8,
+        pitch_fg_loop: state.pitch_fg_loop as u8,
+        pitch_fg_curve: state.pitch_fg_curve as u8,
         filter_cutoff: state.cutoff as u8,
         filter_resonance: state.resonance as u8,
         filter_type: state.filter_type as u8,
         filter_self_oscillation: state.filter_self_oscillation,
-        filter_eg_ar: state.feg_ar as u8,
-        filter_eg_d1r: state.feg_d1r as u8,
-        filter_eg_d1l: state.feg_d1l as u8,
-        filter_eg_d2r: state.feg_d2r as u8,
-        filter_eg_rr: state.feg_rr as u8,
-        filter_eg_depth: state.feg_depth as u8,
-        vca_eg_ar: state.vca_ar as u8,
-        vca_eg_d1r: state.vca_d1r as u8,
-        vca_eg_d1l: state.vca_d1l as u8,
-        vca_eg_d2r: state.vca_d2r as u8,
-        vca_eg_rr: state.vca_rr as u8,
-        perf_lfo_waveform: state.lfo_waveform as u8,
-        perf_lfo_fade_mode: state.lfo_fade_mode as u8,
-        perf_lfo_fade_time: state.lfo_fade_time as u8,
-        perf_lfo_offset: state.lfo_offset as u8,
+        cutoff_fg_ar: state.cutoff_fg_ar as u8,
+        cutoff_fg_d1r: state.cutoff_fg_d1r as u8,
+        cutoff_fg_d1l: state.cutoff_fg_d1l as u8,
+        cutoff_fg_d2r: state.cutoff_fg_d2r as u8,
+        cutoff_fg_rr: state.cutoff_fg_rr as u8,
+        cutoff_fg_depth: state.cutoff_fg_depth as u8,
+        cutoff_fg_floor: state.cutoff_fg_floor as u8,
+        cutoff_fg_delay: state.cutoff_fg_delay as u8,
+        cutoff_fg_loop: state.cutoff_fg_loop as u8,
+        cutoff_fg_curve: state.cutoff_fg_curve as u8,
+        gain_fg_ar: state.gain_fg_ar as u8,
+        gain_fg_d1r: state.gain_fg_d1r as u8,
+        gain_fg_d1l: state.gain_fg_d1l as u8,
+        gain_fg_d2r: state.gain_fg_d2r as u8,
+        gain_fg_rr: state.gain_fg_rr as u8,
+        gain_fg_floor: state.gain_fg_floor as u8,
+        gain_fg_delay: state.gain_fg_delay as u8,
+        gain_fg_loop: state.gain_fg_loop as u8,
+        gain_fg_curve: state.gain_fg_curve as u8,
+        texture_lfo_waveform: state.texture_lfo_waveform as u8,
+        texture_lfo_destination: state.texture_lfo_destination as u8,
+        texture_lfo_rate: state.texture_lfo_rate as u8,
+        texture_lfo_depth: state.texture_lfo_depth as u8,
+        texture_lfo_delay: state.texture_lfo_delay as u8,
+        texture_lfo_fade_mode: state.texture_lfo_fade_mode as u8,
+        texture_lfo_fade_time: state.texture_lfo_fade_time as u8,
+        texture_lfo_offset: state.texture_lfo_offset as u8,
     };
     PatchDto { operators, channel }
 }

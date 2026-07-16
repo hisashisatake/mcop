@@ -10,7 +10,7 @@ pub const CHORUS_TYPE_NAMES: [&str; 8] = [
 ];
 /// 質感LFOの5波形名（宣言順=NRPN(0,1)値0〜4、spec-sound.md「質感LFO」Waveform enumに対応）。
 pub const LFO_WAVEFORM_NAMES: [&str; 5] = ["Square", "Trapezoid", "S&H", "Random", "Chaos"];
-/// パフォーマンスLFOのFadeモード名（宣言順=NRPN(0,22)値0〜3、ym38x6-core LfoFadeModeに対応）。
+/// 質感LFOのFadeモード名（宣言順=NRPN(0,22)値0〜3、ym38x6-core LfoFadeModeに対応）。
 pub const LFO_FADE_MODE_NAMES: [&str; 4] = ["ON-IN", "ON-OUT", "OFF-IN", "OFF-OUT"];
 
 /// 固定候補名一覧から1つを選ぶ汎用コンボボックス。Reverb/Chorus Type等の

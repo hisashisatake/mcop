@@ -1,6 +1,6 @@
 use egui::{self, Pos2, Response, Sense, Stroke, Ui, Vec2, Widget};
 
-use crate::param_handle::IntParamHandle;
+use crate::param_handle::{BoolParamHandle, IntParamHandle};
 
 /// ノブのスイープ角（度）。下方向に90度のギャップを設け、7時(最小)→12時(中間)→5時(最大)を描く。
 const SWEEP_DEG: f32 = 270.0;
@@ -122,6 +122,16 @@ pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
             spin_control(ui, handle, egui::TextStyle::Small);
         },
     );
+}
+
+/// `BoolParamHandle`をチェックボックスとして表示する（Loop/Curve/AM等の真偽パラメーター向け）。
+pub(crate) fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &str) {
+    let mut value = handle.value();
+    if ui.checkbox(&mut value, label).changed() {
+        handle.begin_edit();
+        handle.set(value);
+        handle.end_edit();
+    }
 }
 
 /// 押下開始で1回、その後は初期遅延を挟んで一定間隔で繰り返し`true`を返すボタン（長押しリピート）。
