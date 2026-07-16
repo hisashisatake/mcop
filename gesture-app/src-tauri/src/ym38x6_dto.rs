@@ -187,6 +187,7 @@ impl From<ChannelParamsDto> for ChannelParams {
                     floor: 0,
                     loop_enabled: 0,
                     curve: 0,
+                    delay: 0,
                 },
                 depth: (128.0 + dto.filter_eg_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
             },
@@ -199,6 +200,7 @@ impl From<ChannelParamsDto> for ChannelParams {
                 floor: 0,
                 loop_enabled: 0,
                 curve: 0,
+                delay: 0,
             },
             texture_lfo: TextureLfo {
                 waveform: perf_lfo_waveform_to_texture_lfo_index(dto.perf_lfo_waveform),

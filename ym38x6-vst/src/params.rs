@@ -90,63 +90,117 @@ impl Default for OperatorVstParams {
 
 #[derive(Params)]
 pub(crate) struct Ym38x6Params {
-    // ---- チャンネル単位（20個、spec.md MIDI実装方針参照） ----
+    // ---- チャンネル単位（48個、spec-sound.md MIDI実装方針参照。
+    // Pitch/Cutoff/Gain FG各Delayの3個は仕様書記載の45個から今回追加） ----
     #[id = "algorithm"]
     pub algorithm: IntParam,
     #[id = "feedback"]
     pub feedback: IntParam,
-    #[id = "lfo_rate"]
-    pub lfo_rate: IntParam,
-    #[id = "lfo_depth"]
-    pub lfo_depth: IntParam,
-    #[id = "lfo_delay"]
-    pub lfo_delay: IntParam,
-    #[id = "lfo_waveform"]
-    pub lfo_waveform: IntParam,
-    #[id = "lfo_fade_mode"]
-    pub lfo_fade_mode: IntParam,
-    #[id = "lfo_fade_time"]
-    pub lfo_fade_time: IntParam,
-    #[id = "lfo_offset"]
-    pub lfo_offset: IntParam,
-    #[id = "tone_freq"]
-    pub tone_freq: IntParam,
-    #[id = "tone_pmd"]
-    pub tone_pmd: IntParam,
-    #[id = "tone_amd"]
-    pub tone_amd: IntParam,
-    #[id = "tone_delay"]
-    pub tone_delay: IntParam,
+
+    // 質感LFO（7個。旧パフォーマンスLFOのDAWパラメーター。CC補正は受けない焼き込み専用）
+    #[id = "texture_lfo_rate"]
+    pub texture_lfo_rate: IntParam,
+    #[id = "texture_lfo_depth"]
+    pub texture_lfo_depth: IntParam,
+    #[id = "texture_lfo_delay"]
+    pub texture_lfo_delay: IntParam,
+    /// 質感LFOの5波形パレット(0=矩形/1=台形/2=S&H/3=Random/4=Chaos)へ直接対応する。
+    #[id = "texture_lfo_waveform"]
+    pub texture_lfo_waveform: IntParam,
+    #[id = "texture_lfo_fade_mode"]
+    pub texture_lfo_fade_mode: IntParam,
+    #[id = "texture_lfo_fade_time"]
+    pub texture_lfo_fade_time: IntParam,
+    #[id = "texture_lfo_offset"]
+    pub texture_lfo_offset: IntParam,
+
+    // チップ内LFO（4個）
+    #[id = "chip_lfo_freq"]
+    pub chip_lfo_freq: IntParam,
+    #[id = "chip_lfo_pmd"]
+    pub chip_lfo_pmd: IntParam,
+    #[id = "chip_lfo_amd"]
+    pub chip_lfo_amd: IntParam,
+    #[id = "chip_lfo_delay"]
+    pub chip_lfo_delay: IntParam,
     #[id = "pms"]
     pub pms: IntParam,
     #[id = "ams"]
     pub ams: IntParam,
+
     #[id = "cutoff"]
     pub cutoff: IntParam,
     #[id = "resonance"]
     pub resonance: IntParam,
-    #[id = "feg_ar"]
-    pub feg_ar: IntParam,
-    #[id = "feg_d1r"]
-    pub feg_d1r: IntParam,
-    #[id = "feg_d1l"]
-    pub feg_d1l: IntParam,
-    #[id = "feg_d2r"]
-    pub feg_d2r: IntParam,
-    #[id = "feg_rr"]
-    pub feg_rr: IntParam,
-    #[id = "feg_depth"]
-    pub feg_depth: IntParam,
-    #[id = "vca_ar"]
-    pub vca_ar: IntParam,
-    #[id = "vca_d1r"]
-    pub vca_d1r: IntParam,
-    #[id = "vca_d1l"]
-    pub vca_d1l: IntParam,
-    #[id = "vca_d2r"]
-    pub vca_d2r: IntParam,
-    #[id = "vca_rr"]
-    pub vca_rr: IntParam,
+
+    // Pitch FG（10個。CC1/76/77/78で②③層の補正を受ける唯一のFGスロット）
+    #[id = "pitch_fg_ar"]
+    pub pitch_fg_ar: IntParam,
+    #[id = "pitch_fg_d1r"]
+    pub pitch_fg_d1r: IntParam,
+    #[id = "pitch_fg_d1l"]
+    pub pitch_fg_d1l: IntParam,
+    #[id = "pitch_fg_d2r"]
+    pub pitch_fg_d2r: IntParam,
+    #[id = "pitch_fg_rr"]
+    pub pitch_fg_rr: IntParam,
+    /// バイポーラDepth(0〜255、中心128＝変調なし)。
+    #[id = "pitch_fg_depth"]
+    pub pitch_fg_depth: IntParam,
+    #[id = "pitch_fg_floor"]
+    pub pitch_fg_floor: IntParam,
+    /// キーオンからAR開始までの遅延(0〜255)。CC78の64中心相対補正対象。
+    #[id = "pitch_fg_delay"]
+    pub pitch_fg_delay: IntParam,
+    #[id = "pitch_fg_loop"]
+    pub pitch_fg_loop: BoolParam,
+    #[id = "pitch_fg_curve"]
+    pub pitch_fg_curve: BoolParam,
+
+    // Cutoff FG（10個。旧Filter EG）
+    #[id = "cutoff_fg_ar"]
+    pub cutoff_fg_ar: IntParam,
+    #[id = "cutoff_fg_d1r"]
+    pub cutoff_fg_d1r: IntParam,
+    #[id = "cutoff_fg_d1l"]
+    pub cutoff_fg_d1l: IntParam,
+    #[id = "cutoff_fg_d2r"]
+    pub cutoff_fg_d2r: IntParam,
+    #[id = "cutoff_fg_rr"]
+    pub cutoff_fg_rr: IntParam,
+    /// バイポーラDepth(0〜255、中心128＝変調なし)。コア`BipolarFg::depth`へ直接コピーする
+    /// （旧unipolar Filter EG Depthの変換式は撤去済み）。
+    #[id = "cutoff_fg_depth"]
+    pub cutoff_fg_depth: IntParam,
+    #[id = "cutoff_fg_floor"]
+    pub cutoff_fg_floor: IntParam,
+    #[id = "cutoff_fg_delay"]
+    pub cutoff_fg_delay: IntParam,
+    #[id = "cutoff_fg_loop"]
+    pub cutoff_fg_loop: BoolParam,
+    #[id = "cutoff_fg_curve"]
+    pub cutoff_fg_curve: BoolParam,
+
+    // Gain FG（9個。旧VCA EG、Depthなし＝Floorが深さ役）
+    #[id = "gain_fg_ar"]
+    pub gain_fg_ar: IntParam,
+    #[id = "gain_fg_d1r"]
+    pub gain_fg_d1r: IntParam,
+    #[id = "gain_fg_d1l"]
+    pub gain_fg_d1l: IntParam,
+    #[id = "gain_fg_d2r"]
+    pub gain_fg_d2r: IntParam,
+    #[id = "gain_fg_rr"]
+    pub gain_fg_rr: IntParam,
+    #[id = "gain_fg_floor"]
+    pub gain_fg_floor: IntParam,
+    #[id = "gain_fg_delay"]
+    pub gain_fg_delay: IntParam,
+    #[id = "gain_fg_loop"]
+    pub gain_fg_loop: BoolParam,
+    #[id = "gain_fg_curve"]
+    pub gain_fg_curve: BoolParam,
+
     #[id = "rev_send"]
     pub rev_send: IntParam,
     #[id = "cho_send"]
@@ -178,36 +232,65 @@ impl Default for Ym38x6Params {
         Self {
             algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
             feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_rate: IntParam::new("Perf LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_depth: IntParam::new("Perf LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            lfo_delay: IntParam::new("Perf LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
-            // 宣言順インデックス(0=Triangle〜7=Chaos、lfo_waveform_from_index参照)。
-            lfo_waveform: IntParam::new("Perf LFO Waveform", 0, IntRange::Linear { min: 0, max: 7 }),
+
+            texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            // 質感LFO5波形（0=矩形〜4=Chaos）。
+            texture_lfo_waveform: IntParam::new("Texture LFO Waveform", 0, IntRange::Linear { min: 0, max: 4 }),
             // 宣言順インデックス(0=OnIn〜3=OffOut、lfo_fade_mode_from_index参照)。
-            lfo_fade_mode: IntParam::new("Perf LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
+            texture_lfo_fade_mode: IntParam::new("Texture LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
             // fade_time=0はフェード無効（旧来のハードエッジ挙動と等価）。
-            lfo_fade_time: IntParam::new("Perf LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（op_fine_tune等と同じ中心128の慣習）。
-            lfo_offset: IntParam::new("Perf LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
-            tone_freq: IntParam::new("Tone LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_pmd: IntParam::new("Tone LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_amd: IntParam::new("Tone LFO AMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            tone_delay: IntParam::new("Tone LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_offset: IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
+
+            chip_lfo_freq: IntParam::new("Chip LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_pmd: IntParam::new("Chip LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_amd: IntParam::new("Chip LFO AMD", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_delay: IntParam::new("Chip LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
             pms: IntParam::new("PMS", 0, IntRange::Linear { min: 0, max: 255 }),
             ams: IntParam::new("AMS", 0, IntRange::Linear { min: 0, max: 255 }),
+
             cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
             resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_ar: IntParam::new("Filter EG AR", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_d1r: IntParam::new("Filter EG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_d1l: IntParam::new("Filter EG D1L", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_d2r: IntParam::new("Filter EG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_rr: IntParam::new("Filter EG RR", 0, IntRange::Linear { min: 0, max: 255 }),
-            feg_depth: IntParam::new("Filter EG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            vca_ar: IntParam::new("VCA EG AR", 255, IntRange::Linear { min: 0, max: 255 }),
-            vca_d1r: IntParam::new("VCA EG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
-            vca_d1l: IntParam::new("VCA EG D1L", 255, IntRange::Linear { min: 0, max: 255 }),
-            vca_d2r: IntParam::new("VCA EG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
-            vca_rr: IntParam::new("VCA EG RR", 255, IntRange::Linear { min: 0, max: 255 }),
+
+            // Pitch FG既定＝ym38x6-core::default_pitch_fg()と一致（「無効」状態）。
+            pitch_fg_ar: IntParam::new("Pitch FG AR", 0, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_d1r: IntParam::new("Pitch FG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_d1l: IntParam::new("Pitch FG D1L", 255, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_d2r: IntParam::new("Pitch FG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_rr: IntParam::new("Pitch FG RR", 255, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_depth: IntParam::new("Pitch FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_floor: IntParam::new("Pitch FG Floor", 0, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_delay: IntParam::new("Pitch FG Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_loop: BoolParam::new("Pitch FG Loop", false),
+            pitch_fg_curve: BoolParam::new("Pitch FG Curve", false),
+
+            // Cutoff FG既定＝sound_core::BipolarFg::default()と一致。
+            cutoff_fg_ar: IntParam::new("Cutoff FG AR", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_d1r: IntParam::new("Cutoff FG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_d1l: IntParam::new("Cutoff FG D1L", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_d2r: IntParam::new("Cutoff FG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_rr: IntParam::new("Cutoff FG RR", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_floor: IntParam::new("Cutoff FG Floor", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_delay: IntParam::new("Cutoff FG Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_loop: BoolParam::new("Cutoff FG Loop", false),
+            cutoff_fg_curve: BoolParam::new("Cutoff FG Curve", false),
+
+            // Gain FG既定＝ym38x6-core::default_gain_fg()と一致（rr=0＝透過的既定、
+            // オペレーター本来のリリース尾を打ち消さない。旧VST既定rr=255は不整合だった）。
+            gain_fg_ar: IntParam::new("Gain FG AR", 255, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_d1r: IntParam::new("Gain FG D1R", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_d1l: IntParam::new("Gain FG D1L", 255, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_d2r: IntParam::new("Gain FG D2R", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_rr: IntParam::new("Gain FG RR", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_floor: IntParam::new("Gain FG Floor", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_delay: IntParam::new("Gain FG Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_loop: BoolParam::new("Gain FG Loop", false),
+            gain_fg_curve: BoolParam::new("Gain FG Curve", false),
+
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
             operators: Default::default(),

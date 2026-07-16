@@ -16,37 +16,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use ym38x6_core::mapping::F_NUMBER_CENTER;
 use ym38x6_core::{
-    lfo_fade_mode_from_index, lfo_waveform_from_index, presets_dir, AudioProcessor, BipolarFg,
-    ChannelParams, ChorusType, EgParams, LfoFadeMode, LfoWaveform, MasterEffects, OperatorParams,
-    PresetBank, ReverbType, TextureLfo, Vco, Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
+    cc76_to_rate_scale, lfo_fade_mode_from_index, presets_dir, AudioProcessor, BipolarFg,
+    ChannelParams, ChorusType, EgParams, LfoFadeMode, MasterEffects, OperatorParams, PresetBank,
+    ReverbType, TextureLfo, Vco, Ym38x6Engine, Ym38x6LfoDestination, Ym38x6Patch,
 };
-
-/// 質感LFOの5波形パレット(0〜4)へ写像できる`LfoWaveform`（旧チャンネルLFOの8波形）だけを変換し、
-/// パレット外(Triangle/Sine/Saw)は矩形(0)へフォールバックする（ym38x6-core::lib.rsの
-/// `texture_lfo_waveform_from_engine`と対になる、VST側の暫定マッピング。ステップ7でNRPN/DAW
-/// パラメーターをFG/質感LFO向けに再設計するまでの繋ぎ）。
-fn lfo_waveform_to_texture_lfo_index(waveform: LfoWaveform) -> u8 {
-    match waveform {
-        LfoWaveform::Square => 0,
-        LfoWaveform::Trapezoid => 1,
-        LfoWaveform::SampleHold => 2,
-        LfoWaveform::Random => 3,
-        LfoWaveform::Chaos => 4,
-        LfoWaveform::Triangle | LfoWaveform::Sine | LfoWaveform::Saw => 0,
-    }
-}
-
-/// [lfo_waveform_to_texture_lfo_index]の逆方向。プリセット読込時にDAWノブへ質感LFO波形を
-/// 反映する（editor.rs）ためのVST側の暫定マッピング。
-pub(crate) fn texture_lfo_index_to_lfo_waveform(index: u8) -> LfoWaveform {
-    match index {
-        1 => LfoWaveform::Trapezoid,
-        2 => LfoWaveform::SampleHold,
-        3 => LfoWaveform::Random,
-        4 => LfoWaveform::Chaos,
-        _ => LfoWaveform::Square,
-    }
-}
 
 /// MIDIノート番号の総数（0〜127）。MIDIノート番号をそのままチャンネルIDとして使うため
 /// （1ノート=1チャンネル）、発音中チャンネルを走査するループの上限に使う。
@@ -70,29 +43,49 @@ struct Ym38x6Plugin {
     operator_waveforms: [u8; 4],
     last_operator_waveforms: [u8; 4],
 
-    // パフォーマンスLFO（CC1/76/77/78・RPN0,5・NRPN(0,0)/(0,1)/(0,22)）の状態
-    lfo_cc1: u8,    // CC1 Modulation Wheel（Depth加算分）
-    lfo_rpn0_5: u8, // RPN0,5 Modulation Depth Range（GM2準拠 0〜127、デフォルト64）
-    lfo_destination: Ym38x6LfoDestination, // NRPN(0,0)
-    // 波形（8種）はperf_lfo_shape経由でset_channel_params()により発音中ボイスへも
-    // リアルタイムに伝播する（build_patch()参照。apply_performance_lfo_to_activeは不要）。
-    // algorithm/last_algorithmと同型の1シャドウ差分検知方式でDAWパラメーター（lfo_waveform/
-    // lfo_fade_mode）とNRPN(0,1)/(0,22)を共存させる。fade_time/offsetは同型シャドウ不要の
-    // DAW専用パラメーター（lfo_fade_time/lfo_offset、対応するGM2 CCが無いため）。
-    lfo_waveform: LfoWaveform,  // NRPN(0,1) / DAWパラメーターlfo_waveform
-    lfo_fade_mode: LfoFadeMode, // NRPN(0,22) / DAWパラメーターlfo_fade_mode
-    last_lfo_waveform_param: u8,
-    last_lfo_fade_mode_param: u8,
-    // lfo_rate/lfo_depth/lfo_delayはDAWパラメーターとCC76/77/78の両方から設定され得るため、
-    // 2シャドウ方式で管理する（last_*_param: DAW側差分検知用、effective_*:
-    // apply_performance_lfoへ実際に渡す値。CC受信時はlast_*_paramを更新せず
-    // effective_*のみ書き換えることで、次ブロックのDAW差分検知に上書きされないようにする）。
-    last_lfo_rate_param: u8,
-    effective_lfo_rate: u8,
-    last_lfo_depth_param: u8,
-    effective_lfo_depth: u8,
-    last_lfo_delay_param: u8,
-    effective_lfo_delay: u8,
+    // 質感LFO（NRPN(0,0)/(0,1)/(0,22)〜(0,27)）の状態。全項目が①音色/NRPN専用で、
+    // 演奏系CC(1/76/77/78)による補正は受けない（焼き込み専用、spec-sound.md参照）。
+    // NRPN直書き込み＋DAWパラメーターとの1シャドウ差分検知（algorithmと同型）で管理する
+    // （旧effective_lfo_*の2シャドウは、CC76/77/78がPitch FGへ移ったことで不要になった＝
+    // これが「shadow/effectiveの二重ソースを層分離で解消」の実体）。
+    texture_lfo_destination: Ym38x6LfoDestination, // NRPN(0,0)
+    texture_lfo_waveform: u8,                       // NRPN(0,1)、0〜4
+    texture_lfo_fade_mode: LfoFadeMode,             // NRPN(0,22)
+    texture_lfo_rate: u8,                           // NRPN(0,23)
+    texture_lfo_depth: u8,                          // NRPN(0,24)
+    texture_lfo_delay: u8,                          // NRPN(0,25)
+    texture_lfo_fade_time: u8,                      // NRPN(0,26)
+    texture_lfo_offset: u8,                         // NRPN(0,27)
+    last_texture_lfo_waveform_param: u8,
+    last_texture_lfo_fade_mode_param: u8,
+    last_texture_lfo_rate_param: u8,
+    last_texture_lfo_depth_param: u8,
+    last_texture_lfo_delay_param: u8,
+    last_texture_lfo_fade_time_param: u8,
+    last_texture_lfo_offset_param: u8,
+
+    // Pitch FG（②③層の補正を受ける唯一のFGスロット、spec-sound.md「演奏層による補正」節）。
+    // CC1/76/77/78・RPN0,5の生値を保持し、build_patch()で毎ブロックPitch FGの
+    // AR/D1R/Delay/Depthへ計算適用する（シャドー不要、常に最新のCC状態から再計算するため）。
+    pitch_fg_cc1: u8,             // CC1 Modulation Wheel（0〜127、Depthへ瞬間加算・セント換算）
+    pitch_fg_cc76: u8,            // CC76 Vibrato Rate（0〜127、64=無補正、AR/D1Rの速さスケール）
+    pitch_fg_cc77_depth_add: u8,  // CC77 Vibrato Depth（0〜255、Depthへ0起点加算）
+    pitch_fg_cc78: u8,            // CC78 Vibrato Delay（0〜127、64=無補正、Delayへ加算）
+    pitch_fg_rpn0_5: u8,          // RPN0,5 Modulation Depth Range（GM2準拠0〜127、デフォルト64）
+
+    // Pitch/Cutoff/Gain FGのLoop/Curve（NRPN(0,28)〜(0,33)+DAWパラメーター、算法同型の1シャドウ）。
+    pitch_fg_loop: bool,
+    pitch_fg_curve: bool,
+    cutoff_fg_loop: bool,
+    cutoff_fg_curve: bool,
+    gain_fg_loop: bool,
+    gain_fg_curve: bool,
+    last_pitch_fg_loop_param: bool,
+    last_pitch_fg_curve_param: bool,
+    last_cutoff_fg_loop_param: bool,
+    last_cutoff_fg_curve_param: bool,
+    last_gain_fg_loop_param: bool,
+    last_gain_fg_curve_param: bool,
 
     // Reverb/Chorus Send：DAWパラメーターとCC91/93の両方から設定され得るため、
     // マスターエフェクト5パラメーターと同じ1シャドウ差分検知方式で管理する。
@@ -197,19 +190,38 @@ impl Default for Ym38x6Plugin {
             filter_self_oscillation: true,
             operator_waveforms: [0; 4],
             last_operator_waveforms: [0; 4],
-            lfo_cc1: 0,
-            lfo_rpn0_5: 64,
-            lfo_destination: Ym38x6LfoDestination::Pitch,
-            lfo_waveform: LfoWaveform::Triangle,
-            lfo_fade_mode: LfoFadeMode::default(),
-            last_lfo_waveform_param: 0,
-            last_lfo_fade_mode_param: 0,
-            last_lfo_rate_param: 0,
-            effective_lfo_rate: 0,
-            last_lfo_depth_param: 0,
-            effective_lfo_depth: 0,
-            last_lfo_delay_param: 0,
-            effective_lfo_delay: 0,
+            texture_lfo_destination: Ym38x6LfoDestination::Pitch,
+            texture_lfo_waveform: 0,
+            texture_lfo_fade_mode: LfoFadeMode::default(),
+            texture_lfo_rate: 0,
+            texture_lfo_depth: 0,
+            texture_lfo_delay: 0,
+            texture_lfo_fade_time: 0,
+            texture_lfo_offset: 128,
+            last_texture_lfo_waveform_param: 0,
+            last_texture_lfo_fade_mode_param: 0,
+            last_texture_lfo_rate_param: 0,
+            last_texture_lfo_depth_param: 0,
+            last_texture_lfo_delay_param: 0,
+            last_texture_lfo_fade_time_param: 0,
+            last_texture_lfo_offset_param: 0,
+            pitch_fg_cc1: 0,
+            pitch_fg_cc76: 64,
+            pitch_fg_cc77_depth_add: 0,
+            pitch_fg_cc78: 64,
+            pitch_fg_rpn0_5: 64,
+            pitch_fg_loop: false,
+            pitch_fg_curve: false,
+            cutoff_fg_loop: false,
+            cutoff_fg_curve: false,
+            gain_fg_loop: false,
+            gain_fg_curve: false,
+            last_pitch_fg_loop_param: false,
+            last_pitch_fg_curve_param: false,
+            last_cutoff_fg_loop_param: false,
+            last_cutoff_fg_curve_param: false,
+            last_gain_fg_loop_param: false,
+            last_gain_fg_curve_param: false,
             last_rev_send: 0,
             last_cho_send: 0,
             rpn_msb: 0,
@@ -273,64 +285,96 @@ impl Ym38x6Plugin {
             }
         });
 
+        // Pitch FG: ②パート状態(CC76/77/78)・③ジェスチャー(CC1)の補正を毎ブロック計算し直す
+        // （spec-sound.md「演奏層による補正」節。実効Depth=①パッチ基準値+②③の加算）。
+        // CC76(Rate)はAR/D1Rの生値ではなくrate_scale経由（process()のset_pitch_fg_rate_scale参照、
+        // 「一括スケール」という語義通りの乗算的な速さ変更にするため、詳細はプラン参照）。
+        let delay_delta = self.pitch_fg_cc78 as i32 - 64;
+        let effective_pitch_fg_delay = (p.pitch_fg_delay.value() + delay_delta).clamp(0, 255) as u8;
+        // CC1のセント換算分をDepthと同じ0〜255単位空間へ逆変換して加算する
+        // （Pitch FGの`(depth-128)/128*1200`セント変換式の逆算、cc1_cents = cc1/127 * rpn0_5*50/64）。
+        let cc1_cents = (self.pitch_fg_cc1 as f32 / 127.0) * (self.pitch_fg_rpn0_5 as f32 * 50.0 / 64.0);
+        let cc1_depth_units = (cc1_cents / 1200.0 * 128.0).round() as i32;
+        let effective_pitch_fg_depth = (p.pitch_fg_depth.value()
+            + self.pitch_fg_cc77_depth_add as i32
+            + cc1_depth_units)
+            .clamp(0, 255) as u8;
+
         let channel = ChannelParams {
             algorithm: self.algorithm,
             feedback: p.feedback.value() as u8,
-            chip_lfo_freq: p.tone_freq.value() as u8,
-            chip_lfo_pmd: p.tone_pmd.value() as u8,
-            chip_lfo_amd: p.tone_amd.value() as u8,
-            chip_lfo_delay: p.tone_delay.value() as u8,
+            chip_lfo_freq: p.chip_lfo_freq.value() as u8,
+            chip_lfo_pmd: p.chip_lfo_pmd.value() as u8,
+            chip_lfo_amd: p.chip_lfo_amd.value() as u8,
+            chip_lfo_delay: p.chip_lfo_delay.value() as u8,
             pms: p.pms.value() as u8,
             ams: p.ams.value() as u8,
             filter_cutoff: p.cutoff.value() as u8,
             filter_resonance: p.resonance.value() as u8,
             filter_type: self.filter_type,
             filter_self_oscillation: self.filter_self_oscillation,
-            // Cutoff FG/Gain FG: 旧Filter EG/VCA EGのDAWパラメーターをEgParamsへ詰め替え。
-            // loop/floor/curveとPitch FGはステップ7でDAWパラメーター/NRPNを追加するまでデフォルトのまま。
+            pitch_fg: BipolarFg {
+                eg: EgParams {
+                    ar: p.pitch_fg_ar.value() as u8,
+                    d1r: p.pitch_fg_d1r.value() as u8,
+                    d1l: p.pitch_fg_d1l.value() as u8,
+                    d2r: p.pitch_fg_d2r.value() as u8,
+                    rr: p.pitch_fg_rr.value() as u8,
+                    floor: p.pitch_fg_floor.value() as u8,
+                    loop_enabled: self.pitch_fg_loop as u8,
+                    curve: self.pitch_fg_curve as u8,
+                    delay: effective_pitch_fg_delay,
+                },
+                depth: effective_pitch_fg_depth,
+            },
             cutoff_fg: BipolarFg {
                 eg: EgParams {
-                    ar: p.feg_ar.value() as u8,
-                    d1r: p.feg_d1r.value() as u8,
-                    d1l: p.feg_d1l.value() as u8,
-                    d2r: p.feg_d2r.value() as u8,
-                    rr: p.feg_rr.value() as u8,
-                    floor: 0,
-                    loop_enabled: 0,
-                    curve: 0,
+                    ar: p.cutoff_fg_ar.value() as u8,
+                    d1r: p.cutoff_fg_d1r.value() as u8,
+                    d1l: p.cutoff_fg_d1l.value() as u8,
+                    d2r: p.cutoff_fg_d2r.value() as u8,
+                    rr: p.cutoff_fg_rr.value() as u8,
+                    floor: p.cutoff_fg_floor.value() as u8,
+                    loop_enabled: self.cutoff_fg_loop as u8,
+                    curve: self.cutoff_fg_curve as u8,
+                    delay: p.cutoff_fg_delay.value() as u8,
                 },
-                // 旧unipolar Filter EG Depth(0〜255) → 新bipolar Depth(中心128)への変換
-                // （ym38x6-core::lib.rsの後方互換マイグレーションと同じ式）。
-                depth: (128.0 + p.feg_depth.value() as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
+                // 新bipolar Depth(中心128)をコアへ直接コピーする（旧unipolarとの変換式は撤去済み）。
+                depth: p.cutoff_fg_depth.value() as u8,
             },
             gain_fg: EgParams {
-                ar: p.vca_ar.value() as u8,
-                d1r: p.vca_d1r.value() as u8,
-                d1l: p.vca_d1l.value() as u8,
-                d2r: p.vca_d2r.value() as u8,
-                rr: p.vca_rr.value() as u8,
-                floor: 0,
-                loop_enabled: 0,
-                curve: 0,
+                ar: p.gain_fg_ar.value() as u8,
+                d1r: p.gain_fg_d1r.value() as u8,
+                d1l: p.gain_fg_d1l.value() as u8,
+                d2r: p.gain_fg_d2r.value() as u8,
+                rr: p.gain_fg_rr.value() as u8,
+                floor: p.gain_fg_floor.value() as u8,
+                loop_enabled: self.gain_fg_loop as u8,
+                curve: self.gain_fg_curve as u8,
+                delay: p.gain_fg_delay.value() as u8,
             },
-            // 質感LFO: 旧パフォーマンスLFOのDAW/NRPN/CC状態(rate/depth/delay/destination/waveform/
-            // fade/offset)を1つにまとめて詰め替える。CC1(モジュレーションホイール)の加算分は
-            // 質感LFOが焼き込み専用（CC補正を受けない）になったため反映されない
-            // （ステップ7でPitch FGへ正しく再配線するまでの暫定、既知の制約）。
+            // 質感LFOは焼き込み専用のためCC補正を受けない（NRPN/DAWパラメーターのみ、
+            // 演奏系CC1/76/77/78はすべてPitch FGへ行く）。
             texture_lfo: TextureLfo {
-                waveform: lfo_waveform_to_texture_lfo_index(self.lfo_waveform),
-                destination: self.lfo_destination as u8,
-                rate: self.effective_lfo_rate,
-                depth: self.effective_lfo_depth,
-                delay: self.effective_lfo_delay,
-                fade_mode: self.lfo_fade_mode as u8,
-                fade_time: p.lfo_fade_time.value() as u8,
-                offset: p.lfo_offset.value() as u8,
+                waveform: self.texture_lfo_waveform,
+                destination: self.texture_lfo_destination as u8,
+                rate: self.texture_lfo_rate,
+                depth: self.texture_lfo_depth,
+                delay: self.texture_lfo_delay,
+                fade_mode: self.texture_lfo_fade_mode as u8,
+                fade_time: self.texture_lfo_fade_time,
+                offset: self.texture_lfo_offset,
             },
-            pitch_fg: BipolarFg::default(),
         };
 
         Ym38x6Patch { operators, channel }
+    }
+
+    /// CC76(Vibrato Rate)由来のPitch FG速さスケールを計算する（`cc76_to_rate_scale`、
+    /// 64=1.0倍=無補正）。build_patch()とは別に、`engine.set_pitch_fg_rate_scale`で
+    /// 直接エンジンへ渡す（ChannelParamsを経由しない、pitch_bend/channel_volumeと同じ経路）。
+    fn pitch_fg_rate_scale(&self) -> f32 {
+        cc76_to_rate_scale(self.pitch_fg_cc76)
     }
 
     /// NRPN(0,18)〜(0,21)：CC6(Data Entry MSB)+CC38(Data Entry LSB)の14bit値を
@@ -367,26 +411,24 @@ impl Ym38x6Plugin {
             RpnSelection::Rpn(0, 0) => {
                 self.pitch_bend_range = cc_to_u7(value) as f32;
             }
-            // RPN0,5: Modulation Depth Range
-            // （ステップ7でPitch FGのDepth換算に使うまでの間、保持のみ）
+            // RPN0,5: Modulation Depth Range（Pitch FGのCC1セント換算係数、64≈50セント）。
             RpnSelection::Rpn(0, 5) => {
-                self.lfo_rpn0_5 = cc_to_u7(value);
+                self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
-            // NRPN(0,0): Performance LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ）。
+            // NRPN(0,0): 質感LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ）。
             // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
             // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
             RpnSelection::Nrpn(0, 0) => {
-                self.lfo_destination = match cc_to_u7(value) {
+                self.texture_lfo_destination = match cc_to_u7(value) {
                     0 => Ym38x6LfoDestination::Pitch,
                     1 => Ym38x6LfoDestination::Volume,
                     2 => Ym38x6LfoDestination::TlCarrier,
                     _ => Ym38x6LfoDestination::Cutoff,
                 };
             }
-            // NRPN(0,1): Performance LFO Waveform（0〜7）。build_patch()経由でtexture_lfoへ
-            // 反映され、set_channel_paramsが毎ブロック発音中ボイスへ伝播する。
+            // NRPN(0,1): 質感LFO Waveform（0〜4、質感LFOの5波形パレットへ直接対応）。
             RpnSelection::Nrpn(0, 1) => {
-                self.lfo_waveform = lfo_waveform_from_index(cc_to_u7(value));
+                self.texture_lfo_waveform = cc_to_u7(value).min(4);
             }
             // NRPN(0,2): Reverb Type
             RpnSelection::Nrpn(0, 2) => {
@@ -453,10 +495,46 @@ impl Ym38x6Plugin {
             RpnSelection::Nrpn(0, lsb @ 18..=21) => {
                 self.apply_operator_f_number_override((lsb - 18) as usize);
             }
-            // NRPN(0,22): Performance LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
-            // Waveformと同じくperf_lfo_shape経由でリアルタイム伝播するため、追加の反映呼び出しは不要。
+            // NRPN(0,22): 質感LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
             RpnSelection::Nrpn(0, 22) => {
-                self.lfo_fade_mode = lfo_fade_mode_from_index(cc_to_u7(value));
+                self.texture_lfo_fade_mode = lfo_fade_mode_from_index(cc_to_u7(value));
+            }
+            // NRPN(0,23)〜(0,27): 質感LFO Rate/Depth/Delay/FadeTime/Offset（焼き込み専用、
+            // DAWパラメーターとの1シャドウ差分検知はprocess()側。ここはNRPNからの直接書き込み）。
+            RpnSelection::Nrpn(0, 23) => {
+                self.texture_lfo_rate = cc_to_u8(value);
+            }
+            RpnSelection::Nrpn(0, 24) => {
+                self.texture_lfo_depth = cc_to_u8(value);
+            }
+            RpnSelection::Nrpn(0, 25) => {
+                self.texture_lfo_delay = cc_to_u8(value);
+            }
+            RpnSelection::Nrpn(0, 26) => {
+                self.texture_lfo_fade_time = cc_to_u8(value);
+            }
+            RpnSelection::Nrpn(0, 27) => {
+                self.texture_lfo_offset = cc_to_u8(value);
+            }
+            // NRPN(0,28)〜(0,33): Pitch/Cutoff/Gain FG Loop/Curve（0=OFF/1=ON、DAWパラメーターと
+            // 両方から設定できる例外的な離散パラメーター。process()側の1シャドウ差分検知と共存）。
+            RpnSelection::Nrpn(0, 28) => {
+                self.pitch_fg_loop = cc_to_u7(value) != 0;
+            }
+            RpnSelection::Nrpn(0, 29) => {
+                self.pitch_fg_curve = cc_to_u7(value) != 0;
+            }
+            RpnSelection::Nrpn(0, 30) => {
+                self.cutoff_fg_loop = cc_to_u7(value) != 0;
+            }
+            RpnSelection::Nrpn(0, 31) => {
+                self.cutoff_fg_curve = cc_to_u7(value) != 0;
+            }
+            RpnSelection::Nrpn(0, 32) => {
+                self.gain_fg_loop = cc_to_u7(value) != 0;
+            }
+            RpnSelection::Nrpn(0, 33) => {
+                self.gain_fg_curve = cc_to_u7(value) != 0;
             }
             _ => {}
         }
@@ -509,19 +587,38 @@ impl Plugin for Ym38x6Plugin {
     fn reset(&mut self) {
         self.engine = Ym38x6Engine::new(self.sample_rate);
         self.effects = MasterEffects::new(self.sample_rate);
-        self.lfo_cc1 = 0;
-        self.lfo_rpn0_5 = 64;
-        self.lfo_destination = Ym38x6LfoDestination::Pitch;
-        self.lfo_waveform = LfoWaveform::Triangle;
-        self.lfo_fade_mode = LfoFadeMode::default();
-        self.last_lfo_waveform_param = 0;
-        self.last_lfo_fade_mode_param = 0;
-        self.last_lfo_rate_param = 0;
-        self.effective_lfo_rate = 0;
-        self.last_lfo_depth_param = 0;
-        self.effective_lfo_depth = 0;
-        self.last_lfo_delay_param = 0;
-        self.effective_lfo_delay = 0;
+        self.texture_lfo_destination = Ym38x6LfoDestination::Pitch;
+        self.texture_lfo_waveform = 0;
+        self.texture_lfo_fade_mode = LfoFadeMode::default();
+        self.texture_lfo_rate = 0;
+        self.texture_lfo_depth = 0;
+        self.texture_lfo_delay = 0;
+        self.texture_lfo_fade_time = 0;
+        self.texture_lfo_offset = 128;
+        self.last_texture_lfo_waveform_param = 0;
+        self.last_texture_lfo_fade_mode_param = 0;
+        self.last_texture_lfo_rate_param = 0;
+        self.last_texture_lfo_depth_param = 0;
+        self.last_texture_lfo_delay_param = 0;
+        self.last_texture_lfo_fade_time_param = 0;
+        self.last_texture_lfo_offset_param = 0;
+        self.pitch_fg_cc1 = 0;
+        self.pitch_fg_cc76 = 64;
+        self.pitch_fg_cc77_depth_add = 0;
+        self.pitch_fg_cc78 = 64;
+        self.pitch_fg_rpn0_5 = 64;
+        self.pitch_fg_loop = false;
+        self.pitch_fg_curve = false;
+        self.cutoff_fg_loop = false;
+        self.cutoff_fg_curve = false;
+        self.gain_fg_loop = false;
+        self.gain_fg_curve = false;
+        self.last_pitch_fg_loop_param = false;
+        self.last_pitch_fg_curve_param = false;
+        self.last_cutoff_fg_loop_param = false;
+        self.last_cutoff_fg_curve_param = false;
+        self.last_gain_fg_loop_param = false;
+        self.last_gain_fg_curve_param = false;
         self.last_rev_send = 0;
         self.last_cho_send = 0;
         self.rpn_msb = 0;
@@ -570,18 +667,75 @@ impl Plugin for Ym38x6Plugin {
             self.last_algorithm = algorithm;
         }
 
-        // Perf LFO Waveform/Fade Mode：algorithmと同じ差分検知方式。NRPN(0,1)/(0,22)直接書き込みと
-        // 共存する（build_patch()がself.lfo_waveform/self.lfo_fade_modeを毎ブロック読むため、
-        // Rate/Depth/Delayのような明示的なapply_performance_lfo_to_active呼び出しは不要）。
-        let lfo_waveform_param = self.params.lfo_waveform.value() as u8;
-        if lfo_waveform_param != self.last_lfo_waveform_param {
-            self.lfo_waveform = lfo_waveform_from_index(lfo_waveform_param);
-            self.last_lfo_waveform_param = lfo_waveform_param;
+        // 質感LFO（7個）：algorithmと同じ1シャドウ差分検知方式。NRPN(0,1)/(0,22)〜(0,27)直接
+        // 書き込みと共存する（build_patch()が毎ブロック読むため、明示的な即時反映呼び出しは不要）。
+        let texture_lfo_waveform_param = self.params.texture_lfo_waveform.value() as u8;
+        if texture_lfo_waveform_param != self.last_texture_lfo_waveform_param {
+            self.texture_lfo_waveform = texture_lfo_waveform_param;
+            self.last_texture_lfo_waveform_param = texture_lfo_waveform_param;
         }
-        let lfo_fade_mode_param = self.params.lfo_fade_mode.value() as u8;
-        if lfo_fade_mode_param != self.last_lfo_fade_mode_param {
-            self.lfo_fade_mode = lfo_fade_mode_from_index(lfo_fade_mode_param);
-            self.last_lfo_fade_mode_param = lfo_fade_mode_param;
+        let texture_lfo_fade_mode_param = self.params.texture_lfo_fade_mode.value() as u8;
+        if texture_lfo_fade_mode_param != self.last_texture_lfo_fade_mode_param {
+            self.texture_lfo_fade_mode = lfo_fade_mode_from_index(texture_lfo_fade_mode_param);
+            self.last_texture_lfo_fade_mode_param = texture_lfo_fade_mode_param;
+        }
+        let texture_lfo_rate_param = self.params.texture_lfo_rate.value() as u8;
+        if texture_lfo_rate_param != self.last_texture_lfo_rate_param {
+            self.texture_lfo_rate = texture_lfo_rate_param;
+            self.last_texture_lfo_rate_param = texture_lfo_rate_param;
+        }
+        let texture_lfo_depth_param = self.params.texture_lfo_depth.value() as u8;
+        if texture_lfo_depth_param != self.last_texture_lfo_depth_param {
+            self.texture_lfo_depth = texture_lfo_depth_param;
+            self.last_texture_lfo_depth_param = texture_lfo_depth_param;
+        }
+        let texture_lfo_delay_param = self.params.texture_lfo_delay.value() as u8;
+        if texture_lfo_delay_param != self.last_texture_lfo_delay_param {
+            self.texture_lfo_delay = texture_lfo_delay_param;
+            self.last_texture_lfo_delay_param = texture_lfo_delay_param;
+        }
+        let texture_lfo_fade_time_param = self.params.texture_lfo_fade_time.value() as u8;
+        if texture_lfo_fade_time_param != self.last_texture_lfo_fade_time_param {
+            self.texture_lfo_fade_time = texture_lfo_fade_time_param;
+            self.last_texture_lfo_fade_time_param = texture_lfo_fade_time_param;
+        }
+        let texture_lfo_offset_param = self.params.texture_lfo_offset.value() as u8;
+        if texture_lfo_offset_param != self.last_texture_lfo_offset_param {
+            self.texture_lfo_offset = texture_lfo_offset_param;
+            self.last_texture_lfo_offset_param = texture_lfo_offset_param;
+        }
+
+        // Pitch/Cutoff/Gain FG Loop/Curve（6個）：algorithmと同じ1シャドウ差分検知方式。
+        // NRPN(0,28)〜(0,33)直接書き込みと共存する。
+        let pitch_fg_loop_param = self.params.pitch_fg_loop.value();
+        if pitch_fg_loop_param != self.last_pitch_fg_loop_param {
+            self.pitch_fg_loop = pitch_fg_loop_param;
+            self.last_pitch_fg_loop_param = pitch_fg_loop_param;
+        }
+        let pitch_fg_curve_param = self.params.pitch_fg_curve.value();
+        if pitch_fg_curve_param != self.last_pitch_fg_curve_param {
+            self.pitch_fg_curve = pitch_fg_curve_param;
+            self.last_pitch_fg_curve_param = pitch_fg_curve_param;
+        }
+        let cutoff_fg_loop_param = self.params.cutoff_fg_loop.value();
+        if cutoff_fg_loop_param != self.last_cutoff_fg_loop_param {
+            self.cutoff_fg_loop = cutoff_fg_loop_param;
+            self.last_cutoff_fg_loop_param = cutoff_fg_loop_param;
+        }
+        let cutoff_fg_curve_param = self.params.cutoff_fg_curve.value();
+        if cutoff_fg_curve_param != self.last_cutoff_fg_curve_param {
+            self.cutoff_fg_curve = cutoff_fg_curve_param;
+            self.last_cutoff_fg_curve_param = cutoff_fg_curve_param;
+        }
+        let gain_fg_loop_param = self.params.gain_fg_loop.value();
+        if gain_fg_loop_param != self.last_gain_fg_loop_param {
+            self.gain_fg_loop = gain_fg_loop_param;
+            self.last_gain_fg_loop_param = gain_fg_loop_param;
+        }
+        let gain_fg_curve_param = self.params.gain_fg_curve.value();
+        if gain_fg_curve_param != self.last_gain_fg_curve_param {
+            self.gain_fg_curve = gain_fg_curve_param;
+            self.last_gain_fg_curve_param = gain_fg_curve_param;
         }
 
         // Waveform Op0〜3：algorithmと同じ差分検知方式。NRPN(0,10)〜(0,13)直接書き込みと共存する。
@@ -613,6 +767,7 @@ impl Plugin for Ym38x6Plugin {
         // 発音中チャンネルへDAWオートメーションの変更とAT/Poly AT Destinationの加算を反映する
         // （MIDIノート番号をそのままチャンネルIDとして使うため0〜127を走査する。
         // 非発音チャンネルへのset_*はno-opになる）
+        let pitch_fg_rate_scale = self.pitch_fg_rate_scale();
         for note in 0u8..MIDI_NOTE_COUNT {
             let ch_id = note as usize;
             let mut note_patch = channel_patch;
@@ -628,26 +783,9 @@ impl Plugin for Ym38x6Plugin {
             for (op_index, op) in note_patch.operators.iter().enumerate() {
                 self.engine.set_operator_params(ch_id, op_index, *op);
             }
-        }
-
-        // 質感LFO Rate/Depth/Delay：DAWパラメーターとCC76/77/78の両方から設定され得るため、
-        // 2シャドウ方式で差分検知する。次ブロックのbuild_patch()がeffective_*を読み、
-        // set_channel_paramsの定期伝播に乗るため、即時反映の呼び出しは不要
-        // （texture_lfoがChannelParamsの一部になったことによる簡素化）。
-        let lfo_rate_param = self.params.lfo_rate.value() as u8;
-        if lfo_rate_param != self.last_lfo_rate_param {
-            self.last_lfo_rate_param = lfo_rate_param;
-            self.effective_lfo_rate = lfo_rate_param;
-        }
-        let lfo_depth_param = self.params.lfo_depth.value() as u8;
-        if lfo_depth_param != self.last_lfo_depth_param {
-            self.last_lfo_depth_param = lfo_depth_param;
-            self.effective_lfo_depth = lfo_depth_param;
-        }
-        let lfo_delay_param = self.params.lfo_delay.value() as u8;
-        if lfo_delay_param != self.last_lfo_delay_param {
-            self.last_lfo_delay_param = lfo_delay_param;
-            self.effective_lfo_delay = lfo_delay_param;
+            // CC76(Vibrato Rate)由来のPitch FG速さスケール（ChannelParamsを経由しない、
+            // pitch_bend/channel_volumeと同じ単一ボイス直接setterパターン）。
+            self.engine.set_pitch_fg_rate_scale(ch_id, pitch_fg_rate_scale);
         }
 
         // Reverb/Chorus Send：DAWパラメーターとCC91/93の両方から設定され得るため、
@@ -719,6 +857,7 @@ impl Plugin for Ym38x6Plugin {
                     // このMIDIチャンネルの現在のベンド量と音量ゲインを新ボイスへ反映する
                     self.engine.set_pitch_bend(ch_id, self.channel_bend_cents[channel as usize]);
                     self.engine.set_channel_volume(ch_id, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));
+                    self.engine.set_pitch_fg_rate_scale(ch_id, self.pitch_fg_rate_scale());
                     // texture_lfo（rate/delay/waveform/destination/depth）はnote_on_patchに
                     // 既に含まれておりnote_on内で適用されるため、別途の反映呼び出しは不要。
                     for (op_index, &f_number) in self.operator_f_number_override.iter().enumerate() {
@@ -765,19 +904,22 @@ impl Plugin for Ym38x6Plugin {
                         self.cc11[channel as usize] = cc_to_u7(value);
                         self.engine.set_channel_volume_group(channel as usize, channel_gain(self.cc7[channel as usize], self.cc11[channel as usize]));
                     }
-                    // CC1(モジュレーションホイール)：質感LFOは焼き込み専用でCC補正を受けないため、
-                    // 現状は保持のみ（ステップ7でPitch FG Depthへの瞬間加算として再配線する）。
+                    // CC1(モジュレーションホイール)：Pitch FG Depthへの瞬間加算（セント換算、
+                    // build_patch()参照）。質感LFOは焼き込み専用のためCC補正を受けない。
                     1 => {
-                        self.lfo_cc1 = cc_to_u8(value);
+                        self.pitch_fg_cc1 = cc_to_u7(value);
                     }
+                    // CC76(Vibrato Rate)：Pitch FGの速さスケール（64=無補正、rate_scale経由）。
                     76 => {
-                        self.effective_lfo_rate = cc_to_u8(value);
+                        self.pitch_fg_cc76 = cc_to_u7(value);
                     }
+                    // CC77(Vibrato Depth)：Pitch FG Depthへの0起点パート加算。
                     77 => {
-                        self.effective_lfo_depth = cc_to_u8(value);
+                        self.pitch_fg_cc77_depth_add = cc_to_u8(value);
                     }
+                    // CC78(Vibrato Delay)：Pitch FG Delayへの64中心相対補正。
                     78 => {
-                        self.effective_lfo_delay = cc_to_u8(value);
+                        self.pitch_fg_cc78 = cc_to_u7(value);
                     }
                     // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
                     0 => self.bank_select_msb[channel as usize] = cc_to_u7(value),

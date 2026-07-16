@@ -15,7 +15,7 @@
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」・
 ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」・
-ステップ6「コア実装」完了、次はステップ7「VST配線」)
+ステップ6「コア実装」・ステップ7「VST配線」完了、次はステップ8「UI/gesture-app」)
 
 ---
 
@@ -115,8 +115,32 @@
         質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`tools/wavetest`は新スキーマへ
         機械的に追従済み（新パラメーターのUI/NRPN露出はステップ7/8）
     → `cargo test --workspace`で全クレート0 failedを確認
-  → ステップ7「VST配線」: CC76/77/78をPitch FGのパート補正（Rate/Delay=64中心相対・Depth=0起点加算）化、
-    新NRPN番地(0,0)(0,1)(0,22)〜(0,33)、DAWパラメーター45個化、shadow/effectiveの二重ソースを層分離で解消（未着手）
+  → ステップ7「VST配線」完了（`sound-core`/`ym38x6-core`/`ym38x6-vst`/`ym38x6-ui`、2026-07-16）:
+    (1) 実装中に発覚した仕様矛盾を解決：CC78「Pitch FG Delayへの64中心相対補正」の対応先が
+        `EgParams`に存在しなかったため、`sound-core::EgParams`にDelayフィールドを新設
+        （Pitch/Cutoff/Gain FG共通、`#[serde(default)]`で後方互換）。`sound-core::Eg`に
+        `EgPhase::Delay`と`elapsed`カウンタを追加し、`delay=0`は同一tick内でAttackへフォールスルーする
+        設計で既存パッチのサンプル精度互換を維持。DAWパラメーターは仕様書記載の45個ではなく
+        Pitch/Cutoff/Gain FG各Delay追加分を含め**48個**に確定（spec-sound.md更新済み）
+    (2) CC76（Vibrato Rate、「AR/D1Rを一括スケール」）はAR/D1Rの指数マッピング特性上、生コードへの
+        加算では成立しないと判明し、`sound-core::Eg::tick`の`rate_scale`引数（KSRと同じ仕組み）を
+        経由する方式に設計変更。`cc76_to_rate_scale`（sound-core::eg純粋関数）・
+        `Ym38x6Engine::set_pitch_fg_rate_scale`（`Vco`トレイトではなく`set_operator_f_number`と
+        同じ38x6固有の単一ボイスsetter）・`Channel::pitch_fg_rate_scale`を新設し、
+        `pitch_bend`/`channel_volume`と同じnote_on直後+毎ブロック適用パターンで配線
+    (3) `ym38x6-vst`のチャンネルDAWパラメーターを48個へ全面再構成（`feg_*`→`cutoff_fg_*`、
+        `vca_*`→`gain_fg_*`、`lfo_*`→`texture_lfo_*`とリネームしつつPitch FG一式・Floor/Loop/Curve/Delay
+        を新設）。`cutoff_fg_depth`は旧unipolar→bipolar変換式を撤去し直接コピーに簡素化。
+        `gain_fg_rr`のVST既定値を255→0に修正（`default_gain_fg()`の透過的既定と不整合だった）
+    (4) NRPN(0,1)質感LFO Waveformを8波形経由の変換なし0〜4直接値へ簡素化。新規NRPN(0,23)〜(0,33)
+        （質感LFO Rate/Depth/Delay/FadeTime/Offset・FG Loop/Curve×3）を追加。CC1/76/77/78は
+        質感LFOから完全に切り離しPitch FGのみを補正するよう再配線（具体式はspec-sound.md参照）
+    (5) 質感LFOのRate/Depth/DelayをNRPN直書き込み＋DAW差分検知の1シャドウへ統一し、旧
+        `effective_lfo_*`の2シャドウ（CC76/77/78とDAWパラメーターの二重ソース）を廃止
+        （＝「shadow/effectiveの二重ソースを層分離で解消」の実体）
+    (6) `ym38x6-ui::LFO_WAVEFORM_NAMES`を8波形から質感LFOの5波形（Square/Trapezoid/S&H/Random/Chaos）
+        へ修正し、GUIの質感LFO波形ドロップダウンが新NRPN(0,1)仕様と一致するようにした
+    → `cargo test --workspace`で全クレート0 failedを確認
   → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのFG(Pitch/Cutoff/Gain)・質感LFO対応、
     ホイール/VキーのPitch FG接続、IPC/editor-wasm追随（未着手）
   → ステップ9「smf2wav・変換ツール」: FG/質感LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）

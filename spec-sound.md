@@ -397,13 +397,14 @@ LFOのサイン波では出せない「上りと下りが非対称な軌跡」�
 ### 共通部品：ループ可能EG
 
 FGの本体は、38x6本体のFM EGと同じ**5段OPM形式EG**（`sound-core::Eg`、AR→D1R→D1L→D2R→RR＋Idle）に、
-次の3項目を足した拡張である。**新規の別部品は作らない**（＝Loop=0で既存の5段EGと完全に一致し、後方互換）。
+次の4項目を足した拡張である。**新規の別部品は作らない**（＝Loop=0かつDelay=0で既存の5段EGと完全に一致し、後方互換）。
 
 | 追加項目 | 値域 | 役割 |
 |---|---|---|
 | Loop | 0/1（既定0） | 0=ワンショット（従来のADSR挙動そのまま）／1=ループ |
 | Floor | 0〜255（既定0） | ループ時の折り返しの底レベル（0=完全開閉、上げるほど浅い連続的なうねり） |
 | Curve | 0/1（既定0） | 0=線形（角の立つ三角）／1=サイン風（レイズドコサイン `0.5-0.5cos(π·進行度)` で角を丸める） |
+| Delay | 0〜255（既定0） | キーオンからAR開始までの遅延。0〜10秒（線形、チップ内LFO/質感LFOのDelayと同じマッピング）。CC78の補正対象（下記） |
 
 - **Loop=0（既定）**：キーオンで AR→D1R→D1L→D2R と推移し、キーオフで RR。**従来の5段EGと完全に同一**
   （既存パッチは Loop=0 扱いで挙動不変）。
@@ -421,7 +422,7 @@ FGの本体は、38x6本体のFM EGと同じ**5段OPM形式EG**（`sound-core::E
 | **Cutoff FG** | Filter Cutoff（0〜255） | **バイポーラ**（中心128、±） | Cutoff（VCF前） | オートワウ・アシッド / フィルタースイープ |
 | **Gain FG** | Vcaゲイン | なし（Floorが深さ役） | Vcaゲイン（VCF後） | トレモロ / 通常アンプEG |
 
-各スロットは共通のループ可能EG（AR/D1R/D1L/D2R/RR/Loop/Floor/Curve）を持ち、加えて Pitch/Cutoff は
+各スロットは共通のループ可能EG（AR/D1R/D1L/D2R/RR/Loop/Floor/Curve/Delay）を持ち、加えて Pitch/Cutoff は
 **バイポーラDepth**（0〜255、中心128＝変調なし。128超＝＋方向、128未満＝−方向）を持つ。
 Gain は音量に負値が無いためDepthを持たず、Floor が深さを担う。
 
@@ -452,6 +453,21 @@ Pitch FG＋チップ内LFO(PMS/PMD)＋質感LFO(Dest=Pitch) が積み重なる�
 ①のビブラートは鳴る（GM2互換：ホイールを触らなくてもパッチのビブラートは効く）。Pitch FGはループ時に
 AR/D1R の2レートを持つため、CC76「Vibrato Rate」は両レートを一括でスケールする（全体の速さ）。
 
+**具体式（実装確定、ym38x6-vst）：**
+
+- **CC76（Rate）**：AR/D1Rは指数マッピング（`rate_to_delta`）のため、生コードへの単純加算では
+  ベース値によって体感速度が大きく変わってしまう（「一括スケール」の語義に反する）。そのため
+  `sound-core::Eg::tick`の`rate_scale`引数（時間軸への乗算係数、KSRと同じ仕組み）を経由する：
+  `rate_scale = cc76_to_rate_scale(CC76生値0〜127)`（64→1.0倍、0→0.25倍、127→4.0倍の指数カーブ）。
+  `ChannelParams`を経由せず、`pitch_bend`/`channel_volume`と同じ単一ボイス直接setter
+  （`set_pitch_fg_rate_scale`）でエンジンへ渡す
+- **CC78（Delay）**：`delay_to_seconds`が線形（0〜255が0〜10秒に比例）のため、生コード空間での
+  加算がそのままスケールと等価になる。`実効Delay = clamp(Delayベース値 + (CC78生値-64), 0, 255)`
+- **CC77（Depth）**：`実効Depth内訳 += cc_to_u8(CC77生値)`（0起点、そのまま加算）
+- **CC1（Depth、セント換算）**：`セント = (CC1生値/127) × (RPN0,5生値 × 50/64)`で求めたセント量を、
+  Pitch FGの`(Depth-128)/128×1200`という既存のDepth→セント変換式の逆算で0〜255単位空間へ戻し
+  （`depth_units = round(セント/1200×128)`）、実効Depthへ加算する
+
 ### 実装状況
 
 FGは`sound-core::Eg`にLoop/Floor/Curveを追加した拡張として実装する（ステップ6）。Loop=0既定で既存の
@@ -459,6 +475,11 @@ FGは`sound-core::Eg`にLoop/Floor/Curveを追加した拡張として実装す�
 `VCA EG`（`VoiceAmp`）はそれぞれ Cutoff FG／Gain FG へ移行し、Pitch FGを新設する。パッチの
 FGフィールド名（`pitch_fg`/`cutoff_fg`/`gain_fg`）と旧フィールド（`filter_eg_*`/`vca_eg_*`）の
 serde互換移行はステップ6で実施する。
+
+Delayはステップ7でCC78「Pitch FG Delayへの64中心相対補正」の実装対象が存在しないという矛盾が
+見つかったため追加した項目（`EgParams::delay`、`#[serde(default)]`で後方互換）。Pitch/Cutoff/Gain
+FG共通の`EgParams`拡張のため3スロットとも「効果開始までの遅延」を持つ（オペレーター単位のFM EGへは
+展開せず、`OperatorParams`は12個の公開パラメーターのまま据え置く）。
 
 ---
 
@@ -715,10 +736,10 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（45個）：**
-Algorithm / Feedback / 質感LFO Rate / 質感LFO Depth / 質感LFO Delay / 質感LFO Waveform / 質感LFO Fade Mode / 質感LFO Fade Time / 質感LFO Offset / チップ内LFO Freq / チップ内LFO PMD / チップ内LFO AMD / チップ内LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Pitch FG AR / Pitch FG D1R / Pitch FG D1L / Pitch FG D2R / Pitch FG RR / Pitch FG Depth / Pitch FG Floor / Pitch FG Loop / Pitch FG Curve / Cutoff FG AR / Cutoff FG D1R / Cutoff FG D1L / Cutoff FG D2R / Cutoff FG RR / Cutoff FG Depth / Cutoff FG Floor / Cutoff FG Loop / Cutoff FG Curve / Gain FG AR / Gain FG D1R / Gain FG D1L / Gain FG D2R / Gain FG RR / Gain FG Floor / Gain FG Loop / Gain FG Curve / Reverb Send / Chorus Send
+**チャンネル単位（48個）：**
+Algorithm / Feedback / 質感LFO Rate / 質感LFO Depth / 質感LFO Delay / 質感LFO Waveform / 質感LFO Fade Mode / 質感LFO Fade Time / 質感LFO Offset / チップ内LFO Freq / チップ内LFO PMD / チップ内LFO AMD / チップ内LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Pitch FG AR / Pitch FG D1R / Pitch FG D1L / Pitch FG D2R / Pitch FG RR / Pitch FG Depth / Pitch FG Floor / Pitch FG Delay / Pitch FG Loop / Pitch FG Curve / Cutoff FG AR / Cutoff FG D1R / Cutoff FG D1L / Cutoff FG D2R / Cutoff FG RR / Cutoff FG Depth / Cutoff FG Floor / Cutoff FG Delay / Cutoff FG Loop / Cutoff FG Curve / Gain FG AR / Gain FG D1R / Gain FG D1L / Gain FG D2R / Gain FG RR / Gain FG Floor / Gain FG Delay / Gain FG Loop / Gain FG Curve / Reverb Send / Chorus Send
 
-（質感LFOは7個＝Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。DestinationのみNRPN専用のためDAWパラメーターには含めない。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curveで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。）
+（質感LFOは7個＝Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。DestinationのみNRPN専用のためDAWパラメーターには含めない。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設した結果48個になった。）
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune

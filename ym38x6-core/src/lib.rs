@@ -71,10 +71,11 @@ use waveform::gen_builtin_waveform;
 // 呼び出し側がsound-coreに直接依存しなくて済むようre-export
 // （`Vco`トレイトは同クレート内の`impl Vco for Ym38x6Engine`でも使う）
 pub use sound_core::{
-    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index,
-    pitch_depth_cents, volume_depth, cutoff_depth, AdsrParams, AudioProcessor, BipolarFg, ChorusType,
-    EgParams, FilterType, GainFg, LfoDestination, LfoFadeMode, LfoWaveform, MasterEffects,
-    PerformanceLfoShape, ReverbType, Vca, Vcf, Vco, VoiceAmp, VoiceFilter,
+    cc76_to_rate_scale, lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param,
+    lfo_waveform_from_index, pitch_depth_cents, volume_depth, cutoff_depth, AdsrParams,
+    AudioProcessor, BipolarFg, ChorusType, EgParams, FilterType, GainFg, LfoDestination,
+    LfoFadeMode, LfoWaveform, MasterEffects, PerformanceLfoShape, ReverbType, Vca, Vcf, Vco,
+    VoiceAmp, VoiceFilter,
 };
 
 // ---------------------------------------------------------------------------
@@ -188,7 +189,7 @@ pub struct ChannelParams {
 /// `Pitch FG`の既定値（ar=0/d1r=0/d1l=255/d2r=0/rr=255/depth=128/floor=0/loop=0/curve=0）。
 /// spec-sound.mdのJSON例と一致する「無効（変調なし）」状態。
 fn default_pitch_fg() -> BipolarFg {
-    BipolarFg { eg: EgParams { ar: 0, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0 }, depth: 128 }
+    BipolarFg { eg: EgParams { ar: 0, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0, delay: 0 }, depth: 128 }
 }
 
 /// `Gain FG`の既定値（ar=255/d1l=255/rr=0）。アタックは数サンプルで完了しゲイン1.0に張り付く。
@@ -197,7 +198,7 @@ fn default_pitch_fg() -> BipolarFg {
 /// 発音終了時のチャンネル回収はオペレーターのidle判定のみで行うためVCAを閉じなくても安全）。
 /// 旧既定はrr=255だったが、速いリリースは「透過的」ではなくFM本来のEGへの二重EG化になっていた。
 fn default_gain_fg() -> GainFg {
-    EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 0, floor: 0, loop_enabled: 0, curve: 0 }
+    EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 0, floor: 0, loop_enabled: 0, curve: 0, delay: 0 }
 }
 
 impl Default for ChannelParams {
@@ -305,6 +306,7 @@ impl From<ChannelParamsWire> for ChannelParams {
                     floor: 0,
                     loop_enabled: 0,
                     curve: 0,
+                    delay: 0,
                 },
                 depth: (128.0 + old_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8,
             }
@@ -320,6 +322,7 @@ impl From<ChannelParamsWire> for ChannelParams {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            delay: 0,
         });
         let texture_lfo = wire.texture_lfo.unwrap_or_else(|| match wire.perf_lfo_shape {
             Some(shape) => match texture_lfo_waveform_from_engine(shape.waveform) {
@@ -425,6 +428,9 @@ struct Channel {
     /// Pitch FG（新規）のキーオン連動エンベロープ。バイポーラDepthで`channel_params.pitch_fg`から
     /// ピッチ変調セントを作る（spec-sound.md「ファンクションジェネレーター」節）。
     pitch_fg_eg: Eg,
+    /// CC76（Vibrato Rate）由来のPitch FG速さスケール（1.0=無補正、`set_pitch_fg_rate_scale`で
+    /// 設定）。`pitch_fg_eg.tick`の`rate_scale`引数へそのまま渡す。
+    pitch_fg_rate_scale: f32,
     pitch_mod_cents: f32,
     /// MIDIピッチベンド/RPN0によるピッチオフセット（セント、毎tickでpitch_mod_centsに加算）。
     /// パフォーマンスLFO（pitch_mod_cents）が毎tick上書きされるのと独立に保持する。
@@ -478,6 +484,7 @@ impl Channel {
             velocity,
             perf_lfo,
             pitch_fg_eg,
+            pitch_fg_rate_scale: 1.0,
             pitch_mod_cents: 0.0,
             bend_cents: 0.0,
             volume_mod_delta: 0.0,
@@ -570,7 +577,7 @@ impl Channel {
         // Pitch FG（新規）：ループ可能EGでビブラート/シンセタムを作る一次源。
         // バイポーラDepth(中心128)で±1200セント(1オクターブ)までピッチを揺らす。
         let pitch_fg = self.channel_params.pitch_fg;
-        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, 1.0);
+        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, self.pitch_fg_rate_scale);
         let pitch_fg_cents = pitch_fg_out * (pitch_fg.depth as f32 - 128.0) / 128.0 * 1200.0;
         for op in self.operators.iter_mut() {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
@@ -749,6 +756,17 @@ impl Ym38x6Engine {
     pub fn set_operator_f_number(&mut self, channel: usize, op_index: usize, f_number: u16) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.operators[op_index].set_f_number_override(f_number);
+        }
+    }
+
+    /// 発音中チャンネルのPitch FG速さスケール（CC76 Vibrato Rate、1.0=無補正）を設定する。
+    /// `Vco`トレイトではなく`set_operator_f_number`と同じ38x6固有拡張として持つ
+    /// （Pitch FGはym38x6-core固有の概念で、発振原理非依存の`Vco`契約には含めない）。
+    /// `set_pitch_bend`/`set_channel_volume`と同様、note_on直後に単一ボイスへ即時反映する
+    /// 用途にも使う。
+    pub fn set_pitch_fg_rate_scale(&mut self, channel: usize, scale: f32) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.pitch_fg_rate_scale = scale;
         }
     }
 
@@ -1140,7 +1158,7 @@ mod tests {
             patch.channel.filter_resonance = 255;
             patch.channel.filter_self_oscillation = true;
             patch.channel.cutoff_fg = BipolarFg {
-                eg: EgParams { ar: 200, d1r: 150, d1l: 128, d2r: 0, rr: 150, floor: 0, loop_enabled: 0, curve: 0 },
+                eg: EgParams { ar: 200, d1r: 150, d1l: 128, d2r: 0, rr: 150, floor: 0, loop_enabled: 0, curve: 0, delay: 0 },
                 depth: 255,
             };
 

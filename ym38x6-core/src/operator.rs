@@ -223,6 +223,9 @@ impl Operator {
                 floor: self.params.floor,
                 loop_enabled: self.params.loop_enabled,
                 curve: self.params.curve,
+                // OP単位Delayは公開しない（Pitch/Cutoff/Gain FGのみのスコープ、
+                // ステップ7プラン参照）。常に0=遅延なしで既存挙動を保つ。
+                delay: 0,
             },
             ksr_mul,
         );

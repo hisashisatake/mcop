@@ -7,7 +7,6 @@ use ym38x6_ui::{draw_param_panel, OperatorPanelParams, PanelParams};
 
 use crate::param_adapter::{vb, vi};
 use crate::params::{OperatorVstParams, Ym38x6Params};
-use crate::texture_lfo_index_to_lfo_waveform;
 
 pub(crate) struct EditorState {
     pub(crate) preset_bank: PresetBank,
@@ -46,32 +45,34 @@ fn build_panel_params<'a>(
     PanelParams {
         algorithm: vi(&params.algorithm, setter),
         feedback: vi(&params.feedback, setter),
-        lfo_rate: vi(&params.lfo_rate, setter),
-        lfo_depth: vi(&params.lfo_depth, setter),
-        lfo_delay: vi(&params.lfo_delay, setter),
-        lfo_waveform: vi(&params.lfo_waveform, setter),
-        lfo_fade_mode: vi(&params.lfo_fade_mode, setter),
-        lfo_fade_time: vi(&params.lfo_fade_time, setter),
-        lfo_offset: vi(&params.lfo_offset, setter),
-        tone_freq: vi(&params.tone_freq, setter),
-        tone_pmd: vi(&params.tone_pmd, setter),
-        tone_amd: vi(&params.tone_amd, setter),
-        tone_delay: vi(&params.tone_delay, setter),
+        lfo_rate: vi(&params.texture_lfo_rate, setter),
+        lfo_depth: vi(&params.texture_lfo_depth, setter),
+        lfo_delay: vi(&params.texture_lfo_delay, setter),
+        // 質感LFOの5波形パレット(0〜4)へ直接対応する（ym38x6-ui::LFO_WAVEFORM_NAMESも
+        // 5波形に修正済み。旧8波形経由の変換は不要）。
+        lfo_waveform: vi(&params.texture_lfo_waveform, setter),
+        lfo_fade_mode: vi(&params.texture_lfo_fade_mode, setter),
+        lfo_fade_time: vi(&params.texture_lfo_fade_time, setter),
+        lfo_offset: vi(&params.texture_lfo_offset, setter),
+        tone_freq: vi(&params.chip_lfo_freq, setter),
+        tone_pmd: vi(&params.chip_lfo_pmd, setter),
+        tone_amd: vi(&params.chip_lfo_amd, setter),
+        tone_delay: vi(&params.chip_lfo_delay, setter),
         pms: vi(&params.pms, setter),
         ams: vi(&params.ams, setter),
         cutoff: vi(&params.cutoff, setter),
         resonance: vi(&params.resonance, setter),
-        feg_ar: vi(&params.feg_ar, setter),
-        feg_d1r: vi(&params.feg_d1r, setter),
-        feg_d1l: vi(&params.feg_d1l, setter),
-        feg_d2r: vi(&params.feg_d2r, setter),
-        feg_rr: vi(&params.feg_rr, setter),
-        feg_depth: vi(&params.feg_depth, setter),
-        vca_ar: vi(&params.vca_ar, setter),
-        vca_d1r: vi(&params.vca_d1r, setter),
-        vca_d1l: vi(&params.vca_d1l, setter),
-        vca_d2r: vi(&params.vca_d2r, setter),
-        vca_rr: vi(&params.vca_rr, setter),
+        feg_ar: vi(&params.cutoff_fg_ar, setter),
+        feg_d1r: vi(&params.cutoff_fg_d1r, setter),
+        feg_d1l: vi(&params.cutoff_fg_d1l, setter),
+        feg_d2r: vi(&params.cutoff_fg_d2r, setter),
+        feg_rr: vi(&params.cutoff_fg_rr, setter),
+        feg_depth: vi(&params.cutoff_fg_depth, setter),
+        vca_ar: vi(&params.gain_fg_ar, setter),
+        vca_d1r: vi(&params.gain_fg_d1r, setter),
+        vca_d1l: vi(&params.gain_fg_d1l, setter),
+        vca_d2r: vi(&params.gain_fg_d2r, setter),
+        vca_rr: vi(&params.gain_fg_rr, setter),
         rev_send: vi(&params.rev_send, setter),
         reverb_type: vi(&params.reverb_type, setter),
         cho_send: vi(&params.cho_send, setter),
@@ -137,35 +138,54 @@ pub(crate) fn create_editor(
                                             let ch = &preset.patch.channel;
                                             set!(params.algorithm, ch.algorithm as i32);
                                             set!(params.feedback, ch.feedback as i32);
-                                            // 質感LFO: 新5波形パレット(u8)を、対応するDAWノブ(旧8波形enum)の
-                                            // 該当ラベルへ変換して反映する（ステップ7でノブ自体を5波形へ
-                                            // 作り直すまでの暫定、texture_lfo_index_to_lfo_waveform参照）。
-                                            set!(params.lfo_waveform, texture_lfo_index_to_lfo_waveform(ch.texture_lfo.waveform) as i32);
-                                            set!(params.lfo_fade_mode, ch.texture_lfo.fade_mode as i32);
-                                            set!(params.lfo_fade_time, ch.texture_lfo.fade_time as i32);
-                                            set!(params.lfo_offset, ch.texture_lfo.offset as i32);
-                                            set!(params.tone_freq, ch.chip_lfo_freq as i32);
-                                            set!(params.tone_pmd, ch.chip_lfo_pmd as i32);
-                                            set!(params.tone_amd, ch.chip_lfo_amd as i32);
-                                            set!(params.tone_delay, ch.chip_lfo_delay as i32);
+                                            // 質感LFO: 5波形パレット(0〜4)へ直接対応するため変換不要。
+                                            set!(params.texture_lfo_waveform, ch.texture_lfo.waveform as i32);
+                                            // Destination(NRPN(0,0)専用)はDAWパラメーターに存在しないため反映しない。
+                                            set!(params.texture_lfo_rate, ch.texture_lfo.rate as i32);
+                                            set!(params.texture_lfo_depth, ch.texture_lfo.depth as i32);
+                                            set!(params.texture_lfo_delay, ch.texture_lfo.delay as i32);
+                                            set!(params.texture_lfo_fade_mode, ch.texture_lfo.fade_mode as i32);
+                                            set!(params.texture_lfo_fade_time, ch.texture_lfo.fade_time as i32);
+                                            set!(params.texture_lfo_offset, ch.texture_lfo.offset as i32);
+                                            set!(params.chip_lfo_freq, ch.chip_lfo_freq as i32);
+                                            set!(params.chip_lfo_pmd, ch.chip_lfo_pmd as i32);
+                                            set!(params.chip_lfo_amd, ch.chip_lfo_amd as i32);
+                                            set!(params.chip_lfo_delay, ch.chip_lfo_delay as i32);
                                             set!(params.pms, ch.pms as i32);
                                             set!(params.ams, ch.ams as i32);
                                             set!(params.cutoff, ch.filter_cutoff as i32);
                                             set!(params.resonance, ch.filter_resonance as i32);
-                                            // Cutoff FG/Gain FG: DAWノブはまだloop/floor/curve/バイポーラdepthを
-                                            // 持たないため（ステップ7で追加）、EG本体(ar/d1r/d1l/d2r/rr)と
-                                            // depthの生値のみ反映する。
-                                            set!(params.feg_ar, ch.cutoff_fg.eg.ar as i32);
-                                            set!(params.feg_d1r, ch.cutoff_fg.eg.d1r as i32);
-                                            set!(params.feg_d1l, ch.cutoff_fg.eg.d1l as i32);
-                                            set!(params.feg_d2r, ch.cutoff_fg.eg.d2r as i32);
-                                            set!(params.feg_rr, ch.cutoff_fg.eg.rr as i32);
-                                            set!(params.feg_depth, ch.cutoff_fg.depth as i32);
-                                            set!(params.vca_ar, ch.gain_fg.ar as i32);
-                                            set!(params.vca_d1r, ch.gain_fg.d1r as i32);
-                                            set!(params.vca_d1l, ch.gain_fg.d1l as i32);
-                                            set!(params.vca_d2r, ch.gain_fg.d2r as i32);
-                                            set!(params.vca_rr, ch.gain_fg.rr as i32);
+                                            // Pitch FG（②③層CC補正のCC状態自体はプリセット選択で変わらないため
+                                            // ①パッチ由来の基準値のみDAWパラメーターへ反映する）。
+                                            set!(params.pitch_fg_ar, ch.pitch_fg.eg.ar as i32);
+                                            set!(params.pitch_fg_d1r, ch.pitch_fg.eg.d1r as i32);
+                                            set!(params.pitch_fg_d1l, ch.pitch_fg.eg.d1l as i32);
+                                            set!(params.pitch_fg_d2r, ch.pitch_fg.eg.d2r as i32);
+                                            set!(params.pitch_fg_rr, ch.pitch_fg.eg.rr as i32);
+                                            set!(params.pitch_fg_depth, ch.pitch_fg.depth as i32);
+                                            set!(params.pitch_fg_floor, ch.pitch_fg.eg.floor as i32);
+                                            set!(params.pitch_fg_delay, ch.pitch_fg.eg.delay as i32);
+                                            set!(params.pitch_fg_loop, ch.pitch_fg.eg.loop_enabled != 0);
+                                            set!(params.pitch_fg_curve, ch.pitch_fg.eg.curve != 0);
+                                            set!(params.cutoff_fg_ar, ch.cutoff_fg.eg.ar as i32);
+                                            set!(params.cutoff_fg_d1r, ch.cutoff_fg.eg.d1r as i32);
+                                            set!(params.cutoff_fg_d1l, ch.cutoff_fg.eg.d1l as i32);
+                                            set!(params.cutoff_fg_d2r, ch.cutoff_fg.eg.d2r as i32);
+                                            set!(params.cutoff_fg_rr, ch.cutoff_fg.eg.rr as i32);
+                                            set!(params.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
+                                            set!(params.cutoff_fg_floor, ch.cutoff_fg.eg.floor as i32);
+                                            set!(params.cutoff_fg_delay, ch.cutoff_fg.eg.delay as i32);
+                                            set!(params.cutoff_fg_loop, ch.cutoff_fg.eg.loop_enabled != 0);
+                                            set!(params.cutoff_fg_curve, ch.cutoff_fg.eg.curve != 0);
+                                            set!(params.gain_fg_ar, ch.gain_fg.ar as i32);
+                                            set!(params.gain_fg_d1r, ch.gain_fg.d1r as i32);
+                                            set!(params.gain_fg_d1l, ch.gain_fg.d1l as i32);
+                                            set!(params.gain_fg_d2r, ch.gain_fg.d2r as i32);
+                                            set!(params.gain_fg_rr, ch.gain_fg.rr as i32);
+                                            set!(params.gain_fg_floor, ch.gain_fg.floor as i32);
+                                            set!(params.gain_fg_delay, ch.gain_fg.delay as i32);
+                                            set!(params.gain_fg_loop, ch.gain_fg.loop_enabled != 0);
+                                            set!(params.gain_fg_curve, ch.gain_fg.curve != 0);
                                             for (i, op) in preset.patch.operators.iter().enumerate() {
                                                 let op_p = &params.operators[i];
                                                 set!(op_p.tl, op.tl as i32);

@@ -13,8 +13,9 @@ fn rate_to_hz(rate: u8) -> f32 {
     F_MIN * (F_MAX / F_MIN).powf(rate as f32 / 255.0)
 }
 
-/// delay=0 → 0秒, delay=255 → 10秒（線形マッピング）
-fn delay_to_seconds(delay: u8) -> f32 {
+/// delay=0 → 0秒, delay=255 → 10秒（線形マッピング）。
+/// `sound_core::eg`のFG Delayフェーズからも再利用するため`pub(crate)`。
+pub(crate) fn delay_to_seconds(delay: u8) -> f32 {
     const D_MAX: f32 = 10.0;
     delay as f32 / 255.0 * D_MAX
 }

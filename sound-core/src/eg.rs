@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::lfo::delay_to_seconds;
+
 /// レート値(0〜255)→1サンプルあたりのEG変化量。
 /// rate=0は特殊値で「変化なし」（OPM/OPNのAR=0/D1R=0/D2R=0と同じフリーズ状態）。
 /// rate=1〜255はt_max（rate=1、最遅）〜t_min（rate=255、最速）の指数マッピング。
@@ -70,17 +72,41 @@ pub struct EgParams {
     /// 0=線形（角の立つ三角）／1=サイン風（レイズドコサインで角を丸める）。
     #[serde(default)]
     pub curve: u8,
+    /// キーオンからAR開始までの遅延(0〜255、既定0＝遅延なし)。0〜10秒（線形、
+    /// `crate::lfo::delay_to_seconds`と同じマッピング）。
+    #[serde(default)]
+    pub delay: u8,
 }
 
 impl EgParams {
-    /// 従来の5段EG（Loop/Floor/Curveなし）を表すヘルパー。FMオペレーターのように
+    /// 従来の5段EG（Loop/Floor/Curve/Delayなし）を表すヘルパー。FMオペレーターのように
     /// ループ機能を使わない呼び出し側は、これで`EgParams`を組み立てる。
     pub fn classic(ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) -> Self {
-        Self { ar, d1r, d1l, d2r, rr, floor: 0, loop_enabled: 0, curve: 0 }
+        Self { ar, d1r, d1l, d2r, rr, floor: 0, loop_enabled: 0, curve: 0, delay: 0 }
     }
 
     fn is_loop(&self) -> bool {
         self.loop_enabled != 0
+    }
+}
+
+/// CC76（Vibrato Rate）の生値(0〜127、64=無補正)から、Pitch FGのAR/D1Rへ一括で掛ける
+/// 乗算スケール係数を返す（spec-sound.md「演奏層による補正」節）。
+/// AR/D1Rは指数マッピング（[ar_to_delta]/[decay_to_delta]）のため、生コードへの加算では
+/// 基準値によって体感速度が大きく変わってしまう。`Eg::tick`の`rate_scale`引数（時間軸への
+/// 乗算）を経由することで、パッチのベース速度によらず一律「s倍速く/遅く」という
+/// 「スケール」の語義通りの挙動になる。
+/// 64→1.0（無補正）、0→0.25倍（4倍遅く）、127→4.0倍（4倍速く）の指数カーブ。
+pub fn cc76_to_rate_scale(cc76: u8) -> f32 {
+    const SCALE_MIN: f32 = 0.25;
+    const SCALE_MAX: f32 = 4.0;
+    let cc76 = cc76.min(127) as f32;
+    if cc76 <= 64.0 {
+        // 0〜64 → SCALE_MIN〜1.0
+        SCALE_MIN * (1.0 / SCALE_MIN).powf(cc76 / 64.0)
+    } else {
+        // 64〜127 → 1.0〜SCALE_MAX
+        (SCALE_MAX).powf((cc76 - 64.0) / 63.0)
     }
 }
 
@@ -118,6 +144,8 @@ impl Default for BipolarFg {
 /// 発振源に依存しない汎用プリミティブ（Vcf/Vca/Pitch FG/FMオペレーター共通）。
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum EgPhase {
+    /// キーオンからAR開始までの遅延（`EgParams::delay`）。レベルは0に固定。
+    Delay,
     Attack,
     Decay1,
     Decay2,
@@ -136,18 +164,23 @@ pub struct Eg {
     segment_start: f32,
     /// 現在のセグメントの目標レベル。Curve整形の基準点。
     segment_end: f32,
+    /// Delayフェーズに入ってからの経過秒数（Delayフェーズ専用、他フェーズでは未使用）。
+    elapsed: f32,
 }
 
 impl Eg {
     pub fn new() -> Self {
-        Self { phase: EgPhase::Idle, level: 0.0, segment_start: 0.0, segment_end: 0.0 }
+        Self { phase: EgPhase::Idle, level: 0.0, segment_start: 0.0, segment_end: 0.0, elapsed: 0.0 }
     }
 
+    /// Delayフェーズへ入る（`delay=0`の場合は`tick`の冒頭で同一tick内にAttackへ
+    /// フォールスルーするため、既存パッチの挙動は1サンプルもズレない）。
     pub fn note_on(&mut self) {
-        self.phase = EgPhase::Attack;
+        self.phase = EgPhase::Delay;
         self.level = 0.0;
         self.segment_start = 0.0;
-        self.segment_end = 1.0;
+        self.segment_end = 0.0;
+        self.elapsed = 0.0;
     }
 
     /// 残響レベルを保持したままAttack相位へ再突入する（実機OPMのKey-On挙動の再現）。
@@ -190,7 +223,21 @@ impl Eg {
     pub fn tick(&mut self, sample_rate: f32, params: EgParams, rate_scale: f32) -> f32 {
         let sustain_level = params.d1l as f32 / 255.0;
         let floor_level = params.floor as f32 / 255.0;
+        if self.phase == EgPhase::Delay {
+            let delay_seconds = delay_to_seconds(params.delay);
+            if self.elapsed < delay_seconds {
+                self.elapsed += 1.0 / sample_rate;
+                return self.shaped_output(params.curve);
+            }
+            // delay=0の場合はelapsed(0.0) < delay_seconds(0.0)が偽になり、
+            // ここへ直行して同一tick内でAttack処理へフォールスルーする
+            // （既存パッチは1サンプルもズレない）。
+            self.phase = EgPhase::Attack;
+            self.segment_start = 0.0;
+            self.segment_end = 1.0;
+        }
         match self.phase {
+            EgPhase::Delay => {}
             EgPhase::Attack => {
                 self.level += ar_to_delta(params.ar, sample_rate) * rate_scale;
                 if self.level >= 1.0 {
@@ -364,7 +411,7 @@ mod tests {
         let mut eg = Eg::new();
         eg.note_on();
         // floor=128(≈0.502)、AR/D1Rとも高速で何度も往復させる
-        let params = EgParams { ar: 255, d1r: 255, d1l: 0, d2r: 0, rr: 255, floor: 128, loop_enabled: 1, curve: 0 };
+        let params = EgParams { ar: 255, d1r: 255, d1l: 0, d2r: 0, rr: 255, floor: 128, loop_enabled: 1, curve: 0, delay: 0 };
         // 最初のAttackは0→peakの立ち上がり（floor未満を通過する）なので、
         // 一度peakへ到達し「ループに入った」後だけをfloor⇄peak往復の観測対象にする。
         let mut reached_peak_once = false;
@@ -393,7 +440,7 @@ mod tests {
         let sr = 44100.0;
         let mut eg = Eg::new();
         eg.note_on();
-        let params = EgParams { ar: 200, d1r: 200, d1l: 0, d2r: 0, rr: 255, floor: 64, loop_enabled: 1, curve: 0 };
+        let params = EgParams { ar: 200, d1r: 200, d1l: 0, d2r: 0, rr: 255, floor: 64, loop_enabled: 1, curve: 0, delay: 0 };
         // ループを何周かさせてから離鍵する
         for _ in 0..2000 {
             eg.tick(sr, params, 1.0);
@@ -486,5 +533,67 @@ mod tests {
             first_tick >= level_before,
             "retrigger should continue upward from the preserved level, not reset to 0: before={level_before}, after={first_tick}"
         );
+    }
+
+    #[test]
+    fn eg_delay_zero_matches_immediate_attack() {
+        // delay=0の場合、1回目のtickでAttackへフォールスルーし、旧実装（note_on直後に
+        // Attackへ入る）と1サンプルもズレないことを確認する。
+        let sr = 44100.0;
+        let mut eg = Eg::new();
+        eg.note_on();
+        let params = EgParams::classic(200, 150, 128, 0, 150);
+        let first_tick = eg.tick(sr, params, 1.0);
+        let expected_first_tick = ar_to_delta(200, sr);
+        assert!(
+            (first_tick - expected_first_tick).abs() < 1e-9,
+            "delay=0 should ramp on the very first tick like the old immediate-Attack behavior: got {first_tick}, expected {expected_first_tick}"
+        );
+    }
+
+    #[test]
+    fn eg_delay_holds_at_zero_then_attacks() {
+        let sr = 44100.0;
+        let mut eg = Eg::new();
+        eg.note_on();
+        // delay=13（短めの遅延、≈0.51秒）。elapsedはサンプルごとの浮動小数点加算（sound_core::lfo/
+        // chip_lfoと同じ方式）のため、数十万サンプル級の長い遅延で境界ぎりぎりを厳密比較すると
+        // 累積誤差で早期にドリフトしうる。安全マージンとして90%地点までのみ「0に張り付く」ことを検証する。
+        let params = EgParams { ar: 255, d1r: 0, d1l: 255, d2r: 0, rr: 255, floor: 0, loop_enabled: 0, curve: 0, delay: 13 };
+        let delay_seconds = delay_to_seconds(13);
+        let delay_samples = (delay_seconds * sr) as usize;
+        let hold_check_samples = delay_samples * 9 / 10;
+
+        // 遅延中（90%地点まで）はレベル0に張り付く
+        for _ in 0..hold_check_samples {
+            let level = eg.tick(sr, params, 1.0);
+            assert_eq!(level, 0.0, "should hold at 0 during the delay window");
+        }
+
+        // 遅延経過後はAttackへ移行し、レベルが立ち上がる（残り10%分+余裕を見て回す）。
+        let mut reached_nonzero = false;
+        for _ in 0..(delay_samples / 5) {
+            if eg.tick(sr, params, 1.0) > 0.0 {
+                reached_nonzero = true;
+                break;
+            }
+        }
+        assert!(reached_nonzero, "should start ramping up after the delay elapses");
+    }
+
+    #[test]
+    fn cc76_to_rate_scale_neutral_at_64() {
+        assert!((cc76_to_rate_scale(64) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cc76_to_rate_scale_monotonic_and_bounded() {
+        let min = cc76_to_rate_scale(0);
+        let mid = cc76_to_rate_scale(64);
+        let max = cc76_to_rate_scale(127);
+        assert!(min < mid);
+        assert!(mid < max);
+        assert!((min - 0.25).abs() < 1e-6);
+        assert!((max - 4.0).abs() < 1e-6);
     }
 }
