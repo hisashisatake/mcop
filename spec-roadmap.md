@@ -36,6 +36,9 @@
 フェーズ2: パフォーマンスLFO（現: FG／質感LFO）・マスターエフェクト実装
   → PerformanceLfo / PerformanceLfoTarget をsound-coreに実装
   → MasterEffects（Reverb/Chorus）をsound-coreに実装
+  → 未着手: リバーブの聴感調整。`sound-core/src/effects/reverb.rs`の`INPUT_GAIN=0.05`が
+    加算方式（dry+wet）のセンドアーキテクチャでは残響感が薄く感じられる主要因と考えられるが未調整。
+    ユーザーが「とりあえずそのままでいい」と一度保留した経緯があり優先度は低い
 
 フェーズ3: 38x6 FMエンジン導入、波形選択・デチューン拡張（完了）
   → OPZ系の音色表現を取り込む
@@ -66,6 +69,11 @@
   → GM2プログラムマップ準拠のBank 0音色セットを族ごとに手動設計
     （Bank 0には実機プリセットを直接流用せず、フェーズ5の変換音色は参考程度に用いる）
   → 同一リポジトリ内の tools/patchlab/ に収録
+  → 進捗: Piano(0-7)/Organ(16-23)/Brass(56-63)の3族が完了（piano_template.py/organ_template.py/
+    brass_template.py）。残り13族が未着手: Chromatic Percussion(8-15)/Guitar(24-31)/Bass(32-39)/
+    Strings(40-47)/Ensemble(48-55)/Reed(64-71)/Pipe(72-79)/Synth Lead(80-87)/Synth Pad(88-95)/
+    Synth Effects(96-103)/Ethnic(104-111)/Percussive(112-119)/Sound Effects(120-127)。
+    次に着手する族の優先順は未確定
 
 フェーズ7: MC-505風モジュレーション拡張（承認済みプラン Part 2・2026-06-19、進行中）
   → 実装層は sound-core。FMをVCOと見なし後段にアナログシンセ的なVCF/VCA/VCO変調層を被せる
@@ -208,6 +216,10 @@
   → パラメーターUI・音色保存・プリセットライブラリ（.38x6 の書き出しUI）
   → 実装形態（VST製 or Tauri製）は未決定
   → Bank Select / Program Change（受信は実装済み、UI・運用が残課題）
+  → 未着手: MUL表示のOPZ比率化（UI/セマンティクスのみ・内部無改変）。新パラメーター追加は不要と
+    結論済み（MULとop_fine_tuneの組み合わせで既にOPZ流の小数倍率を上位互換的に表現可能）。
+    残るのはMUL/FINEノブ脇に実効比率（例`×1.06`）を読み取り表示するB-1案のみ（`ym38x6-ui/panel.rs`に
+    閉じる低リスクな作業）
 
 フェーズ9: スケール判定・アボイド挙動の検証
 
