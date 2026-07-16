@@ -51,6 +51,11 @@
     opzref（ymfm参照レンダラ、音程・配線の検算用）
   → エンジン忠実度チューニング（feedback・KSR・EG曲線等）。
     OPN/OPM忠実を保ちつつ拡張軸（8bit・非サイン波形・フィルター等）へ投資
+  → 未決着: feedback上限1.8（ハイハット系のノイズ再現に必要）とOPNベース音色（FB=7、音程が溶けると判明、
+    0.5でないと安定しない）のトレードオフ。`set_feedback_two_sample`実験フラグは高周波にしか効かず
+    低音ベースの解決にはならないと2026-06-20時点で判明済み。コア側のmaxは1.8のまま維持し、
+    コンバーター層（vgm2x6等）でFB圧縮する方向が「味付けはコンバーター層」の層分離方針と
+    整合的か検討（詳細はdocs/session_history.txt・memory参照）
 
 フェーズ6: 音色設計（patchlab）でGM2準拠Bank0を生成
   → 当初は目標音声からのFMパラメーター逆算（ML/A-by-S インバース合成）を計画していたが、
@@ -191,7 +196,10 @@
     （＝**手動ワウ**、LFOのオートワウと独立に積み重なる）。CC1はGM2慣例のPitch FG固定を維持。
     NRPN(0,34)=CC2 Destination／(0,35)=CC4 Destination（AT Destinationと同じNRPN専用シャドウ、
     DAWパラメーター非公開）。VST/smf2wav両方に配線済み、`cargo test --workspace`で0 failed。
-  → 以降の未着手: velocity→音量「量」（ChannelParams、既定255）
+  → 以降の未着手:
+    velocity→音量「量」（ChannelParams、既定255）／
+    CC64サステインペダル（VST側、ホールドフラグ方式。`tools/smf2wav`のrender.rs（commit e828515）が
+    参照実装として使える。smf2wav側は実装済みだが`ym38x6-vst`側は未着手）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
   → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
     質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）
