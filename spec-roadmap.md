@@ -15,7 +15,7 @@
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」・
 ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」・
-ステップ6「コア実装」・ステップ7「VST配線」完了、次はステップ8「UI/gesture-app」)
+ステップ6「コア実装」・ステップ7「VST配線」・ステップ8「UI/gesture-app」完了、次はステップ9「smf2wav・変換ツール」)
 
 ---
 
@@ -141,8 +141,26 @@
     (6) `ym38x6-ui::LFO_WAVEFORM_NAMES`を8波形から質感LFOの5波形（Square/Trapezoid/S&H/Random/Chaos）
         へ修正し、GUIの質感LFO波形ドロップダウンが新NRPN(0,1)仕様と一致するようにした
     → `cargo test --workspace`で全クレート0 failedを確認
-  → ステップ8「UI/gesture-app」: ym38x6-ui共有パネルのFG(Pitch/Cutoff/Gain)・質感LFO対応、
-    ホイール/VキーのPitch FG接続、IPC/editor-wasm追随（未着手）
+  → ステップ8「UI/gesture-app」完了（`ym38x6-ui`/`ym38x6-vst`/`gesture-app`、2026-07-16）:
+    (1) `ym38x6-ui::PanelParams`を新世代スロット名へ改名（`lfo_*`→`texture_lfo_*`／`feg_*`→
+        `cutoff_fg_*`／`vca_*`→`gain_fg_*`／`tone_*`→`chip_lfo_*`）。新設`FgEgPanelParams`/
+        `BipolarFgPanelParams`で共通EG（AR/D1R/D1L/D2R/RR/FLOOR/DLY/LOOP/CURVE）を構造化し、
+        **PITCH FGパネルを新規追加**、CUTOFF FG/GAIN FGパネルにFloor/Delay/Loop/Curveノブを追加。
+        ラベルも"TEXTURE LFO"/"CHIP LFO"/"CUTOFF FG"/"GAIN FG"へ改名
+    (2) `eg_preview()`のシグネチャを`sound_core::eg::EgParams`ベースへ統一し、Delay（線形0〜10秒の
+        無音リードイン）・Loop（Floor⇄peak 2サイクル往復＋RR離脱）・Curve（レイズドコサイン整形）を
+        描画に反映。OPパネルの既存FLOOR/LOOP/CURVEノブがプレビュー未反映だった不整合も解消
+    (3) VST `editor.rs`・gesture-app `editor-wasm`（state/handle/app/ipc）を新スロットへ結線。
+        `ipc.rs`/`ym38x6_dto.rs`のDTOがPitch FG・各FGのFloor/Delay/Loop/Curve・質感LFOの
+        rate/depth/delay/destinationを往復で破棄していた問題を修正（`ChannelParamsDto`拡張）。
+        質感LFO波形が0〜7のままだったgesture-app側のスタールバグ（新5波形はmax=4）も修正。
+        旧8波形経由の変換ロジック（`perf_lfo_waveform_to_texture_lfo_index`等）は撤去し
+        直接値渡しに簡素化
+    (4) gesture-appのVキー（ビブラート⇔トレモロ切替、既存トグルUX維持）を再配線: Pitch時は
+        `pitch_fg`（Loop=1・Curve=1・AR/D1R初期値で往復ビブラート、CC76相当は`set_pitch_fg_rate_scale`
+        でVSTと同じ経路により発音中チャンネルへ個別反映）、Volume時は従来通り質感LFOへ書き込む
+    → `cargo test --workspace`0 failed・VST3/CLAPバンドルビルド・gesture-app実機起動（スクリーン
+      ショットでPITCH FG/CUTOFF FG/GAIN FGパネル表示とV/C/Bキー操作の無クラッシュを確認）で検証済み
   → ステップ9「smf2wav・変換ツール」: FG/質感LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）
   → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/FG Depth等）・
     velocity→音量「量」（ChannelParams、既定255）
