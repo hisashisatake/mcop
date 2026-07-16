@@ -6,6 +6,7 @@ use crate::selector::{
     enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES,
 };
 use crate::waveform::waveform_selector;
+use sound_core::eg::EgParams;
 
 /// オペレーター単位パラメーター一式（VST/gesture-app共通のハンドル束）。
 pub struct OperatorPanelParams<'a> {
@@ -97,11 +98,17 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                             ui,
                             EgAmplitudeMapping::DbLinear,
                             op.tl.value() as u8,
-                            op.ar.value() as u8,
-                            op.d1r.value() as u8,
-                            op.d1l.value() as u8,
-                            op.d2r.value() as u8,
-                            op.rr.value() as u8,
+                            EgParams {
+                                ar: op.ar.value() as u8,
+                                d1r: op.d1r.value() as u8,
+                                d1l: op.d1l.value() as u8,
+                                d2r: op.d2r.value() as u8,
+                                rr: op.rr.value() as u8,
+                                floor: op.floor.value() as u8,
+                                loop_enabled: op.op_loop.value() as u8,
+                                curve: op.curve.value() as u8,
+                                delay: 0,
+                            },
                         );
                         ui.horizontal_wrapped(|ui| {
                             knob(ui, &*op.tl, "TL");
@@ -196,11 +203,13 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                         ui,
                         EgAmplitudeMapping::AmplitudeLinear,
                         255,
-                        params.feg_ar.value() as u8,
-                        params.feg_d1r.value() as u8,
-                        params.feg_d1l.value() as u8,
-                        params.feg_d2r.value() as u8,
-                        params.feg_rr.value() as u8,
+                        EgParams::classic(
+                            params.feg_ar.value() as u8,
+                            params.feg_d1r.value() as u8,
+                            params.feg_d1l.value() as u8,
+                            params.feg_d2r.value() as u8,
+                            params.feg_rr.value() as u8,
+                        ),
                     );
                     ui.horizontal_wrapped(|ui| {
                         knob(ui, &*params.cutoff, "CUT");
@@ -225,11 +234,13 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                         ui,
                         EgAmplitudeMapping::AmplitudeLinear,
                         255,
-                        params.vca_ar.value() as u8,
-                        params.vca_d1r.value() as u8,
-                        params.vca_d1l.value() as u8,
-                        params.vca_d2r.value() as u8,
-                        params.vca_rr.value() as u8,
+                        EgParams::classic(
+                            params.vca_ar.value() as u8,
+                            params.vca_d1r.value() as u8,
+                            params.vca_d1l.value() as u8,
+                            params.vca_d2r.value() as u8,
+                            params.vca_rr.value() as u8,
+                        ),
                     );
                     ui.horizontal_wrapped(|ui| {
                         knob(ui, &*params.vca_ar, "V.AR");

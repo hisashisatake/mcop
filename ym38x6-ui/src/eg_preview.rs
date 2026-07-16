@@ -49,7 +49,7 @@
 // ---------------------------------------------------------------------------
 
 use egui::{Color32, Pos2, Shape, Stroke, Ui, Vec2};
-use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta};
+use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta, EgParams};
 
 const WIDTH: f32 = 84.0;
 const HEIGHT: f32 = 66.0;
@@ -77,6 +77,14 @@ const DECAY_MAX_SECONDS: f32 = 284.9; // D1R/D2R rate=1 ・ RR rate=0（最遅�
 /// 横幅の固定スケール基準＝4フェーズ×log_width最大値(1.0)。この合計がウィジェット幅に
 /// ちょうど収まるよう固定スケールを決める（正規化＝可変スケールをやめる理由は下記）。
 const MAX_TOTAL_WEIGHT: f32 = 4.0;
+
+/// Delay（0〜255）が写る最大秒数。`sound_core::lfo::delay_to_seconds`と同じ線形マッピングだが
+/// `pub(crate)`のため複製する（tl_to_dbと同じ理由）。
+const DELAY_MAX_SECONDS: f32 = 10.0;
+/// Delayの最大値(255=10秒)がウィジェット幅から奪う割合の上限。AR/D1R/D2R/RRの描画幅
+/// （drawable_width = width - delay_width）を圧迫しすぎないよう小さめに抑える。
+/// delay=0では奪う幅が0になり、既存（Delay導入前）の描画と完全に一致する。
+const DELAY_MAX_WIDTH_FRACTION: f32 = 0.25;
 
 /// note-on側（Attack/Decay1/Hold=AR/DR/SR）の色。
 const COLOR_HELD: Color32 = Color32::from_rgb(80, 220, 90);
@@ -167,23 +175,49 @@ fn tl_to_db(tl: u8) -> f32 {
     (-95.25 * (255 - tl) as f32 / 255.0).max(DB_FLOOR)
 }
 
-/// 2点間を線分で描く。`dashed`が真なら破線（フリーズ中＝目標に到達せず現在レベルに留まり続ける
-/// ことを示す）、偽なら実線（目標へ実際に減衰・到達する）で描く。
-fn draw_segment(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool) {
+/// キーオンからAR開始までの遅延(0〜255)を秒へ変換する。`sound_core::lfo::delay_to_seconds`と
+/// 同じ線形マッピング（0〜10秒）だが`pub(crate)`のため複製する（tl_to_dbと同じ理由）。
+fn delay_to_seconds(delay: u8) -> f32 {
+    delay as f32 / 255.0 * DELAY_MAX_SECONDS
+}
+
+/// 進行度(0.0〜1.0)をレイズドコサインで整形する（Curve=1の丸め、`sound_core::Eg`と同じ式）。
+fn eased_progress(t: f32) -> f32 {
+    0.5 - 0.5 * (std::f32::consts::PI * t).cos()
+}
+
+/// 2点間を線分・破線・曲線（レイズドコサイン整形）のいずれかで描く。
+/// `dashed`が真なら破線（フリーズ中＝目標に到達せず現在レベルに留まり続けることを示す。
+/// この場合`curved`は無視し直線のまま簡略表示する）。`curved`が真なら角の立つ直線ではなく
+/// レイズドコサインで丸めたランプ（Curve=1、spec-sound.md「ループ可能EG」節）を描く。
+fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool, curved: bool) {
     let stroke = Stroke::new(1.5, color);
     if dashed {
         painter.extend(Shape::dashed_line(&[from, to], stroke, DASH_LENGTH, DASH_GAP));
-    } else {
-        painter.add(Shape::line(vec![from, to], stroke));
+        return;
     }
+    if !curved {
+        painter.add(Shape::line(vec![from, to], stroke));
+        return;
+    }
+    const STEPS: usize = 12;
+    let points: Vec<Pos2> = (0..=STEPS)
+        .map(|i| {
+            let t = i as f32 / STEPS as f32;
+            let eased = eased_progress(t);
+            Pos2::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * eased)
+        })
+        .collect();
+    painter.add(Shape::line(points, stroke));
 }
 
-/// TL/AR/D1R/D1L/D2R/RR(いずれも0〜255)から、AR/DR/SR=緑・RR=赤の2色に塗り分けた
-/// 折れ線グラフを描く。パネル左側に配置する固定サイズの液晶風ウィジェット。
-/// TLを持たないFILTER/VCAはtl=255（減衰なし）で呼び出す。
+/// TL(0〜255)と`EgParams`（AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delay）から、AR/DR/SR=緑・
+/// RR=赤の2色に塗り分けた折れ線グラフを描く。パネル左側に配置する固定サイズの液晶風ウィジェット。
+/// TLを持たないFILTER/VCAはtl=255（減衰なし）で呼び出す。`eg`はFM EG/FGスロットが共有する
+/// `sound_core::eg::EgParams`をそのまま受け取る（新規の別部品を作らない設計、spec-sound.md参照）。
 /// `mapping`はEGレベルをdBへ変換する方式（OP=[EgAmplitudeMapping::DbLinear]、
 /// FILTER/VCA=[EgAmplitudeMapping::AmplitudeLinear]）。
-pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, ar: u8, d1r: u8, d1l: u8, d2r: u8, rr: u8) {
+pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams) {
     let (rect, _response) = ui.allocate_exact_size(Vec2::new(WIDTH, HEIGHT), egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
@@ -200,21 +234,29 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, ar: u8, d1r:
     let width = inner.width();
 
     // AR=0は「フリーズしたまま発音しない」特殊値（spec.md準拠）。床のフラット線のみ描いて終える。
-    if ar == 0 {
+    if eg.ar == 0 {
         let y = db_to_y(DB_FLOOR);
         painter.add(Shape::line(vec![Pos2::new(x0, y), Pos2::new(x0 + width, y)], Stroke::new(1.5, COLOR_SILENT)));
         return;
     }
 
     let tl_db = tl_to_db(tl);
+    let curved = eg.curve != 0;
+
+    // Delay: キーオンからAR開始までの平坦なリードイン（無音、線形0〜10秒）。ウィジェット幅から
+    // 線形に幅を奪う（delay=0では奪う幅0＝Delay導入前と完全に同じ描画になる）。
+    let delay_fraction = (delay_to_seconds(eg.delay) / DELAY_MAX_SECONDS).clamp(0.0, 1.0);
+    let delay_width = delay_fraction * DELAY_MAX_WIDTH_FRACTION * width;
+    let drawable_width = width - delay_width;
+    let right_edge = x0 + width;
 
     // 各フェーズの実測秒数（AR=0は上で早期return済みなのでここではSome）。
-    let ar_seconds = segment_seconds(ar, ar_to_delta).unwrap_or(0.0);
-    let d1r_seconds = rate_seconds_or_frozen(d1r, decay_to_delta);
+    let ar_seconds = segment_seconds(eg.ar, ar_to_delta).unwrap_or(0.0);
+    let d1r_seconds = rate_seconds_or_frozen(eg.d1r, decay_to_delta);
     // D1Rがフリーズ中はDecay2に自然到達しないため（Eg::tick()参照）、その場合はD2R自体の値に
     // よらずフリーズ（=SRの到達点に留まり続ける）扱いにする。
-    let d2r_seconds = if d1r != 0 { rate_seconds_or_frozen(d2r, decay_to_delta) } else { FROZEN_SECONDS };
-    let rr_seconds = segment_seconds(rr, rr_to_delta).unwrap_or(0.0);
+    let d2r_seconds = if eg.d1r != 0 { rate_seconds_or_frozen(eg.d2r, decay_to_delta) } else { FROZEN_SECONDS };
+    let rr_seconds = segment_seconds(eg.rr, rr_to_delta).unwrap_or(0.0);
 
     // 横幅の重み（実測秒数を各フェーズ固有レンジで対数正規化。rate=255は幅0＝垂直、最遅は幅1.0）。
     let attack_weight = log_width(ar_seconds, AR_MIN_SECONDS, AR_MAX_SECONDS);
@@ -222,30 +264,64 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, ar: u8, d1r:
     let hold_weight = log_width(d2r_seconds, DECAY_MIN_SECONDS, DECAY_MAX_SECONDS);
     let release_weight = log_width(rr_seconds, DECAY_MIN_SECONDS, DECAY_MAX_SECONDS);
 
+    // 各フェーズ幅を「そのフェーズ自身の実測秒数」だけで決めるため、正規化（可変スケール）ではなく
+    // 固定スケールを使う。scaleを合計で割ると1本を動かすたびにscaleが変わり、触っていない
+    // フェーズの頂点まで左右に動いてしまう。固定スケール（最大合計=MAX_TOTAL_WEIGHTが幅ちょうど）に
+    // すれば、各頂点のX座標はそのフェーズ自身の値だけで決まり動かない。かつ同じ秒数はどのパッチでも
+    // 同じ幅で描かれ、時間軸がパッチ間で揃う。短い音ほど右側に余白が残る＝実際の短さを正直に表す。
+    let scale = drawable_width / MAX_TOTAL_WEIGHT;
+
+    let mut x = x0 + delay_width;
+    if delay_width > 0.0 {
+        let y = db_to_y(DB_FLOOR);
+        painter.add(Shape::line(vec![Pos2::new(x0, y), Pos2::new(x, y)], Stroke::new(1.5, COLOR_SILENT)));
+    }
+
+    if eg.loop_enabled != 0 {
+        // Loop=1: Floor⇄peakをAR（開く/戻り）とD1R（閉じる/下降）が独立レートで往復する
+        // （D1L/D2R/RRの膝は使わない、spec-sound.md「ループ可能EG」節）。2サイクル描いたのち、
+        // 現在位置（Floor）からRRで真の無音へ離脱する形でプレビューする。
+        let floor_db = (tl_db + level_contribution_db(mapping, eg.floor as f32 / 255.0)).max(DB_FLOOR);
+        let mut cur = Pos2::new(x, db_to_y(floor_db));
+        painter.circle_filled(cur, DOT_RADIUS, COLOR_DOT_START);
+        for _ in 0..2 {
+            let peak_x = (x + attack_weight * scale).min(right_edge);
+            let peak = Pos2::new(peak_x, db_to_y(tl_db));
+            draw_ramp(painter, cur, peak, COLOR_HELD, false, curved);
+            x = peak_x;
+            cur = peak;
+
+            let floor_x = (x + decay1_weight * scale).min(right_edge);
+            let floor_pt = Pos2::new(floor_x, db_to_y(floor_db));
+            draw_ramp(painter, cur, floor_pt, COLOR_HELD, false, curved);
+            x = floor_x;
+            cur = floor_pt;
+        }
+        painter.circle_filled(cur, DOT_RADIUS, COLOR_DOT_HOLD);
+
+        let release_end_x = (x + release_weight * scale).min(right_edge);
+        let release_end = Pos2::new(release_end_x, db_to_y(DB_FLOOR));
+        draw_ramp(painter, cur, release_end, COLOR_RELEASE, false, curved);
+        painter.circle_filled(release_end, DOT_RADIUS, COLOR_DOT_END);
+        return;
+    }
+
     // 縦方向は「ターゲット方式」：各フェーズは有限レートなら必ず目標レベルまで完全到達し、
     // 到達の速さ（レート）は横幅（＝その秒数）と傾きに現れる。フリーズ(rate=0)のみ開始点に留まる。
     // これによりD1L（SLレベル）がSL点の高さに直結して見える（旧progress方式はD1Rが遅いと
     // SL点がTL付近に留まり、D1Lを動かしても縦に動かないのが欠点だった）。
     // AR: 床 -> TL（AR>0は常に完全到達）。
     // DR: TL -> SL。D1Rフリーズ(rate=0)ならTLに留まる。SLの絶対dB位置はTL+D1Lの寄与（mapping依存）で求める。
-    let sl_db = (tl_db + level_contribution_db(mapping, d1l as f32 / 255.0)).max(DB_FLOOR);
-    let decay1_db = if d1r == 0 { tl_db } else { sl_db };
+    let sl_db = (tl_db + level_contribution_db(mapping, eg.d1l as f32 / 255.0)).max(DB_FLOOR);
+    let decay1_db = if eg.d1r == 0 { tl_db } else { sl_db };
 
     // SR: SL -> SLからSR_DROP_DBぶん下降した点（絶対位置ではなくSL相対、D1Lの効果を保つため）。
     // D1RまたはD2RがフリーズならクリープせずSL（=decay1_db）に留まる。
     let sr_target_db = (decay1_db - SR_DROP_DB).max(DB_FLOOR);
-    let hold_db = if d1r == 0 || d2r == 0 { decay1_db } else { sr_target_db };
+    let hold_db = if eg.d1r == 0 || eg.d2r == 0 { decay1_db } else { sr_target_db };
 
     // RR: hold_db -> 床（RRはrate=0でも284.9秒の有限値でフリーズしない、常に完全到達）。
 
-    // 各フェーズ幅を「そのフェーズ自身の実測秒数」だけで決めるため、正規化（可変スケール）ではなく
-    // 固定スケールを使う。scaleを合計で割ると1本を動かすたびにscaleが変わり、触っていない
-    // フェーズの頂点まで左右に動いてしまう。固定スケール（最大合計=MAX_TOTAL_WEIGHTが幅ちょうど）に
-    // すれば、各頂点のX座標はそのフェーズ自身の値だけで決まり動かない。かつ同じ秒数はどのパッチでも
-    // 同じ幅で描かれ、時間軸がパッチ間で揃う。短い音ほど右側に余白が残る＝実際の短さを正直に表す。
-    let scale = width / MAX_TOTAL_WEIGHT;
-
-    let mut x = x0;
     let start_pt = Pos2::new(x, db_to_y(DB_FLOOR));
     x += attack_weight * scale;
     let tl_pt = Pos2::new(x, db_to_y(tl_db));
@@ -255,16 +331,16 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, ar: u8, d1r:
     let hold_pt = Pos2::new(x, db_to_y(hold_db));
     // AR区間はフリーズしない（ar==0は上で早期return済み）ので常に実線。D1R/D2R区間はrate=0のとき
     // 目標に到達せず現在レベルに留まり続けるだけなので破線にして「フリーズ中」だと視覚的に示す。
-    draw_segment(painter, start_pt, tl_pt, COLOR_HELD, false);
-    draw_segment(painter, tl_pt, sl_pt, COLOR_HELD, d1r == 0);
-    draw_segment(painter, sl_pt, hold_pt, COLOR_HELD, d1r == 0 || d2r == 0);
+    draw_ramp(painter, start_pt, tl_pt, COLOR_HELD, false, curved);
+    draw_ramp(painter, tl_pt, sl_pt, COLOR_HELD, eg.d1r == 0, curved);
+    draw_ramp(painter, sl_pt, hold_pt, COLOR_HELD, eg.d1r == 0 || eg.d2r == 0, curved);
 
     let release_start = hold_pt;
     x += release_weight * scale;
-    // 固定スケールでは通常x < x0+width（短い音ほど手前で終わる）。最長エンベロープでちょうど
+    // 固定スケールでは通常x < 右端（短い音ほど手前で終わる）。最長エンベロープでちょうど
     // 右端に達する。浮動小数点誤差の安全弁としてclampは残す。
-    let release_end = Pos2::new(x.min(x0 + width), db_to_y(DB_FLOOR));
-    painter.add(Shape::line(vec![release_start, release_end], Stroke::new(1.5, COLOR_RELEASE)));
+    let release_end = Pos2::new(x.min(right_edge), db_to_y(DB_FLOOR));
+    draw_ramp(painter, release_start, release_end, COLOR_RELEASE, false, curved);
 
     // 各交点（頂点）に色分けした丸印を打つ（計算結果の目視確認用）。
     painter.circle_filled(start_pt, DOT_RADIUS, COLOR_DOT_START);
@@ -402,5 +478,50 @@ mod tests {
             db_linear_sl < amp_linear_sl - 10.0,
             "DbLinearの方が大きく沈むはず: db_linear={db_linear_sl} amp_linear={amp_linear_sl}"
         );
+    }
+
+    #[test]
+    fn delay_to_seconds_bounds() {
+        // sound_core::lfo::delay_to_secondsと同じ0〜10秒の線形マッピング。
+        assert_eq!(delay_to_seconds(0), 0.0);
+        assert!((delay_to_seconds(255) - DELAY_MAX_SECONDS).abs() < 1e-6);
+        assert!((delay_to_seconds(128) - DELAY_MAX_SECONDS / 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn eased_progress_matches_endpoints_and_midpoint() {
+        // レイズドコサイン`0.5-0.5cos(π·t)`はt=0→0, t=1→1, t=0.5→0.5（sound_core::EgのCurveと同じ式）。
+        assert!(eased_progress(0.0).abs() < 1e-6);
+        assert!((eased_progress(1.0) - 1.0).abs() < 1e-6);
+        assert!((eased_progress(0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eased_progress_bows_below_linear_before_midpoint() {
+        // レイズドコサインは前半で線形より遅く立ち上がる（角が丸くなる=直線より下）。
+        let t = 0.25;
+        assert!(eased_progress(t) < t, "t={t}: eased={} は線形より下のはず", eased_progress(t));
+    }
+
+    #[test]
+    fn eg_params_classic_matches_pre_fg_default_shape() {
+        // EgParams::classic()はfloor=0/loop=0/curve=0/delay=0で、Loop/Curve/Delay追加前の
+        // 挙動（ワンショットADSR）と完全に一致することを保証する後方互換の要。
+        let eg = EgParams::classic(120, 80, 200, 40, 90);
+        assert_eq!(eg.floor, 0);
+        assert_eq!(eg.loop_enabled, 0);
+        assert_eq!(eg.curve, 0);
+        assert_eq!(eg.delay, 0);
+    }
+
+    #[test]
+    fn floor_level_matches_target_levels_formula_at_extremes() {
+        // ループのFloor到達レベルはtarget_levels()のSL計算と同じlevel_contribution_db式を使う。
+        // floor=0は完全開閉（TLからDB_FLOORぶん沈む）、floor=255は浅い（TLと一致）。
+        let tl_db = tl_to_db(255);
+        let floor_min = (tl_db + level_contribution_db(EgAmplitudeMapping::DbLinear, 0.0)).max(DB_FLOOR);
+        let floor_max = (tl_db + level_contribution_db(EgAmplitudeMapping::DbLinear, 1.0)).max(DB_FLOOR);
+        assert!((floor_min - DB_FLOOR).abs() < 1e-3, "floor=0はTLからDB_FLOORぶん沈むはず: {floor_min}");
+        assert!((floor_max - tl_db).abs() < 1e-6, "floor=255はTLと一致するはず: {floor_max}");
     }
 }
