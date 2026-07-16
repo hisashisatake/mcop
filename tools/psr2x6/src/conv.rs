@@ -259,6 +259,7 @@ impl OpqOperator {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         }
     }
 }

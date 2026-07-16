@@ -20,6 +20,7 @@ pub struct OperatorState {
     pub floor: i32,
     pub op_loop: bool,
     pub curve: bool,
+    pub eg_shift: i32,
 }
 
 impl Default for OperatorState {
@@ -41,6 +42,7 @@ impl Default for OperatorState {
             floor: 0,
             op_loop: false,
             curve: false,
+            eg_shift: 0,
         }
     }
 }

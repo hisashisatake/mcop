@@ -134,6 +134,7 @@ struct OperatorDto {
     floor: u8,
     loop_enabled: u8,
     curve: u8,
+    eg_shift: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -199,6 +200,7 @@ impl PatchDto {
                 floor: op.floor as i32,
                 op_loop: op.loop_enabled != 0,
                 curve: op.curve != 0,
+                eg_shift: op.eg_shift as i32,
             };
         }
         let ch = &self.channel;
@@ -258,6 +260,7 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
             floor: op.floor as u8,
             loop_enabled: op.op_loop as u8,
             curve: op.curve as u8,
+            eg_shift: op.eg_shift as u8,
         }
     });
     let channel = ChannelDto {

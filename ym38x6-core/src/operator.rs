@@ -40,6 +40,12 @@ pub struct OperatorParams {
     /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。`sound_core::EgParams::curve`に対応。
     #[serde(default)]
     pub curve: u8,
+    /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝圧縮なし＝96dBフルレンジ）。
+    /// チップの `env_attenuation >> shift`（TX81Z egsft 0/1/2/3 = 96/48/24/12dB）を連続化したもので、
+    /// 値が大きいほどEGの振れ幅が上方（大音量側）へ圧縮される（打鍵時に-96dBでなく高い床から立ち上がる）。
+    /// TLはこの圧縮を受けない（チップと同じくEG分のみ圧縮）。[mapping::eg_shift_to_db_range](crate::mapping::eg_shift_to_db_range)参照。
+    #[serde(default)]
+    pub eg_shift: u8,
 }
 
 /// `op_fine_tune`の中心値（オフセットなし）。serde欠落時およびDefaultで使う。
@@ -68,6 +74,7 @@ impl Default for OperatorParams {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         }
     }
 }
@@ -237,9 +244,11 @@ impl Operator {
         let vel_sens = if self.is_carrier { 0 } else { self.params.velocity_sensitivity };
         let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
         let amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
-        // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-96dB
-        // 4.8 = 96.0 / 20.0
-        let env_amp = 10f32.powf(-(1.0 - env_level) * 4.8);
+        // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-db_range。
+        // db_rangeは通常96dB（eg_shift=0）。EGSFTはこのEG減衰レンジのみを圧縮し（TLは別掛けで不変）、
+        // チップの `env_attenuation >> eg_shift` と厳密一致する。
+        let db_range = eg_shift_to_db_range(self.params.eg_shift);
+        let env_amp = 10f32.powf(-(1.0 - env_level) * (db_range / 20.0));
         sample * env_amp * tl_to_gain(eff_tl) * amp_factor
     }
 }
@@ -271,6 +280,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         }
     }
 
@@ -319,6 +329,31 @@ mod tests {
     /// ここではブラックボックスの出力振幅から、Attack→Decay1→Decay2（0に張り付き、
     /// Idleにはならない）→note_off→Release→Idleという一連の遷移が保たれていることを検証する
     /// （fast_paramsはAR/D1R/D2R/RR=255で全区間が数十〜数百サンプルと高速に完了する）。
+    /// EGSFT（eg_shift）はEGの減衰レンジを圧縮し、サステインの床を持ち上げる。
+    /// d1l=128（env_level≈0.5）でホールドさせ、eg_shift=0（-48dB付近）と
+    /// eg_shift=255（12dBレンジ＝床が大幅に持ち上がる）でサステインのピーク振幅を比較する。
+    #[test]
+    fn eg_shift_raises_sustained_amplitude() {
+        let sr = 44100.0;
+        let wave = gen_op_sine();
+        // Decay2レート0でd1l到達後に張り付かせる
+        let base = OperatorParams { d1l: 128, d2r: 0, rr: 255, ..fast_params() };
+        let settle = |eg_shift: u8| -> f32 {
+            let mut op = Operator::new(OperatorParams { eg_shift, ..base });
+            op.note_on(440.0, 127);
+            for _ in 0..2000 {
+                op.tick(sr, &wave, 0.0, 69);
+            }
+            (0..512)
+                .map(|_| op.tick(sr, &wave, 0.0, 69).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let off = settle(0);
+        let on = settle(255);
+        assert!(off < 0.02, "eg_shift=0 sustain should stay near -48dB, got {off}");
+        assert!(on > off * 10.0, "eg_shift should raise sustain floor: off={off} on={on}");
+    }
+
     #[test]
     fn envelope_transitions_through_phases() {
         let sr = 44100.0;

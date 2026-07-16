@@ -35,6 +35,19 @@ pub fn tl_to_gain(tl: u8) -> f32 {
     10f32.powf(db / 20.0)
 }
 
+/// EGSFT（TX81Z EG Shift）: EGの減衰レンジ(dB)を返す。既定0＝96dB（圧縮なし）。
+/// エンジンは `env_amp = 10^(-(1-env_level) * db_range/20)` でEGを適用するため、
+/// db_rangeを狭めるとEGの振れ幅が上方（大音量側）へ圧縮される（TLはこの圧縮を受けない）。
+///
+/// チップの `env_attenuation >> eg_shift`（[ymfm_fm.ipp] envelope_attenuation）を連続化したもの。
+/// TX81Zの離散4段 egsft 0/1/2/3 は 96/48/24/12dB で、これを eg_shift 0/85/170/255 に写像すると
+/// 各点で `96 / 2^(eg_shift/85)` が 96/48/24/12dB に一致する（opz2x6が採用する代表点写像）。
+pub fn eg_shift_to_db_range(eg_shift: u8) -> f32 {
+    // eg_shift/85 を実機シフト量(0..3)に対応させ、db_range = 96 / 2^units
+    let units = eg_shift as f32 / 85.0;
+    96.0 / 2f32.powf(units)
+}
+
 // AR/D1R/D2R/RRの時定数マッピングはsound-core側（eg.rs）へ移設済み。
 // operator.rsの`use crate::mapping::*;`がそのまま動くよう、ここで再エクスポートする。
 pub use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta};
@@ -185,6 +198,19 @@ mod tests {
         // A4未満はクランプせず1.0未満（低音ほど減衰が遅くなる、実機keycode相当）
         assert!(ksr_rate_multiplier(128, 57) < 1.0);
         assert!(ksr_rate_multiplier(255, 57) < ksr_rate_multiplier(128, 57));
+    }
+
+    #[test]
+    fn eg_shift_to_db_range_anchors() {
+        // eg_shift=0はEGSFTオフ（96dBフルレンジ、既存挙動そのまま）
+        assert!((eg_shift_to_db_range(0) - 96.0).abs() < 1e-4);
+        // TX81Zの離散4段を代表点 0/85/170/255 に写像すると 96/48/24/12dB に一致する
+        assert!((eg_shift_to_db_range(85) - 48.0).abs() < 1e-3);
+        assert!((eg_shift_to_db_range(170) - 24.0).abs() < 1e-3);
+        assert!((eg_shift_to_db_range(255) - 12.0).abs() < 1e-3);
+        // 単調減少（値が大きいほどレンジが狭まる）
+        assert!(eg_shift_to_db_range(255) < eg_shift_to_db_range(128));
+        assert!(eg_shift_to_db_range(128) < eg_shift_to_db_range(0));
     }
 
     #[test]

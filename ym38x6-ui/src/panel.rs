@@ -28,6 +28,8 @@ pub struct OperatorPanelParams<'a> {
     pub op_loop: Box<dyn BoolParamHandle + 'a>,
     /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。
     pub curve: Box<dyn BoolParamHandle + 'a>,
+    /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
+    pub eg_shift: Box<dyn IntParamHandle + 'a>,
 }
 
 /// `draw_param_panel`に渡すパラメーター一式。
@@ -133,6 +135,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                                 op.curve.set(curve);
                                 op.curve.end_edit();
                             }
+                            knob(ui, &*op.eg_shift, "EGSFT");
                         });
                     });
                 });

@@ -57,6 +57,9 @@ pub struct OperatorParamsDto {
     /// 0=線形/1=サイン風。
     #[serde(default)]
     pub curve: u8,
+    /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
+    #[serde(default)]
+    pub eg_shift: u8,
 }
 
 fn default_op_fine_tune() -> u8 {
@@ -82,6 +85,7 @@ impl From<OperatorParamsDto> for OperatorParams {
             floor: dto.floor,
             loop_enabled: dto.loop_enabled,
             curve: dto.curve,
+            eg_shift: dto.eg_shift,
         }
     }
 }
@@ -105,6 +109,7 @@ impl From<OperatorParams> for OperatorParamsDto {
             floor: op.floor,
             loop_enabled: op.loop_enabled,
             curve: op.curve,
+            eg_shift: op.eg_shift,
         }
     }
 }

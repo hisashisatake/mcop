@@ -145,6 +145,7 @@ fn convert_op(op: &OpmOpReg, muted: bool) -> OperatorParams {
         floor: 0,
         loop_enabled: 0,
         curve: 0,
+        eg_shift: 0,
     }
 }
 

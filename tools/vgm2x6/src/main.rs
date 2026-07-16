@@ -125,6 +125,7 @@ fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
         floor: 0,
         loop_enabled: 0,
         curve: 0,
+        eg_shift: 0,
     }
 }
 
@@ -168,6 +169,7 @@ fn mix_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
         floor: 0,
         loop_enabled: 0,
         curve: 0,
+        eg_shift: 0,
     };
     patch.operators[0] = tone;
     patch.operators[1] = OperatorParams { tl: 0, ..tone };

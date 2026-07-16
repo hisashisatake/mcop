@@ -51,6 +51,9 @@ pub(crate) struct OperatorVstParams {
     /// 0=線形（角の立つ三角）/1=サイン風（レイズドコサインで角を丸める）。
     #[id = "op_curve"]
     pub curve: BoolParam,
+    /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
+    #[id = "op_eg_shift"]
+    pub eg_shift: IntParam,
 }
 
 impl Default for OperatorVstParams {
@@ -79,6 +82,8 @@ impl Default for OperatorVstParams {
             floor: IntParam::new("Op Loop Floor", 0, IntRange::Linear { min: 0, max: 255 }),
             op_loop: BoolParam::new("Op Loop", false),
             curve: BoolParam::new("Op Loop Curve", false),
+            // 既定0＝EGSFTオフ（96dBフルレンジ、従来挙動そのまま）。
+            eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
         }
     }
 }

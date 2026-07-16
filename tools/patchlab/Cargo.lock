@@ -210,6 +210,9 @@ dependencies = [
 [[package]]
 name = "sound-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "syn"

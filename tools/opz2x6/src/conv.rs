@@ -329,6 +329,11 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         floor: 0,
         loop_enabled: 0,
         curve: 0,
+        // EGSFT(0-3、96/48/24/12dB)を0-255連続へ写像（0/85/170/255）。
+        // OP1は実機で常にoff固定という制約があるが、38x6は忠実エミュを追わない方針
+        // (project_38x6_identity_and_layering)のためコンバーター側で吸収せず、
+        // パース値をそのまま写像する。
+        eg_shift: op.egsft.min(3) * 85,
     };
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。

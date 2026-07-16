@@ -35,6 +35,7 @@ fn operator_panel<'a>(
         floor: vi(&op.floor, setter),
         op_loop: vb(&op.op_loop, setter),
         curve: vb(&op.curve, setter),
+        eg_shift: vi(&op.eg_shift, setter),
     }
 }
 

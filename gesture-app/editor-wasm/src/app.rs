@@ -52,6 +52,7 @@ fn operator_panel<const I: usize>(state: &Rc<RefCell<EditorState>>, dirty: &Rc<C
             get: |s: &EditorState| s.operators[I].curve,
             set: |s: &mut EditorState, v: bool| s.operators[I].curve = v,
         }),
+        eg_shift: op!(eg_shift, "EGSFT", 0, 255, 0),
     }
 }
 

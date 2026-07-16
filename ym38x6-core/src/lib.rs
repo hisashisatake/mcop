@@ -886,6 +886,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];
@@ -1034,6 +1035,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         };
         let make = |op0_sens: u8| {
             let mut patch = Ym38x6Patch::default();
@@ -1081,6 +1083,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         };
 
         for algorithm in 0u8..8 {
@@ -1125,6 +1128,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         };
 
         for filter_type in 0u8..3 {
@@ -1176,6 +1180,7 @@ mod tests {
             floor: 0,
             loop_enabled: 0,
             curve: 0,
+            eg_shift: 0,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];
