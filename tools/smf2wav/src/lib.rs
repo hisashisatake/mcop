@@ -6,6 +6,7 @@
 
 pub mod bank;
 pub mod fx;
+pub mod midi;
 pub mod render;
 pub mod smf;
 pub mod wav;

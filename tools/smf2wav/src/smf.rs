@@ -11,6 +11,8 @@ pub enum EvKind {
     Tempo(u32),                // µs/四分音符
     PitchBend(u8, i16),        // ch, raw value (-8192〜8191、中心=0)
     ControlChange(u8, u8, u8), // ch, cc番号, value
+    ChannelPressure(u8, u8),   // ch, value（AT Destinationの加算源、NRPN(0,16)参照）
+    PolyPressure(u8, u8, u8),  // ch, note, value（Poly AT Destination、NRPN(0,17)参照）
 }
 
 /// 絶対 tick 付きイベント。
@@ -94,10 +96,15 @@ pub fn parse_smf(data: &[u8]) -> Result<(u16, Vec<Ev>), String> {
                     events.push(Ev { tick, kind: EvKind::Program(ch, p) });
                 }
                 0xD0 => {
+                    let value = data.get(j).copied().unwrap_or(0);
                     j += 1;
+                    events.push(Ev { tick, kind: EvKind::ChannelPressure(ch, value) });
                 }
                 0xA0 => {
-                    j += 2; // Poly Key Pressure: 無視
+                    let note = data.get(j).copied().unwrap_or(0);
+                    let value = data.get(j + 1).copied().unwrap_or(0);
+                    j += 2;
+                    events.push(Ev { tick, kind: EvKind::PolyPressure(ch, note, value) });
                 }
                 0xB0 => {
                     let cc = data.get(j).copied().unwrap_or(0);

@@ -15,7 +15,8 @@
 ステップ3「LFO波形8種/Fade/Offset拡張（VST/UI/gesture-app配線含む）」・
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」・
 ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」・
-ステップ6「コア実装」・ステップ7「VST配線」・ステップ8「UI/gesture-app」完了、次はステップ9「smf2wav・変換ツール」)
+ステップ6「コア実装」・ステップ7「VST配線」・ステップ8「UI/gesture-app」・
+ステップ9「smf2wav CC/NRPN解釈」完了。次は表情ルーティング等の未着手項目)
 
 ---
 
@@ -161,7 +162,25 @@
         でVSTと同じ経路により発音中チャンネルへ個別反映）、Volume時は従来通り質感LFOへ書き込む
     → `cargo test --workspace`0 failed・VST3/CLAPバンドルビルド・gesture-app実機起動（スクリーン
       ショットでPITCH FG/CUTOFF FG/GAIN FGパネル表示とV/C/Bキー操作の無クラッシュを確認）で検証済み
-  → ステップ9「smf2wav・変換ツール」: FG/質感LFO系CC/NRPNの解釈対応（マルチティンバーでパッチ外の揺れを再現、未着手）
+  → ステップ9「smf2wav・変換ツール」完了（`tools/smf2wav`、2026-07-16）: smf2wav を VST と同等の
+    CC/NRPN 解釈器にし、マルチティンバーでパッチ外の揺れを再現する。
+    (1) `smf.rs` に Channel Pressure(0xD0)/Poly Key Pressure(0xA0) の抽出を追加（AT Destination用、
+        従来は読み飛ばしていた）。
+    (2) `render.rs` を全面刷新。VSTのプラグイングローバル・シャドウを **MIDIチャンネル別** の
+        `ChannelState`×16 に持ち直し、`build_effective_patch`（ベースパッチ＋CC/NRPN上書き＋Pitch FG
+        演奏補正）・`apply_live`（発音中ボイスへのライブ伝播、VST毎ブロック伝播ループの1ch版）・
+        `note_on_voice`・`handle_data_entry`（RPN/NRPN全ケース）・`update_rpn_selection` を実装。
+        NRPN離散/焼き込みフィールドは `Option`（None=パッチ値のまま）で「NRPNは現在のパッチの当該
+        フィールドのみ書き換え」を表現。CC1/7/11/76/77/78・NRPN(0,0)〜(0,33)・AT・OPキーオン(CC103〜106)
+        まで対応。
+    (3) エフェクトは `sound-core::MasterEffects` を `render_smf` へ組み込み（CC91/93・NRPN(0,2)〜(0,8)、
+        master単位）、チャンク単位で適用してオートメーションをサンプル正確に反映。既存の `--reverb-*`
+        CLI（fx.rs後段リバーブ、既定OFF）は独立温存。
+    (4) `RpnSelection`/`AtDestination`/`apply_at_modulation`/`cc_to_u8`/`cc_to_u7`/`channel_gain` は
+        VST(`ym38x6-vst`はcdylibで参照不可)から `tools/smf2wav/src/midi.rs` へ最小複製（コメントで明記、
+        VST側変更時は追従が必要）。
+    → CC/NRPNの無いSMFは出力バイト同一（後方互換）。`cargo test --workspace` 0 failed（ライブ伝播・
+      混在CC/NRPNのE2Eスモークで発音中CC1の反映と無クラッシュを検証）＋実バンク/実SMFでのバイナリ実行を確認済み。
   → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/FG Depth等）・
     velocity→音量「量」（ChannelParams、既定255）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）

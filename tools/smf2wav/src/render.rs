@@ -4,24 +4,499 @@
 //! ポリフォニーをそのまま扱う（VST と同じID符号化方式）。
 //! プログラムチェンジ → `PatchBank::patch(program)` を音色として使う。
 //!
+//! CC/NRPN の解釈は `ym38x6-vst`（38x6 VST3/CLAP プラグイン）と同等にしてあり、DAW等で
+//! VST を使って書き込んだ「パッチ外の揺れ」（ビブラート/トレモロ/オートワウ/質感LFO/
+//! アフタータッチ/エフェクト）をマルチティンバーで再現する（フェーズ7ステップ9）。
+//! VST はプラグイン単一音色前提でシャドウ状態をプラグイングローバルに持つが、smf2wav は
+//! マルチティンバーのため [`ChannelState`] を **MIDIチャンネル別** に16個持つ。
+//!
 //! 対応SMFイベント:
-//!   - Note On/Off、Program Change、Tempo
-//!   - Pitch Bend（チャンネル単位、RPN0,0でセンシティビティ設定可）
-//!   - CC11 Expression: チャンネルゲインをVST CC11と同じ(val/127)^2カーブで設定
+//!   - Note On/Off、Program Change（CC102代替含む）、Tempo
+//!   - Pitch Bend（チャンネル単位、RPN(0,0)でセンシティビティ設定可）
+//!   - CC1/76/77/78: Pitch FG（ビブラート）への演奏補正（spec-sound.md「演奏層による補正」）
+//!   - CC7/CC11: GM2音量（実効ゲイン=(cc7/127)²×(cc11/127)²）
 //!   - CC64 Sustain Pedal（ホールドフラグ方式）
-//!   - CC100/101/6: RPN選択とData Entry（ピッチベンド感度のみ）
+//!   - CC91/93 + NRPN(0,2)〜(0,8): マスターエフェクト（Reverb/Chorus、`MasterEffects`）
+//!   - NRPN(0,0)〜(0,33): 質感LFO・FG Loop/Curve・Algorithm/Waveform/Filter/AT/OP F-Number
+//!   - Channel Pressure / Poly Key Pressure: AT Destination（NRPN(0,16)/(0,17)）
+//!   - CC103〜106: Operator Key On/Off
 //!   - CC120/CC123: All Sound Off / All Notes Off
+//!
+//! CC/NRPN の変更は当該チャンネルの発音中ボイスへ即時伝播する（[`apply_live`]）。
+//! smf2wav はイベント境界で正確にレンダリングするため、VSTのブロック量子化より正確。
 
-use ym38x6_core::{Vco, Ym38x6Engine};
+use std::collections::HashMap;
+
+use ym38x6_core::{
+    cc76_to_rate_scale, lfo_fade_mode_from_index, AudioProcessor, ChorusType, MasterEffects,
+    ReverbType, Vco, Ym38x6Engine, Ym38x6Patch,
+};
 
 use crate::bank::PatchBank;
+use crate::midi::{apply_at_modulation, cc_to_u7, cc_to_u8, channel_gain, AtDestination, RpnSelection};
 use crate::smf::{parse_smf, EvKind};
 
-fn render_chunk(engine: &mut Ym38x6Engine, out: &mut Vec<f32>, rendered: &mut usize, target: usize) {
+/// MIDIノート番号の総数（0〜127）。ノート番号をそのままボイスIDの下位に使うため、
+/// 発音中ボイス走査ループの上限に使う（VST の `MIDI_NOTE_COUNT` と同じ）。
+const MIDI_NOTE_COUNT: usize = 128;
+
+/// 1つのMIDIチャンネルの解釈状態（CC/NRPN シャドウ）。16個で全チャンネルを管理する。
+///
+/// VST（`ym38x6-vst/src/lib.rs`）のプラグイングローバル・シャドウフィールドを
+/// **チャンネル別** に持ち直したもの。NRPN で上書きされる離散/焼き込みフィールドは
+/// `Option`（None=ベースパッチ値のまま＝「NRPN は現在のパッチの当該フィールドのみ書き換え」）、
+/// CC1/76/77/78 の Pitch FG 補正は中立既定の加算値として常時適用する。
+struct ChannelState {
+    /// 現在のプログラム番号（Program Change / CC102 で更新）。
+    program: u8,
+
+    // --- RPN/NRPN 選択状態 ---
+    rpn_selection: RpnSelection,
+    nrpn_msb: u8,
+    nrpn_lsb: u8,
+    rpn_msb: u8,
+    rpn_lsb: u8,
+    data_entry_msb: u8,
+    data_entry_lsb: u8,
+
+    // --- ピッチベンド ---
+    /// ピッチベンド感度（半音）。RPN(0,0)で変更、既定±2半音。
+    pitch_bend_range: f32,
+    /// 現在のベンド量（セント）。note_on 時に新ボイスへ再適用する。
+    bend_cents: f32,
+
+    // --- 音量（CC7/CC11、GM2）---
+    cc7: u8,
+    cc11: u8,
+
+    // --- Pitch FG 演奏補正（中立既定、常時適用）---
+    pitch_fg_cc1: u8,            // CC1 Modulation Wheel（0〜127）
+    pitch_fg_cc76: u8,           // CC76 Vibrato Rate（0〜127、64=無補正）
+    pitch_fg_cc77_depth_add: u8, // CC77 Vibrato Depth（0〜255、Depthへ0起点加算）
+    pitch_fg_cc78: u8,           // CC78 Vibrato Delay（0〜127、64=無補正）
+    pitch_fg_rpn0_5: u8,         // RPN(0,5) Modulation Depth Range（GM2、既定64）
+
+    // --- NRPN 離散/焼き込み上書き（None=ベースパッチ値）---
+    algorithm: Option<u8>,
+    operator_waveforms: [Option<u8>; 4],
+    filter_type: Option<u8>,
+    filter_self_oscillation: Option<bool>,
+    texture_lfo_destination: Option<u8>,
+    texture_lfo_waveform: Option<u8>,
+    texture_lfo_fade_mode: Option<u8>,
+    texture_lfo_rate: Option<u8>,
+    texture_lfo_depth: Option<u8>,
+    texture_lfo_delay: Option<u8>,
+    texture_lfo_fade_time: Option<u8>,
+    texture_lfo_offset: Option<u8>,
+    pitch_fg_loop: Option<u8>,
+    pitch_fg_curve: Option<u8>,
+    cutoff_fg_loop: Option<u8>,
+    cutoff_fg_curve: Option<u8>,
+    gain_fg_loop: Option<u8>,
+    gain_fg_curve: Option<u8>,
+    /// OP単位F-Number上書き（NRPN(0,18)〜(0,21)、13bit、Some時のみ set_operator_f_number）。
+    operator_f_number_override: [Option<u16>; 4],
+
+    // --- アフタータッチ ---
+    at_destination: AtDestination,
+    poly_at_destination: AtDestination,
+    channel_pressure: u8,
+    poly_pressure: HashMap<u8, u8>,
+
+    // --- サステインペダル（CC64）---
+    pedal_down: bool,
+    /// ペダル保持中に保留したノートオフ（bit N = note N が保留中）。
+    pending_release: u128,
+}
+
+impl Default for ChannelState {
+    fn default() -> Self {
+        Self {
+            program: 0,
+            rpn_selection: RpnSelection::None,
+            nrpn_msb: 0xFF,
+            nrpn_lsb: 0xFF,
+            rpn_msb: 0xFF,
+            rpn_lsb: 0xFF,
+            data_entry_msb: 0,
+            data_entry_lsb: 0,
+            pitch_bend_range: 2.0,
+            bend_cents: 0.0,
+            cc7: 127,
+            cc11: 127,
+            pitch_fg_cc1: 0,
+            pitch_fg_cc76: 64,
+            pitch_fg_cc77_depth_add: 0,
+            pitch_fg_cc78: 64,
+            pitch_fg_rpn0_5: 64,
+            algorithm: None,
+            operator_waveforms: [None; 4],
+            filter_type: None,
+            filter_self_oscillation: None,
+            texture_lfo_destination: None,
+            texture_lfo_waveform: None,
+            texture_lfo_fade_mode: None,
+            texture_lfo_rate: None,
+            texture_lfo_depth: None,
+            texture_lfo_fade_time: None,
+            texture_lfo_delay: None,
+            texture_lfo_offset: None,
+            pitch_fg_loop: None,
+            pitch_fg_curve: None,
+            cutoff_fg_loop: None,
+            cutoff_fg_curve: None,
+            gain_fg_loop: None,
+            gain_fg_curve: None,
+            operator_f_number_override: [None; 4],
+            at_destination: AtDestination::default(),
+            poly_at_destination: AtDestination::default(),
+            channel_pressure: 0,
+            poly_pressure: HashMap::new(),
+            pedal_down: false,
+            pending_release: 0,
+        }
+    }
+}
+
+/// ベースパッチ（プログラムの音色）に、チャンネルの CC/NRPN シャドウ上書きと Pitch FG 演奏補正を
+/// 重ねた実効パッチを組み立てる。VST の `build_patch()` を移植したもの。
+///
+/// AT（アフタータッチ）と CC76→rate_scale と OP F-Number は `ChannelParams` 外なので、
+/// ここでは扱わず [`apply_live`]/[`note_on_voice`] 側で適用する。
+fn build_effective_patch(base: &Ym38x6Patch, st: &ChannelState) -> Ym38x6Patch {
+    let mut patch = *base;
+
+    // 離散上書き（Some のときのみ）
+    if let Some(v) = st.algorithm {
+        patch.channel.algorithm = v;
+    }
+    for (i, wf) in st.operator_waveforms.iter().enumerate() {
+        if let Some(v) = wf {
+            patch.operators[i].waveform = *v;
+        }
+    }
+    if let Some(v) = st.filter_type {
+        patch.channel.filter_type = v;
+    }
+    if let Some(v) = st.filter_self_oscillation {
+        patch.channel.filter_self_oscillation = v;
+    }
+
+    // 質感LFO 焼き込み上書き（Some のときのみ）
+    if let Some(v) = st.texture_lfo_destination {
+        patch.channel.texture_lfo.destination = v;
+    }
+    if let Some(v) = st.texture_lfo_waveform {
+        patch.channel.texture_lfo.waveform = v;
+    }
+    if let Some(v) = st.texture_lfo_fade_mode {
+        patch.channel.texture_lfo.fade_mode = v;
+    }
+    if let Some(v) = st.texture_lfo_rate {
+        patch.channel.texture_lfo.rate = v;
+    }
+    if let Some(v) = st.texture_lfo_depth {
+        patch.channel.texture_lfo.depth = v;
+    }
+    if let Some(v) = st.texture_lfo_delay {
+        patch.channel.texture_lfo.delay = v;
+    }
+    if let Some(v) = st.texture_lfo_fade_time {
+        patch.channel.texture_lfo.fade_time = v;
+    }
+    if let Some(v) = st.texture_lfo_offset {
+        patch.channel.texture_lfo.offset = v;
+    }
+
+    // FG Loop/Curve 上書き（Some のときのみ）
+    if let Some(v) = st.pitch_fg_loop {
+        patch.channel.pitch_fg.eg.loop_enabled = v;
+    }
+    if let Some(v) = st.pitch_fg_curve {
+        patch.channel.pitch_fg.eg.curve = v;
+    }
+    if let Some(v) = st.cutoff_fg_loop {
+        patch.channel.cutoff_fg.eg.loop_enabled = v;
+    }
+    if let Some(v) = st.cutoff_fg_curve {
+        patch.channel.cutoff_fg.eg.curve = v;
+    }
+    if let Some(v) = st.gain_fg_loop {
+        patch.channel.gain_fg.loop_enabled = v;
+    }
+    if let Some(v) = st.gain_fg_curve {
+        patch.channel.gain_fg.curve = v;
+    }
+
+    // Pitch FG 演奏補正（CC1/77/78）。VST build_patch() 292-301行と同一計算。
+    // CC76(Rate)は rate_scale 経由なのでここでは扱わない。
+    let delay_delta = st.pitch_fg_cc78 as i32 - 64;
+    patch.channel.pitch_fg.eg.delay =
+        (patch.channel.pitch_fg.eg.delay as i32 + delay_delta).clamp(0, 255) as u8;
+    // CC1 のセント換算分を Depth と同じ 0〜255 単位空間へ逆変換して加算する
+    // （Pitch FG の (depth-128)/128*1200 セント変換式の逆算）。
+    let cc1_cents = (st.pitch_fg_cc1 as f32 / 127.0) * (st.pitch_fg_rpn0_5 as f32 * 50.0 / 64.0);
+    let cc1_depth_units = (cc1_cents / 1200.0 * 128.0).round() as i32;
+    patch.channel.pitch_fg.depth = (patch.channel.pitch_fg.depth as i32
+        + st.pitch_fg_cc77_depth_add as i32
+        + cc1_depth_units)
+        .clamp(0, 255) as u8;
+
+    patch
+}
+
+/// CC/NRPN で変わった実効パッチ・CC76 rate_scale・AT・OP F-Number を、そのチャンネルの
+/// 発音中ボイス全てへ伝播する（ライブ反映）。VST の毎ブロック伝播ループ（770-789行）を
+/// 1チャンネル分に絞ったもの。非発音スロットへの set_* はエンジン側で no-op になる。
+fn apply_live(engine: &mut Ym38x6Engine, chi: usize, st: &ChannelState, bank: &PatchBank) {
+    let base = *bank.patch(st.program);
+    let eff = build_effective_patch(&base, st);
+    let rate_scale = cc76_to_rate_scale(st.pitch_fg_cc76);
+    for note in 0..MIDI_NOTE_COUNT {
+        let id = chi * 128 + note;
+        let mut note_patch = eff;
+        apply_at_modulation(
+            note as u8,
+            st.at_destination,
+            st.poly_at_destination,
+            st.channel_pressure,
+            &st.poly_pressure,
+            &mut note_patch,
+        );
+        engine.set_channel_params(id, note_patch.channel);
+        for (op_index, op) in note_patch.operators.iter().enumerate() {
+            engine.set_operator_params(id, op_index, *op);
+        }
+        engine.set_pitch_fg_rate_scale(id, rate_scale);
+        for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
+            if let Some(f_number) = f {
+                engine.set_operator_f_number(id, op_index, *f_number);
+            }
+        }
+    }
+}
+
+/// 1ボイスのノートオン。VST の note_on 適用（845-866行）と同型。
+/// 現在の AT を焼き込んだ実効パッチで発音し、ベンド量・音量ゲイン・rate_scale・
+/// OP F-Number を新ボイスへ反映する。
+fn note_on_voice(
+    engine: &mut Ym38x6Engine,
+    chi: usize,
+    note: u8,
+    vel: u8,
+    st: &ChannelState,
+    bank: &PatchBank,
+) {
+    let base = *bank.patch(st.program);
+    let mut eff = build_effective_patch(&base, st);
+    // このノートの現在の AT を焼き込む（以降の AT 変化は apply_live で伝播）。
+    apply_at_modulation(
+        note,
+        st.at_destination,
+        st.poly_at_destination,
+        st.channel_pressure,
+        &st.poly_pressure,
+        &mut eff,
+    );
+    let id = chi * 128 + note as usize;
+    let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+    engine.set_patch(eff);
+    engine.note_on(id, freq, vel);
+    engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
+    engine.set_pitch_bend(id, st.bend_cents);
+    engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
+    for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
+        if let Some(f_number) = f {
+            engine.set_operator_f_number(id, op_index, *f_number);
+        }
+    }
+}
+
+/// CC99/98(NRPN)・CC101/100(RPN) 受信時に選択状態を更新する。
+/// MSB,LSB=127,127（Null）の場合は選択解除。VST `update_rpn_selection` の移植。
+fn update_rpn_selection(st: &mut ChannelState, is_nrpn: bool) {
+    let (msb, lsb) = if is_nrpn { (st.nrpn_msb, st.nrpn_lsb) } else { (st.rpn_msb, st.rpn_lsb) };
+    st.rpn_selection = if msb == 127 && lsb == 127 {
+        RpnSelection::None
+    } else if is_nrpn {
+        RpnSelection::Nrpn(msb, lsb)
+    } else {
+        RpnSelection::Rpn(msb, lsb)
+    };
+}
+
+/// NRPN(0,18)〜(0,21)：CC6(MSB)+CC38(LSB)の14bit値を13bit(0〜8191)にclampして
+/// OP F-Number 上書きとして記録する（実際の発音中ボイスへの反映は `apply_live`）。
+fn set_operator_f_number_override(st: &mut ChannelState, op_index: usize) {
+    let combined = (st.data_entry_msb as u16) * 128 + st.data_entry_lsb as u16;
+    st.operator_f_number_override[op_index] = Some(combined.min(8191));
+}
+
+/// CC6(Data Entry MSB)受信時、選択中のRPN/NRPNに応じて値を適用する。VST `handle_data_entry` の移植。
+/// 戻り値=発音中ボイスへの伝播（`apply_live`）が必要かどうか。エフェクト系NRPNやRPN(0,0)は不要。
+fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: u8) -> bool {
+    st.data_entry_msb = cc_to_u7(value);
+    match st.rpn_selection {
+        // RPN(0,0): Pitch Bend Sensitivity（半音）。次のベンドイベントで効くので伝播不要。
+        RpnSelection::Rpn(0, 0) => {
+            st.pitch_bend_range = cc_to_u7(value) as f32;
+            false
+        }
+        // RPN(0,5): Modulation Depth Range（CC1 セント換算係数）。CC1 適用へ影響するため伝播。
+        RpnSelection::Rpn(0, 5) => {
+            st.pitch_fg_rpn0_5 = cc_to_u7(value);
+            true
+        }
+        // NRPN(0,0): 質感LFO Destination（0=Pitch/1=Volume/2=TLキャリア/3=Cutoff）。
+        RpnSelection::Nrpn(0, 0) => {
+            st.texture_lfo_destination = Some(cc_to_u7(value).min(3));
+            true
+        }
+        // NRPN(0,1): 質感LFO Waveform（0〜4）。
+        RpnSelection::Nrpn(0, 1) => {
+            st.texture_lfo_waveform = Some(cc_to_u7(value).min(4));
+            true
+        }
+        // NRPN(0,2): Reverb Type（master）。
+        RpnSelection::Nrpn(0, 2) => {
+            effects.set_reverb_type(ReverbType::from_u8(cc_to_u7(value)));
+            false
+        }
+        // NRPN(0,3): Chorus Type（master）。
+        RpnSelection::Nrpn(0, 3) => {
+            effects.set_chorus_type(ChorusType::from_u8(cc_to_u7(value)));
+            false
+        }
+        // NRPN(0,4): Reverb Time（master）。
+        RpnSelection::Nrpn(0, 4) => {
+            effects.set_reverb_time(cc_to_u8(value));
+            false
+        }
+        // NRPN(0,5): Chorus Mod Rate（master）。
+        RpnSelection::Nrpn(0, 5) => {
+            effects.set_chorus_mod_rate(cc_to_u8(value));
+            false
+        }
+        // NRPN(0,6): Chorus Mod Depth（master）。
+        RpnSelection::Nrpn(0, 6) => {
+            effects.set_chorus_mod_depth(cc_to_u8(value));
+            false
+        }
+        // NRPN(0,7): Chorus Feedback（master）。
+        RpnSelection::Nrpn(0, 7) => {
+            effects.set_chorus_feedback(cc_to_u8(value));
+            false
+        }
+        // NRPN(0,8): Chorus Send To Reverb（master）。
+        RpnSelection::Nrpn(0, 8) => {
+            effects.set_chorus_send_to_reverb(cc_to_u8(value));
+            false
+        }
+        // NRPN(0,9): Algorithm（0〜7）。
+        RpnSelection::Nrpn(0, 9) => {
+            st.algorithm = Some(cc_to_u7(value).min(7));
+            true
+        }
+        // NRPN(0,10)〜(0,13): Waveform Op0〜3（0〜255）。
+        RpnSelection::Nrpn(0, lsb @ 10..=13) => {
+            st.operator_waveforms[(lsb - 10) as usize] = Some(cc_to_u8(value));
+            true
+        }
+        // NRPN(0,14): Filter Type（0=LP/1=HP/2=BP）。
+        RpnSelection::Nrpn(0, 14) => {
+            st.filter_type = Some(cc_to_u7(value).min(2));
+            true
+        }
+        // NRPN(0,15): Filter Self-Oscillation（0=OFF/1=ON）。
+        RpnSelection::Nrpn(0, 15) => {
+            st.filter_self_oscillation = Some(cc_to_u7(value) != 0);
+            true
+        }
+        // NRPN(0,16): AT Destination（Channel Pressureの加算先）。
+        RpnSelection::Nrpn(0, 16) => {
+            st.at_destination = AtDestination::from_u8(cc_to_u7(value));
+            true
+        }
+        // NRPN(0,17): Poly AT Destination（Poly Key Pressureの加算先）。
+        RpnSelection::Nrpn(0, 17) => {
+            st.poly_at_destination = AtDestination::from_u8(cc_to_u7(value));
+            true
+        }
+        // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（CC6=MSB、CC38=LSBで14bit→13bit）。
+        RpnSelection::Nrpn(0, lsb @ 18..=21) => {
+            set_operator_f_number_override(st, (lsb - 18) as usize);
+            true
+        }
+        // NRPN(0,22): 質感LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
+        RpnSelection::Nrpn(0, 22) => {
+            st.texture_lfo_fade_mode = Some(lfo_fade_mode_from_index(cc_to_u7(value)) as u8);
+            true
+        }
+        // NRPN(0,23)〜(0,27): 質感LFO Rate/Depth/Delay/FadeTime/Offset（焼き込み専用）。
+        RpnSelection::Nrpn(0, 23) => {
+            st.texture_lfo_rate = Some(cc_to_u8(value));
+            true
+        }
+        RpnSelection::Nrpn(0, 24) => {
+            st.texture_lfo_depth = Some(cc_to_u8(value));
+            true
+        }
+        RpnSelection::Nrpn(0, 25) => {
+            st.texture_lfo_delay = Some(cc_to_u8(value));
+            true
+        }
+        RpnSelection::Nrpn(0, 26) => {
+            st.texture_lfo_fade_time = Some(cc_to_u8(value));
+            true
+        }
+        RpnSelection::Nrpn(0, 27) => {
+            st.texture_lfo_offset = Some(cc_to_u8(value));
+            true
+        }
+        // NRPN(0,28)〜(0,33): Pitch/Cutoff/Gain FG Loop/Curve（0=OFF/1=ON）。
+        RpnSelection::Nrpn(0, 28) => {
+            st.pitch_fg_loop = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        RpnSelection::Nrpn(0, 29) => {
+            st.pitch_fg_curve = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        RpnSelection::Nrpn(0, 30) => {
+            st.cutoff_fg_loop = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        RpnSelection::Nrpn(0, 31) => {
+            st.cutoff_fg_curve = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        RpnSelection::Nrpn(0, 32) => {
+            st.gain_fg_loop = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        RpnSelection::Nrpn(0, 33) => {
+            st.gain_fg_curve = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// レンダリング済みサンプル位置を `target` まで進め、その区間をマスターエフェクトに通す。
+/// チャンクはイベント境界に揃うため、エフェクトのオートメーションがサンプル正確に反映される。
+fn render_chunk(
+    engine: &mut Ym38x6Engine,
+    effects: &mut MasterEffects,
+    out: &mut Vec<f32>,
+    rendered: &mut usize,
+    target: usize,
+) {
     if target > *rendered {
         let n = target - *rendered;
         let mut buf = vec![0.0f32; n];
         engine.render(&mut buf, 1);
+        effects.process(&mut buf, 1);
         out.extend_from_slice(&buf);
         *rendered = target;
     }
@@ -40,22 +515,12 @@ pub fn render_smf(
     let (division, events) = parse_smf(data)?;
 
     let mut engine = Ym38x6Engine::new(sample_rate);
+    // SMF内蔵のマスターエフェクト（CC91/93・NRPN(0,2)〜(0,8)で駆動）。既定 send=0 で透過。
+    // main.rs の `--reverb-*`（fx.rs）はこれとは独立した後段の診断用リバーブ。
+    let mut effects = MasterEffects::new(sample_rate);
     let mut out: Vec<f32> = Vec::new();
-    let mut programs = [0u8; 16];
 
-    // ピッチベンド感度（半音）: RPN(0,0)で変更可。MIDI規格の既定値は±2半音。
-    let mut pitch_bend_range = [2.0f32; 16];
-    // RPN選択状態（CC101=MSB, CC100=LSB）。0xFF=未選択。
-    let mut rpn_msb = [0xFFu8; 16];
-    let mut rpn_lsb = [0xFFu8; 16];
-    // サステインペダル（CC64）: ホールドフラグ + ペダル中のノートオフを保留するビットマスク。
-    let mut pedal_down = [false; 16];
-    let mut pending_release = [0u128; 16]; // bit N = note N が保留中
-
-    // CC11（Expression）対応: VST CC11と同じ(val/127)^2カーブでチャンネルゲインを設定する。
-    // note_on時に新ボイスへ現在のゲインを再適用するため ch_cc11 を状態として保持する
-    // （Channel::newはchannel_gain=1.0で初期化するため、note_on直後に再設定が必要）。
-    let mut ch_cc11 = [127u8; 16];
+    let mut channels: Vec<ChannelState> = (0..16).map(|_| ChannelState::default()).collect();
 
     let mut tempo_us: f64 = 500_000.0; // 既定 120BPM
     let mut spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64; // samples/tick
@@ -73,11 +538,11 @@ pub fn render_smf(
         // 時短打ち切り: 上限に達したらそこまでレンダリングして以降のイベントは無視する。
         if let Some(maxs) = max_samples {
             if target >= maxs {
-                render_chunk(&mut engine, &mut out, &mut rendered, maxs);
+                render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, maxs);
                 return Ok(out);
             }
         }
-        render_chunk(&mut engine, &mut out, &mut rendered, target);
+        render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, target);
 
         match e.kind {
             EvKind::Tempo(us) => {
@@ -85,25 +550,19 @@ pub fn render_smf(
                 spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64;
             }
             EvKind::Program(ch, p) => {
-                programs[ch as usize] = p;
+                channels[ch as usize].program = p;
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
-                let patch = bank.patch(programs[chi]).clone();
-                let id = chi * 128 + note as usize;
-                let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-                engine.set_patch(patch);
-                engine.note_on(id, freq, vel);
-                // Channel::newはchannel_gain=1.0で初期化するため、現在のCC11ゲインを再適用する。
-                let gain = (ch_cc11[chi] as f32 / 127.0).powi(2);
-                engine.set_channel_volume(id, gain);
+                note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank);
             }
             EvKind::NoteOff(ch, note) => {
                 let chi = ch as usize;
                 let id = chi * 128 + note as usize;
-                if pedal_down[chi] {
+                channels[chi].poly_pressure.remove(&note);
+                if channels[chi].pedal_down {
                     // ペダル保持中: Note Offを保留する
-                    pending_release[chi] |= 1u128 << note;
+                    channels[chi].pending_release |= 1u128 << note;
                 } else {
                     engine.note_off(id);
                 }
@@ -111,55 +570,22 @@ pub fn render_smf(
             EvKind::PitchBend(ch, raw) => {
                 let chi = ch as usize;
                 // raw: -8192〜8191、8192=±1半音×pitch_bend_range半音
-                let cents = raw as f32 / 8192.0 * pitch_bend_range[chi] * 100.0;
+                let cents = raw as f32 / 8192.0 * channels[chi].pitch_bend_range * 100.0;
+                channels[chi].bend_cents = cents;
                 engine.set_pitch_bend_group(chi, cents);
             }
-            EvKind::ControlChange(ch, cc, val) => {
+            EvKind::ChannelPressure(ch, value) => {
                 let chi = ch as usize;
-                match cc {
-                    // RPN選択（CC101=MSB, CC100=LSB）
-                    101 => rpn_msb[chi] = val,
-                    100 => rpn_lsb[chi] = val,
-                    // Data Entry MSB: RPN(0,0)のみ処理（ピッチベンド感度=半音数）
-                    6 => {
-                        if rpn_msb[chi] == 0 && rpn_lsb[chi] == 0 {
-                            pitch_bend_range[chi] = val as f32;
-                        }
-                    }
-                    // CC64 Sustain Pedal
-                    64 => {
-                        if val >= 64 {
-                            pedal_down[chi] = true;
-                        } else {
-                            pedal_down[chi] = false;
-                            // 保留中のNote Offをまとめて送出
-                            let mut mask = pending_release[chi];
-                            while mask != 0 {
-                                let note = mask.trailing_zeros() as usize;
-                                let id = chi * 128 + note;
-                                engine.note_off(id);
-                                mask &= mask - 1;
-                            }
-                            pending_release[chi] = 0;
-                        }
-                    }
-                    // CC11 Expression: VST CC11と同じ(val/127)^2カーブでチャンネルゲインを設定する。
-                    // set_channel_volume_groupで発音中の全ボイスへ即時反映される（group=id>>7=MIDIch）。
-                    11 => {
-                        ch_cc11[chi] = val;
-                        let gain = (val as f32 / 127.0).powi(2);
-                        engine.set_channel_volume_group(chi, gain);
-                    }
-                    // CC120 All Sound Off / CC123 All Notes Off
-                    120 | 123 => {
-                        for note in 0usize..128 {
-                            let id = chi * 128 + note;
-                            engine.note_off(id);
-                        }
-                        pending_release[chi] = 0;
-                    }
-                    _ => {}
-                }
+                channels[chi].channel_pressure = cc_to_u8(value);
+                apply_live(&mut engine, chi, &channels[chi], bank);
+            }
+            EvKind::PolyPressure(ch, note, value) => {
+                let chi = ch as usize;
+                channels[chi].poly_pressure.insert(note, cc_to_u8(value));
+                apply_live(&mut engine, chi, &channels[chi], bank);
+            }
+            EvKind::ControlChange(ch, cc, val) => {
+                handle_control_change(&mut engine, &mut effects, &mut channels, ch as usize, cc, val, bank);
             }
         }
     }
@@ -169,6 +595,351 @@ pub fn render_smf(
     if let Some(maxs) = max_samples {
         tail_target = tail_target.min(maxs);
     }
-    render_chunk(&mut engine, &mut out, &mut rendered, tail_target);
+    render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, tail_target);
     Ok(out)
+}
+
+/// 1つのコントロールチェンジを処理する。VST の process() 内 CC match（896-978行）＋
+/// handle_data_entry を per-channel に移植したもの。
+#[allow(clippy::too_many_arguments)]
+fn handle_control_change(
+    engine: &mut Ym38x6Engine,
+    effects: &mut MasterEffects,
+    channels: &mut [ChannelState],
+    chi: usize,
+    cc: u8,
+    val: u8,
+    bank: &PatchBank,
+) {
+    match cc {
+        // CC7/CC11: GM2音量。実効ゲイン=(cc7/127)²×(cc11/127)²。発音中へ即時反映。
+        7 => {
+            channels[chi].cc7 = cc_to_u7(val);
+            let gain = channel_gain(channels[chi].cc7, channels[chi].cc11);
+            engine.set_channel_volume_group(chi, gain);
+        }
+        11 => {
+            channels[chi].cc11 = cc_to_u7(val);
+            let gain = channel_gain(channels[chi].cc7, channels[chi].cc11);
+            engine.set_channel_volume_group(chi, gain);
+        }
+        // CC1/76/77/78: Pitch FG 演奏補正 → 発音中ボイスへ伝播。
+        1 => {
+            channels[chi].pitch_fg_cc1 = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        76 => {
+            channels[chi].pitch_fg_cc76 = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        77 => {
+            channels[chi].pitch_fg_cc77_depth_add = cc_to_u8(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        78 => {
+            channels[chi].pitch_fg_cc78 = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）
+        98 => {
+            channels[chi].nrpn_lsb = cc_to_u7(val);
+            update_rpn_selection(&mut channels[chi], true);
+        }
+        99 => {
+            channels[chi].nrpn_msb = cc_to_u7(val);
+            update_rpn_selection(&mut channels[chi], true);
+        }
+        100 => {
+            channels[chi].rpn_lsb = cc_to_u7(val);
+            update_rpn_selection(&mut channels[chi], false);
+        }
+        101 => {
+            channels[chi].rpn_msb = cc_to_u7(val);
+            update_rpn_selection(&mut channels[chi], false);
+        }
+        // CC6 Data Entry MSB: 選択中の RPN/NRPN へ値を適用。
+        6 => {
+            if handle_data_entry(&mut channels[chi], effects, val) {
+                apply_live(engine, chi, &channels[chi], bank);
+            }
+        }
+        // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
+        38 => {
+            channels[chi].data_entry_lsb = cc_to_u7(val);
+            if let RpnSelection::Nrpn(0, lsb @ 18..=21) = channels[chi].rpn_selection {
+                set_operator_f_number_override(&mut channels[chi], (lsb - 18) as usize);
+                apply_live(engine, chi, &channels[chi], bank);
+            }
+        }
+        // CC64 Sustain Pedal（ホールドフラグ方式）
+        64 => {
+            if val >= 64 {
+                channels[chi].pedal_down = true;
+            } else {
+                channels[chi].pedal_down = false;
+                // 保留中のNote Offをまとめて送出
+                let mut mask = channels[chi].pending_release;
+                while mask != 0 {
+                    let note = mask.trailing_zeros() as usize;
+                    engine.note_off(chi * 128 + note);
+                    mask &= mask - 1;
+                }
+                channels[chi].pending_release = 0;
+            }
+        }
+        // CC91/93: マスターエフェクト送りレベル（master）。
+        91 => effects.set_reverb_send(cc_to_u8(val)),
+        93 => effects.set_chorus_send(cc_to_u8(val)),
+        // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため。smf2wav では
+        // 単一バンクなので Bank Select CC0/32 は使わず、プログラム番号のみ更新する）。
+        102 => {
+            channels[chi].program = cc_to_u7(val);
+        }
+        // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
+        103..=106 => {
+            let op_index = (cc - 103) as usize;
+            let key_on = cc_to_u7(val) >= 64;
+            for note in 0..MIDI_NOTE_COUNT {
+                let id = chi * 128 + note;
+                if key_on {
+                    engine.note_on_operator(id, op_index);
+                } else {
+                    engine.note_off_operator(id, op_index);
+                }
+            }
+        }
+        // CC120 All Sound Off / CC123 All Notes Off
+        120 | 123 => {
+            for note in 0..MIDI_NOTE_COUNT {
+                engine.note_off(chi * 128 + note);
+            }
+            channels[chi].pending_release = 0;
+        }
+        // Bank Select（CC0/32）等は smf2wav では無視（単一バンクのため）。
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 中立の ChannelState では実効パッチがベースと一致する（Pitch FG 補正が全て無補正）。
+    #[test]
+    fn effective_patch_neutral_equals_base() {
+        let base = Ym38x6Patch::default();
+        let st = ChannelState::default();
+        let eff = build_effective_patch(&base, &st);
+        assert_eq!(eff, base);
+    }
+
+    /// CC77(Vibrato Depth)は Pitch FG Depth へ 0 起点で加算される（既定 depth=128）。
+    #[test]
+    fn cc77_adds_to_pitch_fg_depth() {
+        let base = Ym38x6Patch::default();
+        let mut st = ChannelState::default();
+        st.pitch_fg_cc77_depth_add = 40;
+        let eff = build_effective_patch(&base, &st);
+        assert_eq!(eff.channel.pitch_fg.depth, 168); // 128 + 40
+    }
+
+    /// CC78(Vibrato Delay)は Pitch FG Delay へ 64 中心の相対補正。上下端で clamp する。
+    #[test]
+    fn cc78_shifts_pitch_fg_delay_with_clamp() {
+        let mut base = Ym38x6Patch::default();
+        base.channel.pitch_fg.eg.delay = 100;
+        let mut st = ChannelState::default();
+        st.pitch_fg_cc78 = 127; // +63
+        assert_eq!(build_effective_patch(&base, &st).channel.pitch_fg.eg.delay, 163);
+        st.pitch_fg_cc78 = 0; // -64 → clamp 0（100-64=36 なので下端ではないが計算確認）
+        assert_eq!(build_effective_patch(&base, &st).channel.pitch_fg.eg.delay, 36);
+        base.channel.pitch_fg.eg.delay = 10;
+        assert_eq!(build_effective_patch(&base, &st).channel.pitch_fg.eg.delay, 0); // 10-64 clamp 0
+    }
+
+    /// CC1(Mod Wheel)は RPN(0,5) 係数でセント換算し Depth 単位空間へ加算する。
+    #[test]
+    fn cc1_adds_cents_scaled_depth() {
+        let base = Ym38x6Patch::default();
+        let mut st = ChannelState::default();
+        st.pitch_fg_cc1 = 127; // 最大
+        st.pitch_fg_rpn0_5 = 64; // ≈50セント
+                                 // cc1_cents = 1.0 * (64*50/64) = 50、depth_units = round(50/1200*128)=5
+        let eff = build_effective_patch(&base, &st);
+        assert_eq!(eff.channel.pitch_fg.depth, 133);
+    }
+
+    /// NRPN(0,23) 質感LFO Rate は cc_to_u8（×2）でシャドウへ入り、実効パッチへ反映される。
+    #[test]
+    fn nrpn_texture_lfo_rate_into_patch() {
+        let mut st = ChannelState::default();
+        let mut fx = MasterEffects::new(44_100.0);
+        st.rpn_selection = RpnSelection::Nrpn(0, 23);
+        let needs = handle_data_entry(&mut st, &mut fx, 100);
+        assert!(needs);
+        assert_eq!(st.texture_lfo_rate, Some(200));
+        let eff = build_effective_patch(&Ym38x6Patch::default(), &st);
+        assert_eq!(eff.channel.texture_lfo.rate, 200);
+    }
+
+    /// NRPN(0,9) Algorithm 上書きは実効パッチの algorithm を置き換える。
+    #[test]
+    fn nrpn_algorithm_override() {
+        let mut st = ChannelState::default();
+        let mut fx = MasterEffects::new(44_100.0);
+        st.rpn_selection = RpnSelection::Nrpn(0, 9);
+        assert!(handle_data_entry(&mut st, &mut fx, 5));
+        assert_eq!(st.algorithm, Some(5));
+        let eff = build_effective_patch(&Ym38x6Patch::default(), &st);
+        assert_eq!(eff.channel.algorithm, 5);
+    }
+
+    /// エフェクト系 NRPN(0,2〜8) はボイス伝播不要（false）を返す。
+    #[test]
+    fn nrpn_effects_return_no_voice_update() {
+        let mut st = ChannelState::default();
+        let mut fx = MasterEffects::new(44_100.0);
+        for lsb in [2u8, 3, 4, 5, 6, 7, 8] {
+            st.rpn_selection = RpnSelection::Nrpn(0, lsb);
+            assert!(!handle_data_entry(&mut st, &mut fx, 64), "NRPN(0,{lsb}) should not need voice update");
+        }
+    }
+
+    /// NRPN(0,18)＝OP0 F-Number は CC6(MSB)+CC38(LSB)の14bit→13bit clamp。
+    #[test]
+    fn nrpn_operator_f_number_14bit() {
+        let mut st = ChannelState::default();
+        let mut fx = MasterEffects::new(44_100.0);
+        st.rpn_selection = RpnSelection::Nrpn(0, 18);
+        st.data_entry_lsb = 10;
+        assert!(handle_data_entry(&mut st, &mut fx, 60)); // msb=60 → 60*128+10 = 7690
+        assert_eq!(st.operator_f_number_override[0], Some(7690));
+        // 8191 超は clamp
+        st.data_entry_lsb = 127;
+        assert!(handle_data_entry(&mut st, &mut fx, 127)); // 127*128+127 = 16383 → 8191
+        assert_eq!(st.operator_f_number_override[0], Some(8191));
+    }
+
+    /// AT の TL キャリア一括加算（apply_at_modulation の複製がVSTと同挙動）。
+    #[test]
+    fn at_tl_carriers_adds_pressure() {
+        use std::collections::HashMap;
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.algorithm = 7; // 全OPキャリア
+        for op in patch.operators.iter_mut() {
+            op.tl = 100;
+        }
+        apply_at_modulation(60, AtDestination::TlCarriers, AtDestination::LfoPmd, 50, &HashMap::new(), &mut patch);
+        for op in patch.operators.iter() {
+            assert_eq!(op.tl, 150);
+        }
+    }
+
+    // --- E2E smoke: 手書きSMFで発音中CC1のライブ伝播を検証 ---
+
+    /// 可変長数値（delta-time）をエンコードする。
+    fn vlq(mut v: u32) -> Vec<u8> {
+        let mut buf = vec![(v & 0x7F) as u8];
+        v >>= 7;
+        while v > 0 {
+            buf.insert(0, ((v & 0x7F) as u8) | 0x80);
+            v >>= 7;
+        }
+        buf
+    }
+
+    /// (delta, midiバイト列) の列から Format0 SMF（division=480）を組み立てる。
+    fn build_smf(events: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let mut track: Vec<u8> = Vec::new();
+        for (delta, bytes) in events {
+            track.extend(vlq(*delta));
+            track.extend_from_slice(bytes);
+        }
+        track.extend(vlq(0));
+        track.extend_from_slice(&[0xFF, 0x2F, 0x00]); // End of Track
+
+        let mut smf: Vec<u8> = Vec::new();
+        smf.extend_from_slice(b"MThd");
+        smf.extend_from_slice(&6u32.to_be_bytes());
+        smf.extend_from_slice(&0u16.to_be_bytes()); // format 0
+        smf.extend_from_slice(&1u16.to_be_bytes()); // 1 track
+        smf.extend_from_slice(&480u16.to_be_bytes()); // division
+        smf.extend_from_slice(b"MTrk");
+        smf.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        smf.extend_from_slice(&track);
+        smf
+    }
+
+    /// ループする Pitch FG を持つ、発音する1音色バンクを作る。
+    /// depth=128（中立）ではビブラートが出ず、CC1でdepthがずれると出る。
+    fn vibrato_bank() -> PatchBank {
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.algorithm = 7; // 全OP独立キャリア
+        patch.operators[0].tl = 220;
+        patch.operators[0].mul = 1;
+        patch.operators[0].ar = 255;
+        patch.operators[0].d1l = 255;
+        patch.operators[0].rr = 200;
+        patch.channel.pitch_fg.eg.loop_enabled = 1;
+        patch.channel.pitch_fg.eg.ar = 220;
+        patch.channel.pitch_fg.eg.d1r = 220;
+        PatchBank::from_patches(&[patch]).unwrap()
+    }
+
+    /// 発音中に届いた CC1(Mod Wheel) が発音中ボイスへライブ伝播し、出力が変わることを確認する。
+    /// note-on(tick0) → CC1(tick240、mid-note) → note-off(tick480)。CC1有無で後半が異なる。
+    #[test]
+    fn cc1_live_propagation_changes_sounding_voice() {
+        let bank = vibrato_bank();
+        let sr = 8000.0;
+        let note_on = (0u32, vec![0x90, 69, 100]);
+        let note_off = (480u32, vec![0x80, 69, 0]);
+
+        // CC1 無し
+        let smf_a = build_smf(&[note_on.clone(), note_off.clone()]);
+        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0)).unwrap();
+
+        // tick240 で CC1=127（発音中）
+        let smf_b = build_smf(&[
+            note_on,
+            (240u32, vec![0xB0, 1, 127]),
+            (240u32, vec![0x80, 69, 0]), // note_off の delta を分割（合計480）
+        ]);
+        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0)).unwrap();
+
+        // どちらも無音でない
+        assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "CC1無し出力が無音");
+        assert!(buf_b.iter().any(|s| s.abs() > 1e-4), "CC1有り出力が無音");
+        // ライブ伝播が効いていれば波形が異なる
+        let n = buf_a.len().min(buf_b.len());
+        let differs = (0..n).any(|i| (buf_a[i] - buf_b[i]).abs() > 1e-4);
+        assert!(differs, "発音中CC1が出力に反映されていない（ライブ伝播が効いていない）");
+    }
+
+    /// 代表的な CC/NRPN を一通り含む SMF がクラッシュせず発音することを確認する（スモーク）。
+    #[test]
+    fn mixed_cc_nrpn_smoke() {
+        let bank = vibrato_bank();
+        let events = vec![
+            (0u32, vec![0x90, 60, 100]),               // Note On
+            (0, vec![0xB0, 99, 0]),                    // NRPN MSB=0
+            (0, vec![0xB0, 98, 23]),                   // NRPN LSB=23（質感LFO Rate）
+            (0, vec![0xB0, 6, 100]),                   // Data Entry
+            (0, vec![0xB0, 99, 0]),                    // NRPN MSB=0
+            (0, vec![0xB0, 98, 9]),                    // NRPN LSB=9（Algorithm）
+            (0, vec![0xB0, 6, 7]),                     // Data Entry（alg7=全OP独立、op0キャリア維持）
+            (10, vec![0xB0, 76, 90]),                  // CC76 Vibrato Rate
+            (10, vec![0xB0, 91, 60]),                  // CC91 Reverb Send
+            (0, vec![0xB0, 99, 0]),                    // NRPN MSB=0
+            (0, vec![0xB0, 98, 2]),                    // NRPN LSB=2（Reverb Type）
+            (0, vec![0xB0, 6, 3]),                     // Data Entry
+            (10, vec![0xD0, 40]),                      // Channel Pressure（AT）
+            (10, vec![0xA0, 60, 30]),                  // Poly Pressure（AT）
+            (10, vec![0xE0, 0x00, 0x50]),              // Pitch Bend
+            (240, vec![0x80, 60, 0]),                  // Note Off
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0)).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "混在CC/NRPN出力が無音");
+    }
 }
