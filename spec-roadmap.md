@@ -16,7 +16,8 @@
 ステップ4「LFOカットオフ行先(オートワウ)」・ステップ5「チャンネルLFO三層再編（設計・spec改訂）」・
 ステップ5.5「VCF/VCAファンクションジェネレーター統合（設計・spec改訂）」・
 ステップ6「コア実装」・ステップ7「VST配線」・ステップ8「UI/gesture-app」・
-ステップ9「smf2wav CC/NRPN解釈」完了。次は表情ルーティング等の未着手項目)
+ステップ9「smf2wav CC/NRPN解釈」・ステップ10「手動ワウ・表情ルーティング(CC2/CC4)」完了。
+次はvelocity→音量「量」等の未着手項目)
 
 ---
 
@@ -181,8 +182,16 @@
         VST側変更時は追従が必要）。
     → CC/NRPNの無いSMFは出力バイト同一（後方互換）。`cargo test --workspace` 0 failed（ライブ伝播・
       混在CC/NRPNのE2Eスモークで発音中CC1の反映と無クラッシュを検証）＋実バンク/実SMFでのバイナリ実行を確認済み。
-  → 以降の未着手: 手動ワウ・表情ルーティング（CC1/CC2/CC4/AT × 音量/TL/カットオフ/FG Depth等）・
-    velocity→音量「量」（ChannelParams、既定255）
+  → ステップ10「手動ワウ・表情ルーティング（CC2/CC4）」完了（`ym38x6-vst`/`tools/smf2wav`、2026-07-16）:
+    既存のAT（Channel/Poly Key Pressure）destination加算モデル（`AtDestination`→
+    `ExpressionDestination`へ改称、6行先: LFO PMD/AMD・Filter Cutoff/Resonance・TL全OP/キャリア）を
+    CC2（ブレス）・CC4（フット）へ一般化（`apply_at_modulation`→`apply_expression_modulation`、
+    複数ソースの`(値,行先)`を受け取り同一行先なら加算）。`ym38x6-core`は無改造（既存のパッチ
+    フィールド加算モデルへ載るのみ）。CC2既定行先=TLキャリア一括、CC4既定行先=Filter Cutoff
+    （＝**手動ワウ**、LFOのオートワウと独立に積み重なる）。CC1はGM2慣例のPitch FG固定を維持。
+    NRPN(0,34)=CC2 Destination／(0,35)=CC4 Destination（AT Destinationと同じNRPN専用シャドウ、
+    DAWパラメーター非公開）。VST/smf2wav両方に配線済み、`cargo test --workspace`で0 failed。
+  → 以降の未着手: velocity→音量「量」（ChannelParams、既定255）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
   → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
     質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）

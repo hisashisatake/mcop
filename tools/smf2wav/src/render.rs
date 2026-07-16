@@ -33,7 +33,10 @@ use ym38x6_core::{
 };
 
 use crate::bank::PatchBank;
-use crate::midi::{apply_at_modulation, cc_to_u7, cc_to_u8, channel_gain, AtDestination, RpnSelection};
+use crate::midi::{
+    apply_expression_modulation, cc_to_u7, cc_to_u8, channel_gain, ExpressionDestination,
+    RpnSelection,
+};
 use crate::smf::{parse_smf, EvKind};
 
 /// MIDIノート番号の総数（0〜127）。ノート番号をそのままボイスIDの下位に使うため、
@@ -99,10 +102,17 @@ struct ChannelState {
     operator_f_number_override: [Option<u16>; 4],
 
     // --- アフタータッチ ---
-    at_destination: AtDestination,
-    poly_at_destination: AtDestination,
+    at_destination: ExpressionDestination,
+    poly_at_destination: ExpressionDestination,
     channel_pressure: u8,
     poly_pressure: HashMap<u8, u8>,
+
+    // --- CC2(ブレス)/CC4(フット) ---（NRPN(0,34)/(0,35)で行先選択、既定はCC2→TLキャリア一括／
+    // CC4→Filter Cutoff＝手動ワウ）
+    cc2: u8,
+    cc4: u8,
+    cc2_destination: ExpressionDestination,
+    cc4_destination: ExpressionDestination,
 
     // --- サステインペダル（CC64）---
     pedal_down: bool,
@@ -149,10 +159,14 @@ impl Default for ChannelState {
             gain_fg_loop: None,
             gain_fg_curve: None,
             operator_f_number_override: [None; 4],
-            at_destination: AtDestination::default(),
-            poly_at_destination: AtDestination::default(),
+            at_destination: ExpressionDestination::default(),
+            poly_at_destination: ExpressionDestination::default(),
             channel_pressure: 0,
             poly_pressure: HashMap::new(),
+            cc2: 0,
+            cc4: 0,
+            cc2_destination: ExpressionDestination::TlCarriers,
+            cc4_destination: ExpressionDestination::FilterCutoff,
             pedal_down: false,
             pending_release: 0,
         }
@@ -256,11 +270,14 @@ fn apply_live(engine: &mut Ym38x6Engine, chi: usize, st: &ChannelState, bank: &P
     for note in 0..MIDI_NOTE_COUNT {
         let id = chi * 128 + note;
         let mut note_patch = eff;
-        apply_at_modulation(
+        apply_expression_modulation(
             note as u8,
-            st.at_destination,
+            &[
+                (st.cc2, st.cc2_destination),
+                (st.cc4, st.cc4_destination),
+                (st.channel_pressure, st.at_destination),
+            ],
             st.poly_at_destination,
-            st.channel_pressure,
             &st.poly_pressure,
             &mut note_patch,
         );
@@ -290,12 +307,15 @@ fn note_on_voice(
 ) {
     let base = *bank.patch(st.program);
     let mut eff = build_effective_patch(&base, st);
-    // このノートの現在の AT を焼き込む（以降の AT 変化は apply_live で伝播）。
-    apply_at_modulation(
+    // このノートの現在の AT/CC2/CC4 を焼き込む（以降の変化は apply_live で伝播）。
+    apply_expression_modulation(
         note,
-        st.at_destination,
+        &[
+            (st.cc2, st.cc2_destination),
+            (st.cc4, st.cc4_destination),
+            (st.channel_pressure, st.at_destination),
+        ],
         st.poly_at_destination,
-        st.channel_pressure,
         &st.poly_pressure,
         &mut eff,
     );
@@ -415,12 +435,12 @@ fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: 
         }
         // NRPN(0,16): AT Destination（Channel Pressureの加算先）。
         RpnSelection::Nrpn(0, 16) => {
-            st.at_destination = AtDestination::from_u8(cc_to_u7(value));
+            st.at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             true
         }
         // NRPN(0,17): Poly AT Destination（Poly Key Pressureの加算先）。
         RpnSelection::Nrpn(0, 17) => {
-            st.poly_at_destination = AtDestination::from_u8(cc_to_u7(value));
+            st.poly_at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             true
         }
         // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（CC6=MSB、CC38=LSBで14bit→13bit）。
@@ -477,6 +497,16 @@ fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: 
         }
         RpnSelection::Nrpn(0, 33) => {
             st.gain_fg_curve = Some(u8::from(cc_to_u7(value) != 0));
+            true
+        }
+        // NRPN(0,34): CC2(ブレス)Destination。
+        RpnSelection::Nrpn(0, 34) => {
+            st.cc2_destination = ExpressionDestination::from_u8(cc_to_u7(value));
+            true
+        }
+        // NRPN(0,35): CC4(フット)Destination。既定Filter Cutoff＝手動ワウ。
+        RpnSelection::Nrpn(0, 35) => {
+            st.cc4_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             true
         }
         _ => false,
@@ -638,6 +668,16 @@ fn handle_control_change(
         }
         78 => {
             channels[chi].pitch_fg_cc78 = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        // CC2(ブレス)/CC4(フット): Expression Destination（NRPN(0,34)/(0,35)）へ加算 → 発音中ボイスへ伝播。
+        // 既定はCC2→TLキャリア一括、CC4→Filter Cutoff（手動ワウ）。
+        2 => {
+            channels[chi].cc2 = cc_to_u8(val);
+            apply_live(engine, chi, &channels[chi], bank);
+        }
+        4 => {
+            channels[chi].cc4 = cc_to_u8(val);
             apply_live(engine, chi, &channels[chi], bank);
         }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）
@@ -820,7 +860,7 @@ mod tests {
         assert_eq!(st.operator_f_number_override[0], Some(8191));
     }
 
-    /// AT の TL キャリア一括加算（apply_at_modulation の複製がVSTと同挙動）。
+    /// AT の TL キャリア一括加算（apply_expression_modulation の複製がVSTと同挙動）。
     #[test]
     fn at_tl_carriers_adds_pressure() {
         use std::collections::HashMap;
@@ -829,10 +869,73 @@ mod tests {
         for op in patch.operators.iter_mut() {
             op.tl = 100;
         }
-        apply_at_modulation(60, AtDestination::TlCarriers, AtDestination::LfoPmd, 50, &HashMap::new(), &mut patch);
+        apply_expression_modulation(
+            60,
+            &[(50, ExpressionDestination::TlCarriers)],
+            ExpressionDestination::LfoPmd,
+            &HashMap::new(),
+            &mut patch,
+        );
         for op in patch.operators.iter() {
             assert_eq!(op.tl, 150);
         }
+    }
+
+    /// CC4(フット)の既定行先 Filter Cutoff が filter_cutoff へ加算される（手動ワウ）。
+    #[test]
+    fn cc4_default_destination_adds_to_filter_cutoff() {
+        use std::collections::HashMap;
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.filter_cutoff = 100;
+        let st = ChannelState { cc4: 80, ..ChannelState::default() };
+        apply_expression_modulation(
+            60,
+            &[(st.cc2, st.cc2_destination), (st.cc4, st.cc4_destination)],
+            st.poly_at_destination,
+            &HashMap::new(),
+            &mut patch,
+        );
+        assert_eq!(patch.channel.filter_cutoff, 180); // 100 + 80、既定CC4→FilterCutoff
+    }
+
+    /// CC2(ブレス)とAT(Channel Pressure)が同じ行先を指すとき、両方の値が加算される。
+    #[test]
+    fn cc2_and_at_same_destination_are_additive() {
+        use std::collections::HashMap;
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.algorithm = 7;
+        for op in patch.operators.iter_mut() {
+            op.tl = 50;
+        }
+        let mut st = ChannelState { cc2: 30, ..ChannelState::default() };
+        st.at_destination = ExpressionDestination::TlCarriers; // 既定CC2行先(TlCarriers)と一致させる
+        apply_expression_modulation(
+            60,
+            &[(st.cc2, st.cc2_destination), (st.cc4, st.cc4_destination), (20, st.at_destination)],
+            st.poly_at_destination,
+            &HashMap::new(),
+            &mut patch,
+        );
+        for op in patch.operators.iter() {
+            assert_eq!(op.tl, 100); // 50 + 30(CC2) + 20(AT)
+        }
+    }
+
+    /// CC2/CC4 が 0（未操作）のときはパッチが無変化。
+    #[test]
+    fn cc2_cc4_zero_leaves_patch_unchanged() {
+        use std::collections::HashMap;
+        let base = Ym38x6Patch::default();
+        let mut patch = base;
+        let st = ChannelState::default();
+        apply_expression_modulation(
+            60,
+            &[(st.cc2, st.cc2_destination), (st.cc4, st.cc4_destination)],
+            st.poly_at_destination,
+            &HashMap::new(),
+            &mut patch,
+        );
+        assert_eq!(patch, base);
     }
 
     // --- E2E smoke: 手書きSMFで発音中CC1のライブ伝播を検証 ---

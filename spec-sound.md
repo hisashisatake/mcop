@@ -579,7 +579,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 | パラメーター群 | 層 | 保存先 | 設定経路 |
 |---|---|---|---|
 | オペレーター12種×4 / Algorithm / Feedback / チップ内LFO6項目 / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目** / **質感LFO8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
-| CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（Pitch FG補正）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
+| CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（Pitch FG補正）** / **CC2/CC4（Expression Destination加算、下記）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
 | **CC1（モジュレーションホイール）** / Pitch Bend / アフタータッチ / CC64/66/67（ペダル）/ CC103〜106（OP単位キーオン） | ③ジェスチャー | 保存しない（揮発） | MIDI |
 
 **補強規則：**
@@ -999,6 +999,8 @@ CC99/98またはCC101/100（RPN）に127,127（Null）を送ると選択解除�
 | Filter Type | 0=LP / 1=HP / 2=BP |
 | AT Destination | Channel Pressureの加算先（destination enum、下記） |
 | Poly AT Destination | Poly Key Pressureの加算先（destination enum、下記） |
+| CC2 Destination | CC2（ブレス）の加算先（destination enum、下記。既定TLキャリア一括） |
+| CC4 Destination | CC4（フット）の加算先（destination enum、下記。既定Filter Cutoff＝手動ワウ） |
 | 質感LFO Destination | 質感LFOの加算先（destination enum、質感LFOセクション参照） |
 | 質感LFO Waveform | 質感LFOの波形（0〜4、質感LFOセクション参照） |
 | 質感LFO Fade Mode | 質感LFOのFadeモード（fade mode enum、質感LFOセクション参照） |
@@ -1047,11 +1049,21 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Cutoff FG Curve | 0, 31 | 0=線形 / 1=サイン風 |
 | Gain FG Loop | 0, 32 | 0=ワンショット / 1=ループ |
 | Gain FG Curve | 0, 33 | 0=線形 / 1=サイン風 |
+| CC2 Destination | 0, 34 | 0〜5（destination enum、下記参照。既定5=TLキャリア一括） |
+| CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
 
-**AT Destination / Poly AT Destination（アフタータッチの加算先）：**
+**Expression Destination（表情コントローラーの加算先、AT/CC2/CC4共通）：**
 
-Channel PressureとPoly Key Pressureは、それぞれ独立に「揺らぎ系」パラメーターへ加算するモデルで実装する。
-加算先（Destination）はNRPN（AT Destination / Poly AT Destination）で選択可能。デフォルトはLFO PMD。
+Channel Pressure・Poly Key Pressure・CC2（ブレス）・CC4（フット）は、いずれも同じ
+「揺らぎ系パラメーターへ非破壊的に加算する」モデルで実装する（旧称「AT Destination」を
+表情ソース全体へ一般化したもの）。加算先（Destination）はソースごとに独立してNRPNで選択可能。
+
+| ソース | NRPN | デフォルト |
+|---|---|---|
+| Channel Pressure（AT Destination） | 0, 16 | LFO PMD |
+| Poly Key Pressure（Poly AT Destination） | 0, 17 | LFO PMD |
+| CC2（ブレス、Breath Controller） | 0, 34 | TL（キャリア一括） |
+| CC4（フット、Foot Controller） | 0, 35 | Filter Cutoff（**手動ワウ**） |
 
 destination enum（共通）：
 
@@ -1066,11 +1078,18 @@ destination enum（共通）：
 
 加算モデル：
 ```
-実効値 = clamp(ベース値 + プレッシャー値, 0, 255)
+実効値 = clamp(ベース値 + Σ(同じdestinationを指す全ソースの値), 0, 255)
 ```
 
-Channel PressureとPoly Key Pressureが同じdestinationを指す場合、両方の値が加算される。
-Poly Key Pressure対応コントローラーは少数（MPE等）のため、多くの環境ではChannel Pressureのみが機能する。
+複数の表情ソース（Channel Pressure・Poly Key Pressure・CC2・CC4）が同じdestinationを指す場合、
+全ソースの値が加算される。Poly Key Pressure対応コントローラーは少数（MPE等）のため、
+多くの環境ではChannel Pressure（またはCC2/CC4）のみが機能する。
+
+**手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
+フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。
+チップ内LFOのCutoff行先（質感LFO Destination=3、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
+「オートワウ」（自動で周期的に開閉）とは独立して積み重なり、演奏者がリアルタイムに手で
+ワウ効果を制御しつつ、パッチ側の自動オートワウも同時に効かせられる。
 
 **Operator F-Number（OP単位F-Number上書き）：**
 

@@ -3,7 +3,7 @@ mod midi;
 mod param_adapter;
 mod params;
 
-use midi::{apply_at_modulation, cc_to_u8, cc_to_u7, AtDestination, RpnSelection};
+use midi::{apply_expression_modulation, cc_to_u8, cc_to_u7, ExpressionDestination, RpnSelection};
 use params::{
     Ym38x6Params, DEFAULT_ALGORITHM, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH,
     DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE,
@@ -114,10 +114,19 @@ struct Ym38x6Plugin {
     last_chorus_send_to_reverb: u8,
 
     // AT/Poly AT Destination（NRPN(0,16)/(0,17)）と、加算対象のプレッシャー値
-    at_destination: AtDestination,
-    poly_at_destination: AtDestination,
+    at_destination: ExpressionDestination,
+    poly_at_destination: ExpressionDestination,
     channel_pressure: u8,
     poly_pressure: HashMap<u8, u8>, // MIDIノート番号 → Poly Key Pressure
+
+    // CC2(ブレス)/CC4(フット)の加算先（NRPN(0,34)/(0,35)）と現在値。AT同様グローバル単一シャドウ
+    // （既存のapply_expression_modulation経路がグローバル単一パッチ前提のため揃える）。
+    // 既定行先はCC2→TLキャリア一括（ウインド楽器風の明るさ/音量スウェル）、
+    // CC4→Filter Cutoff（古典的ワウペダル＝手動ワウ）。
+    cc2: u8,
+    cc4: u8,
+    cc2_destination: ExpressionDestination,
+    cc4_destination: ExpressionDestination,
 
     // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（CC6+CC38の14bit値→13bit(0〜8191)にclamp）
     data_entry_msb: u8,                     // CC6 (Data Entry MSB) の最新値
@@ -237,10 +246,14 @@ impl Default for Ym38x6Plugin {
             last_chorus_mod_depth: DEFAULT_CHORUS_MOD_DEPTH,
             last_chorus_feedback: DEFAULT_CHORUS_FEEDBACK,
             last_chorus_send_to_reverb: DEFAULT_CHORUS_SEND_TO_REVERB,
-            at_destination: AtDestination::default(),
-            poly_at_destination: AtDestination::default(),
+            at_destination: ExpressionDestination::default(),
+            poly_at_destination: ExpressionDestination::default(),
             channel_pressure: 0,
             poly_pressure: HashMap::new(),
+            cc2: 0,
+            cc4: 0,
+            cc2_destination: ExpressionDestination::TlCarriers,
+            cc4_destination: ExpressionDestination::FilterCutoff,
             data_entry_msb: 0,
             data_entry_lsb: 0,
             operator_f_number_override: [F_NUMBER_CENTER; 4],
@@ -485,11 +498,11 @@ impl Ym38x6Plugin {
             }
             // NRPN(0,16): AT Destination（Channel Pressureの加算先）
             RpnSelection::Nrpn(0, 16) => {
-                self.at_destination = AtDestination::from_u8(cc_to_u7(value));
+                self.at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,17): Poly AT Destination（Poly Key Pressureの加算先）
             RpnSelection::Nrpn(0, 17) => {
-                self.poly_at_destination = AtDestination::from_u8(cc_to_u7(value));
+                self.poly_at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3
             RpnSelection::Nrpn(0, lsb @ 18..=21) => {
@@ -535,6 +548,14 @@ impl Ym38x6Plugin {
             }
             RpnSelection::Nrpn(0, 33) => {
                 self.gain_fg_curve = cc_to_u7(value) != 0;
+            }
+            // NRPN(0,34): CC2(ブレス)Destination
+            RpnSelection::Nrpn(0, 34) => {
+                self.cc2_destination = ExpressionDestination::from_u8(cc_to_u7(value));
+            }
+            // NRPN(0,35): CC4(フット)Destination。既定FilterCutoff＝手動ワウ。
+            RpnSelection::Nrpn(0, 35) => {
+                self.cc4_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             _ => {}
         }
@@ -633,10 +654,14 @@ impl Plugin for Ym38x6Plugin {
         self.last_chorus_mod_depth = DEFAULT_CHORUS_MOD_DEPTH;
         self.last_chorus_feedback = DEFAULT_CHORUS_FEEDBACK;
         self.last_chorus_send_to_reverb = DEFAULT_CHORUS_SEND_TO_REVERB;
-        self.at_destination = AtDestination::default();
-        self.poly_at_destination = AtDestination::default();
+        self.at_destination = ExpressionDestination::default();
+        self.poly_at_destination = ExpressionDestination::default();
         self.channel_pressure = 0;
         self.poly_pressure.clear();
+        self.cc2 = 0;
+        self.cc4 = 0;
+        self.cc2_destination = ExpressionDestination::TlCarriers;
+        self.cc4_destination = ExpressionDestination::FilterCutoff;
         self.data_entry_msb = 0;
         self.data_entry_lsb = 0;
         self.operator_f_number_override = [F_NUMBER_CENTER; 4];
@@ -771,11 +796,14 @@ impl Plugin for Ym38x6Plugin {
         for note in 0u8..MIDI_NOTE_COUNT {
             let ch_id = note as usize;
             let mut note_patch = channel_patch;
-            apply_at_modulation(
+            apply_expression_modulation(
                 note,
-                self.at_destination,
+                &[
+                    (self.cc2, self.cc2_destination),
+                    (self.cc4, self.cc4_destination),
+                    (self.channel_pressure, self.at_destination),
+                ],
                 self.poly_at_destination,
-                self.channel_pressure,
                 &self.poly_pressure,
                 &mut note_patch,
             );
@@ -908,6 +936,14 @@ impl Plugin for Ym38x6Plugin {
                     // build_patch()参照）。質感LFOは焼き込み専用のためCC補正を受けない。
                     1 => {
                         self.pitch_fg_cc1 = cc_to_u7(value);
+                    }
+                    // CC2(ブレス)：Expression Destination（NRPN(0,34)）への加算。既定TLキャリア一括。
+                    2 => {
+                        self.cc2 = cc_to_u8(value);
+                    }
+                    // CC4(フット)：Expression Destination（NRPN(0,35)）への加算。既定Filter Cutoff＝手動ワウ。
+                    4 => {
+                        self.cc4 = cc_to_u8(value);
                     }
                     // CC76(Vibrato Rate)：Pitch FGの速さスケール（64=無補正、rate_scale経由）。
                     76 => {
