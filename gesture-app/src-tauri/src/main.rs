@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
-use ym38x6_core::{cutoff_depth, pitch_depth_cents, presets_dir, volume_depth, AudioProcessor, ChorusType,
-    MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType, TextureLfo,
+use ym38x6_core::{cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, presets_dir, volume_depth, AudioProcessor,
+    BipolarFg, ChorusType, EgParams, MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType, TextureLfo,
     Vco, Ym38x6Engine, Ym38x6LfoDestination};
 use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 
@@ -109,21 +109,29 @@ fn resolve_patch(
         .unwrap_or_else(|| fallback.patch_for_program(bank, program))
 }
 
-/// 38x6エンジンの質感LFO（旧パフォーマンスLFO）を設定する。
-/// `destination`: 0=Pitch（ビブラート） / 1=Volume（トレモロ） / 2=TL（キャリア一括、38x6拡張）
-/// / 3=Cutoff（オートワウ、38x6拡張）
-/// `cc77`/`cc1`/`mod_depth_range`は destination 別の実単位（セント/比率/カットオフ量）へ
-/// 変換するための入力（既存の`pitch_depth_cents`/`volume_depth`/`cutoff_depth`を流用）。
+/// Pitch FGループのAR/D1R基準値（rate_scale=1.0＝CC76無補正のとき、AR≈85ms・D1R≈85msで
+/// 往復1周期≈170ms≈5.9Hzのビブラートになる初期案。CLAUDE.mdのテスト方針に従い、
+/// 実機で聴いてから調整する）。
+const PITCH_FG_VIBRATO_AR: u8 = 136;
+const PITCH_FG_VIBRATO_D1R: u8 = 199;
+
+/// 38x6エンジンの演奏系モジュレーション（V キーのPitch⇔Volume切替、既存トグルUXを維持）を設定する。
+/// `destination`: 0=Pitch（ビブラート、Pitch FGへ配線） / 1=Volume（トレモロ）
+/// / 2=TL（キャリア一括、38x6拡張） / 3=Cutoff（オートワウ、38x6拡張）
+/// Volume/TL/Cutoffは従来通り質感LFO（`ChannelParams.texture_lfo`、焼き込み専用でCC補正は
+/// 受けない）へ書き込む。Pitchのみ演奏CC（CC1/76/77/78）による補正を受ける唯一のFGスロットである
+/// Pitch FG（`ChannelParams.pitch_fg`）へ書き込む（spec-sound.md「演奏層による補正」節）。
+/// `rate`/`delay`はmain.jsのC/Bキー・Vキー由来の0〜255値、`cc77`/`cc1`/`mod_depth_range`は
+/// destination別の実単位へ変換するための入力（既存の`pitch_depth_cents`/`volume_depth`/
+/// `cutoff_depth`を流用）。
 ///
-/// 質感LFOはステップ6の再編で完全にパッチ所有（`ChannelParams.texture_lfo`）になり、
-/// チャンネル単体のランタイムAPI（`Ym38x6Engine::set_performance_lfo`）は廃止された。
-/// そのため`channel`引数は現状使わず、`current_patch()`を書き換えて`set_patch_live`で
-/// 全発音中チャンネル＋以降のnote-onへ反映する（gesture-appは元々「エンジン全体で1つの
-/// カレントパッチ」前提のため、この一本化は既存アーキテクチャと整合する）。
-/// CC1(cc1)の加算分は質感LFOが焼き込み専用（CC補正を受けない）になったため事前に
-/// depthへ織り込んで渡す（Pitch FGへ正しく再配線するのはステップ8）。
-/// 波形/Fade/Offset（`ChannelParams.texture_lfo`の該当項目）はTauri IPC未配線のまま
-/// （ステップ8、ym38x6-vstのNRPN配線と同様の対応を予定）。
+/// 質感LFO・Pitch FGともステップ6の再編で完全にパッチ所有になり、チャンネル単体のランタイムAPI
+/// （`Ym38x6Engine::set_performance_lfo`）は廃止された。そのため`current_patch()`を書き換えて
+/// `set_patch_live`で全発音中チャンネル＋以降のnote-onへ反映する（gesture-appは元々「エンジン
+/// 全体で1つのカレントパッチ」前提のため、この一本化は既存アーキテクチャと整合する）。
+/// Pitch destinationのみ、CC76由来の速さスケールをVSTと同じ`set_pitch_fg_rate_scale`
+/// （`channel`引数を使う唯一の経路、AR/D1Rの生値ではなくrate_scale経由でスケールする理由は
+/// `cc76_to_rate_scale`のドキュメント参照）で発音中の該当チャンネルへ個別に反映する。
 #[tauri::command]
 fn ym38x6_set_performance_lfo(
     engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
@@ -135,18 +143,42 @@ fn ym38x6_set_performance_lfo(
     cc1: u8,
     mod_depth_range: u8,
 ) {
-    let _ = channel;
     let dest = Ym38x6LfoDestination::from_u8(destination);
+    let mut engine = engine.lock().unwrap();
+    let mut patch = engine.current_patch();
+
+    if dest == Ym38x6LfoDestination::Pitch {
+        let cents = pitch_depth_cents(cc77, cc1, mod_depth_range);
+        let depth = (128.0 + cents / 1200.0 * 128.0).round().clamp(0.0, 255.0) as u8;
+        patch.channel.pitch_fg = BipolarFg {
+            eg: EgParams {
+                ar: PITCH_FG_VIBRATO_AR,
+                d1r: PITCH_FG_VIBRATO_D1R,
+                delay,
+                floor: 0,
+                loop_enabled: 1,
+                curve: 1,
+                ..patch.channel.pitch_fg.eg
+            },
+            depth,
+        };
+        engine.set_patch_live(patch);
+        // CC76(Vibrato Rate)相当をrate_scaleへ変換して発音中の該当チャンネルへ即時反映する
+        // （AR/D1Rの生値0〜255をmain.jsのC/Bキー(rate)域からCC76の0〜127域へ線形換算）。
+        let cc76 = (rate as u32 * 127 / 255) as u8;
+        engine.set_pitch_fg_rate_scale(channel, cc76_to_rate_scale(cc76));
+        return;
+    }
+
+    // dest == Pitchは上のearly returnで処理済み。
     let depth = match dest {
-        Ym38x6LfoDestination::Pitch => pitch_depth_cents(cc77, cc1, mod_depth_range),
         Ym38x6LfoDestination::Volume | Ym38x6LfoDestination::TlCarrier => volume_depth(cc77, cc1) * 255.0,
         Ym38x6LfoDestination::Cutoff => cutoff_depth(cc77, cc1),
+        Ym38x6LfoDestination::Pitch => 0.0,
     }
     .round()
     .clamp(0.0, 255.0) as u8;
 
-    let mut engine = engine.lock().unwrap();
-    let mut patch = engine.current_patch();
     patch.channel.texture_lfo = TextureLfo { rate, delay, destination, depth, ..patch.channel.texture_lfo };
     engine.set_patch_live(patch);
 }

@@ -36,7 +36,9 @@ const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80:
 const WAVEFORM_MEMORY_BANK = 16383;
 
 // ─────────────────────────────────────────────
-// パフォーマンスLFO（ビブラート/トレモロ）
+// 演奏系モジュレーション（Vキーでビブラート⇔トレモロ切替。
+// ビブラート(Pitch)はPitch FG、トレモロ(Volume)は質感LFOへ配線される。
+// バックエンド側の分岐はgesture-app/src-tauri/src/main.rsのym38x6_set_performance_lfo参照）
 // ─────────────────────────────────────────────
 const LFO_RATE_DEFAULT = 140; // 中程度の速さ
 const LFO_RATE_STEP    = 8;
@@ -559,7 +561,7 @@ function drawChordScale(W, H) {
 }
 
 function drawLfoIndicator() {
-  const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo' : 'Vibrato';
+  const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Texture LFO)' : 'Vibrato (Pitch FG)';
   const x = 16, barW = 100, barH = 6;
 
   ctx.textAlign = 'left';
