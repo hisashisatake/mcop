@@ -793,6 +793,13 @@ impl Ym38x6Engine {
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));
     }
 
+    /// 指定グループ（`channel >> 7`が一致する全ボイス）を即座に除去する
+    /// （All Sound Off / CC120）。note_offのReleaseを経ず、残響も無く無音になる
+    /// （GM2 All Sound Off準拠。Releaseして自然減衰させるCC123 All Notes Offとは区別する）。
+    pub fn silence_group(&mut self, group: usize) {
+        self.channels.retain(|id, _| id >> 7 != group);
+    }
+
 }
 
 /// 発振源（VCO）としての演奏ライフサイクル層（spec.md「VCO抽象とモジュレーション層」）。

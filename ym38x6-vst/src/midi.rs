@@ -105,3 +105,15 @@ pub(crate) fn apply_expression_modulation(
         }
     }
 }
+
+/// Soft Pedal（CC67）：ON中に新規キーオンしたノートに対して、実効TL（キャリアのみ）と
+/// Filter Cutoffを`depth`だけ減算する（spec-sound.md「Soft Pedal（CC67）」参照）。
+pub(crate) fn apply_soft_pedal(patch: &mut Ym38x6Patch, depth: u8) {
+    if depth == 0 {
+        return;
+    }
+    for &i in ALGORITHMS[patch.channel.algorithm as usize].carriers {
+        patch.operators[i].tl = patch.operators[i].tl.saturating_sub(depth);
+    }
+    patch.channel.filter_cutoff = patch.channel.filter_cutoff.saturating_sub(depth);
+}

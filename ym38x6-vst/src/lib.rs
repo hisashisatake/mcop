@@ -3,7 +3,10 @@ mod midi;
 mod param_adapter;
 mod params;
 
-use midi::{apply_expression_modulation, cc_to_u8, cc_to_u7, ExpressionDestination, RpnSelection};
+use midi::{
+    apply_expression_modulation, apply_soft_pedal, cc_to_u8, cc_to_u7, ExpressionDestination,
+    RpnSelection,
+};
 use params::{
     Ym38x6Params, DEFAULT_ALGORITHM, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH,
     DEFAULT_CHORUS_MOD_RATE, DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE,
@@ -155,11 +158,20 @@ struct Ym38x6Plugin {
     cc7:  [u8; 16], // Channel Volume（既定127=フル）
     cc11: [u8; 16], // Expression（既定127=フル）
 
-    // CC64 サステインペダル（ホールドフラグ方式、spec-sound.md「サステインペダル（CC64）の
-    // 実装方針」参照）。エンジン無改造・1ノート=1チャンネルのまま、MIDIチャンネルごとに管理する。
+    // ペダル（CC64 Sustain / CC66 Sostenuto / CC67 Soft、ホールドフラグ方式。
+    // spec-sound.md「サステインペダル（CC64）の実装方針」参照）。エンジン無改造・
+    // 1ノート=1チャンネルのまま、MIDIチャンネルごとに管理する。
+    /// 物理的に押下中の鍵（bit N = ノート番号N。NoteOnでセット、NoteOffでクリア）。
+    keys_down: [u128; 16],
     pedal_down: [bool; 16],
-    /// ペダル保持中に保留したNote Off（bit N = ノート番号Nが保留中）。
+    /// ペダル（CC64またはCC66）保持中に保留したNote Off（bit N = ノート番号Nが保留中）。
     pending_release: [u128; 16],
+    /// CC66 ON時点でkeys_downをスナップショットしたノート（bit N = ノート番号N）。CC66 OFFで解除。
+    sostenuto: [u128; 16],
+    /// Soft Pedal（CC67）の深さ（0〜127、0=無効）。
+    cc67: [u8; 16],
+    /// cc67>0の間にNote-Onしたノート（bit N = ノート番号N）。実効TL/Cutoff減算の対象。
+    soft_notes: [u128; 16],
 
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
@@ -270,8 +282,12 @@ impl Default for Ym38x6Plugin {
             pitch_bend_range: 2.0,
             cc7:  [127; 16],
             cc11: [127; 16],
+            keys_down: [0; 16],
             pedal_down: [false; 16],
             pending_release: [0; 16],
+            sostenuto: [0; 16],
+            cc67: [0; 16],
+            soft_notes: [0; 16],
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
             egui_state: EguiState::from_size(1200, 680),
@@ -389,6 +405,27 @@ impl Ym38x6Plugin {
         };
 
         Ym38x6Patch { operators, channel }
+    }
+
+    /// `candidates & pending_release[channel]` のうち、`other_held`（他のペダルが保持中の
+    /// ノート）にも`keys_down`（再押下中のノート）にも該当しないものをnote_offして
+    /// `pending_release`/`soft_notes`から除去する。CC64/CC66 OFF・CC121の解放処理で共有する
+    /// （CC64 OFF: candidates=pending_release, other_held=sostenuto。
+    /// 　CC66 OFF: candidates=sostenuto, other_held=pedal_down相当の全ビット。
+    /// 　CC121: candidates=pending_release, other_held=0）。smf2wav `release_unheld`の複製。
+    fn release_unheld(&mut self, channel: u8, candidates: u128, other_held: u128) {
+        let ch = channel as usize;
+        let mut mask = candidates & self.pending_release[ch];
+        while mask != 0 {
+            let note = mask.trailing_zeros() as u8;
+            let bit = 1u128 << note;
+            mask &= mask - 1;
+            if other_held & bit == 0 && self.keys_down[ch] & bit == 0 {
+                self.engine.note_off(midi_channel_note_id(channel, note));
+                self.pending_release[ch] &= !bit;
+                self.soft_notes[ch] &= !bit;
+            }
+        }
     }
 
     /// CC76(Vibrato Rate)由来のPitch FG速さスケールを計算する（`cc76_to_rate_scale`、
@@ -815,6 +852,13 @@ impl Plugin for Ym38x6Plugin {
                 &self.poly_pressure,
                 &mut note_patch,
             );
+            // Soft Pedal（CC67）: soft_notesビットが立っているノートへ現在のcc67深さを
+            // 毎回再適用する（このループがchannel_patchから毎回組み立て直すため、NoteOn時の
+            // 減算を上書きで消さないようにする）。このループはMIDIチャンネル0のみを扱う
+            // 既存仕様（ch_id=note）のため、soft_notes[0]/cc67[0]を参照する。
+            if self.soft_notes[0] & (1u128 << note) != 0 {
+                apply_soft_pedal(&mut note_patch, self.cc67[0]);
+            }
             self.engine.set_channel_params(ch_id, note_patch.channel);
             for (op_index, op) in note_patch.operators.iter().enumerate() {
                 self.engine.set_operator_params(ch_id, op_index, *op);
@@ -884,14 +928,25 @@ impl Plugin for Ym38x6Plugin {
                     // ボイスIDは midi_ch*128+note で符号化する。一意性（Note Off/同音再アタック）と
                     // グループ性（ピッチベンドのMIDIチャンネル一括適用 = id>>7）を同時に満たす。
                     let ch_id = midi_channel_note_id(channel, note);
+                    let bit = 1u128 << note;
                     // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、
                     // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
                     // 誤発火する。spec-sound.md「サステインペダル（CC64）の実装方針」参照）。
-                    self.pending_release[channel as usize] &= !(1u128 << note);
+                    self.pending_release[channel as usize] &= !bit;
+                    self.keys_down[channel as usize] |= bit;
+                    // Soft Pedal（CC67）: ON中に新規キーオンしたノートのみ対象（spec-sound.md参照）。
+                    if self.cc67[channel as usize] > 0 {
+                        self.soft_notes[channel as usize] |= bit;
+                    } else {
+                        self.soft_notes[channel as usize] &= !bit;
+                    }
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければGUI値。
                     // ボイス固有パッチを`set_patch`でカレントに置いてから`Vco::note_on`する
                     // （Channelがnote_on時点のカレントパッチをコピー保持するため、後続ボイスと混ざらない）。
-                    let note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
+                    let mut note_on_patch = self.program_patch[channel as usize].unwrap_or(channel_patch);
+                    if self.soft_notes[channel as usize] & bit != 0 {
+                        apply_soft_pedal(&mut note_on_patch, self.cc67[channel as usize]);
+                    }
                     self.engine.set_patch(note_on_patch);
                     self.engine.note_on(ch_id, freq, velocity_u8);
                     // このMIDIチャンネルの現在のベンド量と音量ゲインを新ボイスへ反映する
@@ -907,11 +962,15 @@ impl Plugin for Ym38x6Plugin {
                 NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     // velocity=0 の NoteOn も NoteOff として扱う（MIDI仕様）
                     self.poly_pressure.remove(&note);
-                    if self.pedal_down[channel as usize] {
-                        // ペダル保持中: Note Offを保留する（ホールドフラグ方式）
-                        self.pending_release[channel as usize] |= 1u128 << note;
+                    let bit = 1u128 << note;
+                    self.keys_down[channel as usize] &= !bit;
+                    let held = self.pedal_down[channel as usize] || self.sostenuto[channel as usize] & bit != 0;
+                    if held {
+                        // いずれかのペダル（CC64/CC66）保持中: Note Offを保留する（ホールドフラグ方式）
+                        self.pending_release[channel as usize] |= bit;
                     } else {
                         self.engine.note_off(midi_channel_note_id(channel, note));
+                        self.soft_notes[channel as usize] &= !bit;
                     }
                 }
                 // MIDIピッチベンド：このMIDIチャンネルの全ノートへセント換算で一括適用する。
@@ -975,21 +1034,57 @@ impl Plugin for Ym38x6Plugin {
                         self.pitch_fg_cc78 = cc_to_u7(value);
                     }
                     // CC64(サステインペダル)：ホールドフラグ方式（(a)、spec-sound.md参照）。
-                    // 64以上でペダルON、64未満でOFF。OFF時は保留していたNote Offをまとめて送出する。
+                    // 64以上でペダルON、64未満でOFF。OFF時は保留していたNote Offのうち、
+                    // sostenuto保持中・再押下中でないものだけ送出する（CC66併用時の順序）。
                     64 => {
                         let ch = channel as usize;
                         if cc_to_u7(value) >= 64 {
                             self.pedal_down[ch] = true;
                         } else {
                             self.pedal_down[ch] = false;
-                            let mut mask = self.pending_release[ch];
-                            while mask != 0 {
-                                let note = mask.trailing_zeros() as u8;
-                                self.engine.note_off(midi_channel_note_id(channel, note));
-                                mask &= mask - 1;
-                            }
-                            self.pending_release[ch] = 0;
+                            let candidates = self.pending_release[ch];
+                            let other_held = self.sostenuto[ch];
+                            self.release_unheld(channel, candidates, other_held);
                         }
+                    }
+                    // CC66(Sostenuto)：ON時点でkeys_down中のノートのみをlatchし、CC66 OFF
+                    // （かつCC64も踏まれていない）までReleaseに入らせない
+                    // （spec-sound.md「Sostenuto（CC66）」）。
+                    66 => {
+                        let ch = channel as usize;
+                        if cc_to_u7(value) >= 64 {
+                            self.sostenuto[ch] = self.keys_down[ch];
+                        } else {
+                            let candidates = self.sostenuto[ch];
+                            let other_held = if self.pedal_down[ch] { u128::MAX } else { 0 };
+                            self.release_unheld(channel, candidates, other_held);
+                            self.sostenuto[ch] = 0;
+                        }
+                    }
+                    // CC67(Soft Pedal)：深さを保持するのみ。ON中に新規キーオンしたノートのみ
+                    // への適用はNoteOn/live伝播ループ側（soft_notesビット）で行う
+                    // （spec-sound.md「Soft Pedal（CC67）」）。
+                    67 => {
+                        self.cc67[channel as usize] = cc_to_u7(value);
+                    }
+                    // CC121(Reset All Controllers)：③ジェスチャー層のみリセットする
+                    // （②パート状態・①音色は保持、spec-sound.md「補強規則」）。CC64/66/67ペダル・
+                    // Pitch Bend・CC1・アフタータッチが対象。CC2/CC4/CC7/CC11/CC76〜78/センド/
+                    // RPN等は保持。次ブロックの毎ブロック伝播ループがchannel_patch/ATを
+                    // 再適用するため、ここではset_pitch_bend_group以外の即時反映は不要。
+                    121 => {
+                        let ch = channel as usize;
+                        let candidates = self.pending_release[ch];
+                        self.release_unheld(channel, candidates, 0);
+                        self.pedal_down[ch] = false;
+                        self.sostenuto[ch] = 0;
+                        self.cc67[ch] = 0;
+                        self.soft_notes[ch] = 0;
+                        self.channel_bend_cents[ch] = 0.0;
+                        self.engine.set_pitch_bend_group(ch, 0.0);
+                        self.pitch_fg_cc1 = 0;
+                        self.channel_pressure = 0;
+                        self.poly_pressure.clear();
                     }
                     // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
                     0 => self.bank_select_msb[channel as usize] = cc_to_u7(value),
@@ -1044,6 +1139,29 @@ impl Plugin for Ym38x6Plugin {
                                 self.engine.note_off_operator(ch_id, op_index);
                             }
                         }
+                    }
+                    // CC120(All Sound Off)：リリースを経ず即座に消音する（GM2準拠、CC123の
+                    // リリースとは区別する）。`silence_group`はnote_offのReleaseを経ないため
+                    // 残響も無い。
+                    120 => {
+                        let ch = channel as usize;
+                        self.engine.silence_group(ch);
+                        self.keys_down[ch] = 0;
+                        self.pending_release[ch] = 0;
+                        self.pedal_down[ch] = false;
+                        self.sostenuto[ch] = 0;
+                        self.soft_notes[ch] = 0;
+                    }
+                    // CC123(All Notes Off)：通常のNote-Off相当（リリースして自然減衰）。
+                    123 => {
+                        let ch = channel as usize;
+                        for note in 0u8..MIDI_NOTE_COUNT {
+                            self.engine.note_off(midi_channel_note_id(channel, note));
+                        }
+                        self.keys_down[ch] = 0;
+                        self.pending_release[ch] = 0;
+                        self.sostenuto[ch] = 0;
+                        self.soft_notes[ch] = 0;
                     }
                     _ => {}
                 },

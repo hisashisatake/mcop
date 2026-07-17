@@ -797,35 +797,45 @@ CC65 ON時、新しいノート（新チャンネル）のF-Numberは、同一MI
 
 **Sostenuto（CC66）：**
 
-CC66 ON時点で発音中（Note-On済みかつNote-Off未到達）の全チャンネルに「サステイン保持」フラグを立てる。該当チャンネルはNote-OffされてもCC66 OFFまでReleaseに入らない（CC64と同じ仕組みを対象チャンネルのみに適用）。CC66 ON以降に新規キーオンしたノートは対象外。
+CC66 ON時点で発音中（Note-On済みかつNote-Off未到達）の全チャンネルに「サステイン保持」フラグを立てる。該当チャンネルはNote-OffされてもCC66 OFFまでReleaseに入らない（CC64と同じ仕組みを対象チャンネルのみに適用）。CC66 ON以降に新規キーオンしたノートは対象外。実装済み（smf2wav `render.rs`・ym38x6-vst `lib.rs`）、詳細は下記「サステインペダル（CC64）の実装方針」参照（`sostenuto`をCC64の`pending_release`と組み合わせて解放判定する）。
 
 **Soft Pedal（CC67）：**
 
-CC67 ON中に新規キーオンしたノートに対してのみ、実効TLとFilter Cutoffを減算する。
+CC67 ON中に新規キーオンしたノートに対してのみ、実効TL（**キャリアのみ**、`ALGORITHMS[alg].carriers`）とFilter Cutoffを減算する。モジュレーターは対象外（音量＝キャリアTL、音色の丸まり＝Cutoffと役割を分離するため）。
 ```
-実効TL = clamp(TLベース値 - CC67値, 0, 255)
+実効TL(キャリアのみ) = clamp(TLベース値 - CC67値, 0, 255)
 実効Cutoff = clamp(Cutoffベース値 - CC67値, 0, 255)
 ```
+実装済み（smf2wav `midi.rs`の`apply_soft_pedal`／ym38x6-vst `midi.rs`の同名関数、複製）。減算はNote-On時点のCC67深さで焼き込み、以降にCC67の値が変わっても既に鳴っているノートには（簡易実装として）ライブ伝播ループ経由で現在値が再適用される（Note-Onのタイミングでsoft対象と判定されたノートに限る。ペダルの深さそのものが発音中に変化するのは実運用上まれなため許容）。
+
+**All Sound Off（CC120）/ Reset All Controllers（CC121）/ All Notes Off（CC123）：**
+
+GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリースを経ず即座に消音**（`Ym38x6Engine::silence_group`でボイスマップから即除去、残響も無い）、CC123は**通常のNote-Off相当**（リリースして自然減衰）。CC121は「モジュレーションの三層モデル」の**③ジェスチャー層のみ**リセットする（②パート状態・①音色は保持、上記「補強規則」参照）。対象はCC64/66/67ペダル・Pitch Bend・CC1(Mod Wheel)・アフタータッチ（Channel Pressure/Poly Key Pressure）。CC2/CC4/CC7/CC11/CC76〜78/センドレベル/RPN選択等（②パート状態）は保持する。実装済み（smf2wav `render.rs`・ym38x6-vst `lib.rs`）。
 
 **サステインペダル（CC64）の実装方針：**
 
 「ペダル対応」は2つの独立した関心事に分かれる。(a)はペダル本体、(b)はオプション拡張。
 
-**(a) ホールドフラグ方式（実装済み）：** smf2wav（`render.rs`、e828515）・ym38x6-vst（`lib.rs`）とも実装済み。
+**(a) ホールドフラグ方式（実装済み）：** smf2wav（`render.rs`、e828515）・ym38x6-vst（`lib.rs`）とも実装済み。CC66(Sostenuto)/CC67(Soft Pedal)/CC120/CC121/CC123も同じホールドフラグ方式を拡張して実装している。
 
-普通のサステイン（離鍵してもReleaseに入らない）は、チャンネルを新規確保せず、現状の1ノート=1チャンネル（[キーオン契約](#チャンネルidとキーオン契約sound-core共通)）のまま実現できる。`pedal_down: [bool; 16]` と `pending_release: [u128; 16]`（ビットN=ノート番号Nが離鍵済みだがペダル保持中）をMIDIチャンネルごとに持つ。
+普通のサステイン（離鍵してもReleaseに入らない）は、チャンネルを新規確保せず、現状の1ノート=1チャンネル（[キーオン契約](#チャンネルidとキーオン契約sound-core共通)）のまま実現できる。`pedal_down: [bool; 16]` と `pending_release: [u128; 16]`（ビットN=ノート番号Nが離鍵済みだがいずれかのペダルで保持中）に加え、`keys_down: [u128; 16]`（物理的に押下中の鍵）・`sostenuto: [u128; 16]`（CC66 ON時点でのkeys_downスナップショット）・`cc67: [u8; 16]`／`soft_notes: [u128; 16]`（Soft Pedal深さと対象ノート）をMIDIチャンネルごとに持つ。
 
 ```
 Note-On(note):   engine.note_on(id, ...)                 // 残響再アタックがデフォルト
                  pending_release.remove(note)            // 弾き直したら保持解除
-Note-Off(note):  if pedal_down { pending_release.insert(note) }  // 離鍵してもReleaseしない
-                 else         { engine.note_off(note) }
+                 keys_down.insert(note)
+Note-Off(note):  keys_down.remove(note)
+                 if pedal_down || sostenuto.contains(note) { pending_release.insert(note) }
+                 else                                     { engine.note_off(note) }
 CC64 ON:         pedal_down = true
 CC64 OFF:        pedal_down = false
-                 pending_release中の全ノートをengine.note_off()してdrain
+                 pending_release中、sostenuto保持中でもkeys_down中でもないノートをengine.note_off()してdrain
+CC66 ON:         sostenuto = keys_down のスナップショット
+CC66 OFF:        sostenuto中、pedal_down中でもkeys_down中でもないノートをengine.note_off()してdrain
+                 sostenuto = 空
 ```
 
-鍵がまだ押されている音は `pending_release` に入らない（ペダルを離しても鳴り続ける）。エンジンは無改造で済む（必要なら `set_sustain(channel, bool)` のようなAPIを足す案もあるが、まずはVST完結）。Sostenuto（CC66）は対象を限定した同じ仕組み。
+鍵がまだ押されている音は `pending_release` に入らない（ペダルを離しても鳴り続ける）。エンジンは無改造で済む（必要なら `set_sustain(channel, bool)` のようなAPIを足す案もあるが、まずはVST完結）。CC64/CC66 OFF・CC121の解放判定は共通ヘルパー（VST `release_unheld`／smf2wav同名関数）に集約し、「他のペダルに保持されておらず、かつ再押下中でもない」ノートだけを解放する。
 
 > **要再検討（残響再アタック化に伴う）：** デフォルトの同一ID再キーオンは「同音チョーク」から「残響からの再アタック」に変わった。ピアノの弦再打弦としてはむしろ残響再アタックの方が物理的に自然だが、ペダルON時に「同じ音を重ねて独立に減衰」させたい場合は、**ペダルON中は同一ノートでも同一チャンネルIDを使わない**フラグを立て、新規ユニークIDを払い出せばよい（下記(b)と同じ仕組み）。これによりデフォルトの残響再アタック挙動を汚さずにスウェルを実現できる。
 

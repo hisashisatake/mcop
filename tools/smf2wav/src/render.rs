@@ -15,12 +15,13 @@
 //!   - Pitch Bend（チャンネル単位、RPN(0,0)でセンシティビティ設定可）
 //!   - CC1/76/77/78: Pitch FG（ビブラート）への演奏補正（spec-sound.md「演奏層による補正」）
 //!   - CC7/CC11: GM2音量（実効ゲイン=(cc7/127)²×(cc11/127)²）
-//!   - CC64 Sustain Pedal（ホールドフラグ方式）
+//!   - CC64 Sustain / CC66 Sostenuto / CC67 Soft Pedal（ホールドフラグ方式）
 //!   - CC91/93 + NRPN(0,2)〜(0,8): マスターエフェクト（Reverb/Chorus、`MasterEffects`）
 //!   - NRPN(0,0)〜(0,33): 質感LFO・FG Loop/Curve・Algorithm/Waveform/Filter/AT/OP F-Number
 //!   - Channel Pressure / Poly Key Pressure: AT Destination（NRPN(0,16)/(0,17)）
 //!   - CC103〜106: Operator Key On/Off
-//!   - CC120/CC123: All Sound Off / All Notes Off
+//!   - CC120 All Sound Off（即時消音）/ CC121 Reset All Controllers（③層のみ）/
+//!     CC123 All Notes Off（リリース）
 //!
 //! CC/NRPN の変更は当該チャンネルの発音中ボイスへ即時伝播する（[`apply_live`]）。
 //! smf2wav はイベント境界で正確にレンダリングするため、VSTのブロック量子化より正確。
@@ -34,8 +35,8 @@ use ym38x6_core::{
 
 use crate::bank::PatchBank;
 use crate::midi::{
-    apply_expression_modulation, cc_to_u7, cc_to_u8, channel_gain, ExpressionDestination,
-    RpnSelection,
+    apply_expression_modulation, apply_soft_pedal, cc_to_u7, cc_to_u8, channel_gain,
+    ExpressionDestination, RpnSelection,
 };
 use crate::smf::{parse_smf, EvKind};
 
@@ -114,10 +115,18 @@ struct ChannelState {
     cc2_destination: ExpressionDestination,
     cc4_destination: ExpressionDestination,
 
-    // --- サステインペダル（CC64）---
+    // --- ペダル（CC64 Sustain / CC66 Sostenuto / CC67 Soft）---
+    /// 物理的に押下中の鍵（bit N = note N。NoteOnでセット、NoteOffでクリア）。
+    keys_down: u128,
     pedal_down: bool,
-    /// ペダル保持中に保留したノートオフ（bit N = note N が保留中）。
+    /// ペダル（CC64またはCC66）保持中に保留したノートオフ（bit N = note N が保留中）。
     pending_release: u128,
+    /// CC66 ON時点でkeys_downをスナップショットしたノート（bit N = note N）。CC66 OFFで解除。
+    sostenuto: u128,
+    /// Soft Pedal（CC67）の深さ（0〜127、0=無効）。
+    cc67: u8,
+    /// cc67>0の間にNote-Onしたノート（bit N = note N）。実効TL/Cutoff減算の対象。
+    soft_notes: u128,
 }
 
 impl Default for ChannelState {
@@ -167,8 +176,12 @@ impl Default for ChannelState {
             cc4: 0,
             cc2_destination: ExpressionDestination::TlCarriers,
             cc4_destination: ExpressionDestination::FilterCutoff,
+            keys_down: 0,
             pedal_down: false,
             pending_release: 0,
+            sostenuto: 0,
+            cc67: 0,
+            soft_notes: 0,
         }
     }
 }
@@ -281,6 +294,12 @@ fn apply_live(engine: &mut Ym38x6Engine, chi: usize, st: &ChannelState, bank: &P
             &st.poly_pressure,
             &mut note_patch,
         );
+        // Soft Pedal（CC67）: NoteOn時点でcc67>0だったノートのみ、現在のcc67深さで
+        // 実効TL(キャリア)/Cutoffを減算し続ける（apply_liveの毎回上書きでNoteOn時の
+        // 減算が消えないようにする。深さは現在値を使う簡易版、spec-sound.md参照）。
+        if st.soft_notes & (1u128 << note) != 0 {
+            apply_soft_pedal(&mut note_patch, st.cc67);
+        }
         engine.set_channel_params(id, note_patch.channel);
         for (op_index, op) in note_patch.operators.iter().enumerate() {
             engine.set_operator_params(id, op_index, *op);
@@ -319,6 +338,11 @@ fn note_on_voice(
         &st.poly_pressure,
         &mut eff,
     );
+    // Soft Pedal（CC67）: NoteOn時点でcc67>0のノートのみ実効TL(キャリア)/Cutoffを減算する
+    // （spec-sound.md「Soft Pedal（CC67）」）。soft_notesは呼び出し側でNoteOn時に立てる。
+    if st.soft_notes & (1u128 << note) != 0 {
+        apply_soft_pedal(&mut eff, st.cc67);
+    }
     let id = chi * 128 + note as usize;
     let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
     engine.set_patch(eff);
@@ -584,21 +608,33 @@ pub fn render_smf(
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
+                let bit = 1u128 << note;
                 // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、
                 // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
                 // 誤発火する。spec-sound.md「サステインペダル（CC64）の実装方針」参照）。
-                channels[chi].pending_release &= !(1u128 << note);
+                channels[chi].pending_release &= !bit;
+                channels[chi].keys_down |= bit;
+                // Soft Pedal（CC67）: ON中に新規キーオンしたノートのみ対象（spec-sound.md参照）。
+                if channels[chi].cc67 > 0 {
+                    channels[chi].soft_notes |= bit;
+                } else {
+                    channels[chi].soft_notes &= !bit;
+                }
                 note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank);
             }
             EvKind::NoteOff(ch, note) => {
                 let chi = ch as usize;
                 let id = chi * 128 + note as usize;
+                let bit = 1u128 << note;
                 channels[chi].poly_pressure.remove(&note);
-                if channels[chi].pedal_down {
-                    // ペダル保持中: Note Offを保留する
-                    channels[chi].pending_release |= 1u128 << note;
+                channels[chi].keys_down &= !bit;
+                let held = channels[chi].pedal_down || channels[chi].sostenuto & bit != 0;
+                if held {
+                    // いずれかのペダル保持中: Note Offを保留する
+                    channels[chi].pending_release |= bit;
                 } else {
                     engine.note_off(id);
+                    channels[chi].soft_notes &= !bit;
                 }
             }
             EvKind::PitchBend(ch, raw) => {
@@ -631,6 +667,26 @@ pub fn render_smf(
     }
     render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, tail_target);
     Ok(out)
+}
+
+/// `candidates & pending_release` のうち、`other_held`（他のペダルが保持中のノート）にも
+/// `keys_down`（再押下中のノート）にも該当しないものを note_off して `pending_release`/
+/// `soft_notes` から除去する。CC64/CC66 OFF・CC121 の解放処理で共有する
+/// （CC64 OFF: candidates=pending_release, other_held=sostenuto。
+/// 　CC66 OFF: candidates=sostenuto, other_held=pedal_down相当の全ビット。
+/// 　CC121: candidates=pending_release, other_held=0）。
+fn release_unheld(engine: &mut Ym38x6Engine, st: &mut ChannelState, chi: usize, candidates: u128, other_held: u128) {
+    let mut mask = candidates & st.pending_release;
+    while mask != 0 {
+        let note = mask.trailing_zeros() as usize;
+        let bit = 1u128 << note;
+        mask &= mask - 1;
+        if other_held & bit == 0 && st.keys_down & bit == 0 {
+            engine.note_off(chi * 128 + note);
+            st.pending_release &= !bit;
+            st.soft_notes &= !bit;
+        }
+    }
 }
 
 /// 1つのコントロールチェンジを処理する。VST の process() 内 CC match（896-978行）＋
@@ -715,21 +771,51 @@ fn handle_control_change(
                 apply_live(engine, chi, &channels[chi], bank);
             }
         }
-        // CC64 Sustain Pedal（ホールドフラグ方式）
+        // CC64 Sustain Pedal（ホールドフラグ方式）。sostenuto保持中・再押下中のノートは
+        // release_unheldが残す（CC66/CC64を併用した場合の解放順序）。
         64 => {
             if val >= 64 {
                 channels[chi].pedal_down = true;
             } else {
                 channels[chi].pedal_down = false;
-                // 保留中のNote Offをまとめて送出
-                let mut mask = channels[chi].pending_release;
-                while mask != 0 {
-                    let note = mask.trailing_zeros() as usize;
-                    engine.note_off(chi * 128 + note);
-                    mask &= mask - 1;
-                }
-                channels[chi].pending_release = 0;
+                let candidates = channels[chi].pending_release;
+                let other_held = channels[chi].sostenuto;
+                release_unheld(engine, &mut channels[chi], chi, candidates, other_held);
             }
+        }
+        // CC66 Sostenuto: ON時点でkeys_down中のノートのみをlatchし、CC66 OFF（かつ
+        // CC64も踏まれていない）までReleaseに入らせない（spec-sound.md「Sostenuto（CC66）」）。
+        66 => {
+            if val >= 64 {
+                channels[chi].sostenuto = channels[chi].keys_down;
+            } else {
+                let candidates = channels[chi].sostenuto;
+                let other_held = if channels[chi].pedal_down { u128::MAX } else { 0 };
+                release_unheld(engine, &mut channels[chi], chi, candidates, other_held);
+                channels[chi].sostenuto = 0;
+            }
+        }
+        // CC67 Soft Pedal: 深さを保持するのみ。ON中に新規キーオンしたノートのみへの
+        // 適用はnote_on_voice/apply_live側（soft_notesビット）で行う（spec-sound.md参照）。
+        67 => {
+            channels[chi].cc67 = cc_to_u7(val);
+        }
+        // CC121 Reset All Controllers: ③ジェスチャー層のみリセットする（②パート状態・
+        // ①音色は保持、spec-sound.md「補強規則」）。CC64/66/67ペダル・Pitch Bend・
+        // CC1・アフタータッチが対象。CC2/CC4/CC7/CC11/CC76〜78/センド/RPN等は保持。
+        121 => {
+            let candidates = channels[chi].pending_release;
+            release_unheld(engine, &mut channels[chi], chi, candidates, 0);
+            channels[chi].pedal_down = false;
+            channels[chi].sostenuto = 0;
+            channels[chi].cc67 = 0;
+            channels[chi].soft_notes = 0;
+            channels[chi].pitch_fg_cc1 = 0;
+            channels[chi].bend_cents = 0.0;
+            channels[chi].channel_pressure = 0;
+            channels[chi].poly_pressure.clear();
+            engine.set_pitch_bend_group(chi, 0.0);
+            apply_live(engine, chi, &channels[chi], bank);
         }
         // CC91/93: マスターエフェクト送りレベル（master）。
         91 => effects.set_reverb_send(cc_to_u8(val)),
@@ -752,12 +838,25 @@ fn handle_control_change(
                 }
             }
         }
-        // CC120 All Sound Off / CC123 All Notes Off
-        120 | 123 => {
+        // CC120 All Sound Off: リリースを経ず即座に消音する（GM2準拠、CC123のリリース
+        // とは区別する）。`silence_group`はnote_offのReleaseを経ないため残響も無い。
+        120 => {
+            engine.silence_group(chi);
+            channels[chi].keys_down = 0;
+            channels[chi].pending_release = 0;
+            channels[chi].pedal_down = false;
+            channels[chi].sostenuto = 0;
+            channels[chi].soft_notes = 0;
+        }
+        // CC123 All Notes Off: 通常のNote-Off相当（リリースして自然減衰）。
+        123 => {
             for note in 0..MIDI_NOTE_COUNT {
                 engine.note_off(chi * 128 + note);
             }
+            channels[chi].keys_down = 0;
             channels[chi].pending_release = 0;
+            channels[chi].sostenuto = 0;
+            channels[chi].soft_notes = 0;
         }
         // Bank Select（CC0/32）等は smf2wav では無視（単一バンクのため）。
         _ => {}
@@ -1112,6 +1211,172 @@ mod tests {
         assert!(
             tail_rms > 0.05,
             "弾き直した鍵盤がまだ押されているのにペダルアップで音が消えた（stale pending_releaseの再発）: rms={tail_rms}"
+        );
+    }
+
+    /// CC66(Sostenuto)はON時点で押下中のノートのみ保持し、ON後に新規キーオンしたノートは
+    /// 対象外であることを確認する（spec-sound.md「Sostenuto（CC66）」）。
+    #[test]
+    fn cc66_sostenuto_holds_only_notes_down_at_press() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_window = 200;
+
+        // CC66 ON以前から押下中のノートはlatchされ、離鍵しても鳴り続ける。
+        let smf_latched = build_smf(&[
+            (0u32, vec![0x90, 69, 100]),  // Note On A（先に押す）
+            (10u32, vec![0xB0, 66, 127]), // CC66 ON（A latch）
+            (10u32, vec![0x80, 69, 0]),   // Note Off A（sostenutoで保留されるはず）
+        ]);
+        let buf_latched = render_smf(&smf_latched, &bank, sr, 0.2, None).unwrap();
+        let tail_latched = rms(&buf_latched[buf_latched.len() - tail_window..]);
+        assert!(tail_latched > 0.05, "CC66 ON時点で押下中のノートが保持されていない: rms={tail_latched}");
+
+        // CC66 ON後に新規キーオンしたノートはlatch対象外で、離鍵すれば即releaseするはず。
+        let smf_unlatched = build_smf(&[
+            (0u32, vec![0xB0, 66, 127]),  // CC66 ON（何も押下中でない状態でlatch）
+            (10u32, vec![0x90, 72, 100]), // Note On C（CC66 ON後に押す）
+            (240u32, vec![0x80, 72, 0]),  // Note Off C（latch対象外なので即release）
+        ]);
+        let buf_unlatched = render_smf(&smf_unlatched, &bank, sr, 0.2, None).unwrap();
+        let tail_unlatched = rms(&buf_unlatched[buf_unlatched.len() - tail_window..]);
+        assert!(
+            tail_unlatched < 1e-3,
+            "CC66 ON後に弾いたノートがsostenutoに保持されてしまっている: rms={tail_unlatched}"
+        );
+    }
+
+    /// CC66(Sostenuto)とCC64(Sustain)を併用したとき、片方をOFFにしても他方が保持中なら
+    /// 音が消えず、両方OFFで初めて解放されることを確認する。
+    #[test]
+    fn cc66_cc64_combined_release_requires_both_off() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_window = 200;
+
+        // CC66 OFFしてもCC64がまだ踏まれていれば保持され続けるはず。
+        let smf_cc64_still_down = build_smf(&[
+            (0u32, vec![0x90, 69, 100]),  // Note On A
+            (10u32, vec![0xB0, 66, 127]), // CC66 ON（A latch）
+            (10u32, vec![0x80, 69, 0]),   // Note Off A（sostenuto保留）
+            (10u32, vec![0xB0, 64, 127]), // CC64 ON
+            (10u32, vec![0xB0, 66, 0]),   // CC66 OFF（CC64がまだ踏まれている）
+        ]);
+        let buf1 = render_smf(&smf_cc64_still_down, &bank, sr, 0.2, None).unwrap();
+        let tail1 = rms(&buf1[buf1.len() - tail_window..]);
+        assert!(tail1 > 0.05, "CC64保持中なのにCC66 OFFで音が消えた: rms={tail1}");
+
+        // さらにCC64もOFFにすれば解放されるはず。
+        let smf_both_off = build_smf(&[
+            (0u32, vec![0x90, 69, 100]),
+            (10u32, vec![0xB0, 66, 127]),
+            (10u32, vec![0x80, 69, 0]),
+            (10u32, vec![0xB0, 64, 127]),
+            (10u32, vec![0xB0, 66, 0]),
+            (10u32, vec![0xB0, 64, 0]), // CC64 OFFでようやく解放
+        ]);
+        let buf2 = render_smf(&smf_both_off, &bank, sr, 0.2, None).unwrap();
+        let tail2 = rms(&buf2[buf2.len() - tail_window..]);
+        assert!(tail2 < 1e-3, "両ペダルOFF後も音が消えない: rms={tail2}");
+    }
+
+    /// CC67(Soft Pedal)ON中に発音したノートは実効TL（キャリア）が減算され出力が小さくなる。
+    #[test]
+    fn cc67_soft_reduces_output() {
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.algorithm = 7; // 全OP独立キャリア
+        patch.operators[0].tl = 180; // 減算後も無音にならない中間値
+        patch.operators[0].mul = 1;
+        patch.operators[0].ar = 255;
+        patch.operators[0].d1l = 255;
+        patch.operators[0].rr = 255;
+        let bank = PatchBank::from_patches(&[patch]).unwrap();
+        let sr = 8000.0;
+        let tail_secs = 0.05;
+        let window = 200;
+
+        let smf_hard = build_smf(&[(0u32, vec![0x90, 69, 100])]);
+        let buf_hard = render_smf(&smf_hard, &bank, sr, tail_secs, None).unwrap();
+        let rms_hard = rms(&buf_hard[buf_hard.len() - window..]);
+
+        let smf_soft = build_smf(&[
+            (0u32, vec![0xB0, 67, 127]), // CC67 ON（最大深さ）
+            (1u32, vec![0x90, 69, 100]),
+        ]);
+        let buf_soft = render_smf(&smf_soft, &bank, sr, tail_secs, None).unwrap();
+        let rms_soft = rms(&buf_soft[buf_soft.len() - window..]);
+
+        assert!(
+            rms_soft < rms_hard * 0.9,
+            "Soft Pedal(深さ127)でも音量が下がっていない: hard={rms_hard} soft={rms_soft}"
+        );
+    }
+
+    /// CC120(All Sound Off)はリリースを経ず即座に消音し、CC123(All Notes Off)は通常の
+    /// Note-Off相当でReleaseしながら減衰することを確認する（区別、spec-sound.md参照）。
+    #[test]
+    fn cc120_silences_immediately_vs_cc123_releases() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_secs = 0.03; // 30ms（rr=255の減衰≈8.71msを含む）
+        let tail_len = (tail_secs * sr) as usize;
+        let head_window = 16; // 直後2msの窓
+
+        let smf_120 = build_smf(&[(0u32, vec![0x90, 69, 100]), (240u32, vec![0xB0, 120, 127])]);
+        let buf_120 = render_smf(&smf_120, &bank, sr, tail_secs, None).unwrap();
+        // CC直前（定常状態）の振幅を基準に、絶対値でなく相対比較する
+        // （EGカーブの形状に依存しないようにするため）。
+        let steady_120 = rms(&buf_120[buf_120.len() - tail_len - head_window..buf_120.len() - tail_len]);
+        let head_120 = rms(&buf_120[buf_120.len() - tail_len..buf_120.len() - tail_len + head_window]);
+        assert!(
+            head_120 < steady_120 * 0.01,
+            "CC120(All Sound Off)直後に即座消音していない: steady={steady_120} head={head_120}"
+        );
+
+        let smf_123 = build_smf(&[(0u32, vec![0x90, 69, 100]), (240u32, vec![0xB0, 123, 127])]);
+        let buf_123 = render_smf(&smf_123, &bank, sr, tail_secs, None).unwrap();
+        let steady_123 = rms(&buf_123[buf_123.len() - tail_len - head_window..buf_123.len() - tail_len]);
+        let head_123 = rms(&buf_123[buf_123.len() - tail_len..buf_123.len() - tail_len + head_window]);
+        assert!(
+            head_123 > steady_123 * 0.1,
+            "CC123(All Notes Off)直後はReleaseで鳴っているはず: steady={steady_123} head={head_123}"
+        );
+
+        let end_123 = rms(&buf_123[buf_123.len() - head_window..]);
+        assert!(end_123 < 1e-3, "CC123のReleaseが完了していない: rms={end_123}");
+    }
+
+    /// CC121(Reset All Controllers)は保留中のペダル保持ノートを解放し、pedal_down等の
+    /// ③層状態をリセットすることを確認する（spec-sound.md「補強規則」）。
+    #[test]
+    fn cc121_resets_pedals_and_releases_pending_notes() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_window = 200;
+
+        // CC64保持中に保留されたノートがCC121で解放される。
+        let smf_pending_release = build_smf(&[
+            (0u32, vec![0xB0, 64, 127]),  // CC64 ON
+            (10u32, vec![0x90, 69, 100]), // Note On
+            (240u32, vec![0x80, 69, 0]),  // Note Off（保留）
+            (10u32, vec![0xB0, 121, 0]),  // Reset All Controllers
+        ]);
+        let buf1 = render_smf(&smf_pending_release, &bank, sr, 0.2, None).unwrap();
+        let tail1 = rms(&buf1[buf1.len() - tail_window..]);
+        assert!(tail1 < 1e-3, "CC121で保留ノートが解放されていない: rms={tail1}");
+
+        // CC121後はpedal_downがリセットされ、新規ノートはCC64を送り直さない限り保持されない。
+        let smf_pedal_state = build_smf(&[
+            (0u32, vec![0xB0, 64, 127]),  // CC64 ON
+            (10u32, vec![0xB0, 121, 0]),  // Reset All Controllers（pedal_downをリセット）
+            (10u32, vec![0x90, 69, 100]), // Note On
+            (240u32, vec![0x80, 69, 0]),  // Note Off
+        ]);
+        let buf2 = render_smf(&smf_pedal_state, &bank, sr, 0.2, None).unwrap();
+        let tail2 = rms(&buf2[buf2.len() - tail_window..]);
+        assert!(
+            tail2 < 1e-3,
+            "CC121後もpedal_downが残っている（新規ノートが保持されてしまう）: rms={tail2}"
         );
     }
 }
