@@ -204,10 +204,12 @@
     （＝**手動ワウ**、LFOのオートワウと独立に積み重なる）。CC1はGM2慣例のPitch FG固定を維持。
     NRPN(0,34)=CC2 Destination／(0,35)=CC4 Destination（AT Destinationと同じNRPN専用シャドウ、
     DAWパラメーター非公開）。VST/smf2wav両方に配線済み、`cargo test --workspace`で0 failed。
+  → CC64サステインペダル（ホールドフラグ方式）完了: `ym38x6-vst`/`tools/smf2wav`両方に
+    MIDIチャンネルごとの`pedal_down: [bool; 16]`/`pending_release: [u128; 16]`で実装。
+    smf2wav側（commit e828515）に弾き直し時の保留ビットクリア漏れ（stale pending_release）が
+    見つかったため同時修正。`cargo test -p smf2wav`にホールド挙動・弾き直し回帰の2テスト追加。
   → 以降の未着手:
-    velocity→音量「量」（ChannelParams、既定255）／
-    CC64サステインペダル（VST側、ホールドフラグ方式。`tools/smf2wav`のrender.rs（commit e828515）が
-    参照実装として使える。smf2wav側は実装済みだが`ym38x6-vst`側は未着手）
+    velocity→音量「量」（ChannelParams、既定255）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
   → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
     質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）

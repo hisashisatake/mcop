@@ -584,6 +584,10 @@ pub fn render_smf(
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
+                // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、
+                // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
+                // 誤発火する。spec-sound.md「サステインペダル（CC64）の実装方針」参照）。
+                channels[chi].pending_release &= !(1u128 << note);
                 note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank);
             }
             EvKind::NoteOff(ch, note) => {
@@ -1044,5 +1048,70 @@ mod tests {
         let smf = build_smf(&events);
         let buf = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0)).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "混在CC/NRPN出力が無音");
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    /// d1l=255（フルサステイン）・rr=255（最速リリース≈8.71ms）の1音色バンク。
+    /// CC64ホールドフラグ方式の検証用：ペダル無しなら release ですぐ無音化する。
+    fn sustain_pedal_bank() -> PatchBank {
+        let mut patch = Ym38x6Patch::default();
+        patch.channel.algorithm = 7; // 全OP独立キャリア
+        patch.operators[0].tl = 220;
+        patch.operators[0].mul = 1;
+        patch.operators[0].ar = 255;
+        patch.operators[0].d1l = 255;
+        patch.operators[0].rr = 255;
+        PatchBank::from_patches(&[patch]).unwrap()
+    }
+
+    /// CC64(サステインペダル)ON中はNote Offが保留され、鳴り続けることを確認する。
+    #[test]
+    fn cc64_holds_release_while_pedal_down() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_window = 200; // 25ms分。rr=255の減衰(≈8.71ms)が完了しきる時間。
+
+        // ペダル無し: note off で即 release に入り、テール終端では無音のはず。
+        let smf_no_pedal = build_smf(&[(0u32, vec![0x90, 69, 100]), (480u32, vec![0x80, 69, 0])]);
+        let buf_no_pedal = render_smf(&smf_no_pedal, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let no_pedal_tail_rms = rms(&buf_no_pedal[buf_no_pedal.len() - tail_window..]);
+        assert!(no_pedal_tail_rms < 1e-3, "ペダル無しなのに末尾で鳴り続けている: rms={no_pedal_tail_rms}");
+
+        // ペダル有り: 同じタイミングでnote offが来てもreleaseへ入らず鳴り続けるはず。
+        let smf_pedal = build_smf(&[
+            (0u32, vec![0xB0, 64, 127]), // CC64 ON
+            (0u32, vec![0x90, 69, 100]),
+            (480u32, vec![0x80, 69, 0]),
+        ]);
+        let buf_pedal = render_smf(&smf_pedal, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let pedal_tail_rms = rms(&buf_pedal[buf_pedal.len() - tail_window..]);
+        assert!(pedal_tail_rms > 0.05, "ペダル保持中なのに音が消えている: rms={pedal_tail_rms}");
+    }
+
+    /// 弾き直し（同ノートの再Note-On）でペダル保留ビットがクリアされることを確認する。
+    /// クリアしないと、鍵盤を押したままペダルアップしただけで誤って音が切れる
+    /// （spec-sound.md「サステインペダル（CC64）の実装方針」参照）。
+    #[test]
+    fn cc64_retrigger_clears_pending_release_before_pedal_up() {
+        let bank = sustain_pedal_bank();
+        let sr = 8000.0;
+        let tail_window = 200;
+
+        let smf = build_smf(&[
+            (0u32, vec![0xB0, 64, 127]), // CC64 ON
+            (0u32, vec![0x90, 69, 100]), // Note On
+            (240u32, vec![0x80, 69, 0]), // Note Off（保留になる）
+            (10u32, vec![0x90, 69, 100]), // 弾き直し（鍵盤はまだ押されたまま、Note Offは送らない）
+            (230u32, vec![0xB0, 64, 0]), // CC64 OFF（鍵盤はまだ押されているので切れてはいけない）
+        ]);
+        let buf = render_smf(&smf, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let tail_rms = rms(&buf[buf.len() - tail_window..]);
+        assert!(
+            tail_rms > 0.05,
+            "弾き直した鍵盤がまだ押されているのにペダルアップで音が消えた（stale pending_releaseの再発）: rms={tail_rms}"
+        );
     }
 }

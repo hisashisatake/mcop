@@ -155,6 +155,12 @@ struct Ym38x6Plugin {
     cc7:  [u8; 16], // Channel Volume（既定127=フル）
     cc11: [u8; 16], // Expression（既定127=フル）
 
+    // CC64 サステインペダル（ホールドフラグ方式、spec-sound.md「サステインペダル（CC64）の
+    // 実装方針」参照）。エンジン無改造・1ノート=1チャンネルのまま、MIDIチャンネルごとに管理する。
+    pedal_down: [bool; 16],
+    /// ペダル保持中に保留したNote Off（bit N = ノート番号Nが保留中）。
+    pending_release: [u128; 16],
+
     // presets_dir()から読み込んだユーザープリセット集合（initialize()で読み込む）
     preset_bank: PresetBank,
 
@@ -264,6 +270,8 @@ impl Default for Ym38x6Plugin {
             pitch_bend_range: 2.0,
             cc7:  [127; 16],
             cc11: [127; 16],
+            pedal_down: [false; 16],
+            pending_release: [0; 16],
             preset_bank: PresetBank::default(),
             pending_gui_preset: Arc::new(Mutex::new(None)),
             egui_state: EguiState::from_size(1200, 680),
@@ -876,6 +884,10 @@ impl Plugin for Ym38x6Plugin {
                     // ボイスIDは midi_ch*128+note で符号化する。一意性（Note Off/同音再アタック）と
                     // グループ性（ピッチベンドのMIDIチャンネル一括適用 = id>>7）を同時に満たす。
                     let ch_id = midi_channel_note_id(channel, note);
+                    // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、
+                    // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
+                    // 誤発火する。spec-sound.md「サステインペダル（CC64）の実装方針」参照）。
+                    self.pending_release[channel as usize] &= !(1u128 << note);
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければGUI値。
                     // ボイス固有パッチを`set_patch`でカレントに置いてから`Vco::note_on`する
                     // （Channelがnote_on時点のカレントパッチをコピー保持するため、後続ボイスと混ざらない）。
@@ -894,8 +906,13 @@ impl Plugin for Ym38x6Plugin {
                 }
                 NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     // velocity=0 の NoteOn も NoteOff として扱う（MIDI仕様）
-                    self.engine.note_off(midi_channel_note_id(channel, note));
                     self.poly_pressure.remove(&note);
+                    if self.pedal_down[channel as usize] {
+                        // ペダル保持中: Note Offを保留する（ホールドフラグ方式）
+                        self.pending_release[channel as usize] |= 1u128 << note;
+                    } else {
+                        self.engine.note_off(midi_channel_note_id(channel, note));
+                    }
                 }
                 // MIDIピッチベンド：このMIDIチャンネルの全ノートへセント換算で一括適用する。
                 // nice-plug/nih-plugのvalueは0.0〜1.0（0.5=センター）。
@@ -956,6 +973,23 @@ impl Plugin for Ym38x6Plugin {
                     // CC78(Vibrato Delay)：Pitch FG Delayへの64中心相対補正。
                     78 => {
                         self.pitch_fg_cc78 = cc_to_u7(value);
+                    }
+                    // CC64(サステインペダル)：ホールドフラグ方式（(a)、spec-sound.md参照）。
+                    // 64以上でペダルON、64未満でOFF。OFF時は保留していたNote Offをまとめて送出する。
+                    64 => {
+                        let ch = channel as usize;
+                        if cc_to_u7(value) >= 64 {
+                            self.pedal_down[ch] = true;
+                        } else {
+                            self.pedal_down[ch] = false;
+                            let mut mask = self.pending_release[ch];
+                            while mask != 0 {
+                                let note = mask.trailing_zeros() as u8;
+                                self.engine.note_off(midi_channel_note_id(channel, note));
+                                mask &= mask - 1;
+                            }
+                            self.pending_release[ch] = 0;
+                        }
                     }
                     // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
                     0 => self.bank_select_msb[channel as usize] = cc_to_u7(value),
