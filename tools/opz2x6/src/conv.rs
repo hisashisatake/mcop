@@ -83,19 +83,25 @@ fn out_to_tl(out: u8, extra_atten: u8) -> u8 {
     aol_to_tl(ol_to_atten(out).saturating_add(extra_atten).min(127))
 }
 
-/// モジュレーター TL 天井の既定値。
+/// モジュレーター TL 天井のオプトイン値（既定は天井なし、[out_to_tl_mod]参照）。
 ///
 /// 2026-07-01は「実機録音とのRMSE比較で天井なしが最良」としてこの天井を既定から外したが、
-/// 2026-07-02にGrandPiano等をopz2x6→38x6エンジン経由（`opzref`のymfm直接レンダリングではなく）
-/// で試聴したところ、天井なしは明確にノイジーだった。フィードバック無効化(`--fb 0`)・波形強制
-/// サイン化のいずれでも改善せず、天井180で初めてノイズが解消した（ユーザー確認、2026-07-02）。
-/// RMSE比較はサンプル単位の誤差であり聴感上の「ノイズっぽさ」（高域のギラつき等、全体エネルギー
-/// への寄与が小さい成分）を捉えにくいため、聴感の結果を優先しこの値を既定へ戻した。
+/// 2026-07-02にGrandPiano等をopz2x6→38x6エンジン経由で試聴したところ天井なしがノイジーに感じられ、
+/// 天井180を既定へ戻した経緯がある。
+///
+/// **【2026-07-18 再評価・既定を天井なしへ差し戻し】** この2026-07-02の聴感判定は、
+/// D1L極性反転バグ（[[project_opz2x6_d1l_polarity_bug]]、2026-07-15修正）が混入した状態での
+/// 比較だった疑いが濃厚（同バグは全音色のエンベロープ極性を反転させており、聴感比較の前提が
+/// 汚染されていた）。修正後にopzref(ymfm実機参照)を基準として再測定したところ、天井なし
+/// （[out_to_tl_mod]の`None`分岐）の方がA028 RichHarpsi・D023 FM Hi-Hats等で実機の明るさ・
+/// ノイズ感に明確に近く（例: A028のスペクトル重心が実機の27%→89%に改善、D023のノイズ成分
+/// (スペクトル平坦度)も0→実機の70%相当まで回復）、ユーザー試聴でも天井なしを支持する結果に
+/// 反転した。この定数はオプトイン値（`--mod-cap 180`等）として残す。
 pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
-/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（既定は`Some(DEFAULT_MOD_TL_CAP)`）、
-/// `None` にするとキャリアと同じ `out_to_tl` を使う（天井なし＝実機のAol/Aalgをそのまま反映、
-/// 診断用。2026-07-02時点ではノイジーになることを確認済みなので通常は使わない）。
+/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（`--mod-cap <N>`指定時、
+/// オプトイン）。`None`（既定）だとキャリアと同じ `out_to_tl` を使う＝天井なし・実機のAol/Aalgを
+/// そのまま反映する実機忠実な経路（[DEFAULT_MOD_TL_CAP]のコメント参照）。
 fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     match cap {
         Some(cap) => {
@@ -357,8 +363,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
 /// 変換オプション（音質追い込み用の上書き群）。
 #[derive(Clone, Copy, Debug)]
 pub struct ConvOptions {
-    /// モジュレーター TL 天井。既定は`Some(DEFAULT_MOD_TL_CAP)`。`None`にすると天井なし
-    /// （実機のAol/Aalgをそのまま反映、診断用。ノイジーになることを確認済みなので通常は使わない）。
+    /// モジュレーター TL 天井。既定は`None`（天井なし＝実機のAol/Aalgをそのまま反映、実機忠実）。
+    /// `Some(n)`（`--mod-cap <n>`、例: [DEFAULT_MOD_TL_CAP]=180）で変調を抑えたい場合のオプトイン。
     pub mod_tl_cap: Option<u8>,
     /// チャンネルフィードバックの上書き（`Some(n)` で 38x6 feedback を直接指定、`None` で .syx 由来）。
     /// 切り分け診断用：`Some(0)` でフィードバックを無効化できる。
@@ -385,7 +391,7 @@ pub struct ConvOptions {
 impl Default for ConvOptions {
     fn default() -> Self {
         Self {
-            mod_tl_cap: Some(DEFAULT_MOD_TL_CAP),
+            mod_tl_cap: None,
             fb_override: None,
             ksr_override: None,
             carrier_sustain: 0.0,
@@ -492,12 +498,13 @@ mod tests {
     }
 
     #[test]
-    fn conv_options_default_caps_modulator_tl() {
-        // 2026-07-02: 天井なしはノイジーと判明したため、既定でDEFAULT_MOD_TL_CAP(180)を適用する。
-        assert_eq!(ConvOptions::default().mod_tl_cap, Some(DEFAULT_MOD_TL_CAP));
+    fn conv_options_default_has_no_modulator_cap() {
+        // 2026-07-18: D1L極性バグ修正後にopzref基準で再評価し、天井なし(None)を既定へ戻した
+        // （[DEFAULT_MOD_TL_CAP]のコメント参照）。180は`--mod-cap`のオプトイン値として残る。
+        assert_eq!(ConvOptions::default().mod_tl_cap, None);
         let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };
         let p = convert_op(&op, false, 0, ConvOptions::default());
-        assert_eq!(p.tl, DEFAULT_MOD_TL_CAP, "既定ではモジュレーターTLがDEFAULT_MOD_TL_CAPで頭打ちになるはず");
+        assert_eq!(p.tl, out_to_tl(99, 0), "既定ではモジュレーターTLがキャリアと同じ天井なしカーブになるはず");
     }
 
     #[test]

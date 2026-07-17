@@ -16,9 +16,10 @@
 //! - `--voice <N>` を指定すると WAV 出力をその音色番号（0始まり）1件のみに絞る。
 //! - `--wav-prefix <str>` で WAV ファイル名の先頭に付ける文字列を指定する
 //!   （例: `--wav-prefix A_` → `A_000_GrandPiano.wav`。複数バンクを同じwav/に出す際の識別用）。
-//! - `--mod-cap <N>` でモジュレーター TL の天井を指定する（既定 180）。実機のOUTをそのまま
-//!   反映する天井なしは2026-07-02の聴感検証でノイジーと判明したため、既定で天井をかける。
-//!   `--mod-cap 255` で実質天井なし（診断用、通常は使わない）。
+//! - `--mod-cap <N>` でモジュレーター TL に天井をかける（既定は天井なし=実機のOUTをそのまま
+//!   反映、opzref基準で実機に忠実と確認済み。2026-07-02は誤って天井180を既定にしていたが、
+//!   D1L極性バグ修正後に再評価し撤回。天井をかけたい場合のみ`--mod-cap 180`等を指定）。
+//!   `--mod-cap none`（既定と同じ）/ `--mod-cap off` も明示指定として使える。
 //! - `--fb <N>` でチャンネルフィードバック（0-255）を全音色一律で上書きする。
 //!   省略時は .syx 由来。切り分け診断用（`--fb 0` でフィードバック無効）。
 //! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
@@ -77,6 +78,10 @@ struct Args {
     voice_filter: Option<usize>,
     opts: conv::ConvOptions,
     smf: Option<PathBuf>,
+    /// 【実験用】2サンプル平均帰還に切替えるか（既定false=1サンプル帰還）。
+    fb_2sample: bool,
+    /// 【実験用】feedback_to_scale の最大値を上書き（None=既定1.8）。
+    fb_max: Option<f32>,
 }
 
 fn note_name_to_semitone(note: &str) -> Result<i32, String> {
@@ -103,12 +108,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut note = "C".to_string();
     let mut voice_filter: Option<usize> = None;
     let mut wav_prefix = String::new();
-    let mut mod_cap: Option<u8> = Some(conv::DEFAULT_MOD_TL_CAP);
+    let mut mod_cap: Option<u8> = None;
     let mut fb_override: Option<u8> = None;
     let mut ksr_override: Option<u8> = None;
     let mut carrier_sustain: f32 = 0.0;
     let mut filter_cutoff: Option<u8> = None;
     let mut smf: Option<PathBuf> = None;
+    let mut fb_2sample = false;
+    let mut fb_max: Option<f32> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -148,7 +155,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--mod-cap" => {
                 let v = args.get(i + 1).ok_or("--mod-cap に値がありません")?;
-                mod_cap = Some(v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?);
+                // "none"/"off" で天井なし（None＝キャリアと同じ対数カーブ＝実機Aol/Aalg忠実）
+                mod_cap = if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("off") {
+                    None
+                } else {
+                    Some(v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255 または none): {v}"))?)
+                };
                 i += 2;
             }
             "--fb" => {
@@ -179,6 +191,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 smf = Some(PathBuf::from(v));
                 i += 2;
             }
+            "--fb-2sample" => { fb_2sample = true; i += 1; }
+            "--fb-max" => {
+                let v = args.get(i + 1).ok_or("--fb-max に値がありません")?;
+                fb_max = Some(v.parse::<f32>().map_err(|_| format!("--fb-max の値が不正: {v}"))?);
+                i += 2;
+            }
             _ => { positional.push(&args[i]); i += 1; }
         }
     }
@@ -199,6 +217,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         voice_filter,
         opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain, filter_cutoff },
         smf,
+        fb_2sample,
+        fb_max,
     })
 }
 
@@ -228,6 +248,17 @@ fn run(args: &[String]) -> Result<(), String> {
 
     std::fs::create_dir_all(&args.output_dir)
         .map_err(|e| format!("出力ディレクトリ作成に失敗: {e}"))?;
+
+    // 【実験用】フィードバック帰還方式の上書き（OPZ音色のFB強度検証用）。WAVレンダリング前に
+    // プロセスグローバルへ設定する。production既定は1サンプル帰還・max=1.8。
+    if args.fb_2sample {
+        ym38x6_core::set_feedback_two_sample(true);
+        eprintln!("実験: feedback帰還を2サンプル平均 (out[n-1]+out[n-2])/2 に切替");
+    }
+    if let Some(m) = args.fb_max {
+        ym38x6_core::set_feedback_scale_max(Some(m));
+        eprintln!("実験: feedback_to_scale 最大値を {m} に上書き（既定1.8）");
+    }
 
     if let Some(smf_path) = &args.smf {
         render_smf_to_wav(&voices, smf_path, &args.output_dir, args.opts)?;

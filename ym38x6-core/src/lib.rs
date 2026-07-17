@@ -17,25 +17,28 @@ use mapping::{
 use operator::Operator;
 
 // ---------------------------------------------------------------------------
-// EXPERIMENT(fb-2sample): フィードバック帰還方式の実験スイッチ（デフォルト=現状の1サンプル帰還）
+// フィードバック帰還方式: 2サンプル平均（実機OPM/OPN/OPZ準拠、既定）
 //
 // 実機OPM/OPN/OPZは feedback 経路を (out[n-1]+out[n-2])/2 の2サンプル平均で帰還する。
-// 38x6は従来 out[n-1] のみの1サンプル帰還で、その弱さを feedback_to_scale の max=1.8 で
-// 補正してきた。OPZ音色の倍音構造（H3ディップ/H4-6棚）を実機に近づけられるか測定するため、
-// 2サンプル平均経路と feedback_to_scale 最大値の override をプロセスグローバルで切替可能にする。
-// production 既定は false / max=1.8 のままで挙動は不変。
+// 38x6は従来 out[n-1] のみの1サンプル帰還だった。
 //
-// 測定結果(2026-06-20): 2サンプル平均は音色帯(基音415Hz)で1サンプルとほぼ完全一致し、OPZ
-// 忠実度を上げる効果は無かった（高周波しか効かない）。本足場は高周波/将来の feedback 調査用に
-// 維持する。一括除去する場合は "EXPERIMENT(fb-2sample)" で grep すること。
+// 【2026-06-20の誤判定について】当時「2サンプル平均は音色帯(基音415Hz)で1サンプルと
+// ほぼ完全一致し、OPZ忠実度を上げる効果は無い」と判定したが、これは opz2x6 側の
+// mod_tl_cap=180（モジュレーターTL上限）が変調を潰した状態での測定だった。
+// 変調を解放した状態（opz2x6 mod_cap=None、2026-07-18〜既定）で再測定すると、
+// opzref(ymfm実機参照)基準で2サンプル平均の方がハイハット系のノイズ忠実度・
+// OPNベースのピッチ安定性ともに1サンプルより実機に近いことを確認し、既定を true へ変更した。
+// 1サンプルとのA/B比較用に set_feedback_two_sample(false) は残す
+// （各コンバーターの --fb-1sample / --fb-2sample から到達可能）。
 // ---------------------------------------------------------------------------
 
-/// true で feedback 経路を (out[n-1]+out[n-2])/2 の2サンプル平均にする（既定 false）。
-static FEEDBACK_TWO_SAMPLE: AtomicBool = AtomicBool::new(false);
+/// true で feedback 経路を (out[n-1]+out[n-2])/2 の2サンプル平均にする（既定 true、実機準拠）。
+static FEEDBACK_TWO_SAMPLE: AtomicBool = AtomicBool::new(true);
 /// feedback_to_scale の最大値 override。f32 を to_bits で格納し 0 を「未設定（=1.8）」とする。
 static FEEDBACK_SCALE_MAX_BITS: AtomicU32 = AtomicU32::new(0);
 
-/// 実験用: feedback 帰還方式を 2サンプル平均にするか設定する。
+/// feedback 帰還方式を切り替える（既定 true=2サンプル平均、実機準拠）。
+/// false にすると旧1サンプル帰還に戻る（A/B比較・診断用）。
 pub fn set_feedback_two_sample(enabled: bool) {
     FEEDBACK_TWO_SAMPLE.store(enabled, Ordering::Relaxed);
 }
@@ -611,7 +614,7 @@ impl Channel {
                 }
             }
             if op_idx == algo.feedback_op {
-                // EXPERIMENT(fb-2sample): 2サンプル平均帰還の切替（既定は1サンプル）。
+                // 帰還方式の切替（既定は2サンプル平均、set_feedback_two_sample(false)で1サンプルに戻せる）。
                 let fb_source = if FEEDBACK_TWO_SAMPLE.load(Ordering::Relaxed) {
                     // 実機OPM/OPN/OPZ準拠: 直近2サンプルの平均で帰還（帰還経路の1次ローパス）
                     0.5 * (self.feedback_buffer + self.feedback_buffer2)

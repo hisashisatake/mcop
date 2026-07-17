@@ -26,7 +26,8 @@
 //!   freq_hz/midi_f/note/pb_cents/alg/carrier_muls を両チップ共通で出し、OPMは kc/kf/ref_midi/error_cents、
 //!   OPNは fnum/block を追加列として埋める。
 //! - `--fb-max <f>`【実験用】: feedback_to_scale の上限を上書き（既定1.8）。高FB音色の音程破綻検証用。
-//! - `--fb-2sample`【実験用】: feedback帰還を2サンプル平均に切替（既定は1サンプル帰還）。
+//! - `--fb-2sample`: feedback帰還を2サンプル平均に明示指定（既定なので通常不要）。
+//! - `--fb-1sample`【診断用】: feedback帰還を旧1サンプルに戻す（既定=2サンプル平均とのA/B比較用）。
 //! - `--only-ch <n>`【実験用】: 指定エンジンチャンネルのみ発音（FM 0..fm、SSG fm..fm+3）。音程ズレの単一ch分離用。
 
 mod opm;
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
             eprintln!("vgm2x6: {msg}");
             eprintln!(
                 "usage: vgm2x6 <input.vgz|.vgm> [--out <dir>] \
-                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>] [--fb-max <f>] [--fb-2sample] [--only-ch <n>]"
+                 [--out-bank <file>] [--out-midi <file>] [--bank N] [--dump-pitch] [--out-wav <file>] [--wav] [--gain <factor>] [--fm-gain <factor>] [--ssg-gain <factor>] [--fb-max <f>] [--fb-2sample] [--fb-1sample] [--only-ch <n>]"
             );
             ExitCode::FAILURE
         }
@@ -79,8 +80,10 @@ struct Args {
     ssg_gain: f32,
     /// 【実験用】feedback_to_scale の最大値を上書き（None=既定1.8）。高FB音色の音程破綻検証用。
     fb_max: Option<f32>,
-    /// 【実験用】2サンプル平均帰還に切替えるか（既定false=1サンプル帰還）。
+    /// 2サンプル平均帰還を明示指定（既定で有効なため通常は不要、A/B比較用）。
     fb_2sample: bool,
+    /// 【診断用】旧1サンプル帰還に戻す（既定=2サンプル平均とのA/B比較用）。
+    fb_1sample: bool,
     /// 【実験用】指定したエンジンチャンネルのみ発音する（FM 0..fm、SSG fm..fm+3）。
     /// 音程ズレを単一チャンネルに分離して測定するためのデバッグフラグ。
     only_ch: Option<usize>,
@@ -192,6 +195,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut gain: f32 = 1.0;
     let mut fb_max: Option<f32> = None;
     let mut fb_2sample = false;
+    let mut fb_1sample = false;
     let mut only_ch: Option<usize> = None;
     let mut i = 0;
     while i < args.len() {
@@ -207,6 +211,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--fb-2sample" => {
                 fb_2sample = true;
+                i += 1;
+            }
+            "--fb-1sample" => {
+                fb_1sample = true;
                 i += 1;
             }
             "--only-ch" => {
@@ -280,7 +288,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         wav_flag.then(|| base_dir.join(format!("{stem}.wav")))
     });
 
-    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain, fb_max, fb_2sample, only_ch })
+    Ok(Args { input, out_bank, out_midi, bank, dump_pitch, wav, gain, fm_gain, ssg_gain, fb_max, fb_2sample, fb_1sample, only_ch })
 }
 
 /// `--dump-pitch` の1行分。OPM/OPN共通スキーマ。
@@ -1514,10 +1522,15 @@ fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result
     let fm_vel = scaled_velocity(args.fm_gain);
     let ssg_vel = scaled_velocity(args.ssg_gain);
 
-    // 【実験用】フィードバック帰還方式の上書き。WAVレンダリング前にプロセスグローバルへ設定。
+    // フィードバック帰還方式の上書き。WAVレンダリング前にプロセスグローバルへ設定。
+    // 既定は2サンプル平均（実機準拠）なので --fb-2sample は明示指定用（通常不要）。
     if args.fb_2sample {
         ym38x6_core::set_feedback_two_sample(true);
-        eprintln!("実験: feedback帰還を2サンプル平均 (out[n-1]+out[n-2])/2 に切替");
+        eprintln!("feedback帰還を2サンプル平均 (out[n-1]+out[n-2])/2 に設定（既定と同じ）");
+    }
+    if args.fb_1sample {
+        ym38x6_core::set_feedback_two_sample(false);
+        eprintln!("診断: feedback帰還を旧1サンプル (out[n-1]) に切替（既定=2サンプル平均とのA/B用）");
     }
     if let Some(m) = args.fb_max {
         ym38x6_core::set_feedback_scale_max(Some(m));
