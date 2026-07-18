@@ -71,18 +71,24 @@ const DT1_FROM_DET: [u8; 7] = [7, 6, 5, 0, 1, 2, 3];
 // midi semitone(0=C) → OPM KC note nibble（3,7,11,15は未使用、標準のOPM/OPZ表）。
 const NOTECODE: [u8; 12] = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14];
 
-// TX81Z FREQ coarse(0-63) → OPZ register (MUL 0-15, fine 0-15)。
-// ratio(opz2x6::conv::coarse_to_ratio、実測テーブルに基づく。opz2x6::conv::freq_to_mul_fine の
-// コメント参照)を MUL+fine/16 に符号化する（floor→MUL、端数×16→fine。ymfmの
+// TX81Z FREQ (coarse 0-63, fine 0-15) → OPZ register (MUL 0-15, reg_fine 0-15)。
+// ratio(opz2x6::conv::coarse_fine_to_ratio、DXConvert実測テーブル。opz2x6::conv::FREQ_4OP の
+// コメント参照)を MUL+reg_fine/16 に符号化する（floor→MUL、端数×16→reg_fine。ymfmの
 // cache.multiple=(MUL<<4)|FINEと同じx.4固定小数点表現）。
-fn freq_to_reg_mul_fine(freq: u8) -> (u8, u8) {
-    let ratio = opz2x6::conv::coarse_to_ratio(freq);
+//
+// 【2026-07-19 fine配線】旧実装はTX81Zパネルのfine(0-15)を無視しcoarseのみでratioを出していた
+// （opz2x6は加算していたため両ツールが最大約80¢食い違い、オラクルとして機能しなかった）。
+// 実測テーブルがfineを含むようになったため、ここもパネルfineを渡して実機挙動に一致させる。
+// なおチップ側reg_fineはx.4の1/16刻みで、パネルfineの実効比(非線形・早期飽和)とは別物なので、
+// ratioを介してreg_fineへ再量子化する（パネルfineをそのままreg_fineに入れてはいけない）。
+fn freq_to_reg_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
+    let ratio = opz2x6::conv::coarse_fine_to_ratio(freq, fine);
     if ratio <= 0.75 {
         return (0, 0); // MUL=0 は ymfm で 0.5 扱い
     }
     let mul = (ratio.floor() as u8).clamp(1, 15);
-    let fine = (((ratio - mul as f32) * 16.0).round() as i32).clamp(0, 15) as u8;
-    (mul, fine)
+    let reg_fine = (((ratio - mul as f32) * 16.0).round() as i32).clamp(0, 15) as u8;
+    (mul, reg_fine)
 }
 
 fn midi_to_kc(midi: u8) -> u8 {
@@ -149,7 +155,7 @@ fn render_voice(
 }
 
 fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8) {
-    let (mul, fine) = freq_to_reg_mul_fine(op.freq);
+    let (mul, fine) = freq_to_reg_mul_fine(op.freq, op.fine);
     let dt1 = DT1_FROM_DET[op.det.min(6) as usize];
     // TX81Z OUT (0-99, 99=最大) → OPZ TL register (0-127, 0=最大)。
     // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)に
@@ -230,10 +236,10 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let v = voices.get(vidx).ok_or_else(|| format!("voice {vidx} が無い(全{}件)", voices.len()))?;
     eprintln!("voice {vidx}: \"{}\" alg={} fb={}", v.name, v.algorithm, v.feedback);
     for (j, op) in v.ops.iter().enumerate() {
-        let (mul, fine) = freq_to_reg_mul_fine(op.freq);
+        let (mul, reg_fine) = freq_to_reg_mul_fine(op.freq, op.fine);
         eprintln!(
-            "  ops[{j}]->slot{}: out={} freq={}(mul{}.f{}) ow={} ar={} d1l={} rr={} egsft={}",
-            slots[j], op.out, op.freq, mul, fine, op.ow, op.ar, op.d1l, op.rr, op.egsft
+            "  ops[{j}]->slot{}: out={} freq={}.f{}(mul{}.f{}) ow={} ar={} d1l={} rr={} egsft={}",
+            slots[j], op.out, op.freq, op.fine, mul, reg_fine, op.ow, op.ar, op.d1l, op.rr, op.egsft
         );
     }
 
