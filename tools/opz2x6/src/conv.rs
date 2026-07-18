@@ -309,8 +309,23 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
     // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
+    // KVS写像（モジュレーターのみ、キャリアは0=velocity一本化）: KVS(0-7) → sens = kvs*24
+    // （nornand attKVS導出のvelocityスイングkvs*12レジスタstep × 38x6の2倍解像度）。
+    let vel_sens = if is_carrier { 0 } else { op.kvs.min(7) * 24 };
+
     let mut params = OperatorParams {
-        tl: if is_carrier { out_to_tl(op.out, alg_atten) } else { out_to_tl_mod(op.out, mod_tl_cap) },
+        // 【2026-07-18 KVSアンカー修正】実機のKVSはOL額面からの追加減衰
+        // （V_TL = … + A_ol + A_kvs、A_kvsはvelocity=最大で0）なのに対し、38x6エンジンの
+        // effective_tl は base_tl + (velocity/127)*sens の上乗せ方向。旧実装はモジュレーターの
+        // base_tl にOL額面をそのまま入れており、velocity>0 で常に実機より sens 分（kvs=4で
+        // 最大+96step≈+36dB）過大な変調になっていた（mod_cap撤廃でBank Aピアノ系が
+        // ノイズ化した回帰の真因。β≈25radの過変調でFMサイドバンドがナイキストを超え折り返す）。
+        // velocity=127 でOL額面に一致するよう base = 額面 - sens にアンカーする。
+        tl: if is_carrier {
+            out_to_tl(op.out, alg_atten)
+        } else {
+            out_to_tl_mod(op.out, mod_tl_cap).saturating_sub(vel_sens)
+        },
         ar: ar_to_x6(op.ar, op.rs),
         d1r: opm_rate_to_x6(op.d1r, op.rs),
         d2r: opm_rate_to_x6(d2r, op.rs),
@@ -326,10 +341,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         // 弱打(velocity=1)→強打(velocity=127)のAkvs減衰スイングをkvs=1..7で計算すると
         // 厳密に `kvs*12`（TLレジスタ0-127スケール、0.75dB/step）になる。38x6のTLは同じ
         // 約95.25dB幅を255段階(0.373dB/step、ちょうど2倍解像度)で表すため換算係数は正確に2倍
-        // → kvs*24。旧実装は255/7(≈36/step)を試して高velocity域でTLがクランプされすぎたため
-        // *10に抑制していたが、今回は実機準拠の値として*24を採用（base_tlが高いモジュレーターは
-        // 依然クランプの可能性があり、要聴感検証）。
-        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 24 },
+        // → kvs*24。base_tl側を額面-sensへアンカーする理由は上記tlフィールドのコメント参照。
+        velocity_sensitivity: vel_sens,
         waveform: op.ow.min(7),
         op_fine_tune,
         floor: 0,
