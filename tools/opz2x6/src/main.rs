@@ -113,6 +113,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut ksr_override: Option<u8> = None;
     let mut carrier_sustain: f32 = 0.0;
     let mut filter_cutoff: Option<u8> = None;
+    let mut pitch_normalize = true;
     let mut smf: Option<PathBuf> = None;
     let mut fb_2sample = false;
     let mut fb_max: Option<f32> = None;
@@ -126,6 +127,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--split" => { split = true; i += 1; }
             "--wav"   => { wav = true; i += 1; }
+            // 音程正規化(at pitch化)を無効化して額面比率のまま出す（移調が残る。A/B切り分け用）
+            "--no-pitch-normalize" => { pitch_normalize = false; i += 1; }
             "--on" => {
                 let v = args.get(i + 1).ok_or("--on に値がありません")?;
                 on_secs = v.parse::<f32>().map_err(|_| format!("--on の値が不正: {v}"))?;
@@ -215,7 +218,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         wav_cfg: WavConfig { on_secs, off_secs: 1.5, frequency },
         wav_prefix,
         voice_filter,
-        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain, filter_cutoff },
+        opts: conv::ConvOptions { mod_tl_cap: mod_cap, fb_override, ksr_override, carrier_sustain, filter_cutoff, pitch_normalize },
         smf,
         fb_2sample,
         fb_max,

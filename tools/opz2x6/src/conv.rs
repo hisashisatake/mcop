@@ -249,11 +249,13 @@ pub fn coarse_fine_to_ratio(coarse: u8, fine: u8) -> f32 {
     FREQ_4OP[16 * coarse.min(63) as usize + fine.min(15) as usize]
 }
 
-/// TX81Z FREQ (0-63) + fine(0-15) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+/// 周波数比率(ratio) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
 /// 最近傍の整数 MUL を選び、差分セントを op_fine_tune に写像する。
-pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
-    let ratio = coarse_fine_to_ratio(freq, fine);
-
+///
+/// op_fine_tune は中心128・±1200¢(±1オクターブ)を255段で表すため、MUL15 の残差で
+/// 最大約30倍（15×2^1）まで表現できる（実機OPZのオペレーター比率上限≈27.6倍＝
+/// multiple≤15 + fine + DT2 を包含）。これを超える比率は clamp される。
+pub fn ratio_to_mul_fine(ratio: f32) -> (u8, u8) {
     // 最近傍の整数MUL（対数空間距離）
     let mut best_mul = 0u8;
     let mut best_dist = f32::MAX;
@@ -271,6 +273,34 @@ pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
     // op_fine_tune: 中心128, 1単位 = 1200/127 ≈ 9.45¢
     let oft = (128.0 + (cents * 127.0 / 1200.0)).round().clamp(0.0, 255.0) as u8;
     (best_mul, oft)
+}
+
+/// TX81Z FREQ (0-63) + fine(0-15) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
+    ratio_to_mul_fine(coarse_fine_to_ratio(freq, fine))
+}
+
+/// 半音値からオクターブ(12の倍数)を除いた非オクターブ成分（[-6, 6]に収まる）。
+fn nonoctave_semitones(t: f32) -> f32 {
+    t - 12.0 * (t / 12.0).round()
+}
+
+/// 音色の「音程正規化」係数を求める（TRPS方式）。
+///
+/// TX81Zの音色はオペレーター比率の一律スケール（移調）を TRPS と対で相殺する設計で、
+/// 「操作子基音の非オクターブ成分 = -(TRPSの非オクターブ成分)」が成り立つ（両者が相殺して
+/// 純オクターブになる。例: LoTine81Z は TRPS=-19・キャリア1.5倍=+7半音 で和が-12=1オクターブ）。
+/// よってTRPSの非オクターブ成分だけを畳み込めば、GCD推定（旧実装、alg6のデチューン
+/// ユニゾンや高倍率モジュレーターで頑健性を欠いていた）に頼らず、全音色（ピッチ/ベル/
+/// 効果音問わず）を一律に最寄りオクターブへ正規化できる
+/// （[[project_opz2x6_fine_transpose_issue]]）。
+///
+/// fold = 2^(nonoctave(TRPS)/12)。nonoctave(t)=t-12*round(t/12) は±6半音に有界。
+/// 純オクターブTRPS（-24/-12/0/+12等）は nonoctave=0 で係数1.0＝無変更
+/// （**完全オクターブのずれは補正しない**というユーザー方針。効果音・打楽器の多くは
+/// TRPSが純オクターブのため、効果音判定なしに自動的に素通しになる）。
+fn voice_pitch_fold(voice: &OpzVoice) -> f32 {
+    2.0_f32.powf(nonoctave_semitones(voice.transpose as f32) / 12.0)
 }
 
 /// A4 相当のキーコード（KSR rate scaling の焼き込み量基準）。
@@ -358,9 +388,11 @@ fn fb_to_x6(fb: u8) -> u8 {
 // オペレーター変換
 // ---------------------------------------------------------------------------
 
-fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions) -> OperatorParams {
+fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions, pitch_fold: f32) -> OperatorParams {
     let mod_tl_cap = opts.mod_tl_cap;
-    let (mul, op_fine_tune) = freq_to_mul_fine(op.freq, op.fine);
+    // 音程正規化(at pitch化): 音色一律の移調係数を比率へ掛けてから MUL/op_fine_tune を算出する
+    // （[voice_pitch_fold]参照）。pitch_fold=1.0 なら従来どおり額面比率。
+    let (mul, op_fine_tune) = ratio_to_mul_fine(coarse_fine_to_ratio(op.freq, op.fine) * pitch_fold);
 
     // EGT=1 のとき D2R を強制的に高値にしてリリース挙動を作る
     // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
@@ -456,6 +488,10 @@ pub struct ConvOptions {
     /// 変調はそのままに出力の高域だけ削るので、低域の基音を保ったまま明るさを落とせる。
     /// 値は 0〜255（指数で 20Hz〜20kHz、180≈2.8kHz / 200≈4.5kHz）。
     pub filter_cutoff: Option<u8>,
+    /// 音程正規化。既定 `true`（TRPSの非オクターブ成分を打ち消すよう全オペレーター比率を
+    /// 一律スケールし、ピッチクラスが弾いた鍵に一致するようにする。[voice_pitch_fold]参照）。
+    /// `false`（`--no-pitch-normalize`）で額面比率のまま（移調が残る。切り分け診断・A/B用）。
+    pub pitch_normalize: bool,
 }
 
 impl Default for ConvOptions {
@@ -466,6 +502,7 @@ impl Default for ConvOptions {
             ksr_override: None,
             carrier_sustain: 0.0,
             filter_cutoff: None,
+            pitch_normalize: true,
         }
     }
 }
@@ -499,10 +536,12 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     // 三点で恒等写像が正しいことを確認した。
     const OP_SRC: [usize; 4] = [0, 1, 2, 3]; // operators[i] ← ops[OP_SRC[i]]（恒等写像）
     let atten = alg_atten(alg as u8);
+    // 音程正規化(at pitch化)係数。既定ON。--no-pitch-normalize で額面比率へ戻せる（A/B用）。
+    let pitch_fold = if opts.pitch_normalize { voice_pitch_fold(voice) } else { 1.0 };
     let operators = std::array::from_fn(|i| {
         let op = &voice.ops[OP_SRC[i]];
         let is_carrier = carriers.contains(&i);
-        convert_op(op, is_carrier, atten, opts)
+        convert_op(op, is_carrier, atten, opts, pitch_fold)
     });
 
     Ym38x6Patch {
@@ -573,7 +612,7 @@ mod tests {
         // （[DEFAULT_MOD_TL_CAP]のコメント参照）。180は`--mod-cap`のオプトイン値として残る。
         assert_eq!(ConvOptions::default().mod_tl_cap, None);
         let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.tl, out_to_tl(99, 0), "既定ではモジュレーターTLがキャリアと同じ天井なしカーブになるはず");
     }
 
@@ -688,7 +727,7 @@ mod tests {
         // Alarm Call回帰: D1R=31 + D1L=15(パネル)は4op機の定番「ディケイスキップ=純サステイン」
         // イディオム。旧極性では「最速で-93dBへ」に化けて9msのプチノイズになっていた。
         let op = OpzOpData { d1l: 15, d1r: 31, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.d1l, 255, "パネルD1L=15はフルサステインに写像されるべき");
     }
 
@@ -735,7 +774,7 @@ mod tests {
     #[test]
     fn kvs_carrier_is_zero() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 0, "carrier velocity_sensitivity must be 0");
     }
 
@@ -743,35 +782,35 @@ mod tests {
     fn kvs_modulator_maps_168_at_max() {
         // kvs*24（実機attKVS導出式から: 弱打→強打の減衰スイングkvs*12を38x6のTL解像度(2倍)へ換算）
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 168);
     }
 
     #[test]
     fn kvs_modulator_zero_stays_zero() {
         let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 0);
     }
 
     #[test]
     fn egt1_forces_d2r_nonzero() {
         let op = OpzOpData { d2r: 0, egt: 1, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert!(p.d2r > 0, "EGT=1 with D2R=0 should force d2r > 0");
     }
 
     #[test]
     fn egt0_d2r_zero_stays_zero() {
         let op = OpzOpData { d2r: 0, egt: 0, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.d2r, 0, "EGT=0 D2R=0 → sustain型（d2r=0のまま）");
     }
 
     #[test]
     fn waveform_direct_copy() {
         let op = OpzOpData { ow: 5, freq: 4, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.waveform, 5);
     }
 
@@ -797,10 +836,62 @@ mod tests {
         voice.ops[1] = OpzOpData { freq: 13, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP3 → ratio4.0,mul4
         voice.ops[2] = OpzOpData { freq: 22, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP2 → ratio7.0,mul7
         voice.ops[3] = OpzOpData { freq: 25, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP1 → ratio8.0,mul8
-        let p = voice_to_patch(&voice);
+        // 結線順(恒等写像)の検証が目的なので、MULを判別子として使うため音程正規化はOFF
+        // （ONだとキャリア比率が1.0へ畳まれ全MULが一律スケールされて判別不能になる）。
+        let p = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
         assert_eq!(p.operators[0].mul, 2, "operators[0]=OP4");
         assert_eq!(p.operators[1].mul, 4, "operators[1]=OP3");
         assert_eq!(p.operators[2].mul, 7, "operators[2]=OP2");
         assert_eq!(p.operators[3].mul, 8, "operators[3]=OP1");
+    }
+
+    #[test]
+    fn nonoctave_semitones_extracts_non_octave_component() {
+        // LoTine81Z(-19)は+5（5度上のキャリア1.5倍を相殺する側）、純オクターブ(-24/-12/0/+12)は0。
+        assert!((nonoctave_semitones(-19.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-12.0) - 0.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-7.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(5.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-24.0) - 0.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(8.0) - (-4.0)).abs() < 1e-4);
+        assert!((nonoctave_semitones(0.0) - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pitch_normalize_removes_non_octave_offset() {
+        // LoTine81Zと同型: TRPS=-19(非オクターブ成分+5)・キャリアが額面1.5倍(5度上)。
+        // TRPSの非オクターブ成分を打ち消す方向へfoldがかかり、キャリアが正確な2の冪(MUL2)
+        // ＝ピッチクラスが鍵に一致するようになる。
+        let mut voice = OpzVoice::default();
+        voice.algorithm = 4; // キャリアは operators[1],[3]
+        voice.transpose = -19;
+        voice.ops[1] = OpzOpData { freq: 4, fine: 8, det: 3, out: 90, ar: 31, rr: 7, ..Default::default() };
+        voice.ops[3] = OpzOpData { freq: 4, fine: 8, det: 3, out: 90, ar: 31, rr: 7, ..Default::default() };
+
+        // 正規化OFF: 額面1.5倍 → MUL2 + op_fine_tune≈75(−498¢の5度オフセットが残る)
+        let raw = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
+        assert!((raw.operators[3].op_fine_tune as i32 - 128).abs() > 30,
+            "正規化OFFではキャリアに5度オフセットが残る(op_fine_tune={})", raw.operators[3].op_fine_tune);
+
+        // 正規化ON: fold=2^(5/12)≈1.335、1.5×1.335≈2.0 へ畳まれ MUL2・op_fine_tune≈128(0¢中心)
+        let norm = voice_to_patch(&voice);
+        assert_eq!(norm.operators[3].mul, 2, "1.5倍はTRPS由来のfoldで最寄りオクターブ2.0(MUL2)へ");
+        assert!((norm.operators[3].op_fine_tune as i32 - 128).abs() <= 2,
+            "正規化後はピッチクラスが鍵に一致(op_fine_tune≈128)、実際={}", norm.operators[3].op_fine_tune);
+    }
+
+    #[test]
+    fn pitch_normalize_leaves_pure_octave_transpose_unchanged() {
+        // TRPSが純オクターブ(-12等)なら「完全オクターブなら補正不要」の方針どおり無変更
+        // （fold=1.0）。効果音・打楽器の多くもTRPSが純オクターブのため同様に素通しされる。
+        let mut voice = OpzVoice::default();
+        voice.transpose = -12;
+        voice.ops[3] = OpzOpData { freq: 8, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() }; // alg0キャリア, 2.0倍
+        let raw = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
+        let norm = voice_to_patch(&voice);
+        assert_eq!(raw.operators[3].mul, norm.operators[3].mul,
+            "純オクターブTRPSは正規化ON/OFFで不変(MUL)");
+        assert_eq!(raw.operators[3].op_fine_tune, norm.operators[3].op_fine_tune,
+            "純オクターブTRPSは正規化ON/OFFで不変(op_fine_tune)");
     }
 }
