@@ -107,6 +107,7 @@ fn midi_to_kc(midi: u8) -> u8 {
 fn render_voice(
     opz: &Opz,
     v: &OpzVoice,
+    note: u8,
     kc: u8,
     slots: [u32; 4],
     sr: u32,
@@ -134,9 +135,9 @@ fn render_voice(
         if force_sine {
             let mut op = op.clone();
             op.ow = 0;
-            write_operator(opz, &op, slot, alg_atten);
+            write_operator(opz, &op, slot, alg_atten, note);
         } else {
-            write_operator(opz, op, slot, alg_atten);
+            write_operator(opz, op, slot, alg_atten, note);
         }
     }
 
@@ -154,13 +155,21 @@ fn render_voice(
     buf
 }
 
-fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8) {
+fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8, note: u8) {
     let (mul, fine) = freq_to_reg_mul_fine(op.freq, op.fine);
     let dt1 = DT1_FROM_DET[op.det.min(6) as usize];
     // TX81Z OUT (0-99, 99=最大) → OPZ TL register (0-127, 0=最大)。
     // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)に
-    // Aalg（アルゴリズムによる追加減衰、キャリアのみ）を加算する。
-    let tl = opz2x6::conv::ol_to_atten(op.out).saturating_add(alg_atten).min(127);
+    // Aalg（アルゴリズムによる追加減衰、キャリアのみ）とAls（Level Scaling、音域依存減衰、
+    // opz2x6::conv::attls_reg。キャリア・モジュレーター双方に効く実機仕様）を加算する。
+    // 【2026-07-20 LS追加】レジスタ直書きのopzrefはvoice load時にnoteが確定しているため、
+    // 38x6エンジンのようなランタイム適用(ym38x6_core::mapping::level_scale_atten)ではなく、
+    // ここでTLレジスタへ静的に加算する（実機ファームウェアが note-on 時にTLを計算し直すのと等価）。
+    let ls_atten = opz2x6::conv::attls_reg(op.ls, note);
+    let tl = opz2x6::conv::ol_to_atten(op.out)
+        .saturating_add(alg_atten)
+        .saturating_add(ls_atten)
+        .min(127);
 
     // 0x40: DT1(6-4) | MUL(3-0), data bit7=0
     opz.write(op_reg(0x40, slot), ((dt1 & 0x07) << 4) | (mul & 0x0f));
@@ -248,7 +257,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let kc = kc_override.unwrap_or_else(|| midi_to_kc(note));
     eprintln!("note={note} kc=0x{kc:02X} sr={sr} slots={slots:?}");
 
-    let mut buf = render_voice(&opz, v, kc, slots, sr, gate, dur, force_sine);
+    let mut buf = render_voice(&opz, v, note, kc, slots, sr, gate, dur, force_sine);
     let peak = normalize(&mut buf);
     eprintln!("peak(before norm)={peak:.6} samples={}", buf.len());
 
