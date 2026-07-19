@@ -442,6 +442,10 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         // (project_38x6_identity_and_layering)のためコンバーター側で吸収せず、
         // パース値をそのまま写像する。
         eg_shift: op.egsft.min(3) * 85,
+        // Level Scaling: TX81Z LS(0-99) → エンジンの level_scale depth(0-255)。
+        // depth = ls*165/64（実測attLS導出式の内部スケール）。ノート依存減衰は
+        // エンジンの mapping::level_scale_atten が持つ。キャリアにも効く（実機LS準拠）。
+        level_scale: (op.ls as u16 * 165 / 64).min(255) as u8,
     };
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
@@ -614,6 +618,21 @@ mod tests {
         let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };
         let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.tl, out_to_tl(99, 0), "既定ではモジュレーターTLがキャリアと同じ天井なしカーブになるはず");
+    }
+
+    #[test]
+    fn grandpiano_op2_maps_ls_to_level_scale() {
+        // TX81Z GrandPiano OP2: LS=94 → level_scale = 94*165/64 = 242
+        let op = OpzOpData { out: 77, freq: 13, det: 3, ar: 20, rr: 7, ls: 94, kvs: 4, ..Default::default() };
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.level_scale, 242);
+    }
+
+    #[test]
+    fn zero_ls_gives_zero_level_scale() {
+        let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ls: 0, ..Default::default() };
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.level_scale, 0);
     }
 
     #[test]

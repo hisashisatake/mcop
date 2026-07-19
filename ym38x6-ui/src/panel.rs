@@ -31,6 +31,8 @@ pub struct OperatorPanelParams<'a> {
     pub curve: Box<dyn BoolParamHandle + 'a>,
     /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
     pub eg_shift: Box<dyn IntParamHandle + 'a>,
+    /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
+    pub level_scale: Box<dyn IntParamHandle + 'a>,
 }
 
 /// ファンクションジェネレーター（Pitch/Cutoff/Gain FG共通）のループ可能EGパラメーター一式。
@@ -182,6 +184,7 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                             bool_checkbox(ui, &*op.op_loop, "LOOP");
                             bool_checkbox(ui, &*op.curve, "CURVE");
                             knob(ui, &*op.eg_shift, "EGSFT");
+                            knob(ui, &*op.level_scale, "LEVEL SCALE");
                         });
                     });
                 });

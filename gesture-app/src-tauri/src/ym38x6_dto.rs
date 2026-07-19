@@ -32,6 +32,9 @@ pub struct OperatorParamsDto {
     /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
     #[serde(default)]
     pub eg_shift: u8,
+    /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
+    #[serde(default)]
+    pub level_scale: u8,
 }
 
 fn default_op_fine_tune() -> u8 {
@@ -58,6 +61,7 @@ impl From<OperatorParamsDto> for OperatorParams {
             loop_enabled: dto.loop_enabled,
             curve: dto.curve,
             eg_shift: dto.eg_shift,
+            level_scale: dto.level_scale,
         }
     }
 }
@@ -82,6 +86,7 @@ impl From<OperatorParams> for OperatorParamsDto {
             loop_enabled: op.loop_enabled,
             curve: op.curve,
             eg_shift: op.eg_shift,
+            level_scale: op.level_scale,
         }
     }
 }

@@ -66,7 +66,7 @@ const VM_D1R: usize = 1;  // 0-31 (bits 4-0)
 const VM_D2R: usize = 2;  // 0-31 (bits 4-0)
 const VM_RR: usize = 3;   // 0-15 (bits 3-0)
 const VM_D1L: usize = 4;  // 0-15 (bits 3-0)
-// addr 5: LS (Level Sensitivity 0-99)、変換未使用
+const VM_LS: usize = 5;   // LS (Level Scaling 0-99): 音域による出力減衰量。attLSでノート依存減衰へ写す
 // addr 6: b6=AME, b5-3=EBS, b2-0=KVS
 const VM_AME_KVS: usize = 6;
 const VM_OUT: usize = 7;  // Output Level 0-99 (bits 6-0)
@@ -120,6 +120,8 @@ pub struct OpzOpData {
     pub kvs: u8,   // Key Velocity Sensitivity 0-7
     pub freq: u8,  // Frequency Coarse 0-63
     pub det: u8,   // Detune 0-6 (3=中心)
+    pub ls: u8,    // Level Scaling 0-99: 音域による出力減衰の効き量（VMEM addr5、VCEDは常に0）。
+                   // conv.rs の attLS で MIDIノートに応じた減衰(TLレジスタ加算値)へ写す
     pub ow: u8,    // Operator Waveform 0-7 (ACEDより取得、未設定=0)
     pub fine: u8,  // Frequency Fine 0-15 (ACEDのOPWバイト下位4bitより取得。VMEMのみ対応、
                    // VCED単体+ACED拡張ファイルの5byte/opストライド内での位置は未検証のため常に0)
@@ -242,6 +244,7 @@ fn parse_op(data: &[u8], base: usize) -> OpzOpData {
         kvs:  get(data, base + F_KVS),
         freq: get(data, base + F_FREQ),
         det:  get(data, base + F_DET),
+        ls:   0, // VCED単音ダンプはLSを含まない（ACED拡張側。未対応のため0=減衰なし）
         ow:   0,
         fine: 0, // VCED単体+ACED拡張ファイルでのfine位置は未検証のため常に0
         egsft: 0, // ACED領域から後で上書き
@@ -303,6 +306,7 @@ fn parse_vmem_op(data: &[u8], base: usize) -> OpzOpData {
         kvs:  b6 & 0x07,
         freq: get(data, base + VM_FREQ) & 0x3F,
         det:  b9 & 0x07, // DBT(0-6): 3=中心、0=最大負デチューン
+        ls:   get(data, base + VM_LS) & 0x7F, // Level Scaling 0-99
         ow:   0, // ACED領域から後で上書き
         fine: 0, // ACED領域から後で上書き
         egsft: 0, // ACED領域から後で上書き
