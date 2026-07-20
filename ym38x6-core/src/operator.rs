@@ -46,6 +46,11 @@ pub struct OperatorParams {
     /// TLはこの圧縮を受けない（チップと同じくEG分のみ圧縮）。[mapping::eg_shift_to_db_range](crate::mapping::eg_shift_to_db_range)参照。
     #[serde(default)]
     pub eg_shift: u8,
+    /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
+    /// 値が大きいほど高音域で出力(TL)を強く絞る。キャリア・モジュレーター双方に効く（実機TX81Z LS準拠）。
+    /// ノート依存の減衰カーブは[mapping::level_scale_atten](crate::mapping::level_scale_atten)が持つ。
+    #[serde(default)]
+    pub level_scale: u8,
 }
 
 /// `op_fine_tune`の中心値（オフセットなし）。serde欠落時およびDefaultで使う。
@@ -75,6 +80,7 @@ impl Default for OperatorParams {
             loop_enabled: 0,
             curve: 0,
             eg_shift: 0,
+            level_scale: 0,
         }
     }
 }
@@ -246,6 +252,7 @@ impl Operator {
         // キャリアでは無視し、音量はチャンネル側のvelocity_to_volume_gainに一本化する。
         let vel_sens = if self.is_carrier { 0 } else { self.params.velocity_sensitivity };
         let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
+        let eff_tl = eff_tl.saturating_sub(level_scale_atten(self.params.level_scale, note));
         let amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-db_range。
         // db_rangeは通常96dB（eg_shift=0）。EGSFTはこのEG減衰レンジのみを圧縮し（TLは別掛けで不変）、
@@ -284,6 +291,7 @@ mod tests {
             loop_enabled: 0,
             curve: 0,
             eg_shift: 0,
+            level_scale: 0,
         }
     }
 

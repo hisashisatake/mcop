@@ -151,8 +151,14 @@ PHRASE_TYPES = {
 }
 
 
+def sanitize_filename(name: str) -> str:
+    """Windowsで使えない文字を`_`に置換する（opz2x6のsanitize_filenameと同じ規則）。"""
+    s = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
+    return s.strip("_")
+
+
 def audition_phrases(patch_json: str, label: str, types: list[str], out_base: Path) -> None:
-    out_dir = out_base / label
+    out_dir = out_base / sanitize_filename(label)
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"  [{label}]")
     for t in types:

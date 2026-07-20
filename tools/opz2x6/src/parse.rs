@@ -66,7 +66,7 @@ const VM_D1R: usize = 1;  // 0-31 (bits 4-0)
 const VM_D2R: usize = 2;  // 0-31 (bits 4-0)
 const VM_RR: usize = 3;   // 0-15 (bits 3-0)
 const VM_D1L: usize = 4;  // 0-15 (bits 3-0)
-// addr 5: LS (Level Sensitivity 0-99)、変換未使用
+const VM_LS: usize = 5;   // LS (Level Scaling 0-99): 音域による出力減衰量。attLSでノート依存減衰へ写す
 // addr 6: b6=AME, b5-3=EBS, b2-0=KVS
 const VM_AME_KVS: usize = 6;
 const VM_OUT: usize = 7;  // Output Level 0-99 (bits 6-0)
@@ -82,7 +82,9 @@ const VMEM_GLOBAL: usize = 40;
 // addr 43: PMD (Pitch Mod Depth 0-99)
 // addr 44: AMD (Amp Mod Depth 0-99)
 // addr 45: b6-4=PMS(0-7), b3-2=AMS(0-3), b1-0=LFW(LFO Wave 0-3)
-// addr 46-56: TRPS, PBR, CH/MO/SU/PO/PM, PORT, FC-VOL, MW/BC 等（変換未使用）
+// addr 46: b5-0=TRPS(Transpose, 生値0-63, 24=無移調)。addr 47-56: PBR, CH/MO/SU/PO/PM,
+// PORT, FC-VOL, MW/BC 等（変換未使用）
+const VMEM_TRPS: usize = VMEM_GLOBAL + 6; // = 46
 
 const VMEM_NAME: usize = 57; // VOICE NAME: 10バイトASCII (addr 57-66)
 
@@ -118,6 +120,8 @@ pub struct OpzOpData {
     pub kvs: u8,   // Key Velocity Sensitivity 0-7
     pub freq: u8,  // Frequency Coarse 0-63
     pub det: u8,   // Detune 0-6 (3=中心)
+    pub ls: u8,    // Level Scaling 0-99: 音域による出力減衰の効き量（VMEM addr5、VCEDは常に0）。
+                   // conv.rs の attLS で MIDIノートに応じた減衰(TLレジスタ加算値)へ写す
     pub ow: u8,    // Operator Waveform 0-7 (ACEDより取得、未設定=0)
     pub fine: u8,  // Frequency Fine 0-15 (ACEDのOPWバイト下位4bitより取得。VMEMのみ対応、
                    // VCED単体+ACED拡張ファイルの5byte/opストライド内での位置は未検証のため常に0)
@@ -143,6 +147,13 @@ pub struct OpzVoice {
     pub pms: u8,       // 0-7
     pub ams: u8,       // 0-3
     pub ops: [OpzOpData; 4], // [OP4, OP3, OP2, OP1]
+    /// TRPS（Transpose、半音、0=無移調）。VMEM byte46 `&0x3F - 24`。
+    /// TX81Zは一部音色でオペレーター比率を一律スケール（＝移調）し、これをTRPSで相殺する
+    /// 設計になっている（例: LoTine81Zはキャリアが1.5倍=5度上、TRPS=-19で相殺し実機は
+    /// 鍵どおり鳴る）。conv.rs の音程正規化(voice_pitch_fold)で使う
+    /// （[[project_opz2x6_fine_transpose_issue]]）。VCED単音パスでは常に0
+    /// （単体ファイルでのTRPS位置は未検証かつ用途が稀なため）。
+    pub transpose: i16,
 }
 
 impl Default for OpzVoice {
@@ -153,6 +164,7 @@ impl Default for OpzVoice {
             lfo_spd: 0, lfo_dly: 0, pmd: 0, amd: 0,
             lfo_sync: false, lfo_wf: 0, pms: 0, ams: 0,
             ops: Default::default(),
+            transpose: 0,
         }
     }
 }
@@ -232,6 +244,7 @@ fn parse_op(data: &[u8], base: usize) -> OpzOpData {
         kvs:  get(data, base + F_KVS),
         freq: get(data, base + F_FREQ),
         det:  get(data, base + F_DET),
+        ls:   0, // VCED単音ダンプはLSを含まない（ACED拡張側。未対応のため0=減衰なし）
         ow:   0,
         fine: 0, // VCED単体+ACED拡張ファイルでのfine位置は未検証のため常に0
         egsft: 0, // ACED領域から後で上書き
@@ -293,6 +306,7 @@ fn parse_vmem_op(data: &[u8], base: usize) -> OpzOpData {
         kvs:  b6 & 0x07,
         freq: get(data, base + VM_FREQ) & 0x3F,
         det:  b9 & 0x07, // DBT(0-6): 3=中心、0=最大負デチューン
+        ls:   get(data, base + VM_LS) & 0x7F, // Level Scaling 0-99
         ow:   0, // ACED領域から後で上書き
         fine: 0, // ACED領域から後で上書き
         egsft: 0, // ACED領域から後で上書き
@@ -324,6 +338,7 @@ fn parse_vmem_voice(data: &[u8], number: u32) -> Option<OpzVoice> {
             parse_vmem_op(data, VMEM_OP2_BASE), // ops[2] = OP2
             parse_vmem_op(data, VMEM_OP1_BASE), // ops[3] = OP1
         ],
+        transpose: (get(data, VMEM_TRPS) & 0x3F) as i16 - 24,
     };
 
     // ACED OPW（オペレーター波形）: bits[6:4] of each OPW byte

@@ -319,6 +319,7 @@ impl Ym38x6Plugin {
                 loop_enabled: op.op_loop.value() as u8,
                 curve: op.curve.value() as u8,
                 eg_shift: op.eg_shift.value() as u8,
+                level_scale: op.level_scale.value() as u8,
             }
         });
 

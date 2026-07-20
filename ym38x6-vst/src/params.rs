@@ -54,6 +54,9 @@ pub(crate) struct OperatorVstParams {
     /// EGSFT（TX81Z EG Shift）。EGの減衰レンジ(dB)を圧縮する（0〜255、既定0＝96dBフルレンジ）。
     #[id = "op_eg_shift"]
     pub eg_shift: IntParam,
+    /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
+    #[id = "op_level_scale"]
+    pub level_scale: IntParam,
 }
 
 impl Default for OperatorVstParams {
@@ -84,6 +87,8 @@ impl Default for OperatorVstParams {
             curve: BoolParam::new("Op Loop Curve", false),
             // 既定0＝EGSFTオフ（96dBフルレンジ、従来挙動そのまま）。
             eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
+            // 既定0＝Level Scalingオフ（ノート依存の出力減衰なし、従来挙動そのまま）。
+            level_scale: IntParam::new("Op Level Scale", 0, IntRange::Linear { min: 0, max: 255 }),
         }
     }
 }

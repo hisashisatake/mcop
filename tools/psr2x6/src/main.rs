@@ -10,8 +10,9 @@
 //! - `--voices` の既定は `all`（全68音色）。`panel`=voice0-31（32パネル音色）、
 //!   `extended`=voice0-31+52-67（48音色、2op複製テーブルvoice32-51を除外）。
 //! - 出力は `<output_dir>/b<bank>.38x6`（128件超は連番バンクへ分割）。
-//! - `--mod-cap <0-255>` モジュレーターTL天井（既定180）。低いほど変調を抑えノイズが減る。
-//!   PSR-70 ROM音色はfeedback/モジュレーターTLが高くノイズが乗りやすいため既定で圧縮する。opz2x6 と同一。
+//! - `--mod-cap <0-255|none|off>` モジュレーターTL天井（既定は天井なし=opz2x6と同じ）。
+//!   `--mod-cap 180`等で明示的に圧縮を指定するとノイズを抑えられる（PSR-70 ROM音色は
+//!   feedback/モジュレーターTLが高くノイズが乗りやすい）。opz2x6 と同一仕様。
 //! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機準拠）。opz2x6 と同一。
 //! - `--cutoff <0-255>` ローパスカットオフ（味付け、既定=全開255=20kHz）。低いほど倍音過多を抑える
 //!   （180≈2.8kHz/200≈4.5kHz）。変調は保つので基音を失わず明るさだけ落とせる。opz2x6 と同一。
@@ -136,7 +137,12 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, PathBuf, u16, VoiceMode, PsrC
             }
             "--mod-cap" => {
                 let v = args.get(i + 1).ok_or("--mod-cap に値がありません")?;
-                opts.mod_tl_cap = v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255): {v}"))?;
+                // "none"/"off" で天井なし（既定と同じ）
+                opts.mod_tl_cap = if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("off") {
+                    None
+                } else {
+                    Some(v.parse::<u8>().map_err(|_| format!("--mod-cap の値が不正(0-255 または none): {v}"))?)
+                };
                 i += 2;
             }
             "--sustain" => {

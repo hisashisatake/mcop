@@ -189,21 +189,28 @@ const CARRIERS: [&[usize]; 8] = [
     &[0, 1, 2, 3], // 7
 ];
 
-/// モジュレーター TL 天井の既定値（opz2x6 の `DEFAULT_MOD_TL_CAP` と同値）。
+/// モジュレーター TL 天井のオプトイン値（opz2x6 の `DEFAULT_MOD_TL_CAP` と同値）。
 ///
 /// 38x6 エンジンは `FM_MODULATION_INDEX_SCALE=4.0` のため、モジュレーター TL を 254 まで
-/// 通すと変調指数 β が過大（≈24rad）になりノイズ化する。OPQ→38x6 でも同じ補正が要る。
-/// PSR-70 ROM 音色は feedback=252・モジュレーター TL>200 が多く、天井なしだとノイズが乗る
-/// （psr2x6 中断の主因）。180 でモジュレーターを圧縮し、キャリア（音量）は触らない。
+/// 通すと変調指数 β が過大（≈24rad）になりノイズ化しうる。PSR-70 ROM 音色は feedback=252・
+/// モジュレーター TL>200 が多く、当初この天井（既定180）で圧縮していた（psr2x6 中断の主因への対処）。
+///
+/// **【2026-07-18 opz2x6に合わせ既定を天井なしへ】** opz2x6でも同型の天井（既定180）が
+/// あったが、opzref(ymfm実機参照)基準の再測定で天井なしの方が実機に近いと判明し既定を撤廃した
+/// （[[project_opz2x6_d1l_polarity_bug]]混入時の聴感判定だった疑いが根拠。詳細はspec-fm.md参照）。
+/// PSR-70にはopzref相当の実機参照レンダラーが無く同様の定量検証はできていないが、仕様の
+/// 一貫性を優先しopz2x6と揃えて既定を天井なしに変更する。ノイジーに感じる場合は
+/// `--mod-cap 180`等で明示的に天井をかけられる。
 pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
 /// 変換の味付けオプション。
 #[derive(Clone, Copy, Debug)]
 pub struct PsrConvOptions {
-    /// モジュレーター TL 天井（既定 [`DEFAULT_MOD_TL_CAP`]=180）。
-    /// モジュレーターの実効 TL を `tl×cap/254` に圧縮して変調過多＝ノイズを抑える。
-    /// キャリア（音量）には適用しない。254 でほぼ無効（実機 TL そのまま）。
-    pub mod_tl_cap: u8,
+    /// モジュレーター TL 天井。既定は`None`（天井なし＝実機TLをそのまま反映）。
+    /// `Some(cap)`（`--mod-cap <n>`、例: [`DEFAULT_MOD_TL_CAP`]=180）で
+    /// モジュレーターの実効 TL を `tl×cap/254` に圧縮したい場合のオプトイン。
+    /// キャリア（音量）には適用しない。
+    pub mod_tl_cap: Option<u8>,
     /// キャリアのサステイン延長（0.0=実機準拠 .. 1.0=最大延長）。opz2x6 と同一ロジック。
     /// キャリアのみ D1L を満レベル方向へ持ち上げ、D1R/D2R を減速する。
     pub carrier_sustain: f32,
@@ -214,7 +221,7 @@ pub struct PsrConvOptions {
 
 impl Default for PsrConvOptions {
     fn default() -> Self {
-        Self { mod_tl_cap: DEFAULT_MOD_TL_CAP, carrier_sustain: 0.0, filter_cutoff: None }
+        Self { mod_tl_cap: None, carrier_sustain: 0.0, filter_cutoff: None }
     }
 }
 
@@ -260,6 +267,7 @@ impl OpqOperator {
             loop_enabled: 0,
             curve: 0,
             eg_shift: 0,
+            level_scale: 0,
         }
     }
 }
@@ -280,9 +288,9 @@ impl OpqVoice {
             let mut p = self.operators[i].to_operator_params();
             if carriers.contains(&i) {
                 apply_carrier_sustain(&mut p, opts.carrier_sustain);
-            } else {
-                // モジュレーターのみ TL を天井で圧縮（変調過多＝ノイズ対策）。
-                p.tl = (p.tl as f32 * opts.mod_tl_cap as f32 / 254.0).round().clamp(0.0, 255.0) as u8;
+            } else if let Some(cap) = opts.mod_tl_cap {
+                // モジュレーターのみ TL を天井で圧縮（変調過多＝ノイズ対策、オプトイン）。
+                p.tl = (p.tl as f32 * cap as f32 / 254.0).round().clamp(0.0, 255.0) as u8;
             }
             p
         });
@@ -519,5 +527,41 @@ mod tests {
         let json = files[0].to_json().expect("serialize");
         let parsed = PresetFile::from_json(&json).expect("deserialize");
         assert_eq!(parsed, files[0]);
+    }
+
+    #[test]
+    fn conv_options_default_has_no_modulator_cap() {
+        // 2026-07-18: opz2x6と仕様を揃え、天井なし(None)を既定にした
+        // （[DEFAULT_MOD_TL_CAP]のコメント参照）。180は`--mod-cap`のオプトイン値として残る。
+        assert_eq!(PsrConvOptions::default().mod_tl_cap, None);
+    }
+
+    #[test]
+    fn mod_tl_cap_some_compresses_modulator_tl() {
+        let voice = OpqVoice {
+            operators: [OpqOperator {
+                tl: 0,
+                ar: 31,
+                d1r: 10,
+                d2r: 4,
+                d1l: 2,
+                rr: 7,
+                mul: 1,
+                detune: 32,
+                ksr: 1,
+                am_enable: false,
+            }; 4],
+            algorithm: 4, // モジュレーター=op0,op2 / キャリア=op1,op3
+            feedback: 3,
+        };
+        let uncapped = voice.to_ym38x6_patch_opts(PsrConvOptions::default());
+        let capped = voice.to_ym38x6_patch_opts(PsrConvOptions {
+            mod_tl_cap: Some(DEFAULT_MOD_TL_CAP),
+            ..PsrConvOptions::default()
+        });
+        assert!(
+            capped.operators[0].tl <= uncapped.operators[0].tl,
+            "天井指定時はモジュレーターTLが天井なし以下になるはず"
+        );
     }
 }

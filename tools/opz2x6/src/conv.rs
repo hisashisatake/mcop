@@ -83,19 +83,25 @@ fn out_to_tl(out: u8, extra_atten: u8) -> u8 {
     aol_to_tl(ol_to_atten(out).saturating_add(extra_atten).min(127))
 }
 
-/// モジュレーター TL 天井の既定値。
+/// モジュレーター TL 天井のオプトイン値（既定は天井なし、[out_to_tl_mod]参照）。
 ///
 /// 2026-07-01は「実機録音とのRMSE比較で天井なしが最良」としてこの天井を既定から外したが、
-/// 2026-07-02にGrandPiano等をopz2x6→38x6エンジン経由（`opzref`のymfm直接レンダリングではなく）
-/// で試聴したところ、天井なしは明確にノイジーだった。フィードバック無効化(`--fb 0`)・波形強制
-/// サイン化のいずれでも改善せず、天井180で初めてノイズが解消した（ユーザー確認、2026-07-02）。
-/// RMSE比較はサンプル単位の誤差であり聴感上の「ノイズっぽさ」（高域のギラつき等、全体エネルギー
-/// への寄与が小さい成分）を捉えにくいため、聴感の結果を優先しこの値を既定へ戻した。
+/// 2026-07-02にGrandPiano等をopz2x6→38x6エンジン経由で試聴したところ天井なしがノイジーに感じられ、
+/// 天井180を既定へ戻した経緯がある。
+///
+/// **【2026-07-18 再評価・既定を天井なしへ差し戻し】** この2026-07-02の聴感判定は、
+/// D1L極性反転バグ（[[project_opz2x6_d1l_polarity_bug]]、2026-07-15修正）が混入した状態での
+/// 比較だった疑いが濃厚（同バグは全音色のエンベロープ極性を反転させており、聴感比較の前提が
+/// 汚染されていた）。修正後にopzref(ymfm実機参照)を基準として再測定したところ、天井なし
+/// （[out_to_tl_mod]の`None`分岐）の方がA028 RichHarpsi・D023 FM Hi-Hats等で実機の明るさ・
+/// ノイズ感に明確に近く（例: A028のスペクトル重心が実機の27%→89%に改善、D023のノイズ成分
+/// (スペクトル平坦度)も0→実機の70%相当まで回復）、ユーザー試聴でも天井なしを支持する結果に
+/// 反転した。この定数はオプトイン値（`--mod-cap 180`等）として残す。
 pub const DEFAULT_MOD_TL_CAP: u8 = 180;
 
-/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（既定は`Some(DEFAULT_MOD_TL_CAP)`）、
-/// `None` にするとキャリアと同じ `out_to_tl` を使う（天井なし＝実機のAol/Aalgをそのまま反映、
-/// 診断用。2026-07-02時点ではノイジーになることを確認済みなので通常は使わない）。
+/// OUT → 38x6 TL（モジュレーター用）。`cap` が `Some` なら上限を設ける（`--mod-cap <N>`指定時、
+/// オプトイン）。`None`（既定）だとキャリアと同じ `out_to_tl` を使う＝天井なし・実機のAol/Aalgを
+/// そのまま反映する実機忠実な経路（[DEFAULT_MOD_TL_CAP]のコメント参照）。
 fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
     match cap {
         Some(cap) => {
@@ -143,34 +149,96 @@ fn det_to_x6(det: u8) -> u8 {
     DT1_TO_X6[dt1 as usize]
 }
 
-/// TX81Z FREQ coarse(0-63) → [group(0-3), order基準値]。
+/// TX81Z FREQ (coarse 0-63, fine 0-15) → 周波数比率(ratio) 実測テーブル。index = `16*coarse + fine`。
 ///
-/// TX81Zの周波数比は「4個おきの連続ブロック」のような単純な規則ではなく、coarse値が
-/// 4グループ（グループごとに異なる線形係数）へ複雑にスクランブルされて割り当てられている。
-/// 旧実装は前者の単純化された誤った仮定を使っており、coarse値が大きくなるほど誤差が拡大していた
-/// （例: coarse=22で旧実装7.937 vs 実測7.00、+13.4%の誤差。FM倍音比としては協和(7.00)から
-/// 不協和寸前(7.937≒8倍音直下)への変質に相当し、金属的・非整数倍音的な音色劣化の主因だった）。
-/// 出典: https://mgregory22.me/tx81z/freqratios.html （TX81Zの周波数比を実測でリバースエンジニアリング。
-/// 著者自身「端数に説明のつかない周期誤差が残る」と明記しており完全な精度は無いが、
-/// 旧実装より大幅に正確）。
-/// fine(0-15、TX81Zの別パラメーター)は`order = order_base + fine`として加算される
-/// （VMEMのACED拡張領域のOPWバイト下位4bitから取得。parse.rs参照）。
-const COARSE_TO_GROUP: [(u8, u16); 64] = [
-    (0, 0), (1, 0), (2, 0), (3, 0), (0, 8), (1, 8), (2, 8), (3, 8), (0, 24), (1, 24),
-    (0, 40), (2, 24), (3, 24), (0, 56), (1, 40), (2, 40), (0, 72), (3, 40), (1, 56), (0, 88),
-    (2, 56), (3, 56), (0, 104), (1, 72), (2, 72), (0, 120), (1, 88), (3, 72), (0, 136), (2, 88),
-    (1, 104), (0, 152), (3, 88), (2, 104), (0, 168), (1, 120), (0, 184), (3, 104), (2, 120), (1, 136),
-    (0, 200), (3, 120), (0, 216), (1, 152), (2, 136), (0, 232), (1, 168), (3, 136), (2, 152), (1, 184),
-    (2, 168), (3, 152), (1, 200), (2, 184), (3, 168), (1, 216), (2, 200), (3, 184), (1, 232), (2, 216),
-    (3, 200), (2, 232), (3, 216), (3, 232),
-];
-
-/// [COARSE_TO_GROUP]の4グループそれぞれの(基準値, 増分)係数。ratio = base + step * order。
-const FREQ_RATIO_COEFFS: [(f32, f32); 4] = [
-    (0.50, 0.0625),
-    (0.71, 0.088105),
-    (0.78, 0.098145),
-    (0.87, 0.108105),
+/// **【2026-07-19 実測テーブルへ差し替え】** 旧実装はmgregory22のリバースエンジニアリング
+/// （coarse値を4グループの線形係数へスクランブルし`ratio = base + step*(order_base + fine)`で
+/// 近似する方式）を使っていたが、DXConvert（martintarenskeen、実績あるTX81Z⇄DX系sysex変換ツール）の
+/// `freq_4op`テーブルと突き合わせたところ、fine扱いに大きな不整合があった:
+/// - 平均15.6¢の誤差に加え、低coarse×高fineの隅で最大753.9¢（約6半音）の移調バグ。
+///   実機テーブルは低coarseでfineが途中で頭打ち（例: coarse=0はfine=7の0.93で飽和し以降クランプ）
+///   になるのに対し、線形近似はfineを際限なく加算し続けていた。
+/// - 一方でopzref（fine完全無視）は平均199.6¢・最大1149¢で全域大外れだった。
+///
+/// DXConvertの`freq_4op`（`fourop.py`、コメント「4op frequencies (16*CRS+FINE)」）は
+/// `16*coarse+fine`でインデックスする1024要素の実測テーブルで、TX81Z/DX11のfine分割挙動
+/// （coarse間をfineが非線形に補間し、低coarseでは早期飽和する）をそのまま含む権威データ。
+/// これを直接引くことで opz2x6/opzref 双方が実機のfine挙動に一致する。
+/// fine≠0音色（A008 LoTine81Z等、carrierがcoarse=5/fine=1でratio≈1.49＝5度上に鳴る「移調」も
+/// **実機仕様**）を正しく再現する。
+///
+/// 出典の`freq_4op`には非単調な2セル（coarse=38 fine=12の原典値13.37、coarse=57 fine=10の
+/// 原典値21.48）があり、いずれの行も他の全セルはfine方向に厳密単調増加する中でこの1セルだけ
+/// 値が下がる。さらに誤値は近傍の別セル（13.37=coarse=40/fine=6、21.48=coarse=56/fine=11）と
+/// 完全一致しており、DXConvert原典（`fourop.py`）自体の転記誤記と判断できる。実機の忠実再現が
+/// このテーブル採用の目的であるため、誤記は前後セルの平均で補正した値を採録する
+/// （13.37→13.73、21.48→21.84。いずれも高coarse域でファクトリー音色がまず踏まないため実害はない）。
+#[rustfmt::skip]
+const FREQ_4OP: [f32; 1024] = [
+    0.50, 0.56, 0.62, 0.68, 0.75, 0.81, 0.87, 0.93, 0.93, 0.93, 0.93, 0.93, 0.93, 0.93, 0.93, 0.93, // coarse=0
+    0.71, 0.79, 0.88, 0.96, 1.05, 1.14, 1.23, 1.32, 1.32, 1.32, 1.32, 1.32, 1.32, 1.32, 1.32, 1.32, // coarse=1
+    0.78, 0.88, 0.98, 1.07, 1.17, 1.27, 1.37, 1.47, 1.47, 1.47, 1.47, 1.47, 1.47, 1.47, 1.47, 1.47, // coarse=2
+    0.87, 0.97, 1.08, 1.18, 1.29, 1.40, 1.51, 1.62, 1.62, 1.62, 1.62, 1.62, 1.62, 1.62, 1.62, 1.62, // coarse=3
+    1.00, 1.06, 1.12, 1.18, 1.25, 1.31, 1.37, 1.43, 1.50, 1.56, 1.62, 1.68, 1.75, 1.81, 1.87, 1.93, // coarse=4
+    1.41, 1.49, 1.58, 1.67, 1.76, 1.85, 1.93, 2.02, 2.11, 2.20, 2.29, 2.37, 2.46, 2.55, 2.64, 2.73, // coarse=5
+    1.57, 1.66, 1.76, 1.86, 1.96, 2.06, 2.15, 2.25, 2.35, 2.45, 2.55, 2.64, 2.74, 2.84, 2.94, 3.04, // coarse=6
+    1.73, 1.83, 1.94, 2.05, 2.16, 2.27, 2.37, 2.48, 2.59, 2.70, 2.81, 2.91, 3.02, 3.13, 3.24, 3.35, // coarse=7
+    2.00, 2.06, 2.12, 2.18, 2.25, 2.31, 2.37, 2.43, 2.50, 2.56, 2.62, 2.68, 2.75, 2.81, 2.87, 2.93, // coarse=8
+    2.82, 2.90, 2.99, 3.08, 3.17, 3.26, 3.34, 3.43, 3.52, 3.61, 3.70, 3.78, 3.87, 3.96, 4.05, 4.14, // coarse=9
+    3.00, 3.06, 3.12, 3.18, 3.25, 3.31, 3.37, 3.43, 3.50, 3.56, 3.62, 3.68, 3.75, 3.81, 3.87, 3.93, // coarse=10
+    3.14, 3.23, 3.33, 3.43, 3.53, 3.63, 3.72, 3.82, 3.92, 4.02, 4.12, 4.21, 4.31, 4.41, 4.51, 4.61, // coarse=11
+    3.46, 3.56, 3.67, 3.78, 3.89, 4.00, 4.10, 4.21, 4.32, 4.43, 4.54, 4.64, 4.75, 4.86, 4.97, 5.08, // coarse=12
+    4.00, 4.06, 4.12, 4.18, 4.25, 4.31, 4.37, 4.43, 4.50, 4.56, 4.62, 4.68, 4.75, 4.81, 4.87, 4.93, // coarse=13
+    4.24, 4.31, 4.40, 4.49, 4.58, 4.67, 4.75, 4.84, 4.93, 5.02, 5.11, 5.19, 5.28, 5.37, 5.46, 5.55, // coarse=14
+    4.71, 4.80, 4.90, 5.00, 5.10, 5.20, 5.29, 5.39, 5.49, 5.59, 5.69, 5.78, 5.88, 5.98, 6.08, 6.18, // coarse=15
+    5.00, 5.06, 5.12, 5.18, 5.25, 5.31, 5.37, 5.43, 5.50, 5.56, 5.62, 5.68, 5.75, 5.81, 5.87, 5.93, // coarse=16
+    5.19, 5.29, 5.40, 5.51, 5.62, 5.73, 5.83, 5.94, 6.05, 6.16, 6.27, 6.37, 6.48, 6.59, 6.70, 6.81, // coarse=17
+    5.65, 5.72, 5.81, 5.90, 5.99, 6.08, 6.16, 6.25, 6.34, 6.43, 6.52, 6.60, 6.69, 6.78, 6.87, 6.96, // coarse=18
+    6.00, 6.06, 6.12, 6.18, 6.25, 6.31, 6.37, 6.43, 6.50, 6.56, 6.62, 6.68, 6.75, 6.81, 6.87, 6.93, // coarse=19
+    6.28, 6.37, 6.47, 6.57, 6.67, 6.77, 6.86, 6.96, 7.06, 7.16, 7.26, 7.35, 7.45, 7.55, 7.65, 7.75, // coarse=20
+    6.92, 7.02, 7.13, 7.24, 7.35, 7.46, 7.56, 7.67, 7.78, 7.89, 8.00, 8.10, 8.21, 8.32, 8.43, 8.54, // coarse=21
+    7.00, 7.06, 7.12, 7.18, 7.25, 7.31, 7.37, 7.43, 7.50, 7.56, 7.62, 7.68, 7.75, 7.81, 7.87, 7.93, // coarse=22
+    7.07, 7.13, 7.22, 7.31, 7.40, 7.49, 7.57, 7.66, 7.75, 7.84, 7.93, 8.01, 8.10, 8.19, 8.28, 8.37, // coarse=23
+    7.85, 7.94, 8.04, 8.14, 8.24, 8.34, 8.43, 8.53, 8.63, 8.73, 8.83, 8.92, 9.02, 9.12, 9.22, 9.32, // coarse=24
+    8.00, 8.06, 8.12, 8.18, 8.25, 8.31, 8.37, 8.43, 8.50, 8.56, 8.62, 8.68, 8.75, 8.81, 8.87, 8.93, // coarse=25
+    8.48, 8.54, 8.63, 8.72, 8.81, 8.90, 8.98, 9.07, 9.16, 9.25, 9.34, 9.42, 9.51, 9.60, 9.69, 9.78, // coarse=26
+    8.65, 8.75, 8.86, 8.97, 9.08, 9.19, 9.29, 9.40, 9.51, 9.62, 9.73, 9.83, 9.94, 10.05, 10.16, 10.27, // coarse=27
+    9.00, 9.06, 9.12, 9.18, 9.25, 9.31, 9.37, 9.43, 9.50, 9.56, 9.62, 9.68, 9.75, 9.81, 9.87, 9.93, // coarse=28
+    9.42, 9.51, 9.61, 9.71, 9.81, 9.91, 10.00, 10.10, 10.20, 10.30, 10.40, 10.49, 10.59, 10.69, 10.79, 10.89, // coarse=29
+    9.89, 9.95, 10.04, 10.13, 10.22, 10.31, 10.39, 10.48, 10.57, 10.66, 10.75, 10.83, 10.92, 11.01, 11.10, 11.19, // coarse=30
+    10.00, 10.06, 10.12, 10.18, 10.25, 10.31, 10.37, 10.43, 10.50, 10.56, 10.62, 10.68, 10.75, 10.81, 10.87, 10.93, // coarse=31
+    10.38, 10.48, 10.59, 10.70, 10.81, 10.92, 11.02, 11.13, 11.24, 11.35, 11.46, 11.56, 11.67, 11.78, 11.89, 12.00, // coarse=32
+    10.99, 11.08, 11.18, 11.28, 11.38, 11.48, 11.57, 11.67, 11.77, 11.87, 11.97, 12.06, 12.16, 12.26, 12.36, 12.46, // coarse=33
+    11.00, 11.06, 11.12, 11.18, 11.25, 11.31, 11.37, 11.43, 11.50, 11.56, 11.62, 11.68, 11.75, 11.81, 11.87, 11.93, // coarse=34
+    11.30, 11.36, 11.45, 11.54, 11.63, 11.72, 11.80, 11.89, 11.98, 12.07, 12.16, 12.24, 12.33, 12.42, 12.51, 12.60, // coarse=35
+    12.00, 12.06, 12.12, 12.18, 12.25, 12.31, 12.37, 12.43, 12.50, 12.56, 12.62, 12.68, 12.75, 12.81, 12.87, 12.93, // coarse=36
+    12.11, 12.21, 12.32, 12.43, 12.54, 12.65, 12.75, 12.86, 12.97, 13.08, 13.19, 13.29, 13.40, 13.51, 13.62, 13.73, // coarse=37
+    12.56, 12.65, 12.75, 12.85, 12.95, 13.05, 13.14, 13.24, 13.34, 13.44, 13.54, 13.63, 13.73, 13.83, 13.93, 14.03, // coarse=38 (fine=12は原典13.37を非単調誤記と判断し前後平均13.73へ補正)
+    12.72, 12.77, 12.86, 12.95, 13.04, 13.13, 13.21, 13.30, 13.39, 13.48, 13.57, 13.65, 13.74, 13.83, 13.92, 14.01, // coarse=39
+    13.00, 13.06, 13.12, 13.18, 13.25, 13.31, 13.37, 13.43, 13.50, 13.56, 13.62, 13.68, 13.75, 13.81, 13.87, 13.93, // coarse=40
+    13.84, 13.94, 14.05, 14.16, 14.27, 14.38, 14.48, 14.59, 14.70, 14.81, 14.92, 15.02, 15.13, 15.24, 15.35, 15.46, // coarse=41
+    14.00, 14.06, 14.12, 14.18, 14.25, 14.31, 14.37, 14.43, 14.50, 14.56, 14.62, 14.68, 14.75, 14.81, 14.87, 14.93, // coarse=42
+    14.10, 14.18, 14.27, 14.36, 14.45, 14.54, 14.62, 14.71, 14.80, 14.89, 14.98, 15.06, 15.15, 15.24, 15.33, 15.42, // coarse=43
+    14.13, 14.22, 14.32, 14.42, 14.52, 14.62, 14.71, 14.81, 14.91, 15.01, 15.11, 15.20, 15.30, 15.40, 15.50, 15.60, // coarse=44
+    15.00, 15.06, 15.12, 15.18, 15.25, 15.31, 15.37, 15.43, 15.50, 15.56, 15.62, 15.68, 15.75, 15.81, 15.87, 15.93, // coarse=45
+    15.55, 15.59, 15.68, 15.77, 15.86, 15.95, 16.03, 16.12, 16.21, 16.30, 16.39, 16.47, 16.56, 16.65, 16.74, 16.83, // coarse=46
+    15.57, 15.67, 15.78, 15.89, 16.00, 16.11, 16.21, 16.32, 16.43, 16.54, 16.65, 16.75, 16.86, 16.97, 17.08, 17.19, // coarse=47
+    15.70, 15.79, 15.89, 15.99, 16.09, 16.19, 16.28, 16.38, 16.48, 16.58, 16.68, 16.77, 16.87, 16.97, 17.07, 17.17, // coarse=48
+    16.96, 17.00, 17.09, 17.18, 17.27, 17.36, 17.44, 17.53, 17.62, 17.71, 17.80, 17.88, 17.97, 18.06, 18.15, 18.24, // coarse=49
+    17.27, 17.36, 17.46, 17.56, 17.66, 17.76, 17.85, 17.95, 18.05, 18.15, 18.25, 18.35, 18.44, 18.54, 18.64, 18.74, // coarse=50
+    17.30, 17.40, 17.51, 17.62, 17.73, 17.84, 17.94, 18.05, 18.16, 18.27, 18.38, 18.48, 18.59, 18.70, 18.81, 18.92, // coarse=51
+    18.37, 18.41, 18.50, 18.59, 18.68, 18.77, 18.85, 18.94, 19.03, 19.12, 19.21, 19.29, 19.38, 19.47, 19.56, 19.65, // coarse=52
+    18.84, 18.93, 19.03, 19.13, 19.23, 19.33, 19.42, 19.52, 19.62, 19.72, 19.82, 19.91, 20.01, 20.11, 20.21, 20.31, // coarse=53
+    19.03, 19.13, 19.24, 19.35, 19.46, 19.57, 19.67, 19.78, 19.89, 20.00, 20.11, 20.21, 20.32, 20.43, 20.54, 20.65, // coarse=54
+    19.78, 19.82, 19.91, 20.00, 20.09, 20.18, 20.26, 20.35, 20.44, 20.53, 20.62, 20.70, 20.79, 20.88, 20.97, 21.06, // coarse=55
+    20.41, 20.50, 20.60, 20.70, 20.80, 20.90, 20.99, 21.09, 21.19, 21.29, 21.39, 21.48, 21.58, 21.68, 21.78, 21.88, // coarse=56
+    20.76, 20.86, 20.97, 21.08, 21.19, 21.30, 21.40, 21.51, 21.62, 21.73, 21.84, 21.94, 22.05, 22.16, 22.27, 22.38, // coarse=57 (fine=10は原典21.48を非単調誤記と判断し前後平均21.84へ補正)
+    21.20, 21.23, 21.32, 21.41, 21.50, 21.59, 21.67, 21.76, 21.85, 21.94, 22.03, 22.11, 22.20, 22.29, 22.38, 22.47, // coarse=58
+    21.98, 22.07, 22.17, 22.27, 22.37, 22.47, 22.56, 22.66, 22.76, 22.86, 22.96, 23.05, 23.15, 23.25, 23.35, 23.45, // coarse=59
+    22.49, 22.59, 22.70, 22.81, 22.92, 23.03, 23.13, 23.24, 23.35, 23.46, 23.57, 23.67, 23.78, 23.89, 24.00, 24.11, // coarse=60
+    23.55, 23.64, 23.74, 23.84, 23.94, 24.04, 24.13, 24.23, 24.33, 24.43, 24.53, 24.62, 24.72, 24.82, 24.92, 25.02, // coarse=61
+    24.22, 24.32, 24.43, 24.54, 24.65, 24.76, 24.86, 24.97, 25.08, 25.19, 25.30, 25.40, 25.51, 25.62, 25.73, 25.84, // coarse=62
+    25.95, 26.05, 26.16, 26.27, 26.38, 26.49, 26.59, 26.70, 26.81, 26.92, 27.03, 27.13, 27.24, 27.35, 27.46, 27.57, // coarse=63
 ];
 
 /// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref共通で使う変換の核（fine=0固定）。
@@ -179,18 +247,18 @@ pub fn coarse_to_ratio(coarse: u8) -> f32 {
 }
 
 /// TX81Z FREQ coarse(0-63) + fine(0-15) → 周波数比率(ratio)。
-/// `order = order_base + fine`として加算する([COARSE_TO_GROUP]のコメント参照)。
+/// DXConvert実測テーブル[FREQ_4OP]を`16*coarse+fine`で引く。
 pub fn coarse_fine_to_ratio(coarse: u8, fine: u8) -> f32 {
-    let (group, order_base) = COARSE_TO_GROUP[coarse.min(63) as usize];
-    let (base, step) = FREQ_RATIO_COEFFS[group as usize];
-    base + step * (order_base + fine.min(15) as u16) as f32
+    FREQ_4OP[16 * coarse.min(63) as usize + fine.min(15) as usize]
 }
 
-/// TX81Z FREQ (0-63) + fine(0-15) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+/// 周波数比率(ratio) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
 /// 最近傍の整数 MUL を選び、差分セントを op_fine_tune に写像する。
-pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
-    let ratio = coarse_fine_to_ratio(freq, fine);
-
+///
+/// op_fine_tune は中心128・±1200¢(±1オクターブ)を255段で表すため、MUL15 の残差で
+/// 最大約30倍（15×2^1）まで表現できる（実機OPZのオペレーター比率上限≈27.6倍＝
+/// multiple≤15 + fine + DT2 を包含）。これを超える比率は clamp される。
+pub fn ratio_to_mul_fine(ratio: f32) -> (u8, u8) {
     // 最近傍の整数MUL（対数空間距離）
     let mut best_mul = 0u8;
     let mut best_dist = f32::MAX;
@@ -208,6 +276,34 @@ pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
     // op_fine_tune: 中心128, 1単位 = 1200/127 ≈ 9.45¢
     let oft = (128.0 + (cents * 127.0 / 1200.0)).round().clamp(0.0, 255.0) as u8;
     (best_mul, oft)
+}
+
+/// TX81Z FREQ (0-63) + fine(0-15) → 38x6 (MUL 0-15, op_fine_tune 0-255)。
+pub fn freq_to_mul_fine(freq: u8, fine: u8) -> (u8, u8) {
+    ratio_to_mul_fine(coarse_fine_to_ratio(freq, fine))
+}
+
+/// 半音値からオクターブ(12の倍数)を除いた非オクターブ成分（[-6, 6]に収まる）。
+fn nonoctave_semitones(t: f32) -> f32 {
+    t - 12.0 * (t / 12.0).round()
+}
+
+/// 音色の「音程正規化」係数を求める（TRPS方式）。
+///
+/// TX81Zの音色はオペレーター比率の一律スケール（移調）を TRPS と対で相殺する設計で、
+/// 「操作子基音の非オクターブ成分 = -(TRPSの非オクターブ成分)」が成り立つ（両者が相殺して
+/// 純オクターブになる。例: LoTine81Z は TRPS=-19・キャリア1.5倍=+7半音 で和が-12=1オクターブ）。
+/// よってTRPSの非オクターブ成分だけを畳み込めば、GCD推定（旧実装、alg6のデチューン
+/// ユニゾンや高倍率モジュレーターで頑健性を欠いていた）に頼らず、全音色（ピッチ/ベル/
+/// 効果音問わず）を一律に最寄りオクターブへ正規化できる
+/// （[[project_opz2x6_fine_transpose_issue]]）。
+///
+/// fold = 2^(nonoctave(TRPS)/12)。nonoctave(t)=t-12*round(t/12) は±6半音に有界。
+/// 純オクターブTRPS（-24/-12/0/+12等）は nonoctave=0 で係数1.0＝無変更
+/// （**完全オクターブのずれは補正しない**というユーザー方針。効果音・打楽器の多くは
+/// TRPSが純オクターブのため、効果音判定なしに自動的に素通しになる）。
+fn voice_pitch_fold(voice: &OpzVoice) -> f32 {
+    2.0_f32.powf(nonoctave_semitones(voice.transpose as f32) / 12.0)
 }
 
 /// A4 相当のキーコード（KSR rate scaling の焼き込み量基準）。
@@ -291,20 +387,66 @@ fn fb_to_x6(fb: u8) -> u8 {
     fb.min(7) * 36
 }
 
+/// TX81Z Level Scaling: LS(0-99) × MIDIノート番号 → 実機TLレジスタ加算値(0-127, 0.75dB/step)。
+///
+/// 出典: nornandブログ「導出方法を考えてみた」のattLS実測疑似コード。ノート24が基準点で、
+/// 3半音（1オクターブ/4）ごとにカーブテーブルのインデックスが1増える（高音ほど急峻に増加）。
+/// レジスタ直書きの[opzref](../../opzref)（ymfm実機参照レンダラ）がTL計算にそのまま使う値。
+/// 38x6エンジン側の等価カーブは[ym38x6_core::mapping::level_scale_atten]（0-255 TLスケールへ
+/// 再量子化した版、ノート依存でエンジンが実行時に適用する。opz2x6コンバーターはこちらではなく
+/// `OperatorParams::level_scale`(depth=ls*165/64)を静的パッチに埋め込むだけで、レジスタ加算値
+/// 自体は計算しない点に注意）。
+pub fn attls_reg(ls: u8, note: u8) -> u8 {
+    const CURVE: [u32; 29] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 16, 19, 23, 28, 33, 39, 47, 57, 67, 80, 95, 113,
+        134, 160, 190, 224, 255,
+    ];
+    let note = note as i32;
+    let index = if note < 24 {
+        0
+    } else if note <= 108 {
+        (note - 24) / 3
+    } else if note < 121 {
+        (note - 12 - 24) / 3
+    } else {
+        (note - 24 - 24) / 3
+    };
+    let index = index.clamp(0, CURVE.len() as i32 - 1) as usize;
+    let depth = ls.min(99) as u32 * 165 / 64; // attLS内部スケール(0-255)。engineのlevel_scaleと同一の前処理
+    ((depth * CURVE[index]) >> 8).min(127) as u8
+}
+
 // ---------------------------------------------------------------------------
 // オペレーター変換
 // ---------------------------------------------------------------------------
 
-fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions) -> OperatorParams {
+fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions, pitch_fold: f32) -> OperatorParams {
     let mod_tl_cap = opts.mod_tl_cap;
-    let (mul, op_fine_tune) = freq_to_mul_fine(op.freq, op.fine);
+    // 音程正規化(at pitch化): 音色一律の移調係数を比率へ掛けてから MUL/op_fine_tune を算出する
+    // （[voice_pitch_fold]参照）。pitch_fold=1.0 なら従来どおり額面比率。
+    let (mul, op_fine_tune) = ratio_to_mul_fine(coarse_fine_to_ratio(op.freq, op.fine) * pitch_fold);
 
     // EGT=1 のとき D2R を強制的に高値にしてリリース挙動を作る
     // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
     let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
 
+    // KVS写像（モジュレーターのみ、キャリアは0=velocity一本化）: KVS(0-7) → sens = kvs*24
+    // （nornand attKVS導出のvelocityスイングkvs*12レジスタstep × 38x6の2倍解像度）。
+    let vel_sens = if is_carrier { 0 } else { op.kvs.min(7) * 24 };
+
     let mut params = OperatorParams {
-        tl: if is_carrier { out_to_tl(op.out, alg_atten) } else { out_to_tl_mod(op.out, mod_tl_cap) },
+        // 【2026-07-18 KVSアンカー修正】実機のKVSはOL額面からの追加減衰
+        // （V_TL = … + A_ol + A_kvs、A_kvsはvelocity=最大で0）なのに対し、38x6エンジンの
+        // effective_tl は base_tl + (velocity/127)*sens の上乗せ方向。旧実装はモジュレーターの
+        // base_tl にOL額面をそのまま入れており、velocity>0 で常に実機より sens 分（kvs=4で
+        // 最大+96step≈+36dB）過大な変調になっていた（mod_cap撤廃でBank Aピアノ系が
+        // ノイズ化した回帰の真因。β≈25radの過変調でFMサイドバンドがナイキストを超え折り返す）。
+        // velocity=127 でOL額面に一致するよう base = 額面 - sens にアンカーする。
+        tl: if is_carrier {
+            out_to_tl(op.out, alg_atten)
+        } else {
+            out_to_tl_mod(op.out, mod_tl_cap).saturating_sub(vel_sens)
+        },
         ar: ar_to_x6(op.ar, op.rs),
         d1r: opm_rate_to_x6(op.d1r, op.rs),
         d2r: opm_rate_to_x6(d2r, op.rs),
@@ -320,10 +462,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         // 弱打(velocity=1)→強打(velocity=127)のAkvs減衰スイングをkvs=1..7で計算すると
         // 厳密に `kvs*12`（TLレジスタ0-127スケール、0.75dB/step）になる。38x6のTLは同じ
         // 約95.25dB幅を255段階(0.373dB/step、ちょうど2倍解像度)で表すため換算係数は正確に2倍
-        // → kvs*24。旧実装は255/7(≈36/step)を試して高velocity域でTLがクランプされすぎたため
-        // *10に抑制していたが、今回は実機準拠の値として*24を採用（base_tlが高いモジュレーターは
-        // 依然クランプの可能性があり、要聴感検証）。
-        velocity_sensitivity: if is_carrier { 0 } else { op.kvs.min(7) * 24 },
+        // → kvs*24。base_tl側を額面-sensへアンカーする理由は上記tlフィールドのコメント参照。
+        velocity_sensitivity: vel_sens,
         waveform: op.ow.min(7),
         op_fine_tune,
         floor: 0,
@@ -334,6 +474,10 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         // (project_38x6_identity_and_layering)のためコンバーター側で吸収せず、
         // パース値をそのまま写像する。
         eg_shift: op.egsft.min(3) * 85,
+        // Level Scaling: TX81Z LS(0-99) → エンジンの level_scale depth(0-255)。
+        // depth = ls*165/64（実測attLS導出式の内部スケール）。ノート依存減衰は
+        // エンジンの mapping::level_scale_atten が持つ。キャリアにも効く（実機LS準拠）。
+        level_scale: (op.ls as u16 * 165 / 64).min(255) as u8,
     };
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
@@ -357,8 +501,8 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
 /// 変換オプション（音質追い込み用の上書き群）。
 #[derive(Clone, Copy, Debug)]
 pub struct ConvOptions {
-    /// モジュレーター TL 天井。既定は`Some(DEFAULT_MOD_TL_CAP)`。`None`にすると天井なし
-    /// （実機のAol/Aalgをそのまま反映、診断用。ノイジーになることを確認済みなので通常は使わない）。
+    /// モジュレーター TL 天井。既定は`None`（天井なし＝実機のAol/Aalgをそのまま反映、実機忠実）。
+    /// `Some(n)`（`--mod-cap <n>`、例: [DEFAULT_MOD_TL_CAP]=180）で変調を抑えたい場合のオプトイン。
     pub mod_tl_cap: Option<u8>,
     /// チャンネルフィードバックの上書き（`Some(n)` で 38x6 feedback を直接指定、`None` で .syx 由来）。
     /// 切り分け診断用：`Some(0)` でフィードバックを無効化できる。
@@ -380,16 +524,21 @@ pub struct ConvOptions {
     /// 変調はそのままに出力の高域だけ削るので、低域の基音を保ったまま明るさを落とせる。
     /// 値は 0〜255（指数で 20Hz〜20kHz、180≈2.8kHz / 200≈4.5kHz）。
     pub filter_cutoff: Option<u8>,
+    /// 音程正規化。既定 `true`（TRPSの非オクターブ成分を打ち消すよう全オペレーター比率を
+    /// 一律スケールし、ピッチクラスが弾いた鍵に一致するようにする。[voice_pitch_fold]参照）。
+    /// `false`（`--no-pitch-normalize`）で額面比率のまま（移調が残る。切り分け診断・A/B用）。
+    pub pitch_normalize: bool,
 }
 
 impl Default for ConvOptions {
     fn default() -> Self {
         Self {
-            mod_tl_cap: Some(DEFAULT_MOD_TL_CAP),
+            mod_tl_cap: None,
             fb_override: None,
             ksr_override: None,
             carrier_sustain: 0.0,
             filter_cutoff: None,
+            pitch_normalize: true,
         }
     }
 }
@@ -423,10 +572,12 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     // 三点で恒等写像が正しいことを確認した。
     const OP_SRC: [usize; 4] = [0, 1, 2, 3]; // operators[i] ← ops[OP_SRC[i]]（恒等写像）
     let atten = alg_atten(alg as u8);
+    // 音程正規化(at pitch化)係数。既定ON。--no-pitch-normalize で額面比率へ戻せる（A/B用）。
+    let pitch_fold = if opts.pitch_normalize { voice_pitch_fold(voice) } else { 1.0 };
     let operators = std::array::from_fn(|i| {
         let op = &voice.ops[OP_SRC[i]];
         let is_carrier = carriers.contains(&i);
-        convert_op(op, is_carrier, atten, opts)
+        convert_op(op, is_carrier, atten, opts, pitch_fold)
     });
 
     Ym38x6Patch {
@@ -475,6 +626,24 @@ mod tests {
     use crate::parse::OpzOpData;
 
     #[test]
+    fn attls_reg_zero_ls_is_no_op() {
+        assert_eq!(attls_reg(0, 60), 0);
+        assert_eq!(attls_reg(0, 108), 0);
+    }
+
+    #[test]
+    fn attls_reg_increases_with_pitch() {
+        // GrandPiano OP2相当(LS=94)。低音ほど減衰小、高音ほど大（音域勾配）。
+        let low = attls_reg(94, 44);  // G#2
+        let mid = attls_reg(94, 56);  // G#3
+        let high = attls_reg(94, 60); // C4
+        assert!(low < mid && mid < high, "{low} < {mid} < {high}");
+        // 検算値: [[project_opz2x6_grandpiano_ls_investigation]]の実証と同じ数値
+        assert_eq!(mid, 10); // G#3: 7.5dB相当
+        assert_eq!(high, 15); // C4: 11.2dB相当
+    }
+
+    #[test]
     fn out_to_tl_polarity() {
         assert_eq!(out_to_tl(0, 0), 0);    // 無音
         assert_eq!(out_to_tl(99, 0), 255); // 最大（キャリア用、Aalgなし）
@@ -492,12 +661,28 @@ mod tests {
     }
 
     #[test]
-    fn conv_options_default_caps_modulator_tl() {
-        // 2026-07-02: 天井なしはノイジーと判明したため、既定でDEFAULT_MOD_TL_CAP(180)を適用する。
-        assert_eq!(ConvOptions::default().mod_tl_cap, Some(DEFAULT_MOD_TL_CAP));
+    fn conv_options_default_has_no_modulator_cap() {
+        // 2026-07-18: D1L極性バグ修正後にopzref基準で再評価し、天井なし(None)を既定へ戻した
+        // （[DEFAULT_MOD_TL_CAP]のコメント参照）。180は`--mod-cap`のオプトイン値として残る。
+        assert_eq!(ConvOptions::default().mod_tl_cap, None);
         let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
-        assert_eq!(p.tl, DEFAULT_MOD_TL_CAP, "既定ではモジュレーターTLがDEFAULT_MOD_TL_CAPで頭打ちになるはず");
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.tl, out_to_tl(99, 0), "既定ではモジュレーターTLがキャリアと同じ天井なしカーブになるはず");
+    }
+
+    #[test]
+    fn grandpiano_op2_maps_ls_to_level_scale() {
+        // TX81Z GrandPiano OP2: LS=94 → level_scale = 94*165/64 = 242
+        let op = OpzOpData { out: 77, freq: 13, det: 3, ar: 20, rr: 7, ls: 94, kvs: 4, ..Default::default() };
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.level_scale, 242);
+    }
+
+    #[test]
+    fn zero_ls_gives_zero_level_scale() {
+        let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ls: 0, ..Default::default() };
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.level_scale, 0);
     }
 
     #[test]
@@ -611,7 +796,7 @@ mod tests {
         // Alarm Call回帰: D1R=31 + D1L=15(パネル)は4op機の定番「ディケイスキップ=純サステイン」
         // イディオム。旧極性では「最速で-93dBへ」に化けて9msのプチノイズになっていた。
         let op = OpzOpData { d1l: 15, d1r: 31, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.d1l, 255, "パネルD1L=15はフルサステインに写像されるべき");
     }
 
@@ -628,31 +813,54 @@ mod tests {
 
     #[test]
     fn coarse_to_ratio_matches_reference_table() {
-        // https://mgregory22.me/tx81z/freqratios.html の実測値(fine=0)との照合。
+        // DXConvert freq_4op 実測テーブル(fine=0)との照合。
         // GrandPianoパッチ(Yamaha Factory Bank A voice0)で実際に使われている値を含む。
         assert!((coarse_to_ratio(0) - 0.50).abs() < 1e-3);
         assert!((coarse_to_ratio(4) - 1.00).abs() < 1e-3);
         assert!((coarse_to_ratio(8) - 2.00).abs() < 1e-3);
         assert!((coarse_to_ratio(13) - 4.00).abs() < 1e-3);
-        assert!((coarse_to_ratio(22) - 7.00).abs() < 1e-3); // 旧実装は7.937(+13.4%誤差)だった
+        assert!((coarse_to_ratio(22) - 7.00).abs() < 1e-3); // 旧近似は7.937(+13.4%誤差)だった
         assert!((coarse_to_ratio(25) - 8.00).abs() < 1e-3);
     }
 
     #[test]
-    fn coarse_fine_to_ratio_adds_fine_as_order_offset() {
-        // FREQ=4: group0(base=0.50,step=0.0625), order_base=8 → fine=0で1.0
-        assert!((coarse_fine_to_ratio(4, 0) - 1.00).abs() < 1e-3);
-        // fine=1刻みでorderが+1、step分(0.0625)だけratioが増える
-        assert!((coarse_fine_to_ratio(4, 1) - 1.0625).abs() < 1e-3);
-        assert!((coarse_fine_to_ratio(4, 15) - (1.0 + 0.0625 * 15.0)).abs() < 1e-3);
+    fn coarse_fine_to_ratio_uses_measured_table() {
+        // DXConvert freq_4op を 16*coarse+fine で引く。
+        // coarse=4: 1.00, 1.06, 1.12, ... （fineでcoarse間を非線形補間）
+        assert_eq!(coarse_fine_to_ratio(4, 0), 1.00);
+        assert_eq!(coarse_fine_to_ratio(4, 1), 1.06);
+        assert_eq!(coarse_fine_to_ratio(4, 15), 1.93);
+        // A008 LoTine81Zのcarrier: coarse=5,fine=1 → 1.49(≈5度上)。これは実機仕様。
+        assert_eq!(coarse_fine_to_ratio(5, 1), 1.49);
+        // 低coarseはfineが早期飽和する（旧線形近似がここで最大753.9¢移調していた）:
+        // coarse=0はfine=7の0.93以降クランプ。
+        assert_eq!(coarse_fine_to_ratio(0, 7), 0.93);
+        assert_eq!(coarse_fine_to_ratio(0, 15), 0.93);
         // fine>15はclampされ、16も15と同じ結果になる
-        assert!((coarse_fine_to_ratio(4, 16) - coarse_fine_to_ratio(4, 15)).abs() < 1e-6);
+        assert_eq!(coarse_fine_to_ratio(4, 16), coarse_fine_to_ratio(4, 15));
+    }
+
+    /// FREQ_4OPは各coarse行内でfineが増えるほど周波数比が単調に増える実測テーブルであるべき。
+    /// coarse=38/fine=12・coarse=57/fine=10の原典誤記（前後平均で補正済み）の再発を検出する。
+    #[test]
+    fn freq_4op_is_monotonic_per_row() {
+        for coarse in 0u8..64 {
+            for fine in 1u8..16 {
+                let prev = coarse_fine_to_ratio(coarse, fine - 1);
+                let curr = coarse_fine_to_ratio(coarse, fine);
+                assert!(
+                    curr >= prev,
+                    "FREQ_4OP not monotonic at coarse={coarse}: fine={} -> {prev}, fine={fine} -> {curr}",
+                    fine - 1
+                );
+            }
+        }
     }
 
     #[test]
     fn kvs_carrier_is_zero() {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 0, "carrier velocity_sensitivity must be 0");
     }
 
@@ -660,35 +868,35 @@ mod tests {
     fn kvs_modulator_maps_168_at_max() {
         // kvs*24（実機attKVS導出式から: 弱打→強打の減衰スイングkvs*12を38x6のTL解像度(2倍)へ換算）
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 168);
     }
 
     #[test]
     fn kvs_modulator_zero_stays_zero() {
         let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 0);
     }
 
     #[test]
     fn egt1_forces_d2r_nonzero() {
         let op = OpzOpData { d2r: 0, egt: 1, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert!(p.d2r > 0, "EGT=1 with D2R=0 should force d2r > 0");
     }
 
     #[test]
     fn egt0_d2r_zero_stays_zero() {
         let op = OpzOpData { d2r: 0, egt: 0, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, true, 0, ConvOptions::default());
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.d2r, 0, "EGT=0 D2R=0 → sustain型（d2r=0のまま）");
     }
 
     #[test]
     fn waveform_direct_copy() {
         let op = OpzOpData { ow: 5, freq: 4, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() };
-        let p = convert_op(&op, false, 0, ConvOptions::default());
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.waveform, 5);
     }
 
@@ -714,10 +922,62 @@ mod tests {
         voice.ops[1] = OpzOpData { freq: 13, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP3 → ratio4.0,mul4
         voice.ops[2] = OpzOpData { freq: 22, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP2 → ratio7.0,mul7
         voice.ops[3] = OpzOpData { freq: 25, det: 3, out: 80, ar: 31, rr: 7, ..Default::default() }; // OP1 → ratio8.0,mul8
-        let p = voice_to_patch(&voice);
+        // 結線順(恒等写像)の検証が目的なので、MULを判別子として使うため音程正規化はOFF
+        // （ONだとキャリア比率が1.0へ畳まれ全MULが一律スケールされて判別不能になる）。
+        let p = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
         assert_eq!(p.operators[0].mul, 2, "operators[0]=OP4");
         assert_eq!(p.operators[1].mul, 4, "operators[1]=OP3");
         assert_eq!(p.operators[2].mul, 7, "operators[2]=OP2");
         assert_eq!(p.operators[3].mul, 8, "operators[3]=OP1");
+    }
+
+    #[test]
+    fn nonoctave_semitones_extracts_non_octave_component() {
+        // LoTine81Z(-19)は+5（5度上のキャリア1.5倍を相殺する側）、純オクターブ(-24/-12/0/+12)は0。
+        assert!((nonoctave_semitones(-19.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-12.0) - 0.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-7.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(5.0) - 5.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(-24.0) - 0.0).abs() < 1e-4);
+        assert!((nonoctave_semitones(8.0) - (-4.0)).abs() < 1e-4);
+        assert!((nonoctave_semitones(0.0) - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pitch_normalize_removes_non_octave_offset() {
+        // LoTine81Zと同型: TRPS=-19(非オクターブ成分+5)・キャリアが額面1.5倍(5度上)。
+        // TRPSの非オクターブ成分を打ち消す方向へfoldがかかり、キャリアが正確な2の冪(MUL2)
+        // ＝ピッチクラスが鍵に一致するようになる。
+        let mut voice = OpzVoice::default();
+        voice.algorithm = 4; // キャリアは operators[1],[3]
+        voice.transpose = -19;
+        voice.ops[1] = OpzOpData { freq: 4, fine: 8, det: 3, out: 90, ar: 31, rr: 7, ..Default::default() };
+        voice.ops[3] = OpzOpData { freq: 4, fine: 8, det: 3, out: 90, ar: 31, rr: 7, ..Default::default() };
+
+        // 正規化OFF: 額面1.5倍 → MUL2 + op_fine_tune≈75(−498¢の5度オフセットが残る)
+        let raw = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
+        assert!((raw.operators[3].op_fine_tune as i32 - 128).abs() > 30,
+            "正規化OFFではキャリアに5度オフセットが残る(op_fine_tune={})", raw.operators[3].op_fine_tune);
+
+        // 正規化ON: fold=2^(5/12)≈1.335、1.5×1.335≈2.0 へ畳まれ MUL2・op_fine_tune≈128(0¢中心)
+        let norm = voice_to_patch(&voice);
+        assert_eq!(norm.operators[3].mul, 2, "1.5倍はTRPS由来のfoldで最寄りオクターブ2.0(MUL2)へ");
+        assert!((norm.operators[3].op_fine_tune as i32 - 128).abs() <= 2,
+            "正規化後はピッチクラスが鍵に一致(op_fine_tune≈128)、実際={}", norm.operators[3].op_fine_tune);
+    }
+
+    #[test]
+    fn pitch_normalize_leaves_pure_octave_transpose_unchanged() {
+        // TRPSが純オクターブ(-12等)なら「完全オクターブなら補正不要」の方針どおり無変更
+        // （fold=1.0）。効果音・打楽器の多くもTRPSが純オクターブのため同様に素通しされる。
+        let mut voice = OpzVoice::default();
+        voice.transpose = -12;
+        voice.ops[3] = OpzOpData { freq: 8, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() }; // alg0キャリア, 2.0倍
+        let raw = voice_to_patch_opts(&voice, ConvOptions { pitch_normalize: false, ..Default::default() });
+        let norm = voice_to_patch(&voice);
+        assert_eq!(raw.operators[3].mul, norm.operators[3].mul,
+            "純オクターブTRPSは正規化ON/OFFで不変(MUL)");
+        assert_eq!(raw.operators[3].op_fine_tune, norm.operators[3].op_fine_tune,
+            "純オクターブTRPSは正規化ON/OFFで不変(op_fine_tune)");
     }
 }

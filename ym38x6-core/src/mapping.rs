@@ -48,6 +48,37 @@ pub fn eg_shift_to_db_range(eg_shift: u8) -> f32 {
     96.0 / 2f32.powf(units)
 }
 
+/// Level Scaling: level_scale(0-255 depth) × MIDIノート番号 → 38x6 TL減衰量(0-255)。
+///
+/// TX81Z Level Scaling（attLS実測カーブ）を移植した汎用ノート依存レベルスケーリング。OPL系の
+/// KSL(Key Scale Level)に相当する。ノート24を基準点に3半音（1オクターブ/4）ごとにカーブテーブルの
+/// インデックスが1増え、高音ほど減衰が急峻に増える（低音域はほぼフラット）。
+/// 出典: nornandブログ「TX81Zを解析した／導出方法を考えてみた」のattLS実測テーブル。
+/// depth はコンバーター側でTX81Z LS(0-99)を `ls*165/64`(0-255) に写した値。
+/// レジスタ減衰(0.75dB/step) = (depth×CURVE)>>8 を、38x6 TL(0.373dB/step)へ ×255/127 で換算する。
+pub fn level_scale_atten(level_scale: u8, note: u8) -> u8 {
+    if level_scale == 0 {
+        return 0;
+    }
+    const CURVE: [u32; 29] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 16, 19, 23, 28, 33, 39, 47, 57, 67, 80, 95, 113,
+        134, 160, 190, 224, 255,
+    ];
+    let note = note as i32;
+    let index = if note < 24 {
+        0
+    } else if note <= 108 {
+        (note - 24) / 3
+    } else if note < 121 {
+        (note - 12 - 24) / 3
+    } else {
+        (note - 24 - 24) / 3
+    };
+    let index = index.clamp(0, CURVE.len() as i32 - 1) as usize;
+    let atten_reg = (level_scale as u32 * CURVE[index]) >> 8;
+    ((atten_reg as f32 * 255.0 / 127.0).round() as u32).min(255) as u8
+}
+
 // AR/D1R/D2R/RRの時定数マッピングはsound-core側（eg.rs）へ移設済み。
 // operator.rsの`use crate::mapping::*;`がそのまま動くよう、ここで再エクスポートする。
 pub use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta};
@@ -243,5 +274,24 @@ mod tests {
         assert_eq!(f_number_to_ratio(F_NUMBER_CENTER), 1.0);
         assert_eq!(f_number_to_ratio(0), 0.0);
         assert!((f_number_to_ratio(8191) - 1.99976).abs() < 1e-4);
+    }
+
+    #[test]
+    fn level_scale_atten_zero_depth_is_no_op() {
+        assert_eq!(level_scale_atten(0, 60), 0);
+        assert_eq!(level_scale_atten(0, 108), 0);
+    }
+
+    #[test]
+    fn level_scale_atten_increases_with_pitch() {
+        // depth=242 は TX81Z GrandPiano OP2 の LS=94 相当（ls*165/64）。
+        // 低音ほど減衰小、高音ほど大（音域勾配）。
+        let low = level_scale_atten(242, 44); // G#2
+        let mid = level_scale_atten(242, 60); // C4
+        let high = level_scale_atten(242, 84); // C6
+        assert!(low < mid && mid < high, "{low} < {mid} < {high}");
+        // 検算値（atten_reg×255/127, round）: note44→5reg→10, note60→15reg→30
+        assert_eq!(low, 10);
+        assert_eq!(mid, 30);
     }
 }
