@@ -30,9 +30,21 @@ pub fn op_fine_tune_to_cents(v: u8) -> f32 {
 
 /// TL値(0〜255)→リニアゲイン。実機OPM TL(7bit、0.75dB/step)のreg=0(0dB)〜
 /// reg=127(-95.25dB)をtl=255〜0に厳密アンカーし、dB単位で線形補間する。
+///
+/// TLは1ノート中不変のパッチ値だが、以前は`operator::tick()`から毎サンプル`powf()`を
+/// 呼んでいた。256要素テーブルを初回アクセス時に1回だけ構築（`OnceLock`、全チャンネル共有）し、
+/// 以降は配列参照のみで済ませる。数式は変更していないため出力は従来と数学的に同一。
 pub fn tl_to_gain(tl: u8) -> f32 {
-    let db = -95.25 * (255 - tl) as f32 / 255.0;
-    10f32.powf(db / 20.0)
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (tl, slot) in table.iter_mut().enumerate() {
+            let db = -95.25 * (255 - tl) as f32 / 255.0;
+            *slot = 10f32.powf(db / 20.0);
+        }
+        table
+    });
+    table[tl as usize]
 }
 
 /// EGSFT（TX81Z EG Shift）: EGの減衰レンジ(dB)を返す。既定0＝96dB（圧縮なし）。

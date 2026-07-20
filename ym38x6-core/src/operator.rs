@@ -110,6 +110,11 @@ pub struct Operator {
     noise_accum: f32,
     /// サンプル&ホールドの現在保持値（±1）。
     noise_hold: f32,
+    /// KSRレート倍率(`ksr_rate_multiplier`、`powf()`を含む)のキャッシュ。(ksr, note)が
+    /// 前回と同じならtick()内で再計算しない（ノート中は両方とも不変のため、毎サンプル
+    /// powf()を呼んでいた無駄を避ける）。
+    cached_rate_scale: f32,
+    cached_rate_scale_key: Option<(u8, u8)>,
 }
 
 impl Operator {
@@ -128,6 +133,8 @@ impl Operator {
             noise_lfsr: 1,
             noise_accum: 0.0,
             noise_hold: 0.0,
+            cached_rate_scale: 1.0,
+            cached_rate_scale_key: None,
         }
     }
 
@@ -169,6 +176,11 @@ impl Operator {
 
     pub fn is_idle(&self) -> bool {
         self.eg.is_idle()
+    }
+
+    /// 現在のEGレベル(0.0〜1.0)。ボイススチールの「最も静かなボイス」判定に使う。
+    pub fn env_level(&self) -> f32 {
+        self.eg.level()
     }
 
     /// チップ内LFOによる変調値を設定する（毎サンプル、Channelから呼ばれる）。
@@ -217,7 +229,15 @@ impl Operator {
         if self.eg.is_idle() {
             return 0.0;
         }
-        let ksr_mul = ksr_rate_multiplier(self.params.ksr, note);
+        let rate_scale_key = (self.params.ksr, note);
+        let ksr_mul = if self.cached_rate_scale_key == Some(rate_scale_key) {
+            self.cached_rate_scale
+        } else {
+            let v = ksr_rate_multiplier(self.params.ksr, note);
+            self.cached_rate_scale = v;
+            self.cached_rate_scale_key = Some(rate_scale_key);
+            v
+        };
         let env_level = self.eg.tick(
             sample_rate,
             EgParams {

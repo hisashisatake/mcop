@@ -581,6 +581,7 @@ pub fn render_smf(
     let mut cur_tick: u64 = 0;
     let mut sample_pos: f64 = 0.0;
     let mut rendered: usize = 0;
+    let mut peak_voices: usize = 0;
 
     let max_samples = max_secs.map(|s| (s * sample_rate).max(0.0) as usize);
 
@@ -593,10 +594,12 @@ pub fn render_smf(
         if let Some(maxs) = max_samples {
             if target >= maxs {
                 render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, maxs);
+                eprintln!("smf2wav: ピークボイス数(active_voice_count) = {peak_voices}");
                 return Ok(out);
             }
         }
         render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, target);
+        peak_voices = peak_voices.max(engine.active_voice_count());
 
         match e.kind {
             EvKind::Tempo(us) => {
@@ -666,6 +669,8 @@ pub fn render_smf(
         tail_target = tail_target.min(maxs);
     }
     render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, tail_target);
+    peak_voices = peak_voices.max(engine.active_voice_count());
+    eprintln!("smf2wav: ピークボイス数(active_voice_count) = {peak_voices}");
     Ok(out)
 }
 

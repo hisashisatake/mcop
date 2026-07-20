@@ -452,6 +452,9 @@ struct Channel {
     vcf: VoiceFilter,
     /// 4op合成後に適用するVCAオーバーレイ（sound-core::VoiceAmp）。
     vca: VoiceAmp,
+    /// このボイス全体がnote_off済みか（CC103〜106によるOP単位キーオフとは独立）。
+    /// ボイススチール（`steal_score`）でrelease中のボイスを優先して奪うために使う。
+    note_is_off: bool,
 }
 
 impl Channel {
@@ -497,6 +500,7 @@ impl Channel {
             chip_lfo: ChipLfo::new(),
             vcf,
             vca,
+            note_is_off: false,
         }
     }
 
@@ -524,6 +528,7 @@ impl Channel {
         self.perf_lfo.set_delay(patch.channel.texture_lfo.delay);
         self.perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
         self.perf_lfo.note_on();
+        self.note_is_off = false;
     }
 
     fn note_off(&mut self) {
@@ -534,6 +539,24 @@ impl Channel {
         self.vca.note_off();
         self.pitch_fg_eg.note_off();
         self.perf_lfo.note_off();
+        self.note_is_off = true;
+    }
+
+    /// ボイススチールの優先度スコア。値が小さいほど先に奪われる
+    /// （release中（note_off済み）のボイスを優先し、その中では最も静かなキャリアを優先する。
+    /// 発音中のボイスは大きなペナルティを足して奪われにくくする）。
+    fn steal_score(&self) -> f32 {
+        let algo = &ALGORITHMS[(self.channel_params.algorithm as usize).min(7)];
+        let carrier_level = algo
+            .carriers
+            .iter()
+            .map(|&i| self.operators[i].env_level())
+            .fold(0.0f32, f32::max);
+        if self.note_is_off {
+            carrier_level
+        } else {
+            carrier_level + 10.0
+        }
     }
 
     /// CC103〜106（≧64）：指定オペレーター(0〜3)をNote-On時の周波数/ベロシティでキーオンする。
@@ -685,11 +708,20 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 
 const TOTAL_SLOTS: usize = 256;
 
+/// 同時発音数の既定上限。「無制限チャンネル管理」の安全弁で、通常の演奏では
+/// 到達しない値に設定してある（この曲を含む一般的なMIDIの瞬間可聴ポリは数〜十数）。
+/// 長いリリース（RR）を持つパッチ×高密度なノート列では、聴感上無音のリリース裾ボイスが
+/// `is_idle()`に達するまで（数十秒）チャンネルに残り続け、上限が無いと際限なく積み上がって
+/// レンダリング負荷が膨らむ。上限到達時は最も奪ってよいボイス（release中かつ最も静かなもの）
+/// を1つ削除してから新規ボイスを確保する（`Channel::steal_score`参照）。
+const DEFAULT_MAX_VOICES: usize = 48;
+
 pub struct Ym38x6Engine {
     sample_rate: f32,
     channels: HashMap<usize, Channel>,
     wave_tables: Vec<Option<WaveTable>>,
     current_patch: Ym38x6Patch,
+    max_voices: usize,
 }
 
 impl Ym38x6Engine {
@@ -703,6 +735,24 @@ impl Ym38x6Engine {
             channels: HashMap::new(),
             wave_tables,
             current_patch: Ym38x6Patch::default(),
+            max_voices: DEFAULT_MAX_VOICES,
+        }
+    }
+
+    /// 同時発音数の上限を変更する（既定`DEFAULT_MAX_VOICES`=48）。診断・テスト用途にも使う。
+    pub fn set_max_voices(&mut self, max_voices: usize) {
+        self.max_voices = max_voices.max(1);
+    }
+
+    /// 上限到達時に、最も奪ってよいボイス（`Channel::steal_score`が最小のもの）を1つ除去する。
+    fn steal_one_voice(&mut self) {
+        if let Some(steal_id) = self
+            .channels
+            .iter()
+            .min_by(|a, b| a.1.steal_score().partial_cmp(&b.1.steal_score()).unwrap())
+            .map(|(&id, _)| id)
+        {
+            self.channels.remove(&steal_id);
         }
     }
 
@@ -803,6 +853,10 @@ impl Ym38x6Engine {
         self.channels.retain(|id, _| id >> 7 != group);
     }
 
+    /// 現在生存している（idleでない）ボイス数。負荷診断用（ボイススチール上限との比較等）。
+    pub fn active_voice_count(&self) -> usize {
+        self.channels.len()
+    }
 }
 
 /// 発振源（VCO）としての演奏ライフサイクル層（spec.md「VCO抽象とモジュレーション層」）。
@@ -821,6 +875,10 @@ impl Vco for Ym38x6Engine {
                 ch.retrigger(frequency, velocity, patch);
                 return;
             }
+        } else if self.channels.len() >= self.max_voices {
+            // 既存スロットの上書き（idleなチャンネルへのnote-on）はボイス数を増やさないため
+            // スチール対象外。ここに来るのは新規スロットが上限に到達している場合のみ。
+            self.steal_one_voice();
         }
         self.channels.insert(channel, Channel::new(frequency, velocity, patch));
     }
@@ -921,6 +979,48 @@ mod tests {
         patch.operators = [op_params; 4];
         patch.channel.algorithm = 7;
         patch
+    }
+
+    #[test]
+    fn voice_steal_caps_channel_count() {
+        let mut engine = Ym38x6Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.set_max_voices(4);
+        for ch in 0..8 {
+            engine.note_on(ch, 440.0, 100);
+        }
+        assert_eq!(engine.channels.len(), 4, "上限を超えて積み上がってはいけない");
+    }
+
+    #[test]
+    fn voice_steal_prefers_released_over_held() {
+        let mut engine = Ym38x6Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.set_max_voices(2);
+        engine.note_on(0, 440.0, 100);
+        engine.note_on(1, 440.0, 100);
+        engine.note_off(0); // ch0だけrelease中にする
+
+        engine.note_on(2, 440.0, 100); // 上限到達→ch0(release中)が奪われるはず
+
+        assert!(!engine.channels.contains_key(&0), "release中のボイスが優先的に奪われるはず");
+        assert!(engine.channels.contains_key(&1), "発音中のボイスは残るはず");
+        assert!(engine.channels.contains_key(&2), "新規ボイスは確保されるはず");
+        assert_eq!(engine.channels.len(), 2);
+    }
+
+    #[test]
+    fn retrigger_does_not_trigger_steal() {
+        let mut engine = Ym38x6Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.set_max_voices(2);
+        engine.note_on(0, 440.0, 100);
+        engine.note_on(1, 440.0, 100);
+        engine.note_on(0, 880.0, 100); // 同一IDへの再note-on＝retrigger（新規スロットではない）
+
+        assert!(engine.channels.contains_key(&0));
+        assert!(engine.channels.contains_key(&1), "retriggerが他ボイスを巻き込んで奪ってはいけない");
+        assert_eq!(engine.channels.len(), 2);
     }
 
     #[test]

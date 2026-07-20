@@ -5,19 +5,51 @@
 // 実装後に音を聴いて係数を調整する。
 // ---------------------------------------------------------------------------
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 use crate::lfo::delay_to_seconds;
 
-/// レート値(0〜255)→1サンプルあたりのEG変化量。
-/// rate=0は特殊値で「変化なし」（OPM/OPNのAR=0/D1R=0/D2R=0と同じフリーズ状態）。
-/// rate=1〜255はt_max（rate=1、最遅）〜t_min（rate=255、最速）の指数マッピング。
-fn rate_to_delta(rate: u8, sample_rate: f32, t_min: f32, t_max: f32) -> f32 {
-    if rate == 0 {
-        return 0.0;
+// ---------------------------------------------------------------------------
+// レートテーブル（AR/D1R/D2R/RR）
+//
+// rate(0〜255)は1ノート中不変のパッチ値だが、旧実装は`powf()`（超越関数）を
+// `Eg::tick()`から毎サンプル呼んでいた。AR/D1R/D2R/RRそれぞれについて
+// rate→秒数のテーブルを初回アクセス時に1回だけ構築し（`OnceLock`、全チャンネル共有）、
+// 以降は配列参照のみで済ませる。数式は変更していないため出力は従来と数学的に同一。
+// ---------------------------------------------------------------------------
+
+/// rate(1〜255)→秒数の256要素テーブルを構築する（index 0は未使用）。
+fn build_rate_seconds_table(t_min: f32, t_max: f32) -> [f32; 256] {
+    let mut table = [0.0f32; 256];
+    for (rate, slot) in table.iter_mut().enumerate().skip(1) {
+        *slot = t_min * (t_max / t_min).powf(1.0 - (rate as f32 - 1.0) / 254.0);
     }
-    let t = t_min * (t_max / t_min).powf(1.0 - (rate as f32 - 1.0) / 254.0);
-    1.0 / (t * sample_rate)
+    table
+}
+
+fn ar_seconds_table() -> &'static [f32; 256] {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| build_rate_seconds_table(0.00068, 20.2))
+}
+
+fn decay_seconds_table() -> &'static [f32; 256] {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| build_rate_seconds_table(0.00871, 284.9))
+}
+
+fn rr_seconds_table() -> &'static [f32; 256] {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        let t_min: f32 = 0.00871;
+        let t_max: f32 = 284.9;
+        for (rate, slot) in table.iter_mut().enumerate() {
+            *slot = t_min * (t_max / t_min).powf(1.0 - rate as f32 / 255.0);
+        }
+        table
+    })
 }
 
 /// AR: 0.68ms〜20.2秒。OPM AR(5bit)のreg=31〜1(eg_rate=62〜2、KSRなし)の理論値が基準。
@@ -25,13 +57,19 @@ fn rate_to_delta(rate: u8, sample_rate: f32, t_min: f32, t_max: f32) -> f32 {
 /// 増分テーブルの値自体はreg=30(eg_rate=60)と同一のため0.68msを採用。
 /// rate=0はreg=0相当のフリーズ（発音しない）。
 pub fn ar_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    rate_to_delta(rate, sample_rate, 0.00068, 20.2)
+    if rate == 0 {
+        return 0.0;
+    }
+    1.0 / (ar_seconds_table()[rate as usize] * sample_rate)
 }
 
 /// D1R/D2R: 8.71ms〜284.9秒。OPM D1R/D2R(5bit)のreg=31〜1(eg_rate=62〜2、KSRなし)の理論値が基準。
 /// rate=0はD1R/D2R=0相当のフリーズ（サスティンレベルを無限保持）。
 pub fn decay_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    rate_to_delta(rate, sample_rate, 0.00871, 284.9)
+    if rate == 0 {
+        return 0.0;
+    }
+    1.0 / (decay_seconds_table()[rate as usize] * sample_rate)
 }
 
 /// RR: 8.71ms〜284.9秒。OPM RR(4bit)のreg=15〜0(eg_rate=62〜2、KSRなし)の理論値が基準。
@@ -39,10 +77,7 @@ pub fn decay_to_delta(rate: u8, sample_rate: f32) -> f32 {
 /// eg_rate=2となり実機にフリーズが存在しないため、rate=0〜255の全域を指数補間する
 /// （rate=0でも284.9秒で減衰し、無限保持の特殊値は持たない）。
 pub fn rr_to_delta(rate: u8, sample_rate: f32) -> f32 {
-    let t_min: f32 = 0.00871;
-    let t_max: f32 = 284.9;
-    let t = t_min * (t_max / t_min).powf(1.0 - rate as f32 / 255.0);
-    1.0 / (t * sample_rate)
+    1.0 / (rr_seconds_table()[rate as usize] * sample_rate)
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +236,13 @@ impl Eg {
 
     pub fn is_idle(&self) -> bool {
         self.phase == EgPhase::Idle
+    }
+
+    /// 現在のエンベロープレベル(0.0〜1.0、Curve整形前の生値)。ボイススチールで
+    /// 「どのボイスが最も静かか」を比較する用途（`shaped_output`はCurve由来の
+    /// 一時的な上下動があるため使わない）。
+    pub fn level(&self) -> f32 {
+        self.level
     }
 
     /// Curve整形前の生レベル(0.0〜1.0)。フェーズ遷移判定に使う内部値そのもの。
