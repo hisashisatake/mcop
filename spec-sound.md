@@ -540,7 +540,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 ```
 
 **実装方式：**
-- Reverb：コムフィルタ＋オールパスフィルタ構成のアルゴリズミックリバーブ（Room1〜Plate）。Delay/Panning Delayタイプはフィードバックディレイラインで実現
+- Reverb：FDN（Feedback Delay Network、8ライン・Householder行列によるライン混合＋プリディレイ＋入力拡散オールパス）方式のアルゴリズミックリバーブ（Room1〜Plate）。Delay/Panning Delayタイプはフィードバックディレイラインで実現
 - Chorus：LFO変調ディレイライン（Chorus1〜4、Flanger、Feedback Chorus）。Short Delay系タイプは変調なしの短ディレイ
 - `sound-core`に依存ゼロのDSPモジュールとして実装し、各エンジンの`render()`出力に対してapp/plugin側のレンダリング後段で適用する
 
