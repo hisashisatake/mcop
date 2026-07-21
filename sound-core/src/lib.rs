@@ -43,16 +43,26 @@ const LOG_SILENCE: u16 = 0x7FFF;
 ///   bit15   : sign flag (1 = negative)
 pub struct WaveTable {
     data: [u16; WAVE_SIZE],
+    /// `log_to_linear(data[i])` decoded once at construction time, so `sample_at()`
+    /// (called every sample for every sounding operator) is a plain array read
+    /// instead of a `powf()` call. Values are identical to decoding `data` on the fly.
+    linear: [f32; WAVE_SIZE],
 }
 
 impl WaveTable {
     fn new() -> Self {
-        Self { data: [LOG_SILENCE; WAVE_SIZE] }
+        Self { data: [LOG_SILENCE; WAVE_SIZE], linear: [0.0; WAVE_SIZE] }
+    }
+
+    /// Encode `value` into the log table and refresh the decoded linear cache.
+    fn set(&mut self, idx: usize, value: f32) {
+        self.data[idx] = linear_to_log(value);
+        self.linear[idx] = log_to_linear(self.data[idx]);
     }
 
     /// Decode one sample at the given table index to linear [-1.0, 1.0].
     pub fn sample_at(&self, idx: usize) -> f32 {
-        log_to_linear(self.data[idx % WAVE_SIZE])
+        self.linear[idx % WAVE_SIZE]
     }
 
     pub fn len(&self) -> usize {
@@ -87,7 +97,7 @@ pub fn gen_sine() -> WaveTable {
     let mut t = WaveTable::new();
     for i in 0..WAVE_SIZE {
         let phase = i as f32 / WAVE_SIZE as f32;
-        t.data[i] = linear_to_log((2.0 * std::f32::consts::PI * phase).sin());
+        t.set(i, (2.0 * std::f32::consts::PI * phase).sin());
     }
     t
 }
@@ -95,7 +105,7 @@ pub fn gen_sine() -> WaveTable {
 pub fn gen_square() -> WaveTable {
     let mut t = WaveTable::new();
     for i in 0..WAVE_SIZE {
-        t.data[i] = linear_to_log(if i < WAVE_SIZE / 2 { 1.0 } else { -1.0 });
+        t.set(i, if i < WAVE_SIZE / 2 { 1.0 } else { -1.0 });
     }
     t
 }
@@ -104,7 +114,7 @@ pub fn gen_sawtooth() -> WaveTable {
     let mut t = WaveTable::new();
     for i in 0..WAVE_SIZE {
         let phase = i as f32 / WAVE_SIZE as f32;
-        t.data[i] = linear_to_log(2.0 * phase - 1.0);
+        t.set(i, 2.0 * phase - 1.0);
     }
     t
 }
@@ -114,7 +124,7 @@ pub fn gen_triangle() -> WaveTable {
     for i in 0..WAVE_SIZE {
         let p = i as f32 / WAVE_SIZE as f32;
         let s = if p < 0.5 { 4.0 * p - 1.0 } else { 3.0 - 4.0 * p };
-        t.data[i] = linear_to_log(s);
+        t.set(i, s);
     }
     t
 }
@@ -125,7 +135,7 @@ pub fn gen_from_fn(f: impl Fn(f32) -> f32) -> WaveTable {
     let mut t = WaveTable::new();
     for i in 0..WAVE_SIZE {
         let phase = i as f32 / WAVE_SIZE as f32;
-        t.data[i] = linear_to_log(f(phase).clamp(-1.0, 1.0));
+        t.set(i, f(phase).clamp(-1.0, 1.0));
     }
     t
 }
@@ -139,7 +149,7 @@ pub fn convert_wave_32(input: &[i8; 32]) -> WaveTable {
         let frac = pos - idx as f32;
         let a = input[idx % 32] as f32 / 128.0;
         let b = input[(idx + 1) % 32] as f32 / 128.0;
-        t.data[i] = linear_to_log((a + frac * (b - a)).clamp(-1.0, 1.0));
+        t.set(i, (a + frac * (b - a)).clamp(-1.0, 1.0));
     }
     t
 }

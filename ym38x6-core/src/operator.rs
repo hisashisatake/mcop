@@ -115,7 +115,28 @@ pub struct Operator {
     /// powf()を呼んでいた無駄を避ける）。
     cached_rate_scale: f32,
     cached_rate_scale_key: Option<(u8, u8)>,
+    /// `effective_frequency`のピッチ比(`2f32.powf(cents/1200.0)`)のキャッシュ。DT1/op_fine_tuneは
+    /// 1ノート中不変、chip_lfo/perf_lfoのビブラートが無効な間はcentsの合計も不変になるため、
+    /// centsキーが前回と同じなら再計算しない（ビブラート有効時は毎サンプル変わるため素通しでpowf()を呼ぶ）。
+    cached_pitch_ratio: f32,
+    cached_pitch_ratio_key: Option<f32>,
+    /// `env_amp`(`10f32.powf()`)の等比数列キャッシュ。curve=0（線形EG）の区間ではenv_levelが
+    /// 毎サンプル一定delta(AR/D1R/D2R/RRのレート由来)で加減算されるだけなので、env_amp自体も
+    /// 等比数列になる(env_amp[n]=env_amp[n-1]*ratio)。deltaが前回と同じ間はpowf()を呼ばず
+    /// 乗算のみで済ませ、deltaが変わった（フェーズ遷移・クランプ・note_on/off等）タイミングだけ
+    /// 再計算する。curve!=0（非線形warpで等比の前提が崩れる）では常にpowf()へフォールバックする。
+    /// 浮動小数点誤差の蓄積を抑えるため、[ENV_AMP_RESYNC_INTERVAL]サンプルごとにも強制再計算する。
+    cached_env_amp: f32,
+    cached_env_level: f32,
+    cached_env_delta: f32,
+    cached_env_ratio: f32,
+    env_amp_cache_valid: bool,
+    env_amp_resync_counter: u32,
 }
+
+/// env_ampの等比数列キャッシュを強制的に再同期する間隔（サンプル数）。約93ms@44.1kHz。
+/// 浮動小数点の乗算誤差が長い減衰（最長284.9秒）で蓄積しないよう定期的にpowf()で厳密値へ戻す。
+const ENV_AMP_RESYNC_INTERVAL: u32 = 4096;
 
 impl Operator {
     pub fn new(params: OperatorParams) -> Self {
@@ -135,6 +156,14 @@ impl Operator {
             noise_hold: 0.0,
             cached_rate_scale: 1.0,
             cached_rate_scale_key: None,
+            cached_pitch_ratio: 1.0,
+            cached_pitch_ratio_key: None,
+            cached_env_amp: 0.0,
+            cached_env_level: 0.0,
+            cached_env_delta: 0.0,
+            cached_env_ratio: 1.0,
+            env_amp_cache_valid: false,
+            env_amp_resync_counter: 0,
         }
     }
 
@@ -152,6 +181,7 @@ impl Operator {
         self.noise_lfsr = 1;
         self.noise_accum = 0.0;
         self.noise_hold = 0.0;
+        self.env_amp_cache_valid = false;
     }
 
     /// 残響レベルを保持したまま Attack 相位へ再突入する（実機 OPM の Key-On 挙動の再現）。
@@ -168,6 +198,7 @@ impl Operator {
         self.noise_lfsr = 1;
         self.noise_accum = 0.0;
         self.noise_hold = 0.0;
+        self.env_amp_cache_valid = false;
     }
 
     pub fn note_off(&mut self) {
@@ -199,12 +230,49 @@ impl Operator {
         self.f_number_ratio = f_number_to_ratio(f_number);
     }
 
-    fn effective_frequency(&self) -> f32 {
+    fn effective_frequency(&mut self) -> f32 {
         let cents = dt1_to_cents(self.params.dt1)
             + op_fine_tune_to_cents(self.params.op_fine_tune)
             + self.chip_lfo_pitch_mod_cents
             + self.perf_lfo_pitch_mod_cents;
-        self.frequency * self.f_number_ratio * mul_to_ratio(self.params.mul) * 2f32.powf(cents / 1200.0)
+        let pitch_ratio = if self.cached_pitch_ratio_key == Some(cents) {
+            self.cached_pitch_ratio
+        } else {
+            let v = 2f32.powf(cents / 1200.0);
+            self.cached_pitch_ratio = v;
+            self.cached_pitch_ratio_key = Some(cents);
+            v
+        };
+        self.frequency * self.f_number_ratio * mul_to_ratio(self.params.mul) * pitch_ratio
+    }
+
+    /// dBリニアエンベロープの`env_amp = 10^(-(1-env_level)*(db_range/20))`を求める。
+    /// curve=0（線形EG）の区間ではenv_levelが毎サンプル一定deltaで動くだけなので等比数列で
+    /// 近似し、deltaが変わった時とcurve!=0の時だけ`powf()`を呼ぶ（詳細は各フィールドのコメント参照）。
+    fn compute_env_amp(&mut self, env_level: f32, db_range: f32) -> f32 {
+        let k = db_range / 20.0;
+        if self.params.curve != 0 {
+            self.env_amp_cache_valid = false;
+            return 10f32.powf(-(1.0 - env_level) * k);
+        }
+        let delta = env_level - self.cached_env_level;
+        self.env_amp_resync_counter += 1;
+        let use_cache = self.env_amp_cache_valid
+            && delta == self.cached_env_delta
+            && self.env_amp_resync_counter < ENV_AMP_RESYNC_INTERVAL;
+        let env_amp = if use_cache {
+            self.cached_env_amp * self.cached_env_ratio
+        } else {
+            let amp = 10f32.powf(-(1.0 - env_level) * k);
+            self.cached_env_ratio = 10f32.powf(delta * k);
+            self.cached_env_delta = delta;
+            self.env_amp_cache_valid = true;
+            self.env_amp_resync_counter = 0;
+            amp
+        };
+        self.cached_env_amp = env_amp;
+        self.cached_env_level = env_level;
+        env_amp
     }
 
     /// ノイズ波形（32〜63）の1サンプルを生成する。17bit LFSR（AY-3-8910互換）を
@@ -278,7 +346,7 @@ impl Operator {
         // db_rangeは通常96dB（eg_shift=0）。EGSFTはこのEG減衰レンジのみを圧縮し（TLは別掛けで不変）、
         // チップの `env_attenuation >> eg_shift` と厳密一致する。
         let db_range = eg_shift_to_db_range(self.params.eg_shift);
-        let env_amp = 10f32.powf(-(1.0 - env_level) * (db_range / 20.0));
+        let env_amp = self.compute_env_amp(env_level, db_range);
         sample * env_amp * tl_to_gain(eff_tl) * amp_factor
     }
 }
@@ -547,6 +615,46 @@ mod tests {
             let b = op_new.tick(sr, &wave, 0.0, 69);
             assert_eq!(a, b, "floor=0/loop=0/curve=0 must match the classic ADSR bit-for-bit");
         }
+    }
+
+    /// compute_env_ampの等比数列キャッシュが、毎回powf()で直接計算した値からどれだけ
+    /// 乖離するかを実際のnote_on〜note_offのライフサイクルで検証する回帰テスト。
+    #[test]
+    fn env_amp_cache_stays_close_to_direct_computation() {
+        let sr = 44100.0;
+        let wave = sound_core::gen_square(); // frequency=0でsample_at(0)=+1.0固定にするための波形
+        let mut params = fast_params();
+        params.tl = 255; // tl_to_gain(255)=1.0
+        params.ar = 100;
+        params.d1r = 80;
+        params.d1l = 180;
+        params.d2r = 40;
+        params.rr = 90;
+        params.velocity_sensitivity = 0;
+        params.eg_shift = 0;
+        let mut op = Operator::new(params);
+        op.note_on(0.0, 127); // frequency=0 → phaseが進まずsample_at(0)固定
+        let db_range = crate::mapping::eg_shift_to_db_range(0);
+        let k = db_range / 20.0;
+        let mut max_abs_diff = 0.0f32;
+        let mut max_rel_diff = 0.0f32;
+        for i in 0..20000 {
+            if i == 8000 {
+                op.note_off();
+            }
+            let out = op.tick(sr, &wave, 0.0, 69);
+            if op.is_idle() {
+                break;
+            }
+            let level = op.env_level();
+            let reference = 10f32.powf(-(1.0 - level) * k);
+            let diff = (out - reference).abs();
+            let rel = diff / reference.max(1e-9);
+            max_abs_diff = max_abs_diff.max(diff);
+            max_rel_diff = max_rel_diff.max(rel);
+        }
+        eprintln!("max_abs_diff={max_abs_diff}, max_rel_diff={max_rel_diff}");
+        assert!(max_rel_diff < 0.01, "cached env_amp diverges too much from direct computation: rel={max_rel_diff}");
     }
 
     /// OP単位ループEG: loop=1で、そのOPのEG出力（＝モジュレーターなら変調指数）が

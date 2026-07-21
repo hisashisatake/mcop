@@ -54,10 +54,23 @@ pub fn tl_to_gain(tl: u8) -> f32 {
 /// チップの `env_attenuation >> eg_shift`（[ymfm_fm.ipp] envelope_attenuation）を連続化したもの。
 /// TX81Zの離散4段 egsft 0/1/2/3 は 96/48/24/12dB で、これを eg_shift 0/85/170/255 に写像すると
 /// 各点で `96 / 2^(eg_shift/85)` が 96/48/24/12dB に一致する（opz2x6が採用する代表点写像）。
+///
+/// eg_shiftは1ノート中不変のパッチ値だが、以前は`operator::tick()`から毎サンプル`powf()`を
+/// 呼んでいた。TL(`tl_to_gain`)と同じ256要素テーブルパターンで初回アクセス時に1回だけ構築
+/// （`OnceLock`、全チャンネル共有）し、以降は配列参照のみで済ませる。数式は変更していないため
+/// 出力は従来と数学的に同一。
 pub fn eg_shift_to_db_range(eg_shift: u8) -> f32 {
-    // eg_shift/85 を実機シフト量(0..3)に対応させ、db_range = 96 / 2^units
-    let units = eg_shift as f32 / 85.0;
-    96.0 / 2f32.powf(units)
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (eg_shift, slot) in table.iter_mut().enumerate() {
+            // eg_shift/85 を実機シフト量(0..3)に対応させ、db_range = 96 / 2^units
+            let units = eg_shift as f32 / 85.0;
+            *slot = 96.0 / 2f32.powf(units);
+        }
+        table
+    });
+    table[eg_shift as usize]
 }
 
 /// Level Scaling: level_scale(0-255 depth) × MIDIノート番号 → 38x6 TL減衰量(0-255)。
