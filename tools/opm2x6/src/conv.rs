@@ -147,6 +147,7 @@ fn convert_op(op: &OpmOpReg, muted: bool) -> OperatorParams {
         curve: 0,
         eg_shift: 0,
         level_scale: 0,
+        velocity_gain: 255,
     }
 }
 

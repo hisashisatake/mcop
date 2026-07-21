@@ -320,6 +320,7 @@ impl Ym38x6Plugin {
                 curve: op.curve.value() as u8,
                 eg_shift: op.eg_shift.value() as u8,
                 level_scale: op.level_scale.value() as u8,
+                velocity_gain: op.velocity_gain.value() as u8,
             }
         });
 

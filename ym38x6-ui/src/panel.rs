@@ -55,6 +55,10 @@ pub struct OperatorPanelParams<'a> {
     pub eg_shift: Box<dyn IntParamHandle + 'a>,
     /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
     pub level_scale: Box<dyn IntParamHandle + 'a>,
+    /// キャリア出力へのベロシティ音量ゲイン深さ（0〜255、既定255＝フル）。
+    /// `vel_sens`（明るさ、モジュレーター専用）とは独立・別軸。役割はALGで決まるため、
+    /// パネルはそのOPがキャリアかモジュレーターかでVEL/V.GAINを排他的にグレーアウトする。
+    pub velocity_gain: Box<dyn IntParamHandle + 'a>,
 }
 
 /// ファンクションジェネレーター（Pitch/Cutoff/Gain FG共通）のループ可能EGパラメーター一式。
@@ -197,6 +201,13 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                                 delay: 0,
                             },
                         );
+                        // このOPがキャリアかどうかでVEL(明るさ・モジュレーター専用)/
+                        // V.GAIN(音量・キャリア専用)を排他的にグレーアウトする。
+                        // ALGノブを変えるとその場で切り替わる（値自体は不変）。
+                        let is_carrier = crate::algorithm_diagram::carriers(
+                            params.algorithm.value() as u8,
+                        )
+                        .contains(&i);
                         ui.horizontal_wrapped(|ui| {
                             knob(ui, &*op.tl, "TL");
                             knob(ui, &*op.ar, "AR");
@@ -207,7 +218,12 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                             knob(ui, &*op.mul, "MUL");
                             knob(ui, &*op.dt1, "DT1");
                             knob(ui, &*op.ksr, "KSR");
-                            knob(ui, &*op.vel_sens, "VEL");
+                            ui.add_enabled_ui(!is_carrier, |ui| {
+                                knob(ui, &*op.vel_sens, "VEL");
+                            });
+                            ui.add_enabled_ui(is_carrier, |ui| {
+                                knob(ui, &*op.velocity_gain, "V.GAIN");
+                            });
                             knob(ui, &*op.op_fine_tune, "FINE");
                             bool_checkbox(ui, &*op.ame, "AM");
                             waveform_selector(ui, &*op.waveform, i);

@@ -134,7 +134,7 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
   cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
 - **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（ステップ5）とVCF/VCAファンクション
   ジェネレーター統合（ステップ5.5、FG=Pitch/Cutoff/Gain＋質感LFOへの再編）の設計・spec改訂が完了、
-  コア実装ステップ6〜smf2wavステップ9が未実装、手動ワウ・表情ルーティング・velocity→音量「量」が未実装。
+  velocity→音量「量」は完了（`OperatorParams.velocity_gain`、詳細はspec-roadmap.mdフェーズ7参照）。
   これらも**ボイス内・キーオン連動EG/持続する揺れ・サンプル単位**の処理であり、`AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
   UI・MIDI実装を再利用できる状態を目指す。

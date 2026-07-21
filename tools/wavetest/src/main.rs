@@ -86,6 +86,7 @@ fn op(tl: u8, ar: u8, d1r: u8, d2r: u8, d1l: u8, rr: u8, mul: u8, dt1: u8) -> Op
         curve: 0,
         eg_shift: 0,
         level_scale: 0,
+        velocity_gain: 255,
     }
 }
 

@@ -35,10 +35,18 @@ pub struct OperatorParamsDto {
     /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
     #[serde(default)]
     pub level_scale: u8,
+    /// キャリア出力へのベロシティ音量ゲイン深さ（0〜255、既定255＝フル）。未送信の古い
+    /// フロントエンドでもフル（旧チャンネル一括velocity/127と同一）として扱う。
+    #[serde(default = "default_velocity_gain")]
+    pub velocity_gain: u8,
 }
 
 fn default_op_fine_tune() -> u8 {
     128
+}
+
+fn default_velocity_gain() -> u8 {
+    255
 }
 
 impl From<OperatorParamsDto> for OperatorParams {
@@ -62,6 +70,7 @@ impl From<OperatorParamsDto> for OperatorParams {
             curve: dto.curve,
             eg_shift: dto.eg_shift,
             level_scale: dto.level_scale,
+            velocity_gain: dto.velocity_gain,
         }
     }
 }
@@ -87,6 +96,7 @@ impl From<OperatorParams> for OperatorParamsDto {
             curve: op.curve,
             eg_shift: op.eg_shift,
             level_scale: op.level_scale,
+            velocity_gain: op.velocity_gain,
         }
     }
 }

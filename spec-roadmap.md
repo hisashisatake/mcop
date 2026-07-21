@@ -205,8 +205,14 @@
     MIDIチャンネルごとの`pedal_down: [bool; 16]`/`pending_release: [u128; 16]`で実装。
     smf2wav側（commit e828515）に弾き直し時の保留ビットクリア漏れ（stale pending_release）が
     見つかったため同時修正。`cargo test -p smf2wav`にホールド挙動・弾き直し回帰の2テスト追加。
-  → 以降の未着手:
-    velocity→音量「量」（ChannelParams、既定255）
+  → velocity→音量「量」完了: 旧来チャンネル一括で掛けていた`velocity/127`
+    （`mapping::velocity_to_volume_gain`）を、`OperatorParams.velocity_gain`
+    （OP単位・0〜255・既定255＝フル）へ移設した。全キャリアが既定255の既存パッチは
+    従来と数式同一の高速経路（`Channel::tick`）を通り後方互換。0にするとそのキャリアは
+    ベロシティに関わらず常時フル音量になる（オルガン的運用）。モジュレーター専用の
+    `velocity_sensitivity`（明るさ）とは独立・別軸。UIパネルはALG連動でVEL(明るさ)/
+    V.GAIN(音量)を排他的にグレーアウトする。opz2x6はキャリアKVS(0-7)をこのフィールドへ
+    写像するようになった（従来は捨てていた）
   → VST/NRPN配線（差分検知方式に追加、各ステップ内で随時）
   → スコープ外: SSG-EGループ・汎用モッドマトリクス・テンポ同期・ポリAT/MPE。
     質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）

@@ -147,8 +147,24 @@ pub fn effective_tl(base_tl: u8, velocity: u8, sensitivity: u8) -> u8 {
 /// 通常のMIDI楽器と同じく、ベロシティは音量だけに作用する常時ONの挙動。
 /// velocity=127で1.0（フル）、低ベロシティほど小さくなる線形振幅カーブ。
 /// （聴感カーブは実装後に調整する前提の第一案）
+///
+/// 【OP単位`velocity_gain`導入後の位置づけ】このチャンネル一括版は、全キャリアの
+/// `velocity_gain`が既定255（フル）のときの高速経路としてのみ`Channel::tick`が使う
+/// （既存`.38x6`はこの経路を通り数式が従来と完全同一のまま）。深さを変えたキャリアが
+/// 1つでもあれば[carrier_velocity_gain]をキャリアごとに使う。
 pub fn velocity_to_volume_gain(velocity: u8) -> f32 {
     velocity as f32 / 127.0
+}
+
+/// OP単位`velocity_gain`深さ(0〜255) × ベロシティ(0〜127) → そのキャリアの出力ゲイン。
+/// `depth=255`（既定）で`velocity_to_volume_gain`と数学的に同一（`velocity/127`）、
+/// `depth=0`でベロシティに関わらず常時1.0（音量一定＝オルガン的運用）。
+/// キャリアの出力（合算前）に個別に掛ける、リニアカーブ（[velocity_to_volume_gain]と同じ軸）。
+/// モジュレーターでは無視される（`Channel::tick`がキャリアにのみ適用）。
+pub fn carrier_velocity_gain(depth: u8, velocity: u8) -> f32 {
+    let velocity_gain = velocity_to_volume_gain(velocity);
+    let d = depth as f32 / 255.0;
+    1.0 - d * (1.0 - velocity_gain)
 }
 
 /// フィードバック値(0〜255)→自己変調の強さ（位相オフセット換算、単位：サイクル）。
@@ -274,6 +290,33 @@ mod tests {
         assert_eq!(effective_tl(250, 127, 255), 255);
         assert_eq!(effective_tl(0, 0, 255), 0);
         assert_eq!(effective_tl(100, 0, 100), 100);
+    }
+
+    #[test]
+    fn carrier_velocity_gain_full_depth_matches_channel_wide_gain() {
+        // depth=255（既定）は velocity_to_volume_gain と数学的に同一
+        for v in [0u8, 1, 64, 100, 127] {
+            assert!(
+                (carrier_velocity_gain(255, v) - velocity_to_volume_gain(v)).abs() < 1e-6,
+                "v={v}"
+            );
+        }
+    }
+
+    #[test]
+    fn carrier_velocity_gain_zero_depth_is_always_full() {
+        // depth=0 はベロシティに関わらず常に1.0（音量一定）
+        assert_eq!(carrier_velocity_gain(0, 0), 1.0);
+        assert_eq!(carrier_velocity_gain(0, 64), 1.0);
+        assert_eq!(carrier_velocity_gain(0, 127), 1.0);
+    }
+
+    #[test]
+    fn carrier_velocity_gain_mid_depth_is_between() {
+        // 中間深さは、弱打(v=0)でフル(1.0)とvelocity_to_volume_gainの間になる
+        let v = 0u8;
+        let mid = carrier_velocity_gain(128, v);
+        assert!(mid > velocity_to_volume_gain(v) && mid < 1.0, "mid={mid}");
     }
 
     #[test]

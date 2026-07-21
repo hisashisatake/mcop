@@ -51,11 +51,24 @@ pub struct OperatorParams {
     /// ノート依存の減衰カーブは[mapping::level_scale_atten](crate::mapping::level_scale_atten)が持つ。
     #[serde(default)]
     pub level_scale: u8,
+    /// キャリア出力へのベロシティ音量ゲイン深さ（0〜255、既定255）。
+    /// 旧来チャンネル一括で掛けていた`velocity/127`（[mapping::velocity_to_volume_gain]）を
+    /// キャリアOP単位へ移設したもの。255＝フル（`velocity/127`、既存挙動と数学的に同一）、
+    /// 0＝ベロシティに関わらず常時フル音量（オルガン的運用）。モジュレーターでは無視される
+    /// （`is_carrier`で役割が決まり、UIパネルはALG連動でVEL(明るさ)/V.GAIN(音量)を排他的に
+    /// グレーアウトする）。`velocity_sensitivity`（明るさ専用）とは独立・別軸。
+    #[serde(default = "default_velocity_gain")]
+    pub velocity_gain: u8,
 }
 
 /// `op_fine_tune`の中心値（オフセットなし）。serde欠落時およびDefaultで使う。
 pub(crate) fn default_op_fine_tune() -> u8 {
     128
+}
+
+/// `velocity_gain`の既定値（フル＝旧チャンネル一括`velocity/127`と同一）。serde欠落時およびDefaultで使う。
+pub(crate) fn default_velocity_gain() -> u8 {
+    255
 }
 
 impl Default for OperatorParams {
@@ -81,6 +94,7 @@ impl Default for OperatorParams {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: default_velocity_gain(),
         }
     }
 }
@@ -380,6 +394,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         }
     }
 
@@ -594,6 +609,7 @@ mod tests {
         assert_eq!(op.loop_enabled, 0);
         assert_eq!(op.curve, 0);
         assert_eq!(op.op_fine_tune, 128, "op_fine_tuneも既存の後方互換規則どおり中心128");
+        assert_eq!(op.velocity_gain, 255, "velocity_gainは欠落時フル(255)＝旧チャンネル一括挙動と同一");
     }
 
     /// loop=0(既定)の場合、新規追加したfloor/loop/curveフィールドが0でも従来の5段ADSRと

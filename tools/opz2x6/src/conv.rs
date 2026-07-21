@@ -434,6 +434,17 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
     // （nornand attKVS導出のvelocityスイングkvs*12レジスタstep × 38x6の2倍解像度）。
     let vel_sens = if is_carrier { 0 } else { op.kvs.min(7) * 24 };
 
+    // キャリアKVS写像（velocity_gain、OP単位のベロシティ音量ゲイン深さ）: KVS(0-7) → depth(0-255)。
+    // 実機はキャリアにもKVSを持たせ「ベロシティで音量がどれだけ動くか」を音色ごとに決めるが、
+    // 旧実装はこれを捨てて常時フル(255)扱いにしていた。KVS=7(最大感度)→255(フル、旧挙動と同じ)、
+    // KVS=0(感度なし)→0(常時フル音量、ベロシティ非依存)の線形写像。モジュレーターでは無視される
+    // フィールドなので既定のフル(255)のままにする。
+    let velocity_gain = if is_carrier {
+        (op.kvs.min(7) as f32 * 255.0 / 7.0).round() as u8
+    } else {
+        255
+    };
+
     let mut params = OperatorParams {
         // 【2026-07-18 KVSアンカー修正】実機のKVSはOL額面からの追加減衰
         // （V_TL = … + A_ol + A_kvs、A_kvsはvelocity=最大で0）なのに対し、38x6エンジンの
@@ -478,6 +489,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
         // depth = ls*165/64（実測attLS導出式の内部スケール）。ノート依存減衰は
         // エンジンの mapping::level_scale_atten が持つ。キャリアにも効く（実機LS準拠）。
         level_scale: (op.ls as u16 * 165 / 64).min(255) as u8,
+        velocity_gain,
     };
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
@@ -862,6 +874,30 @@ mod tests {
         let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
         let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
         assert_eq!(p.velocity_sensitivity, 0, "carrier velocity_sensitivity must be 0");
+    }
+
+    #[test]
+    fn kvs_carrier_maps_to_velocity_gain_max_at_7() {
+        // KVS=7(実機最大感度)→velocity_gain=255(フル、旧チャンネル一括挙動と同一)
+        let op = OpzOpData { kvs: 7, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.velocity_gain, 255);
+    }
+
+    #[test]
+    fn kvs_carrier_zero_maps_to_velocity_gain_zero() {
+        // KVS=0(実機感度なし)→velocity_gain=0(常時フル音量、ベロシティ非依存)
+        let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 99, ar: 31, rr: 7, ..Default::default() };
+        let p = convert_op(&op, true, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.velocity_gain, 0);
+    }
+
+    #[test]
+    fn kvs_modulator_velocity_gain_stays_full() {
+        // モジュレーターのvelocity_gainは無視されるフィールドなので既定のフル(255)のまま
+        let op = OpzOpData { kvs: 0, freq: 4, det: 3, out: 50, ar: 31, rr: 7, ..Default::default() };
+        let p = convert_op(&op, false, 0, ConvOptions::default(), 1.0);
+        assert_eq!(p.velocity_gain, 255);
     }
 
     #[test]

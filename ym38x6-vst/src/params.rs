@@ -57,6 +57,10 @@ pub(crate) struct OperatorVstParams {
     /// Level Scaling（ノート依存の出力レベル減衰、OPL系KSL相当）。0〜255、既定0＝スケーリングなし。
     #[id = "op_level_scale"]
     pub level_scale: IntParam,
+    /// キャリア出力へのベロシティ音量ゲイン深さ（0〜255、既定255＝フル）。
+    /// モジュレーターでは無視される（`vel_sens`＝明るさとは独立・別軸、役割はALGで決まる）。
+    #[id = "op_vel_gain"]
+    pub velocity_gain: IntParam,
 }
 
 impl Default for OperatorVstParams {
@@ -89,6 +93,8 @@ impl Default for OperatorVstParams {
             eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
             // 既定0＝Level Scalingオフ（ノート依存の出力減衰なし、従来挙動そのまま）。
             level_scale: IntParam::new("Op Level Scale", 0, IntRange::Linear { min: 0, max: 255 }),
+            // 既定255＝フル（旧チャンネル一括velocity/127と数学的に同一、従来挙動そのまま）。
+            velocity_gain: IntParam::new("Op Velocity Gain", 255, IntRange::Linear { min: 0, max: 255 }),
         }
     }
 }

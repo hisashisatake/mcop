@@ -22,6 +22,7 @@ fn sustained_release_patch() -> Ym38x6Patch {
         curve: 0,
         eg_shift: 0,
         level_scale: 0,
+        velocity_gain: 255,
     };
     Ym38x6Patch {
         operators: [op; 4],

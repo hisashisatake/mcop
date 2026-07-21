@@ -36,6 +36,7 @@ fn operator_panel<'a>(
         curve: vb(&op.curve, setter),
         eg_shift: vi(&op.eg_shift, setter),
         level_scale: vi(&op.level_scale, setter),
+        velocity_gain: vi(&op.velocity_gain, setter),
     }
 }
 
@@ -228,6 +229,7 @@ pub(crate) fn create_editor(
                                                 set!(op_p.ksr, op.ksr as i32);
                                                 set!(op_p.ame, op.am_enable);
                                                 set!(op_p.vel_sens, op.velocity_sensitivity as i32);
+                                                set!(op_p.velocity_gain, op.velocity_gain as i32);
                                                 set!(op_p.op_fine_tune, op.op_fine_tune as i32);
                                                 set!(op_p.waveform, op.waveform as i32);
                                             }

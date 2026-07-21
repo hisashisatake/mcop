@@ -31,6 +31,7 @@ fn operator_panel<const I: usize>(state: &Rc<RefCell<EditorState>>, dirty: &Rc<C
         dt1: op!(dt1, "DT1", 0, 255, 128),
         ksr: op!(ksr, "KSR", 0, 255, 64),
         vel_sens: op!(vel_sens, "VEL", 0, 255, 0),
+        velocity_gain: op!(velocity_gain, "V.GAIN", 0, 255, 255),
         op_fine_tune: op!(op_fine_tune, "FINE", 0, 255, 128),
         ame: Box::new(BoolField {
             state: state.clone(),

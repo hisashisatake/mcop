@@ -136,6 +136,7 @@ struct OperatorDto {
     curve: u8,
     eg_shift: u8,
     level_scale: u8,
+    velocity_gain: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -260,6 +261,7 @@ impl PatchDto {
                 curve: op.curve != 0,
                 eg_shift: op.eg_shift as i32,
                 level_scale: op.level_scale as i32,
+                velocity_gain: op.velocity_gain as i32,
             };
         }
         let ch = &self.channel;
@@ -343,6 +345,7 @@ fn patch_dto_from_state(state: &EditorState) -> PatchDto {
             curve: op.curve as u8,
             eg_shift: op.eg_shift as u8,
             level_scale: op.level_scale as u8,
+            velocity_gain: op.velocity_gain as u8,
         }
     });
     let channel = ChannelDto {

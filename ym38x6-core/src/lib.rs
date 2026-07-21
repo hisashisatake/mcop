@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use algorithm::ALGORITHMS;
 use mapping::{
-    feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
+    carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
     FM_MODULATION_INDEX_SCALE,
 };
 use operator::Operator;
@@ -657,12 +657,27 @@ impl Channel {
             }
         }
 
-        let carrier_sum: f32 = algo.carriers.iter().map(|&i| op_outputs[i]).sum();
+        // ベロシティは音量のみに作用（通常のMIDI楽器と同じ常時ONの挙動）。音色は変えない。
+        // キャリアごとの`velocity_gain`深さ（既定255＝フル）で効き具合を調整できる。
+        // 全キャリアが既定255（＝既存`.38x6`はすべてこう）なら、旧チャンネル一括の計算経路を
+        // そのまま使い、浮動小数点演算の順序まで従来と完全に同一にする（後方互換）。
+        let all_full_velocity_gain =
+            algo.carriers.iter().all(|&i| self.operators[i].params.velocity_gain == 255);
+        let carrier_sum: f32 = if all_full_velocity_gain {
+            let sum: f32 = algo.carriers.iter().map(|&i| op_outputs[i]).sum();
+            sum * velocity_to_volume_gain(self.velocity)
+        } else {
+            algo.carriers
+                .iter()
+                .map(|&i| {
+                    op_outputs[i]
+                        * carrier_velocity_gain(self.operators[i].params.velocity_gain, self.velocity)
+                })
+                .sum()
+        };
         let tl_carrier_gain = (1.0 + self.tl_carrier_mod_delta).max(0.0);
         let volume_gain = (1.0 + self.volume_mod_delta).max(0.0);
-        // ベロシティは音量のみに作用（通常のMIDI楽器と同じ常時ONの挙動）。音色は変えない。
-        let velocity_gain = velocity_to_volume_gain(self.velocity);
-        let dry = carrier_sum * tl_carrier_gain * volume_gain * velocity_gain * self.channel_gain;
+        let dry = carrier_sum * tl_carrier_gain * volume_gain * self.channel_gain;
 
         // VCF（4op合成後、Cutoff FG） + VCA（TVAオーバーレイ、Gain FG）
         let cp = &self.channel_params;
@@ -974,6 +989,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];
@@ -1143,6 +1159,61 @@ mod tests {
     }
 
     #[test]
+    fn carrier_velocity_gain_default_matches_legacy_channel_wide_gain() {
+        // 全キャリアが既定255のとき、velocity_changes_output_volume_regardless_of_sensitivity
+        // と同じ挙動（＝旧チャンネル一括velocity_gain）になることを確認する。
+        let mut patch = loud_patch(0);
+        for op in patch.operators.iter_mut() {
+            op.tl = 200;
+            assert_eq!(op.velocity_gain, 255, "既定は255のはず");
+        }
+
+        let mut engine_lo = Ym38x6Engine::new(44100.0);
+        let mut engine_hi = Ym38x6Engine::new(44100.0);
+        engine_lo.set_patch(patch);
+        engine_lo.note_on(0, 440.0, 40);
+        engine_hi.set_patch(patch);
+        engine_hi.note_on(0, 440.0, 120);
+        let mut buf_lo = vec![0.0f32; 100];
+        let mut buf_hi = vec![0.0f32; 100];
+        engine_lo.render(&mut buf_lo, 1);
+        engine_hi.render(&mut buf_hi, 1);
+
+        let peak_lo = buf_lo.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        let peak_hi = buf_hi.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        assert!(peak_hi > peak_lo, "higher velocity should be louder: {peak_hi} vs {peak_lo}");
+    }
+
+    #[test]
+    fn carrier_velocity_gain_zero_depth_keeps_volume_constant() {
+        // 全キャリアのvelocity_gain=0なら、ベロシティに関わらず音量が一定になる
+        // （オルガン的運用）。
+        let mut patch = loud_patch(0);
+        for op in patch.operators.iter_mut() {
+            op.tl = 200;
+            op.velocity_gain = 0;
+        }
+
+        let mut engine_lo = Ym38x6Engine::new(44100.0);
+        let mut engine_hi = Ym38x6Engine::new(44100.0);
+        engine_lo.set_patch(patch);
+        engine_lo.note_on(0, 440.0, 1);
+        engine_hi.set_patch(patch);
+        engine_hi.note_on(0, 440.0, 127);
+        let mut buf_lo = vec![0.0f32; 100];
+        let mut buf_hi = vec![0.0f32; 100];
+        engine_lo.render(&mut buf_lo, 1);
+        engine_hi.render(&mut buf_hi, 1);
+
+        let peak_lo = buf_lo.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        let peak_hi = buf_hi.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        assert!(
+            (peak_lo - peak_hi).abs() < 1e-6,
+            "velocity_gain=0 should make volume velocity-independent: {peak_lo} vs {peak_hi}"
+        );
+    }
+
+    #[test]
     fn velocity_sensitivity_affects_modulator_brightness() {
         // algo0: O1->O2->O3->O4。O1はモジュレーター。
         // モジュレーターのVelocity Sensitivityは変調量（明るさ）を変えるので、
@@ -1166,6 +1237,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         };
         let make = |op0_sens: u8| {
             let mut patch = Ym38x6Patch::default();
@@ -1215,6 +1287,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         };
 
         for algorithm in 0u8..8 {
@@ -1261,6 +1334,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         };
 
         for filter_type in 0u8..3 {
@@ -1314,6 +1388,7 @@ mod tests {
             curve: 0,
             eg_shift: 0,
             level_scale: 0,
+            velocity_gain: 255,
         };
         let mut patch = Ym38x6Patch::default();
         patch.operators = [op_params; 4];

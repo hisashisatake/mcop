@@ -112,7 +112,8 @@ fn routes(algorithm: u8) -> &'static [(usize, usize)] {
 
 /// チャンネル出力へ直接合算されるキャリアのop index一覧。
 /// ym38x6-core::algorithm::ALGORITHMS\[n\].carriersと一致させること。
-fn carriers(algorithm: u8) -> &'static [usize] {
+/// `panel.rs`のVEL/V.GAINグレーアウト判定からも参照する（`pub(crate)`）。
+pub(crate) fn carriers(algorithm: u8) -> &'static [usize] {
     match algorithm {
         0..=3 => &[3],
         4 => &[1, 3],
