@@ -1,0 +1,1197 @@
+<title>egui panel.rs レイアウトエディタ</title>
+<style>
+  :root{
+    --bg:#eef0f4; --surface:#ffffff; --surface-2:#f5f6f9; --line:#d7dbe3;
+    --ink:#1d2029; --ink-2:#5b616e; --ink-3:#8a909c;
+    --accent:#c07a1e;            /* knob amber */
+    --accent-soft:#f0d9b3;
+    --cable:#159e8e;             /* patchbay teal */
+    --raw:#8a5cf0;               /* verbatim violet */
+    --warn:#c0392b;
+    --code-bg:#f7f8fb;
+    --radius:9px;
+    --mono: ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#14161c; --surface:#1b1e26; --surface-2:#22262f; --line:#333846;
+      --ink:#e4e7ee; --ink-2:#a7adba; --ink-3:#727888;
+      --accent:#e8a33d; --accent-soft:#4a3a1e;
+      --cable:#3dd6c4; --raw:#b799ff; --warn:#ef6a5c;
+      --code-bg:#12141a;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#eef0f4; --surface:#ffffff; --surface-2:#f5f6f9; --line:#d7dbe3;
+    --ink:#1d2029; --ink-2:#5b616e; --ink-3:#8a909c; --accent:#c07a1e;
+    --accent-soft:#f0d9b3; --cable:#159e8e; --raw:#8a5cf0; --warn:#c0392b; --code-bg:#f7f8fb;
+  }
+  :root[data-theme="dark"]{
+    --bg:#14161c; --surface:#1b1e26; --surface-2:#22262f; --line:#333846;
+    --ink:#e4e7ee; --ink-2:#a7adba; --ink-3:#727888; --accent:#e8a33d;
+    --accent-soft:#4a3a1e; --cable:#3dd6c4; --raw:#b799ff; --warn:#ef6a5c; --code-bg:#12141a;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0}
+  #app{
+    font-family:var(--sans); color:var(--ink); background:var(--bg);
+    height:100vh; display:flex; flex-direction:column; font-size:14px; line-height:1.45;
+  }
+
+  /* ---- toolbar ---- */
+  header.bar{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; background:var(--surface); border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:baseline; gap:9px; margin-right:auto}
+  .brand h1{font-size:15px; margin:0; font-weight:650; letter-spacing:.2px}
+  .brand .sub{font-size:11px; color:var(--ink-3); font-family:var(--mono)}
+  .bar .grp{display:flex; align-items:center; gap:8px}
+  .bar label.wl{font-size:11px; color:var(--ink-2); letter-spacing:.4px; text-transform:uppercase}
+  input[type=range]{accent-color:var(--accent)}
+  .wval{font-family:var(--mono); font-size:12px; color:var(--accent); min-width:52px; text-align:right}
+
+  button{
+    font-family:var(--sans); font-size:13px; color:var(--ink); background:var(--surface-2);
+    border:1px solid var(--line); border-radius:7px; padding:6px 12px; cursor:pointer;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
+  button.primary:hover{filter:brightness(1.06); color:#fff}
+  button.ghost{background:transparent; border-color:transparent; color:var(--ink-3); padding:4px 7px}
+  button.ghost:hover{color:var(--accent); background:var(--surface-2)}
+  button:focus-visible, [tabindex]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  /* ---- main split ---- */
+  main{flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-height:0}
+  @media (max-width:900px){ main{grid-template-columns:1fr; overflow:auto} }
+  .pane{min-height:0; display:flex; flex-direction:column; overflow:hidden}
+  .pane.left{border-right:1px solid var(--line)}
+  .pane-head{
+    display:flex; align-items:center; gap:10px; padding:8px 14px;
+    border-bottom:1px solid var(--line); background:var(--surface);
+    font-size:11px; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-2); font-weight:600;
+  }
+  .pane-head .sp{margin-left:auto}
+  .pane-body{flex:1; overflow:auto; padding:14px}
+
+  /* ---- blocks ---- */
+  .block{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    margin-bottom:12px; overflow:hidden;
+  }
+  .block.sel{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent)}
+  .block-head{
+    display:flex; align-items:center; gap:8px; padding:7px 10px 7px 12px;
+    background:var(--surface-2); border-bottom:1px solid var(--line);
+  }
+  .badge{
+    font-family:var(--mono); font-size:10px; padding:2px 7px; border-radius:20px;
+    text-transform:uppercase; letter-spacing:.5px; border:1px solid; font-weight:600;
+  }
+  .badge.panel{color:var(--accent); border-color:var(--accent-soft)}
+  .badge.foreach{color:var(--cable); border-color:var(--cable)}
+  .badge.raw{color:var(--raw); border-color:var(--raw)}
+  .badge.columns{color:var(--ink-2); border-color:var(--line)}
+  .block-title{font-weight:600; font-size:14px}
+  .block-title[contenteditable]{outline:none; border-bottom:1px dashed transparent; padding:0 2px}
+  .block-title[contenteditable]:focus{border-bottom-color:var(--accent)}
+  .head-actions{margin-left:auto; display:flex; gap:2px; align-items:center}
+  .foreach-loop{font-family:var(--mono); font-size:10.5px; color:var(--ink-3); padding:0 12px; margin-top:6px}
+  .block-body{padding:10px 12px 12px}
+
+  .row{
+    border:1px dashed var(--line); border-radius:7px; padding:8px; margin-top:8px; background:var(--surface);
+  }
+  .row.raw{border-style:solid; border-color:color-mix(in srgb,var(--raw) 45%,var(--line))}
+  .row-meta{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+  .row-tag{font-family:var(--mono); font-size:9.5px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.5px}
+  .row-tag.hor{color:var(--cable)}
+  .lead-raw{font-family:var(--mono); font-size:10.5px; color:var(--cable); background:var(--surface-2);
+    border-radius:5px; padding:3px 6px; margin-bottom:6px; white-space:pre-wrap; opacity:.85}
+
+  .chips{display:flex; flex-wrap:wrap; gap:6px; align-items:stretch}
+  .chip{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    min-width:46px; padding:6px 8px; border-radius:7px; cursor:grab; user-select:none;
+    border:1px solid var(--line); background:var(--surface-2); position:relative;
+  }
+  .chip:hover{border-color:var(--accent)}
+  .chip.sel{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent)}
+  .chip.dragging{opacity:.4}
+  .chip.drop-before::before, .chip.drop-after::after{
+    content:""; position:absolute; top:4px; bottom:4px; width:2px; background:var(--accent);
+  }
+  .chip.drop-before::before{left:-4px}
+  .chip.drop-after::after{right:-4px}
+  .chip .lab{font-family:var(--mono); font-size:11px; font-weight:600}
+  .chip .w{font-family:var(--mono); font-size:9px; color:var(--ink-3)}
+  .chip.knob{}
+  .chip.knob .dot{width:14px; height:14px; border-radius:50%; border:2px solid var(--accent);
+    position:relative}
+  .chip.knob .dot::after{content:""; position:absolute; left:50%; top:1px; width:2px; height:5px;
+    background:var(--accent); transform:translateX(-50%)}
+  .chip.checkbox .dot,.chip.checkstack .dot{width:11px;height:11px;border-radius:3px;border:2px solid var(--cable)}
+  .chip.checkstack{background:color-mix(in srgb,var(--cable) 9%,var(--surface-2))}
+  .chip.waveform{background:color-mix(in srgb,var(--accent) 9%,var(--surface-2))}
+  .chip.enum{background:color-mix(in srgb,var(--accent) 6%,var(--surface-2))}
+  .chip .kind{font-size:8px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.4px}
+  .chip.enabled{border-style:dashed}
+  .chip .en{position:absolute; top:-6px; right:-4px; font-size:8px; background:var(--cable);
+    color:#fff; border-radius:6px; padding:0 3px; font-family:var(--mono)}
+
+  .add-w{min-width:34px; border-style:dashed; color:var(--ink-3); cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-size:16px; border-radius:7px; background:transparent}
+  .add-w:hover{color:var(--accent); border-color:var(--accent)}
+
+  .widths-line{font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:7px; word-break:break-all}
+  .widths-line b{color:var(--accent); font-weight:600}
+
+  .raw-ta,.insp textarea{
+    width:100%; font-family:var(--mono); font-size:12px; line-height:1.5; color:var(--ink);
+    background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:8px; resize:vertical;
+  }
+  .row-add{display:flex; gap:6px; margin-top:9px}
+  .row-add button{font-size:12px; padding:4px 9px}
+
+  .add-block{display:flex; gap:8px; margin-top:6px}
+
+  /* ---- preview ---- */
+  #preview-wrap{background:var(--bg); border-radius:8px; padding:14px}
+  .pv-panel{
+    background:var(--surface); border:1px solid var(--line); border-radius:7px;
+    padding:8px 9px; margin-bottom:9px;
+  }
+  .pv-panel .pv-title{font-weight:700; font-size:12px; margin-bottom:6px; color:var(--ink)}
+  .pv-row{display:flex; align-items:flex-end; margin:5px 0; justify-content:space-between}
+  .pv-cell{
+    display:flex; flex-direction:column; align-items:center; gap:3px; flex:0 0 auto;
+    font-family:var(--mono); font-size:9px; color:var(--ink-2);
+  }
+  .pv-knob{width:26px;height:26px;border-radius:50%;border:2px solid var(--accent);position:relative;background:var(--surface-2)}
+  .pv-knob::after{content:"";position:absolute;left:50%;top:2px;width:2px;height:8px;background:var(--accent);transform:translateX(-50%)}
+  .pv-box{height:26px; border:1px solid var(--line); border-radius:4px; background:var(--surface-2);
+    display:flex; align-items:center; justify-content:center; padding:0 4px}
+  .pv-box.wave{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+  .pv-box.enum{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .pv-box.eg{border-color:var(--cable); color:var(--cable); font-style:italic}
+  .pv-stack{display:flex; flex-direction:column; gap:2px}
+  .pv-stack span{font-size:8px; border:1px solid var(--cable); border-radius:3px; padding:0 3px; color:var(--cable)}
+  .pv-raw{font-family:var(--mono); font-size:10px; color:var(--raw); background:color-mix(in srgb,var(--raw) 7%,var(--surface));
+    border:1px solid color-mix(in srgb,var(--raw) 35%,var(--line)); border-radius:6px; padding:8px; margin-bottom:9px;
+    white-space:pre-wrap; overflow-x:auto}
+  .pv-overflow{color:var(--warn); font-size:10px; margin-top:2px; font-family:var(--mono)}
+  .pv-ruler{font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-bottom:8px}
+
+  /* ---- code ---- */
+  #code{margin:0; font-family:var(--mono); font-size:12.5px; line-height:1.55; color:var(--ink);
+    background:var(--code-bg); padding:14px; overflow:auto; height:100%; white-space:pre; tab-size:4}
+  .tabs{display:flex; gap:4px}
+  .tab{padding:4px 12px; border-radius:6px 6px 0 0; cursor:pointer; font-size:12px; color:var(--ink-3); border:1px solid transparent; border-bottom:none}
+  .tab.on{color:var(--accent); background:var(--surface); border-color:var(--line)}
+
+  /* ---- modal / inspector ---- */
+  .scrim{position:fixed; inset:0; background:rgba(0,0,0,.42); display:flex; align-items:center; justify-content:center; z-index:50}
+  .modal{background:var(--surface); border:1px solid var(--line); border-radius:11px; width:min(520px,94vw);
+    max-height:88vh; overflow:auto; box-shadow:0 18px 50px rgba(0,0,0,.35)}
+  .modal h2{font-size:14px; margin:0; padding:14px 16px; border-bottom:1px solid var(--line)}
+  .modal .body{padding:14px 16px; display:flex; flex-direction:column; gap:11px}
+  .modal .foot{display:flex; gap:8px; justify-content:flex-end; padding:12px 16px; border-top:1px solid var(--line)}
+  .fld{display:flex; flex-direction:column; gap:4px}
+  .fld label{font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--ink-2)}
+  .fld input,.fld select,.fld textarea{
+    font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--surface-2);
+    border:1px solid var(--line); border-radius:6px; padding:7px 9px;
+  }
+  .fld .hint{font-size:10.5px; color:var(--ink-3); font-family:var(--sans)}
+  .del{color:var(--warn); border-color:transparent; background:transparent; margin-right:auto}
+  .del:hover{border-color:var(--warn); color:var(--warn)}
+  .stack-items{display:flex; flex-direction:column; gap:6px}
+  .stack-item{display:flex; gap:6px}
+  .stack-item input{flex:1}
+  .note{font-size:11px; color:var(--ink-3); padding:8px 14px; border-top:1px solid var(--line); background:var(--surface)}
+</style>
+
+<div id="app">
+  <header class="bar">
+    <div class="brand">
+      <h1>egui レイアウトエディタ</h1>
+      <span class="sub">→ ym38x6-ui/src/panel.rs</span>
+    </div>
+    <div class="grp">
+      <label class="wl" for="ww">ウィンドウ幅</label>
+      <input type="range" id="ww" min="560" max="1500" value="900" step="10">
+      <span class="wval" id="wwv">900px</span>
+    </div>
+    <div class="grp">
+      <button id="btn-import">取り込み…</button>
+      <button id="btn-reset" class="ghost">実物に戻す</button>
+      <button id="btn-copy" class="primary">Rustをコピー</button>
+      <button id="btn-dl">.rs保存</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="pane left">
+      <div class="pane-head">
+        レイアウト
+        <span class="sp"></span>
+        <button class="ghost" id="add-panel">＋ パネル</button>
+        <button class="ghost" id="add-raw">＋ rawブロック</button>
+      </div>
+      <div class="pane-body" id="canvas"></div>
+    </section>
+
+    <section class="pane">
+      <div class="pane-head" style="padding-bottom:0; align-items:flex-end">
+        <div class="tabs">
+          <div class="tab on" data-tab="preview">プレビュー</div>
+          <div class="tab" data-tab="code">Rust出力</div>
+        </div>
+      </div>
+      <div class="pane-body" id="tab-preview">
+        <div class="pv-ruler" id="pv-ruler"></div>
+        <div id="preview-wrap"></div>
+      </div>
+      <pre id="code" hidden></pre>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+// ============================================================
+//  egui panel.rs layout editor  —  self-contained, no deps
+// ============================================================
+
+// natural widths (mirror panel.rs consts, in px)
+const W = { KNOB:62, CHECKBOX:50, WAVEFORM:130, ENUM:100 };
+const WIDTH_CONST = { KNOB:"KNOB_W", CHECKBOX:"CHECKBOX_W", WAVEFORM:"WAVEFORM_SELECTOR_W", ENUM:"ENUM_SELECTOR_W" };
+const WIDTH_OF = { knob:"KNOB", checkbox:"CHECKBOX", checkstack:"CHECKBOX", waveform:"WAVEFORM", enum:"ENUM" };
+
+let uid = 1;
+const id = () => "n" + (uid++);
+
+// ---------- widget/row/block constructors ----------
+const knob = (label, handle, extra={}) => ({ id:id(), type:"knob", label, handle, ...extra });
+const checkbox = (label, handle) => ({ id:id(), type:"checkbox", label, handle });
+const waveform = (handle, idxExpr="i") => ({ id:id(), type:"waveform", label:"WAVE", handle, idxExpr });
+const enm = (label, handle, names, idx) => ({ id:id(), type:"enum", label, handle, names, idx });
+const stack = (items) => ({ id:id(), type:"checkstack", label:"±", items });
+
+const jrow = (widgets, o={}) => ({ id:id(), kind:"justified", widgets, wrapHorizontal:!!o.wrapHorizontal, leadingRaw:o.leadingRaw||null, bodyRaw:o.bodyRaw||null, widths:o.widths||null });
+const rawrow = (text) => ({ id:id(), kind:"raw", rawText:text });
+
+const panel = (title, rows, o={}) => ({ id:id(), kind:"panel", title, widthExpr:o.widthExpr||"panel_width", rows });
+const foreachBlk = (loop, rows, o={}) => ({ id:id(), kind:"foreach", loop, title:o.title||null, rows });
+const rawblk = (text) => ({ id:id(), kind:"raw", rawText:text });
+
+// ---------- seed = the real panel.rs layout ----------
+function buildSeed(){
+  const opRow = jrow([
+    knob("TL","op.tl"), knob("AR","op.ar"), knob("D1R","op.d1r"), knob("D2R","op.d2r"),
+    knob("D1L","op.d1l"), knob("RR","op.rr"), knob("MUL","op.mul"), knob("DT1","op.dt1"),
+    knob("KSR","op.ksr"),
+    knob("VEL","op.vel_sens",{enabledExpr:"!is_carrier"}),
+    knob("V.GAIN","op.velocity_gain",{enabledExpr:"is_carrier"}),
+    knob("FINE","op.op_fine_tune"),
+    waveform("op.waveform","i"),
+    knob("FLOOR","op.floor"),
+    stack([{label:"AM",handle:"op.ame"},{label:"LOOP",handle:"op.op_loop"},{label:"CURVE",handle:"op.curve"}]),
+    knob("EGSFT","op.eg_shift"),
+    knob("LEVEL SCALE","op.level_scale"),
+  ], {
+    wrapHorizontal:true,
+    leadingRaw:[
+      'eg_preview(',
+      '    ui,',
+      '    EgAmplitudeMapping::DbLinear,',
+      '    op.tl.value() as u8,',
+      '    EgParams { ar: op.ar.value() as u8, d1r: op.d1r.value() as u8, d1l: op.d1l.value() as u8,',
+      '        d2r: op.d2r.value() as u8, rr: op.rr.value() as u8, floor: op.floor.value() as u8,',
+      '        loop_enabled: op.op_loop.value() as u8, curve: op.curve.value() as u8, delay: 0 },',
+      ');',
+      'let is_carrier = crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i);'
+    ].join("\n")
+  });
+
+  const opHeader = rawrow([
+    'ui.horizontal(|ui| {',
+    '    ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());',
+    '    let ratio = mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8);',
+    '    ui.label(egui::RichText::new(format!("\\u{d7}{ratio:.2}")).size(10.0).weak())',
+    '        .on_hover_text("MUL×FINEの実効周波数比（DT1は含まない）");',
+    '});'
+  ].join("\n"));
+
+  const operators = foreachBlk(
+    "for (i, op) in params.operators.iter().enumerate()",
+    [opHeader, opRow],
+    { title:"OP {i}" }
+  );
+
+  const channelChip = rawblk([
+    '// CHANNEL(1/3) + CHIP LFO(2/3) の2列。高さ合わせ・パッチベイ配線を含むため原文保持。',
+    'let two_col_usable = full_width - inter_gap * 2.0;',
+    'let channel_width = two_col_usable / 3.0;',
+    'let chip_lfo_width = two_col_usable * 2.0 / 3.0;',
+    'ui.horizontal(|ui| {',
+    '    let channel_resp = ui.group(|ui| {',
+    '        ui.set_width(channel_width);',
+    '        ui.vertical(|ui| {',
+    '            ui.label(egui::RichText::new("CHANNEL").strong());',
+    '            ui.horizontal(|ui| {',
+    '                algorithm_diagram(ui, params.algorithm.value() as u8);',
+    '                justified_row(ui, &[KNOB_W, KNOB_W], |ui| {',
+    '                    knob(ui, &*params.algorithm, "ALG");',
+    '                    knob(ui, &*params.feedback, "FB");',
+    '                });',
+    '            });',
+    '            ui.add_space(2.0);',
+    '            crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, 2, "TX LFO (TL)", &mut tx_jacks);',
+    '        });',
+    '    });',
+    '    let channel_height = channel_resp.response.rect.height();',
+    '    ui.group(|ui| {',
+    '        ui.set_width(chip_lfo_width);',
+    '        ui.set_min_height(channel_height);',
+    '        ui.vertical(|ui| {',
+    '            ui.label(egui::RichText::new("CHIP LFO").strong());',
+    '            justified_row(ui, &[KNOB_W; 6], |ui| {',
+    '                knob(ui, &*params.chip_lfo_freq, "CH.FRQ");',
+    '                knob(ui, &*params.chip_lfo_pmd, "CH.PMD");',
+    '                knob(ui, &*params.chip_lfo_amd, "CH.AMD");',
+    '                knob(ui, &*params.chip_lfo_delay, "CH.DLY");',
+    '                knob(ui, &*params.pms, "PMS");',
+    '                knob(ui, &*params.ams, "AMS");',
+    '            });',
+    '        });',
+    '    });',
+    '});'
+  ].join("\n"));
+
+  const textureLfo = panel("TEXTURE LFO", [
+    jrow([
+      knob("TX.RATE","params.texture_lfo_rate"),
+      knob("TX.DEP","params.texture_lfo_depth"),
+      knob("TX.DLY","params.texture_lfo_delay"),
+      enm("TX.WAVE","params.texture_lfo_waveform","LFO_WAVEFORM_NAMES",2),
+      enm("TX.FADE","params.texture_lfo_fade_mode","LFO_FADE_MODE_NAMES",3),
+      knob("TX.F.TM","params.texture_lfo_fade_time"),
+      knob("TX.OFS","params.texture_lfo_offset"),
+    ]),
+    rawrow([
+      'ui.add_space(2.0);',
+      'crate::patchbay::texture_lfo_source_jack(ui, &mut tx_jacks);'
+    ].join("\n")),
+  ]);
+
+  const fgHeader = (title, dest, hint) => rawrow([
+    'ui.horizontal(|ui| {',
+    '    ui.label(egui::RichText::new("'+title+'").strong());',
+    '    crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, '+dest+', "'+hint+'", &mut tx_jacks);',
+    '});'
+  ].join("\n"));
+
+  const pitchFg = panel("PITCH FG", [
+    fgHeader("PITCH FG",0,"TX LFO"),
+    jrow([], {
+      wrapHorizontal:true,
+      leadingRaw:'eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.pitch_fg.eg.to_eg_params());',
+      widths:["KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","CHECKBOX"],
+      bodyRaw:'fg_eg_knobs(ui, "P.", &params.pitch_fg.eg, Some(&*params.pitch_fg.depth));'
+    }),
+  ]);
+
+  const cutoffFg = panel("CUTOFF FG", [
+    fgHeader("CUTOFF FG",3,"TX LFO"),
+    jrow([], {
+      wrapHorizontal:true,
+      leadingRaw:'eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.cutoff_fg.eg.to_eg_params());',
+      widths:["KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","CHECKBOX"],
+      bodyRaw:[
+        'knob(ui, &*params.cutoff, "CUT");',
+        'knob(ui, &*params.resonance, "RES");',
+        'fg_eg_knobs(ui, "F.", &params.cutoff_fg.eg, Some(&*params.cutoff_fg.depth));'
+      ].join("\n")
+    }),
+  ]);
+
+  const gainFg = panel("GAIN FG", [
+    fgHeader("GAIN FG",1,"TX LFO"),
+    jrow([], {
+      wrapHorizontal:true,
+      leadingRaw:'eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.gain_fg.to_eg_params());',
+      widths:["KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","KNOB","CHECKBOX"],
+      bodyRaw:'fg_eg_knobs(ui, "V.", &params.gain_fg, None);'
+    }),
+  ]);
+
+  const master = panel("MASTER EFFECT", [
+    jrow([
+      enm("REV TYPE","params.reverb_type","REVERB_TYPE_NAMES",0),
+      knob("REV","params.rev_send"),
+      knob("R.TIME","params.reverb_time"),
+      enm("CHO TYPE","params.chorus_type","CHORUS_TYPE_NAMES",1),
+      knob("CHO","params.cho_send"),
+      knob("C.RATE","params.chorus_mod_rate"),
+      knob("C.DEP","params.chorus_mod_depth"),
+      knob("C.FB","params.chorus_feedback"),
+      knob("C>R","params.chorus_send_to_reverb"),
+    ]),
+  ]);
+
+  return [operators, channelChip, textureLfo, pitchFg, cutoffFg, gainFg, master];
+}
+
+// ---------- state ----------
+let model = buildSeed();
+let sel = null;        // {kind:'widget'|'row'|'block', id}
+let windowWidth = 900;
+
+// ============================================================
+//  code generation  →  panel.rs style Rust
+// ============================================================
+function indent(text, n){
+  const pad = " ".repeat(n);
+  return text.split("\n").map(l => l.length ? pad + l : l).join("\n");
+}
+function widthConstOf(wd){ return WIDTH_CONST[wd] || "KNOB_W"; }
+
+function rowWidths(row){
+  if (row.widths) return row.widths.map(widthConstOf);
+  return row.widgets.map(w => widthConstOf(WIDTH_OF[w.type]));
+}
+
+function genWidgetCall(w){
+  switch(w.type){
+    case "knob": {
+      const call = `knob(ui, &*${w.handle}, "${w.label}");`;
+      if (w.enabledExpr)
+        return `ui.add_enabled_ui(${w.enabledExpr}, |ui| {\n    ${call}\n});`;
+      return call;
+    }
+    case "checkbox":
+      return `bool_checkbox(ui, &*${w.handle}, "${w.label}");`;
+    case "waveform":
+      return `waveform_selector(ui, &*${w.handle}, ${w.idxExpr||"i"});`;
+    case "enum":
+      return `enum_selector(ui, &*${w.handle}, "${w.label}", &${w.names}, ${w.idx});`;
+    case "checkstack": {
+      const inner = w.items.map(it => `    bool_checkbox(ui, &*${it.handle}, "${it.label}");`).join("\n");
+      return `ui.vertical(|ui| {\n${inner}\n});`;
+    }
+  }
+  return "";
+}
+
+function genJustifiedBody(row){
+  if (row.bodyRaw) return row.bodyRaw;
+  return row.widgets.map(genWidgetCall).join("\n");
+}
+
+function genRow(row){
+  if (row.kind === "raw") return row.rawText;
+  // justified
+  const widths = rowWidths(row);
+  const wArr = "&[" + widths.join(", ") + "]";
+  const body = genJustifiedBody(row);
+  let core;
+  if (widths.length >= 11){
+    core = `let widths = [${widths.join(", ")}];\njustified_row(ui, &widths, |ui| {\n${indent(body,4)}\n});`;
+  } else {
+    core = `justified_row(ui, ${wArr}, |ui| {\n${indent(body,4)}\n});`;
+  }
+  if (row.wrapHorizontal){
+    const lead = row.leadingRaw ? row.leadingRaw + "\n" : "";
+    return `ui.horizontal(|ui| {\n${indent(lead + core, 4)}\n});`;
+  }
+  return core;
+}
+
+function genPanelInner(p){
+  const label = `ui.label(egui::RichText::new("${p.title}").strong());`;
+  const rows = p.rows.map(genRow).join("\n");
+  return `${label}\n${rows}`;
+}
+
+function genBlock(b){
+  if (b.kind === "raw") return b.rawText;
+  if (b.kind === "panel"){
+    const inner = genPanelInner(b);
+    return `ui.group(|ui| {\n    ui.set_width(${b.widthExpr});\n    ui.vertical(|ui| {\n${indent(inner,8)}\n    });\n});`;
+  }
+  if (b.kind === "foreach"){
+    const label = "";
+    const rows = b.rows.map(genRow).join("\n");
+    const groupInner = `ui.vertical(|ui| {\n${indent(rows,4)}\n});`;
+    const group = `ui.group(|ui| {\n    ui.set_width(panel_width);\n${indent(groupInner,4)}\n});`;
+    return `${b.loop} {\n${indent(group,4)}\n}`;
+  }
+  return "";
+}
+
+function generate(){
+  const blocks = model.map(genBlock).join("\n\n");
+  return [
+`pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {`,
+`    let mut tx_jacks = crate::patchbay::JackLayout::new();`,
+``,
+`    egui::ScrollArea::vertical().show(ui, |ui| {`,
+`        let full_width = ui.available_width();`,
+`        let inter_gap = ui.spacing().item_spacing.x;`,
+`        let panel_width = full_width - inter_gap;`,
+``,
+indent(blocks, 8),
+``,
+`        crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);`,
+`    });`,
+`}`,
+  ].join("\n");
+}
+
+// ============================================================
+//  canvas rendering
+// ============================================================
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => { const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; };
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+function findRow(rowId){
+  for (const b of model){
+    if (!b.rows) continue;
+    for (const r of b.rows) if (r.id===rowId) return {block:b, row:r};
+  }
+  return null;
+}
+function findWidget(wid){
+  for (const b of model){
+    if (!b.rows) continue;
+    for (const r of b.rows){
+      if (!r.widgets) continue;
+      const w = r.widgets.find(x=>x.id===wid);
+      if (w) return {block:b, row:r, widget:w};
+    }
+  }
+  return null;
+}
+
+function renderCanvas(){
+  const c = $("#canvas"); c.innerHTML = "";
+  model.forEach((b, bi) => c.appendChild(renderBlock(b, bi)));
+  const add = el("div","add-block");
+  c.appendChild(add);
+}
+
+function iconBtn(txt, title, fn){
+  const b = el("button","ghost",txt); b.title=title;
+  b.onclick = (e)=>{ e.stopPropagation(); fn(); };
+  return b;
+}
+
+function renderBlock(b, bi){
+  const box = el("div","block");
+  if (sel && sel.kind==="block" && sel.id===b.id) box.classList.add("sel");
+
+  const head = el("div","block-head");
+  const badge = el("span","badge "+b.kind, b.kind);
+  head.appendChild(badge);
+
+  if (b.kind==="panel"){
+    const t = el("div","block-title"); t.textContent=b.title; t.contentEditable="true";
+    t.onblur = ()=>{ b.title=t.textContent.trim()||b.title; regen(); };
+    t.onkeydown = e=>{ if(e.key==="Enter"){e.preventDefault(); t.blur();} };
+    head.appendChild(t);
+  } else if (b.kind==="foreach"){
+    head.appendChild(el("div","block-title", b.title||"repeat"));
+  } else {
+    head.appendChild(el("div","block-title","verbatim block"));
+  }
+
+  const acts = el("div","head-actions");
+  acts.appendChild(iconBtn("↑","上へ",()=>moveBlock(bi,-1)));
+  acts.appendChild(iconBtn("↓","下へ",()=>moveBlock(bi,1)));
+  if (b.kind==="raw"){ acts.appendChild(iconBtn("✎","テキスト編集",()=>editRawBlock(b))); }
+  acts.appendChild(iconBtn("✕","削除",()=>{ if(confirm("このブロックを削除しますか？")){ model.splice(bi,1); sel=null; regen(); }}));
+  head.appendChild(acts);
+  box.appendChild(head);
+
+  if (b.kind==="foreach"){
+    box.appendChild(el("div","foreach-loop", b.loop + " {"));
+  }
+
+  const body = el("div","block-body");
+  if (b.kind==="raw"){
+    const pre = el("div","raw-ta"); pre.style.whiteSpace="pre"; pre.style.overflowX="auto";
+    pre.style.maxHeight="160px"; pre.style.cursor="pointer";
+    pre.textContent = b.rawText;
+    pre.title="クリックでテキスト編集";
+    pre.onclick=()=>editRawBlock(b);
+    body.appendChild(pre);
+  } else {
+    b.rows.forEach((r,ri)=> body.appendChild(renderRow(b,r,ri)));
+    const ra = el("div","row-add");
+    const a1 = el("button",null,"＋ justified行"); a1.onclick=()=>{ b.rows.push(jrow([knob("NEW","params.x")])); regen(); };
+    const a2 = el("button",null,"＋ raw行"); a2.onclick=()=>{ b.rows.push(rawrow("// raw egui\n")); regen(); };
+    ra.appendChild(a1); ra.appendChild(a2);
+    body.appendChild(ra);
+  }
+  box.appendChild(body);
+  return box;
+}
+
+function renderRow(b, r, ri){
+  const row = el("div","row"+(r.kind==="raw"?" raw":""));
+  const meta = el("div","row-meta");
+  if (r.kind==="raw"){
+    meta.appendChild(el("span","row-tag","raw 行"));
+  } else {
+    meta.appendChild(el("span","row-tag"+(r.wrapHorizontal?" hor":""), r.wrapHorizontal?"horizontal + justified_row":"justified_row"));
+  }
+  const racts = el("div","head-actions");
+  racts.appendChild(iconBtn("↑","上へ",()=>{ if(ri>0){ b.rows.splice(ri-1,0,b.rows.splice(ri,1)[0]); regen(); }}));
+  racts.appendChild(iconBtn("↓","下へ",()=>{ if(ri<b.rows.length-1){ b.rows.splice(ri+1,0,b.rows.splice(ri,1)[0]); regen(); }}));
+  if (r.kind==="raw" || r.leadingRaw!=null || r.bodyRaw!=null)
+    racts.appendChild(iconBtn("✎","テキスト編集",()=>editRowText(r)));
+  racts.appendChild(iconBtn("✕","削除",()=>{ b.rows.splice(ri,1); regen(); }));
+  meta.appendChild(racts);
+  row.appendChild(meta);
+
+  if (r.kind==="raw"){
+    const pre = el("div","raw-ta"); pre.style.whiteSpace="pre"; pre.style.overflowX="auto"; pre.style.cursor="pointer";
+    pre.textContent=r.rawText; pre.onclick=()=>editRowText(r);
+    row.appendChild(pre);
+    return row;
+  }
+
+  if (r.leadingRaw){
+    const lr = el("div","lead-raw"); lr.textContent="⟜ "+r.leadingRaw.split("\n")[0]+(r.leadingRaw.includes("\n")?" …":"");
+    lr.title=r.leadingRaw; row.appendChild(lr);
+  }
+
+  if (r.bodyRaw!=null){
+    // width-array editable, body is verbatim helper
+    const pre = el("div","lead-raw"); pre.style.color="var(--ink-2)"; pre.textContent="{ "+r.bodyRaw.replace(/\n/g," ")+" }";
+    row.appendChild(pre);
+    row.appendChild(widthsLine(r, true));
+  } else {
+    const chips = el("div","chips");
+    r.widgets.forEach((w,wi)=> chips.appendChild(renderChip(r,w,wi)));
+    const add = el("div","add-w","＋"); add.title="ウィジェット追加";
+    add.onclick=()=>{ r.widgets.push(knob("NEW","params.x")); regen(); openWidget(r.widgets[r.widgets.length-1].id); };
+    chips.appendChild(add);
+    row.appendChild(chips);
+    row.appendChild(widthsLine(r, false));
+  }
+  return row;
+}
+
+function widthsLine(r, editable){
+  const line = el("div","widths-line");
+  const widths = rowWidths(r);
+  line.innerHTML = "&[" + widths.map(x=>"<b>"+x+"</b>").join(", ") + "]  ·  "+widths.length+" slots";
+  if (editable){
+    line.style.cursor="pointer";
+    line.title="クリックで幅配列を編集";
+    line.onclick=()=>editWidths(r);
+  }
+  return line;
+}
+
+let dragW = null;
+function renderChip(r, w, wi){
+  const chip = el("div","chip "+w.type);
+  chip.draggable = true;
+  if (sel && sel.kind==="widget" && sel.id===w.id) chip.classList.add("sel");
+  if (w.enabledExpr) chip.classList.add("enabled");
+
+  if (w.type==="knob"){ const d=el("div","dot"); chip.appendChild(d); }
+  else if (w.type==="checkbox"){ const d=el("div","dot"); chip.appendChild(d); }
+  else if (w.type==="checkstack"){ const d=el("div","dot"); chip.appendChild(d); }
+
+  chip.appendChild(el("div","lab", w.type==="checkstack" ? (w.items.map(i=>i.label).join("/")) : w.label));
+  chip.appendChild(el("div","kind", w.type));
+  chip.appendChild(el("div","w", widthConstOf(WIDTH_OF[w.type])));
+  if (w.enabledExpr){ const e=el("div","en","en"); e.title="add_enabled_ui("+w.enabledExpr+")"; chip.appendChild(e); }
+
+  chip.onclick = (e)=>{ e.stopPropagation(); openWidget(w.id); };
+
+  chip.ondragstart = e=>{ dragW={row:r, i:wi}; chip.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; };
+  chip.ondragend = ()=>{ chip.classList.remove("dragging"); document.querySelectorAll(".chip").forEach(c=>c.classList.remove("drop-before","drop-after")); };
+  chip.ondragover = e=>{
+    if(!dragW||dragW.row!==r) return; e.preventDefault();
+    const before = e.offsetX < chip.offsetWidth/2;
+    chip.classList.toggle("drop-before", before); chip.classList.toggle("drop-after", !before);
+  };
+  chip.ondragleave = ()=> chip.classList.remove("drop-before","drop-after");
+  chip.ondrop = e=>{
+    if(!dragW||dragW.row!==r) return; e.preventDefault();
+    const before = e.offsetX < chip.offsetWidth/2;
+    let to = before ? wi : wi+1;
+    const from = dragW.i;
+    const moved = r.widgets.splice(from,1)[0];
+    if (from < to) to--;
+    r.widgets.splice(to,0,moved);
+    dragW=null; regen();
+  };
+  return chip;
+}
+
+// ============================================================
+//  preview  (emulates justified_row via flex space-between)
+// ============================================================
+function panelInnerPx(){ return Math.max(120, windowWidth - 24); } // group margins approx
+
+function renderPreview(){
+  const wrap = $("#preview-wrap");
+  wrap.innerHTML="";
+  const inner = panelInnerPx();
+  wrap.style.width = windowWidth + "px";
+  wrap.style.maxWidth = "100%";
+  $("#pv-ruler").textContent = `panel_width ≈ ${inner}px（space-between で justified_row の隙間を再現）`;
+
+  model.forEach(b=>{
+    if (b.kind==="raw"){
+      const d = el("div","pv-raw"); d.textContent = firstLines(b.rawText,3); wrap.appendChild(d); return;
+    }
+    if (b.kind==="foreach"){
+      b.rows.forEach(r=> wrap.appendChild(pvPanel("OP n", [r], inner)));
+      return;
+    }
+    wrap.appendChild(pvPanel(b.title, b.rows, inner));
+  });
+}
+
+function firstLines(t,n){ const a=t.split("\n"); return a.slice(0,n).join("\n")+(a.length>n?"\n…":""); }
+
+function pvPanel(title, rows, inner){
+  const p = el("div","pv-panel");
+  p.appendChild(el("div","pv-title", title));
+  rows.forEach(r=>{
+    if (r.kind==="raw"){ const d=el("div","pv-raw"); d.textContent=firstLines(r.rawText,2); p.appendChild(d); return; }
+    p.appendChild(pvRow(r, inner));
+  });
+  return p;
+}
+
+function pvRow(r, inner){
+  const widths = rowWidths(r);
+  const pxWidths = widths.map(c=>{
+    if(c==="KNOB_W")return W.KNOB; if(c==="CHECKBOX_W")return W.CHECKBOX;
+    if(c==="WAVEFORM_SELECTOR_W")return W.WAVEFORM; if(c==="ENUM_SELECTOR_W")return W.ENUM; return W.KNOB;
+  });
+  const wrap = el("div");
+  const rowdiv = el("div","pv-row");
+  let leadPx = 0;
+  if (r.leadingRaw){ const eg = el("div","pv-cell"); const bx=el("div","pv-box eg"); bx.textContent="EG"; bx.style.width="118px";
+    eg.appendChild(bx); eg.appendChild(el("div",null,"eg_preview")); rowdiv.appendChild(eg); leadPx=126; }
+
+  const avail = inner - leadPx - (r.leadingRaw? 8:0);
+  rowdiv.style.width = (leadPx? avail : inner) + (r.leadingRaw? "px":"px");
+  const inner2 = el("div","pv-row"); inner2.style.width = (leadPx?avail:inner)+"px"; inner2.style.flex="1";
+
+  if (r.bodyRaw!=null){
+    // render generic cells at their widths
+    pxWidths.forEach((px,i)=> inner2.appendChild(pvCell({type: guessType(widths[i])}, px, widths[i])));
+  } else {
+    r.widgets.forEach((w,i)=> inner2.appendChild(pvCell(w, pxWidths[i], widths[i])));
+  }
+  if (r.leadingRaw){ rowdiv.appendChild(inner2); wrap.appendChild(rowdiv); }
+  else { wrap.appendChild(inner2); }
+
+  const sum = pxWidths.reduce((a,b)=>a+b,0);
+  const availW = (leadPx? avail : inner);
+  if (sum > availW){ const o=el("div","pv-overflow"); o.textContent=`⚠ 自然幅合計 ${sum}px > ${Math.round(availW)}px（隙間0でも収まりません）`; wrap.appendChild(o); }
+  return wrap;
+}
+function guessType(wc){ if(wc==="WAVEFORM_SELECTOR_W")return "waveform"; if(wc==="ENUM_SELECTOR_W")return "enum"; if(wc==="CHECKBOX_W")return "checkstack"; return "knob"; }
+
+function pvCell(w, px, wc){
+  const c = el("div","pv-cell"); c.style.width = px+"px";
+  if (w.type==="knob"){ c.appendChild(el("div","pv-knob")); c.appendChild(el("div",null, w.label||"")); }
+  else if (w.type==="waveform"){ const b=el("div","pv-box wave"); b.textContent="WAVE ▾"; b.style.width=px+"px"; c.appendChild(b); }
+  else if (w.type==="enum"){ const b=el("div","pv-box enum"); b.textContent=(w.label||"ENUM")+" ▾"; b.style.width=px+"px"; c.appendChild(b); c.appendChild(el("div",null,"")); }
+  else if (w.type==="checkbox"){ const b=el("div","pv-box"); b.textContent="☐ "+(w.label||""); b.style.width=px+"px"; c.appendChild(b); }
+  else if (w.type==="checkstack"){ const s=el("div","pv-stack"); (w.items||[{label:"A"},{label:"B"}]).forEach(it=>s.appendChild(el("span",null,it.label))); c.appendChild(s); }
+  return c;
+}
+
+// ============================================================
+//  inspector modals
+// ============================================================
+function modal(titleTxt, buildBody, onSave, extraFoot){
+  const scrim = el("div","scrim");
+  const m = el("div","modal");
+  m.appendChild(el("h2",null,titleTxt));
+  const body = el("div","body"); buildBody(body); m.appendChild(body);
+  const foot = el("div","foot");
+  if (extraFoot) foot.appendChild(extraFoot(()=>close()));
+  const cancel = el("button",null,"閉じる"); cancel.onclick=()=>close();
+  const save = el("button","primary","適用"); save.onclick=()=>{ if(onSave()!==false){ close(); regen(); } };
+  foot.appendChild(cancel); foot.appendChild(save);
+  m.appendChild(foot);
+  scrim.appendChild(m);
+  scrim.onclick=e=>{ if(e.target===scrim) close(); };
+  const onKey=e=>{ if(e.key==="Escape") close(); };
+  document.addEventListener("keydown",onKey);
+  function close(){ scrim.remove(); document.removeEventListener("keydown",onKey); }
+  document.body.appendChild(scrim);
+  return {close, body};
+}
+
+function field(parent, label, value, hint){
+  const f = el("div","fld"); f.appendChild(el("label",null,label));
+  const inp = el("input"); inp.value = value==null?"":value; f.appendChild(inp);
+  if (hint){ const h=el("div","hint",hint); f.appendChild(h); }
+  parent.appendChild(f); return inp;
+}
+function selectField(parent, label, value, opts){
+  const f = el("div","fld"); f.appendChild(el("label",null,label));
+  const s = el("select");
+  opts.forEach(o=>{ const op=el("option",null,o.label||o); op.value=o.value!=null?o.value:o; if((o.value!=null?o.value:o)===value)op.selected=true; s.appendChild(op); });
+  f.appendChild(s); parent.appendChild(f); return s;
+}
+
+function openWidget(wid){
+  const found = findWidget(wid);
+  if (!found){ return; }
+  sel = {kind:"widget", id:wid};
+  const w = found.widget;
+  let typeSel, labIn, handleIn, enIn, namesIn, idxIn, waveIn, stackWrap;
+  const rebuild = () => { /* re-render fields on type change */ };
+
+  const dlg = modal("ウィジェット編集", (body)=>{
+    typeSel = selectField(body,"種類", w.type, [
+      {value:"knob",label:"knob（KNOB_W）"},
+      {value:"checkbox",label:"bool_checkbox（CHECKBOX_W）"},
+      {value:"checkstack",label:"checkstack 縦積み（CHECKBOX_W）"},
+      {value:"waveform",label:"waveform_selector（WAVEFORM_SELECTOR_W）"},
+      {value:"enum",label:"enum_selector（ENUM_SELECTOR_W）"},
+    ]);
+    const dyn = el("div"); dyn.style.display="flex"; dyn.style.flexDirection="column"; dyn.style.gap="11px";
+    body.appendChild(dyn);
+    function renderDyn(){
+      dyn.innerHTML="";
+      const t = typeSel.value;
+      if (t!=="checkstack") labIn = field(dyn,"ラベル", w.label, '第2引数の "..." 文字列');
+      if (t!=="checkstack") handleIn = field(dyn,"ハンドル式", w.handle, 'knob(ui, &*<ここ>, ...) 例: params.feedback / op.tl');
+      if (t==="knob") enIn = field(dyn,"enabled 条件式（任意）", w.enabledExpr||"", '空欄でなければ add_enabled_ui(<式>, …) で囲む。例: is_carrier / !is_carrier');
+      if (t==="waveform") waveIn = field(dyn,"インデックス式", w.idxExpr||"i", 'waveform_selector(ui, &*h, <ここ>) 通常は i');
+      if (t==="enum"){
+        namesIn = field(dyn,"名前定数", w.names||"LFO_WAVEFORM_NAMES", '&<定数> 例: REVERB_TYPE_NAMES');
+        idxIn = field(dyn,"selector index", (w.idx!=null?w.idx:0), '末尾の一意なindex');
+      }
+      if (t==="checkstack"){
+        const f=el("div","fld"); f.appendChild(el("label",null,"縦積みチェックボックス（label ↔ handle）"));
+        stackWrap = el("div","stack-items"); f.appendChild(stackWrap); dyn.appendChild(f);
+        const items = w.items ? w.items.map(x=>({...x})) : [{label:"AM",handle:"op.ame"}];
+        const draw = ()=>{ stackWrap.innerHTML="";
+          items.forEach((it,ix)=>{ const row=el("div","stack-item");
+            const l=el("input"); l.value=it.label; l.placeholder="LABEL"; l.oninput=()=>it.label=l.value;
+            const h=el("input"); h.value=it.handle; h.placeholder="op.xxx"; h.oninput=()=>it.handle=h.value;
+            const del=el("button","ghost","✕"); del.onclick=()=>{ items.splice(ix,1); draw(); };
+            row.appendChild(l); row.appendChild(h); row.appendChild(del); stackWrap.appendChild(row);
+          });
+          const add=el("button",null,"＋ 段追加"); add.onclick=()=>{ items.push({label:"NEW",handle:"op.x"}); draw(); };
+          stackWrap.appendChild(add);
+        };
+        draw();
+        stackWrap._items = items;
+      }
+    }
+    typeSel.onchange=renderDyn;
+    renderDyn();
+  }, ()=>{
+    w.type = typeSel.value;
+    if (w.type!=="checkstack"){ w.label = labIn.value.trim(); w.handle = handleIn.value.trim(); }
+    if (w.type==="knob"){ const e=enIn.value.trim(); if(e) w.enabledExpr=e; else delete w.enabledExpr; }
+    else delete w.enabledExpr;
+    if (w.type==="waveform") w.idxExpr = waveIn.value.trim()||"i";
+    if (w.type==="enum"){ w.names=namesIn.value.trim(); w.idx=parseInt(idxIn.value)||0; }
+    if (w.type==="checkstack"){ w.items = stackWrap._items.filter(i=>i.label); if(!w.items.length) w.items=[{label:"A",handle:"op.x"}]; }
+  }, (close)=>{
+    const del = el("button","del","このウィジェットを削除");
+    del.onclick=()=>{ const f=findWidget(wid); if(f){ f.row.widgets.splice(f.row.widgets.indexOf(f.widget),1); } sel=null; close(); regen(); };
+    return del;
+  });
+}
+
+function editWidths(r){
+  modal("幅配列を編集", (body)=>{
+    const f=el("div","fld"); f.appendChild(el("label",null,"widths（カンマ区切り）"));
+    const ta=el("textarea"); ta.rows=3; ta.value=(r.widths||[]).join(", ");
+    f.appendChild(ta); f.appendChild(el("div","hint","KNOB / CHECKBOX / WAVEFORM / ENUM（または *_W 定数名）で記述。要素数＝bodyRaw内のウィジェット数と一致させること。"));
+    body.appendChild(f); body._ta=ta;
+  }, ()=>{
+    const raw = document.querySelector(".modal textarea").value;
+    r.widths = raw.split(",").map(s=>s.trim()).filter(Boolean).map(normWidth);
+  });
+}
+function normWidth(s){
+  const up=s.toUpperCase();
+  if(up==="KNOB"||up==="KNOB_W")return "KNOB";
+  if(up==="CHECKBOX"||up==="CHECKBOX_W")return "CHECKBOX";
+  if(up==="WAVEFORM"||up==="WAVEFORM_SELECTOR_W")return "WAVEFORM";
+  if(up==="ENUM"||up==="ENUM_SELECTOR_W")return "ENUM";
+  return "KNOB";
+}
+
+function editRowText(r){
+  modal("行のテキスト編集", (body)=>{
+    if (r.kind==="raw"){
+      const ta = bigTA(body,"raw Rust（この行の原文）", r.rawText); body._main=ta;
+    } else {
+      const l = bigTA(body,"leadingRaw（horizontal内・justified_row前に出力。空可）", r.leadingRaw||""); body._lead=l;
+      const b = bigTA(body,"bodyRaw（justified_row本体。空ならウィジェット列を使用）", r.bodyRaw||""); body._body=b;
+    }
+  }, ()=>{
+    const m=document.querySelector(".modal");
+    if (r.kind==="raw"){ r.rawText = m.querySelectorAll("textarea")[0].value; }
+    else {
+      const tas=m.querySelectorAll("textarea");
+      r.leadingRaw = tas[0].value.trim()? tas[0].value : null;
+      r.bodyRaw = tas[1].value.trim()? tas[1].value : null;
+    }
+  });
+}
+function editRawBlock(b){
+  modal("rawブロックのテキスト編集", (body)=>{ bigTA(body,"raw Rust（原文保持）", b.rawText); },
+  ()=>{ b.rawText = document.querySelector(".modal textarea").value; });
+}
+function bigTA(parent,label,val){
+  const f=el("div","fld"); f.appendChild(el("label",null,label));
+  const ta=el("textarea"); ta.rows=Math.min(16, Math.max(4,(val.split("\n").length+1))); ta.value=val;
+  f.appendChild(ta); parent.appendChild(f); return ta;
+}
+
+// ============================================================
+//  import  (best-effort panel.rs parser)
+// ============================================================
+function openImport(){
+  modal("panel.rs を取り込み", (body)=>{
+    const f=el("div","fld"); f.appendChild(el("label",null,"draw_param_panel を含む Rust を貼り付け"));
+    const ta=el("textarea"); ta.rows=14; ta.placeholder="pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) { ..."; f.appendChild(ta);
+    f.appendChild(el("div","hint","justified_row を持つ ui.group パネルと for ループを構造化します。解釈できない箇所は raw ブロックとして原文保持します（往復で消えません）。"));
+    body.appendChild(f);
+  }, ()=>{
+    const src = document.querySelector(".modal textarea").value;
+    try{
+      const parsed = parsePanelRs(src);
+      if (!parsed.length){ alert("draw_param_panel の本体を検出できませんでした。"); return false; }
+      model = parsed; sel=null; regen();
+    }catch(err){ alert("解析に失敗しました: "+err.message); return false; }
+  });
+}
+
+// brace/string-aware splitter into top-level statements
+function splitStatements(body){
+  const out=[]; let depth=0, i=0, start=0, s=body;
+  let inStr=false, inChar=false, inLC=false, inBC=false, strCh="";
+  for (i=0;i<s.length;i++){
+    const c=s[i], n=s[i+1];
+    if (inLC){ if(c==="\n") inLC=false; continue; }
+    if (inBC){ if(c==="*"&&n==="/"){inBC=false;i++;} continue; }
+    if (inStr){ if(c==="\\"){i++;continue;} if(c===strCh) inStr=false; continue; }
+    if (inChar){ if(c==="\\"){i++;continue;} if(c==="'") inChar=false; continue; }
+    if (c==="/"&&n==="/"){ inLC=true; i++; continue; }
+    if (c==="/"&&n==="*"){ inBC=true; i++; continue; }
+    if (c==='"'){ inStr=true; strCh='"'; continue; }
+    if (c==="'"){ inChar=true; continue; }
+    if (c==="{"||c==="("||c==="[") depth++;
+    else if (c==="}"||c===")"||c==="]") depth--;
+    else if (c===";"&&depth===0){ const st=s.slice(start,i+1).trim(); if(st)out.push(st); start=i+1; }
+  }
+  const tail=s.slice(start).trim(); if(tail)out.push(tail);
+  return out;
+}
+
+function extractDrawBody(src){
+  const m = src.indexOf("fn draw_param_panel");
+  if (m<0) return null;
+  // find ScrollArea ... show(ui, |ui| { <BODY> });  — take the last big closure body
+  const sIdx = src.indexOf(".show(", m);
+  let braceStart;
+  if (sIdx>=0){ braceStart = src.indexOf("{", src.indexOf("|ui|", sIdx)); }
+  else { braceStart = src.indexOf("{", m); }
+  if (braceStart<0) return null;
+  // match brace
+  let depth=0;
+  for (let i=braceStart;i<src.length;i++){ const c=src[i]; if(c==="{")depth++; else if(c==="}"){depth--; if(depth===0) return src.slice(braceStart+1,i); } }
+  return null;
+}
+
+function parsePanelRs(src){
+  const body = extractDrawBody(src);
+  if (!body) return [];
+  const stmts = splitStatements(body);
+  const blocks=[];
+  for (const st of stmts){
+    if (/^ui\.group\s*\(\s*\|ui\|/.test(st)){
+      const p = parsePanelGroup(st);
+      blocks.push(p || rawblk(st));
+    } else if (/^for\s+/.test(st)){
+      blocks.push(parseForEach(st) || rawblk(st));
+    } else if (/^(let\s+full_width|let\s+inter_gap|let\s+panel_width)/.test(st)){
+      // scaffold lets — skip (regenerated by template)
+      continue;
+    } else if (/^let\s+mut\s+tx_jacks/.test(st) || /finish_texture_lfo_patchbay/.test(st)){
+      continue; // scaffold
+    } else {
+      blocks.push(rawblk(st));
+    }
+  }
+  return blocks;
+}
+
+function innerClosure(st){
+  // return the {...} body of the first |ui| { ... } in st
+  const k = st.indexOf("|ui|"); if(k<0) return null;
+  const bs = st.indexOf("{", k); if(bs<0) return null;
+  let depth=0;
+  for(let i=bs;i<st.length;i++){ const c=st[i]; if(c==="{")depth++; else if(c==="}"){depth--; if(depth===0) return st.slice(bs+1,i); } }
+  return null;
+}
+
+function parsePanelGroup(st){
+  const inner = innerClosure(st); if(inner==null) return null;
+  // expect set_width + ui.vertical(|ui| { label + rows })
+  const wm = inner.match(/set_width\(\s*([a-zA-Z0-9_]+)\s*\)/);
+  const widthExpr = wm ? wm[1] : "panel_width";
+  const vIdx = inner.indexOf("ui.vertical");
+  const vbody = vIdx>=0 ? innerClosure(inner.slice(vIdx)) : inner;
+  if (vbody==null) return null;
+  const rows = splitStatements(vbody);
+  let title="PANEL"; const outRows=[];
+  for (const r of rows){
+    const tm = r.match(/RichText::new\("([^"]+)"\)\s*\.strong\(\)/);
+    if (tm && title==="PANEL" && /ui\.label/.test(r)){ title=tm[1]; continue; }
+    if (/justified_row\s*\(/.test(r) && !/ui\.horizontal/.test(r)){
+      outRows.push(parseJustified(r)); continue;
+    }
+    if (/ui\.horizontal/.test(r) && /justified_row/.test(r)){
+      outRows.push(parseHorizontalJustified(r)); continue;
+    }
+    outRows.push(rawrow(r));
+  }
+  return panel(title, outRows, {widthExpr});
+}
+
+function parseForEach(st){
+  const hm = st.match(/^(for\s+[^\{]+?)\s*\{/);
+  const loop = hm ? hm[1].trim() : "for _ in _";
+  const bodyStart = st.indexOf("{");
+  let depth=0, bodyInner=null;
+  for(let i=bodyStart;i<st.length;i++){ const c=st[i]; if(c==="{")depth++; else if(c==="}"){depth--; if(depth===0){bodyInner=st.slice(bodyStart+1,i);break;} } }
+  if(bodyInner==null) return null;
+  const inGroup = bodyInner.trim();
+  const g = /^ui\.group/.test(inGroup) ? parsePanelGroup(inGroup) : null;
+  const rows = g ? g.rows : [rawrow(inGroup)];
+  return foreachBlk(loop, rows, {title:"OP {i}"});
+}
+
+function extractWidths(r){
+  const m = r.match(/justified_row\s*\(\s*ui\s*,\s*&(\[[^\]]*\])/) || r.match(/let\s+widths\s*=\s*(\[[^\]]*\])/);
+  if(!m) return null;
+  let arr = m[1].replace(/[\[\]]/g,"").trim();
+  // handle [KNOB_W; 6]
+  const rep = arr.match(/([A-Z_]+)\s*;\s*(\d+)/);
+  if (rep){ return Array(parseInt(rep[2])).fill(normWidth(rep[1])); }
+  return arr.split(",").map(s=>s.trim()).filter(Boolean).map(normWidth);
+}
+function justifiedClosureBody(r){
+  const k = r.indexOf("justified_row");
+  const pipe = r.indexOf("|ui|", k); if(pipe<0) return "";
+  return innerClosure(r.slice(pipe-1)) || "";
+}
+function parseWidgetsFromBody(bodyText){
+  const widgets=[]; let recognizedAll=true;
+  const stmts = splitStatements(bodyText);
+  for (const s of stmts){
+    let m;
+    if (m=s.match(/^knob\(ui,\s*&\*([^,]+),\s*"([^"]*)"\)/)){ widgets.push(knob(m[2], m[1].trim())); }
+    else if (m=s.match(/add_enabled_ui\(([^,]+),\s*\|ui\|\s*\{\s*knob\(ui,\s*&\*([^,]+),\s*"([^"]*)"\)/)){
+      widgets.push(knob(m[3], m[2].trim(), {enabledExpr:m[1].trim()})); }
+    else if (m=s.match(/^bool_checkbox\(ui,\s*&\*([^,]+),\s*"([^"]*)"\)/)){ widgets.push(checkbox(m[2], m[1].trim())); }
+    else if (m=s.match(/^waveform_selector\(ui,\s*&\*([^,]+),\s*([^\)]+)\)/)){ widgets.push(waveform(m[1].trim(), m[2].trim())); }
+    else if (m=s.match(/^enum_selector\(ui,\s*&\*([^,]+),\s*"([^"]*)",\s*&([A-Za-z0-9_]+),\s*(\d+)\)/)){
+      widgets.push(enm(m[2], m[1].trim(), m[3], parseInt(m[4]))); }
+    else if (/^ui\.vertical/.test(s)){
+      const vb = innerClosure(s)||""; const items=[];
+      splitStatements(vb).forEach(x=>{ const mm=x.match(/bool_checkbox\(ui,\s*&\*([^,]+),\s*"([^"]*)"\)/); if(mm)items.push({label:mm[2],handle:mm[1].trim()}); });
+      if(items.length) widgets.push(stack(items)); else recognizedAll=false;
+    }
+    else { recognizedAll=false; }
+  }
+  return {widgets, recognizedAll};
+}
+
+function parseJustified(r){
+  const widths = extractWidths(r);
+  const bodyText = justifiedClosureBody(r);
+  const {widgets, recognizedAll} = parseWidgetsFromBody(bodyText);
+  if (recognizedAll && widgets.length){
+    return jrow(widgets);
+  }
+  // fall back: keep width array + verbatim body
+  return jrow([], {widths: widths||["KNOB"], bodyRaw: bodyText.trim()});
+}
+
+function parseHorizontalJustified(r){
+  // horizontal wrapping: leadingRaw = everything before justified_row inside horizontal
+  const hbody = innerClosure(r) || r;
+  const jIdx = hbody.indexOf("justified_row");
+  const leadStmts = splitStatements(hbody.slice(0, jIdx>=0?jIdx:0)).filter(s=>!/^let\s+widths/.test(s));
+  const leadingRaw = leadStmts.join("\n").trim() || null;
+  const jr = parseJustified(hbody);
+  jr.wrapHorizontal = true;
+  jr.leadingRaw = leadingRaw;
+  return jr;
+}
+
+// ============================================================
+//  driver
+// ============================================================
+let codeStr="";
+function regen(){
+  renderCanvas();
+  renderPreview();
+  codeStr = generate();
+  $("#code").textContent = codeStr;
+}
+
+function moveBlock(i, d){
+  const j=i+d; if(j<0||j>=model.length) return;
+  model.splice(j,0,model.splice(i,1)[0]); regen();
+}
+
+// tabs
+document.querySelectorAll(".tab").forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
+    t.classList.add("on");
+    const isCode = t.dataset.tab==="code";
+    $("#tab-preview").hidden = isCode;
+    $("#code").hidden = !isCode;
+  };
+});
+
+$("#ww").oninput = e=>{ windowWidth=+e.target.value; $("#wwv").textContent=windowWidth+"px"; renderPreview(); $("#pv-ruler"); };
+$("#btn-copy").onclick = async ()=>{
+  try{ await navigator.clipboard.writeText(codeStr); flash($("#btn-copy"),"コピーしました"); }
+  catch{ const ta=document.createElement("textarea"); ta.value=codeStr; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); flash($("#btn-copy"),"コピーしました"); }
+};
+$("#btn-dl").onclick = ()=>{
+  const blob=new Blob([codeStr],{type:"text/plain"}); const u=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=u; a.download="panel_generated.rs"; a.click(); URL.revokeObjectURL(u);
+};
+$("#btn-import").onclick = openImport;
+$("#btn-reset").onclick = ()=>{ if(confirm("編集を破棄して実物の panel.rs レイアウトに戻しますか？")){ model=buildSeed(); sel=null; regen(); } };
+$("#add-panel").onclick = ()=>{ model.push(panel("NEW PANEL",[jrow([knob("A","params.x"),knob("B","params.y")])])); regen(); };
+$("#add-raw").onclick = ()=>{ model.push(rawblk("// raw egui block\n")); regen(); };
+
+function flash(btn, msg){ const o=btn.textContent; btn.textContent=msg; setTimeout(()=>btn.textContent=o,1100); }
+
+regen();
+</script>
