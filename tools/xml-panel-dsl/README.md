@@ -13,6 +13,35 @@ Start-Process tools\xml-panel-dsl\index.html
 [panel-editor](../panel-editor/)（ドラッグ編集式のJSモデル）の後継として設計。
 詳しい経緯は `docs/session_history.txt` の2026-07-22セッションを参照。
 
+## アーキテクチャ（2026-07-22改訂: ビルド時トランスパイル化）
+
+XMLパース・Rustコード生成・`<row>`/`<stack>`のレイアウト計算（taffy）は、egui非依存の
+純粋Rustクレート **`ym38x6-ui/panel-codegen`**（`ym38x6-ui/panel-layout`に依存）に一本化されている。
+両クレートは`ym38x6-ui`配下に置く（ビルド時にしか使われないym38x6-ui自身のためのツールという
+位置づけで、tools側がそれを参照する方向にするため）。これを2ターゲットで共有する：
+
+- **ネイティブ**: `ym38x6-ui/build.rs`が`panel-codegen`をbuild-dependencyとして呼び、
+  `ym38x6-ui/src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
+  `panel.rs`はこれを`include!`するだけで、手動でのコード貼り替えは不要
+  （XMLを編集して`cargo build`し直すだけで反映される）。
+- **ブラウザ（このツール）**: `panel-codegen`を`tools/xml-panel-dsl/codegen-wasm`で
+  wasm-bindgenラップし、`build-wasm.ps1`が`wasm32-unknown-unknown`向けにビルド。
+  生成された`--target no-modules`のJSグルーコードと、base64エンコードした
+  wasmバイナリ本体を、`index.html`内の`<!-- BEGIN/END GENERATED -->`マーカー間に
+  **直接埋め込む**（fetchはfile://上のCORSで使えないため、`wasm_bindgen.initSync()`に
+  デコード済みbyte列を直接渡す）。これにより**wasmを使いながらも自己完結HTML1枚のまま**
+  （サーバー不要・file://で開くだけで動く）を維持している。
+
+```powershell
+# panel.xmlやpanel-codegenのロジックを変更したら再実行する
+powershell -File tools\xml-panel-dsl\build-wasm.ps1
+```
+
+これにより、以前の「JS版レイアウトエンジンがRust版(`layout.rs`)を非公式に移植したもの」という
+二重実装（移植ズレでバグが3件見つかった経緯がある）を解消した。ブラウザのプレビューも
+本物のtaffy（`panel_layout::solve`をwasm経由で呼ぶ）で矩形計算するため、近似計算は無くなった。
+`index.html`側に残るJSは、DOM操作・SVG描画・ファイル開く/保存・タブ切替のグルーのみ。
+
 ## 位置づけ・割り切り（2026-07-22の方針決定）
 
 - **ドラッグ&ドロップ編集UIは持たない**。XML手書き＋プレビュー専用ツール。
@@ -20,11 +49,7 @@ Start-Process tools\xml-panel-dsl\index.html
   取り込み機能も持たない（XML→Rust/HTMLの一方向）。ただし`PanelParams`等の構造体定義や
   `mul_fine_ratio`等のヘルパー関数は引き続き手書きのまま（XMLの`handle`属性が参照する
   「データ契約」なので、生成対象は描画コードのみ）。
-- 自己完結HTML1枚（`panel-editor`と同形式。ただし将来変わる可能性はある）。
-- レイアウト計算は`ym38x6-ui/src/layout.rs`（bare taffy採用）のJS移植。
-  `<row>`/`<stack>`の中でのみtaffy的な配置計算を行い、パネル同士の縦積み・`<columns>`の
-  高さ合わせは`panel.rs`の現行実装と同じ命令的コード（`ui.group`の逐次呼び出し・
-  `response.rect.height()`計測）をそのまま生成する。
+- 自己完結HTML1枚（wasmバイナリをbase64埋め込みすることで維持。詳細は上記アーキテクチャ節）。
 
 ## ウィジェット自然サイズは実測不要と判明
 
@@ -32,7 +57,7 @@ Start-Process tools\xml-panel-dsl\index.html
 `ui.allocate_exact_size`/`ui.allocate_ui_with_layout`で内部的に固定サイズを強制しているため、
 `panel.rs`の`KNOB_W`等の定数は近似値ではなくウィジェット自身の宣言値と完全一致する
 （ソースを読めば自明）。**実測が必要だったのは`bool_checkbox`（内容依存の可変幅）だけ**で、
-その実測値（70px、"CURVE"ラベル基準）はこのツールの`WIDGET_SIZE`テーブルと
+その実測値（70px、"CURVE"ラベル基準）は`panel-codegen`（`build_leaf_info`）と
 `panel.rs`の`CHECKBOX_W`の両方に反映済み。
 
 ## XML語彙
@@ -89,11 +114,10 @@ Start-Process tools\xml-panel-dsl\index.html
 
 ## 既知の割り切り・未実装
 
-- `<stack grow="true">`は`layout.rs`に`stack_grow`が無いため未対応（パースエラーにする）。
-- プレビュー（SVG）はegui実描画の忠実再現ではなく、構造・サイズ・位置関係の確認用途。
-  幅が自然サイズより狭い場合はCSS flexbox既定の`flex-shrink`相当で全要素を比例縮小する
-  近似計算をしている（実際のegui描画はウィジェットごとに固定サイズを`allocate_exact_size`
-  するため、狭すぎる場合の実際の見た目とは一致しない）。
-- 生成結果は`cargo check`の前に一度目視確認する前提で使う（`panel.rs`の構造体定義・
+- `<stack grow="true">`は`panel-layout`に`stack_grow`が無いため未対応（パースエラーにする）。
+- プレビュー（SVG）の`<row>`/`<stack>`矩形計算は本物のtaffy（wasm経由）だが、パネル同士の
+  縦積み・`<columns>`の高さ合わせはSVG側の簡易な逐次配置計算（JS）のまま
+  （`panel.rs`実行時の`ui.group`逐次呼び出し・`response.rect.height()`計測を模した近似）。
+- 生成（`ym38x6-ui/build.rs`）は`cargo check`時に自動反映される。`panel.rs`の構造体定義・
   ヘルパー関数はこのツールの生成対象外なので、既存の`panel.rs`上部はそのまま残し
-  `draw_param_panel`本体だけを置き換える）。
+  `draw_param_panel`本体だけが`include!`で差し替わる。

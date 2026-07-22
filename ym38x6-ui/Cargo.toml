@@ -6,7 +6,10 @@ edition = "2021"
 [dependencies]
 egui = "0.34"
 sound-core = { path = "../sound-core" }
-taffy = "0.9"
+panel-layout = { path = "panel-layout" }
+
+[build-dependencies]
+panel-codegen = { path = "panel-codegen" }
 
 [dev-dependencies]
 # 【一時】spike検証example(examples/op_slice.rs)用。方針確定後にexample・spikeごと削除。
