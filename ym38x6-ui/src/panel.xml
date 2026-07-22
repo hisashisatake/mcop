@@ -1,0 +1,178 @@
+<layout>
+
+  <panel repeat="operators" as="op" index="i">
+    <let name="is_carrier" expr="crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&amp;i)"/>
+    <header>
+      <raw>ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
+let ratio = mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8);
+ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hover_text("MUL×FINEの実効周波数比（DT1は含まない）");</raw>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="DbLinear" tl="tl" ar="ar" d1r="d1r" d1l="d1l" d2r="d2r" rr="rr"
+        floor="floor" loop="op_loop" curve="curve" delay-value="0"/>
+      <row grow="true" justify="between">
+        <knob label="TL" handle="tl"/>
+        <knob label="AR" handle="ar"/>
+        <knob label="D1R" handle="d1r"/>
+        <knob label="D2R" handle="d2r"/>
+        <knob label="D1L" handle="d1l"/>
+        <knob label="RR" handle="rr"/>
+        <knob label="MUL" handle="mul"/>
+        <knob label="DT1" handle="dt1"/>
+        <knob label="KSR" handle="ksr"/>
+        <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
+        <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
+        <knob label="FINE" handle="op_fine_tune"/>
+        <waveform handle="waveform" index="i"/>
+        <knob label="FLOOR" handle="floor"/>
+        <checkbox-stack>
+          <checkbox label="AM" handle="ame"/>
+          <checkbox label="LOOP" handle="op_loop"/>
+          <checkbox label="CURVE" handle="curve"/>
+        </checkbox-stack>
+        <knob label="EGSFT" handle="eg_shift"/>
+        <knob label="LEVEL SCALE" handle="level_scale"/>
+      </row>
+    </row>
+  </panel>
+
+  <columns match-height="true">
+    <column width="1" title="CHANNEL">
+      <row justify="start" gap="spacing">
+        <algorithm-diagram handle="algorithm"/>
+        <row grow="true" justify="between">
+          <knob label="ALG" handle="algorithm"/>
+          <knob label="FB" handle="feedback"/>
+        </row>
+      </row>
+      <space size="2"/>
+      <jack kind="dest" dest-index="2" label="TX LFO (TL)" handle="texture_lfo_destination"/>
+    </column>
+    <column width="2" title="CHIP LFO">
+      <row justify="between">
+        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
+        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
+        <knob label="CH.AMD" handle="chip_lfo_amd"/>
+        <knob label="CH.DLY" handle="chip_lfo_delay"/>
+        <knob label="PMS" handle="pms"/>
+        <knob label="AMS" handle="ams"/>
+      </row>
+    </column>
+  </columns>
+
+  <panel title="TEXTURE LFO">
+    <header><raw>ui.label(egui::RichText::new("TEXTURE LFO").strong());</raw></header>
+    <row justify="between">
+      <knob label="TX.RATE" handle="texture_lfo_rate"/>
+      <knob label="TX.DEP" handle="texture_lfo_depth"/>
+      <knob label="TX.DLY" handle="texture_lfo_delay"/>
+      <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2"/>
+      <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3"/>
+      <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
+      <knob label="TX.OFS" handle="texture_lfo_offset"/>
+    </row>
+    <space size="2"/>
+    <jack kind="source"/>
+  </panel>
+
+  <panel title="PITCH FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("PITCH FG").strong());</raw>
+      <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.pitch_fg.eg.ar" d1r="params.pitch_fg.eg.d1r" d1l="params.pitch_fg.eg.d1l"
+        d2r="params.pitch_fg.eg.d2r" rr="params.pitch_fg.eg.rr" floor="params.pitch_fg.eg.floor"
+        loop="params.pitch_fg.eg.loop_enabled" curve="params.pitch_fg.eg.curve"
+        delay="params.pitch_fg.eg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="P.AR" handle="params.pitch_fg.eg.ar"/>
+        <knob label="P.D1R" handle="params.pitch_fg.eg.d1r"/>
+        <knob label="P.D1L" handle="params.pitch_fg.eg.d1l"/>
+        <knob label="P.D2R" handle="params.pitch_fg.eg.d2r"/>
+        <knob label="P.RR" handle="params.pitch_fg.eg.rr"/>
+        <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
+        <knob label="P.FLOOR" handle="params.pitch_fg.eg.floor"/>
+        <knob label="P.DLY" handle="params.pitch_fg.eg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.pitch_fg.eg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.pitch_fg.eg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="CUTOFF FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("CUTOFF FG").strong());</raw>
+      <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.cutoff_fg.eg.ar" d1r="params.cutoff_fg.eg.d1r" d1l="params.cutoff_fg.eg.d1l"
+        d2r="params.cutoff_fg.eg.d2r" rr="params.cutoff_fg.eg.rr" floor="params.cutoff_fg.eg.floor"
+        loop="params.cutoff_fg.eg.loop_enabled" curve="params.cutoff_fg.eg.curve"
+        delay="params.cutoff_fg.eg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="CUT" handle="params.cutoff"/>
+        <knob label="RES" handle="params.resonance"/>
+        <knob label="F.AR" handle="params.cutoff_fg.eg.ar"/>
+        <knob label="F.D1R" handle="params.cutoff_fg.eg.d1r"/>
+        <knob label="F.D1L" handle="params.cutoff_fg.eg.d1l"/>
+        <knob label="F.D2R" handle="params.cutoff_fg.eg.d2r"/>
+        <knob label="F.RR" handle="params.cutoff_fg.eg.rr"/>
+        <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
+        <knob label="F.FLOOR" handle="params.cutoff_fg.eg.floor"/>
+        <knob label="F.DLY" handle="params.cutoff_fg.eg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.cutoff_fg.eg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.cutoff_fg.eg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="GAIN FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("GAIN FG").strong());</raw>
+      <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.gain_fg.ar" d1r="params.gain_fg.d1r" d1l="params.gain_fg.d1l"
+        d2r="params.gain_fg.d2r" rr="params.gain_fg.rr" floor="params.gain_fg.floor"
+        loop="params.gain_fg.loop_enabled" curve="params.gain_fg.curve"
+        delay="params.gain_fg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="V.AR" handle="params.gain_fg.ar"/>
+        <knob label="V.D1R" handle="params.gain_fg.d1r"/>
+        <knob label="V.D1L" handle="params.gain_fg.d1l"/>
+        <knob label="V.D2R" handle="params.gain_fg.d2r"/>
+        <knob label="V.RR" handle="params.gain_fg.rr"/>
+        <knob label="V.FLOOR" handle="params.gain_fg.floor"/>
+        <knob label="V.DLY" handle="params.gain_fg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.gain_fg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.gain_fg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="MASTER EFFECT">
+    <header><raw>ui.label(egui::RichText::new("MASTER EFFECT").strong());</raw></header>
+    <row justify="between">
+      <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="0"/>
+      <knob label="REV" handle="rev_send"/>
+      <knob label="R.TIME" handle="reverb_time"/>
+      <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="1"/>
+      <knob label="CHO" handle="cho_send"/>
+      <knob label="C.RATE" handle="chorus_mod_rate"/>
+      <knob label="C.DEP" handle="chorus_mod_depth"/>
+      <knob label="C.FB" handle="chorus_feedback"/>
+      <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+    </row>
+  </panel>
+
+</layout>

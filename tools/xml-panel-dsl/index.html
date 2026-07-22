@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ym38x6-ui XML panel DSL</title>
+<style>
+  :root{
+    --bg:#eef0f4; --surface:#ffffff; --surface-2:#f5f6f9; --line:#d7dbe3;
+    --ink:#1d2029; --ink-2:#5b616e; --ink-3:#8a909c;
+    --accent:#c07a1e; --accent-soft:#f0d9b3;
+    --cable:#159e8e; --raw:#8a5cf0; --warn:#c0392b; --code-bg:#f7f8fb;
+    --knob:#3d7fd9; --checkbox:#2fa86b; --waveform:#c07a1e; --enum:#9b5cd9;
+    --eg:#d94f4f; --alg:#159e8e; --jack:#d9b23d;
+    --radius:9px;
+    --mono: ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#14161c; --surface:#1b1e26; --surface-2:#22262f; --line:#333846;
+      --ink:#e4e7ee; --ink-2:#a7adba; --ink-3:#727888;
+      --accent:#e8a33d; --accent-soft:#4a3a1e; --cable:#3dd6c4; --raw:#b799ff;
+      --warn:#ef6a5c; --code-bg:#12141a;
+      --knob:#6ea3ec; --checkbox:#5cd196; --waveform:#e8a33d; --enum:#c090f0;
+      --eg:#f08a8a; --alg:#3dd6c4; --jack:#f0d073;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0}
+  #app{
+    font-family:var(--sans); color:var(--ink); background:var(--bg);
+    height:100vh; display:flex; flex-direction:column; font-size:14px; line-height:1.45;
+  }
+  header.bar{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; background:var(--surface); border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:baseline; gap:9px; margin-right:auto}
+  .brand h1{font-size:15px; margin:0; font-weight:650; letter-spacing:.2px}
+  .brand .sub{font-size:11px; color:var(--ink-3); font-family:var(--mono)}
+  .bar .grp{display:flex; align-items:center; gap:8px}
+  .bar label.wl{font-size:11px; color:var(--ink-2); letter-spacing:.4px; text-transform:uppercase}
+  input[type=range]{accent-color:var(--accent)}
+  .wval{font-family:var(--mono); font-size:12px; color:var(--accent); min-width:56px; text-align:right}
+  button{
+    font-family:var(--sans); font-size:13px; color:var(--ink); background:var(--surface-2);
+    border:1px solid var(--line); border-radius:7px; padding:6px 12px; cursor:pointer;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
+  button.primary:hover{filter:brightness(1.06); color:#fff}
+  main{flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-height:0}
+  @media (max-width:900px){ main{grid-template-columns:1fr; overflow:auto} }
+  .pane{min-height:0; display:flex; flex-direction:column; overflow:hidden}
+  .pane.left{border-right:1px solid var(--line)}
+  .pane-head{
+    display:flex; align-items:center; gap:10px; padding:8px 14px;
+    border-bottom:1px solid var(--line); background:var(--surface);
+    font-size:11px; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-2); font-weight:600;
+  }
+  .pane-head .sp{margin-left:auto}
+  .pane-head button.tab{
+    background:transparent; border:1px solid transparent; color:var(--ink-3);
+    text-transform:uppercase; letter-spacing:.4px; font-size:11px; padding:4px 10px;
+  }
+  .pane-head button.tab.active{color:var(--accent); border-color:var(--line); background:var(--surface-2)}
+  .pane-body{flex:1; overflow:auto; padding:0}
+  #xmlSrc{
+    width:100%; height:100%; border:0; resize:none; padding:14px;
+    font-family:var(--mono); font-size:12.5px; background:var(--code-bg); color:var(--ink);
+    outline:none;
+  }
+  #tabPreview, #tabRust{height:100%; overflow:auto}
+  #tabPreview{padding:14px; position:relative}
+  #tabRust{display:flex; flex-direction:column}
+  #rustOut{
+    flex:1; margin:0; padding:14px; overflow:auto; font-family:var(--mono); font-size:12px;
+    background:var(--code-bg); white-space:pre; color:var(--ink);
+  }
+  #tabRust .toolbar{padding:8px 14px; border-bottom:1px solid var(--line); background:var(--surface)}
+  .err{
+    margin:10px 0; padding:10px 12px; border-radius:var(--radius);
+    background:color-mix(in srgb, var(--warn) 14%, var(--surface)); border:1px solid var(--warn);
+    color:var(--warn); font-family:var(--mono); font-size:12.5px; white-space:pre-wrap;
+  }
+  .ok{
+    margin:10px 0; padding:6px 10px; border-radius:var(--radius);
+    background:color-mix(in srgb, var(--checkbox) 12%, var(--surface)); border:1px solid var(--checkbox);
+    color:var(--checkbox); font-family:var(--mono); font-size:11.5px; display:inline-block;
+  }
+  svg text{font-family:var(--sans); user-select:none}
+  .legend{display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; font-size:11px; color:var(--ink-2)}
+  .legend .sw{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <div class="brand">
+      <h1>XML panel DSL</h1>
+      <span class="sub">ym38x6-ui / PanelParams レイアウトDSL（プレビュー専用・panel.rs生成専用）</span>
+    </div>
+    <div class="grp">
+      <label class="wl">PANEL W</label>
+      <input type="range" id="widthSlider" min="360" max="1400" value="900">
+      <span class="wval" id="widthVal">900px</span>
+    </div>
+    <button id="btnGen" class="primary">再生成</button>
+  </header>
+  <main>
+    <section class="pane left">
+      <div class="pane-head">
+        XML入力
+        <span class="sp"></span>
+        <span id="fileNameLabel" class="wl" style="text-transform:none;letter-spacing:0"></span>
+        <button id="btnOpen">ファイルを開く</button>
+        <button id="btnSave">名前を付けて保存</button>
+        <input type="file" id="fileInput" accept=".xml,text/xml" hidden>
+        <span id="statusBadge"></span>
+      </div>
+      <div class="pane-body"><textarea id="xmlSrc" spellcheck="false"></textarea></div>
+    </section>
+    <section class="pane right">
+      <div class="pane-head">
+        <button class="tab active" data-tab="preview">プレビュー</button>
+        <button class="tab" data-tab="rust">Rust出力</button>
+      </div>
+      <div class="pane-body">
+        <div id="tabPreview">
+          <div id="errBox" class="err" hidden></div>
+          <svg id="previewSvg" width="100%"></svg>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div id="tabRust" style="display:none">
+          <div class="toolbar"><button id="btnCopy">クリップボードへコピー</button></div>
+          <pre id="rustOut"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+'use strict';
+
+/* =========================================================================
+ * ウィジェット自然サイズ表（ym38x6-ui/src/{knob,waveform,selector,eg_preview,
+ * algorithm_diagram}.rs 実装のui.allocate_exact_size/allocate_ui_with_layoutの
+ * ハードコード値と1:1で一致させること。checkbox系のみ実測値（panel.rs CHECKBOX_W）。
+ * ========================================================================= */
+const WIDGET_SIZE = {
+  knob: { w: 62, h: 66 },
+  checkbox: { w: 70, h: 66 },
+  'checkbox-stack': { w: 70, h: 66 },
+  waveform: { w: 130, h: 66 },
+  enum: { w: 100, h: 66 },
+  'eg-preview': { w: 84, h: 66 },
+  'algorithm-diagram': { w: 150, h: 100 },
+};
+const PREVIEW_COLOR = {
+  knob:'var(--knob)', checkbox:'var(--checkbox)', 'checkbox-stack':'var(--checkbox)',
+  waveform:'var(--waveform)', enum:'var(--enum)', 'eg-preview':'var(--eg)',
+  'algorithm-diagram':'var(--alg)', raw:'var(--raw)', jack:'var(--jack)',
+};
+
+/* =========================================================================
+ * エラーヘルパー
+ * ========================================================================= */
+function fail(msg){ throw new Error(msg); }
+function reqAttr(el, name){
+  if (!el.hasAttribute(name)) fail(`<${el.tagName}> に ${name} 属性が必要です`);
+  return el.getAttribute(name);
+}
+function elementChildren(el){
+  return Array.from(el.children).filter(c => c.nodeType === 1);
+}
+function fmt(n){
+  return Number.isInteger(n) ? `${n}.0` : `${n}`;
+}
+function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+/* =========================================================================
+ * handle解決: repeat中は "tl" -> "op.tl" のような相対パス。
+ * "."を含む値はフルパスとしてそのまま使う(呼び出し側で"params."等を書く)。
+ * ========================================================================= */
+function resolvePath(raw, ctx){
+  if (raw.includes('.')) return raw;
+  return `${ctx.base}.${raw}`;
+}
+
+/* =========================================================================
+ * <row>/<stack> 配下のleafウィジェット1個ぶんの情報を組み立てる。
+ * 戻り値: { size:{w,h}, rustStmt, previewLabel, previewType }
+ * ========================================================================= */
+function buildLeafInfo(el, ctx){
+  const tag = el.tagName;
+  const enabledIf = el.getAttribute('enabled-if');
+  const wrap = (stmt) => enabledIf
+    ? `ui.add_enabled_ui(${enabledIf}, |ui| { ${stmt} });`
+    : stmt;
+
+  switch (tag) {
+    case 'knob': {
+      const label = reqAttr(el, 'label');
+      const path = resolvePath(reqAttr(el, 'handle'), ctx);
+      return {
+        size: WIDGET_SIZE.knob,
+        rustStmt: wrap(`knob(ui, &*${path}, "${label}");`),
+        previewLabel: label, previewType: 'knob',
+      };
+    }
+    case 'checkbox': {
+      const label = reqAttr(el, 'label');
+      const path = resolvePath(reqAttr(el, 'handle'), ctx);
+      return {
+        size: WIDGET_SIZE.checkbox,
+        rustStmt: wrap(`bool_checkbox(ui, &*${path}, "${label}");`),
+        previewLabel: label, previewType: 'checkbox',
+      };
+    }
+    case 'checkbox-stack': {
+      const items = elementChildren(el).map(c => {
+        if (c.tagName !== 'checkbox') fail('<checkbox-stack>の子要素は<checkbox>のみです');
+        const label = reqAttr(c, 'label');
+        const path = resolvePath(reqAttr(c, 'handle'), ctx);
+        return { label, stmt: `bool_checkbox(ui, &*${path}, "${label}");` };
+      });
+      if (items.length === 0) fail('<checkbox-stack>には1個以上<checkbox>が必要です');
+      const stmt = `ui.vertical(|ui| { ${items.map(i => i.stmt).join(' ')} });`;
+      return {
+        size: WIDGET_SIZE['checkbox-stack'],
+        rustStmt: wrap(stmt),
+        previewLabel: items.map(i => i.label).join('/'), previewType: 'checkbox-stack',
+      };
+    }
+    case 'waveform': {
+      const path = resolvePath(reqAttr(el, 'handle'), ctx);
+      const index = el.getAttribute('index') || '0';
+      return {
+        size: WIDGET_SIZE.waveform,
+        rustStmt: wrap(`waveform_selector(ui, &*${path}, (${index}) as usize);`),
+        previewLabel: 'WAVE', previewType: 'waveform',
+      };
+    }
+    case 'enum': {
+      const label = reqAttr(el, 'label');
+      const path = resolvePath(reqAttr(el, 'handle'), ctx);
+      const names = reqAttr(el, 'names');
+      const salt = el.getAttribute('salt') || '0';
+      return {
+        size: WIDGET_SIZE.enum,
+        rustStmt: wrap(`enum_selector(ui, &*${path}, "${label}", &${names}, ${salt});`),
+        previewLabel: label, previewType: 'enum',
+      };
+    }
+    case 'eg-preview': {
+      const mapping = el.getAttribute('mapping') || 'DbLinear';
+      const field = (name) => {
+        if (el.hasAttribute(name)) return `${resolvePath(el.getAttribute(name), ctx)}.value() as u8`;
+        if (el.hasAttribute(name + '-value')) return el.getAttribute(name + '-value');
+        fail(`<eg-preview>に${name}属性(または${name}-value)が必要です`);
+      };
+      const tlExpr = field('tl');
+      const eg = `EgParams { ar: ${field('ar')}, d1r: ${field('d1r')}, d1l: ${field('d1l')}, `
+        + `d2r: ${field('d2r')}, rr: ${field('rr')}, floor: ${field('floor')}, `
+        + `loop_enabled: ${field('loop')}, curve: ${field('curve')}, delay: ${field('delay')} }`;
+      return {
+        size: WIDGET_SIZE['eg-preview'],
+        rustStmt: wrap(`eg_preview(ui, EgAmplitudeMapping::${mapping}, ${tlExpr}, ${eg});`),
+        previewLabel: 'EG', previewType: 'eg-preview',
+      };
+    }
+    case 'algorithm-diagram': {
+      const path = resolvePath(reqAttr(el, 'handle'), ctx);
+      return {
+        size: WIDGET_SIZE['algorithm-diagram'],
+        rustStmt: wrap(`algorithm_diagram(ui, ${path}.value() as u8);`),
+        previewLabel: 'ALG', previewType: 'algorithm-diagram',
+      };
+    }
+    case 'raw': {
+      const w = parseFloat(reqAttr(el, 'width'));
+      const h = parseFloat(reqAttr(el, 'height'));
+      if (Number.isNaN(w) || Number.isNaN(h)) fail('<raw>のwidth/heightは数値で指定してください');
+      const code = el.textContent.trim();
+      if (!code) fail('<raw>は空にできません');
+      return { size: { w, h }, rustStmt: wrap(code), previewLabel: 'raw', previewType: 'raw' };
+    }
+    default:
+      fail(`<row>/<stack>内で未知の要素です: <${tag}>`);
+  }
+}
+
+/* =========================================================================
+ * <row>/<stack> 木の構築。leaves配列はDFS順（コード生成のlayout::place順と一致）。
+ * ========================================================================= */
+function buildRowTree(el, ctx){
+  const tag = el.tagName;
+  if (tag === 'row' || tag === 'stack') {
+    const gapAttr = el.getAttribute('gap');
+    const gap = gapAttr === null ? 0 : (gapAttr === 'spacing' ? 'SPACING' : parseFloat(gapAttr));
+    const grow = el.getAttribute('grow') === 'true';
+    const justify = el.getAttribute('justify') || 'start';
+    if (tag === 'stack' && grow) fail('<stack grow="true">は現時点で未対応です（layout.rsにstack_growが無い）');
+    const kids = elementChildren(el);
+    if (kids.length === 0) fail(`<${tag}>には1個以上の子要素が必要です`);
+    const children = kids.map(c => buildRowTree(c, ctx));
+    return {
+      kind: tag, gap, grow, justify, children,
+      leaves: children.flatMap(c => c.leaves),
+    };
+  }
+  const info = buildLeafInfo(el, ctx);
+  return { kind: 'leaf', size: info.size, children: [], leaves: [{ el, ...info }] };
+}
+
+function gapNumeric(node){ return node.gap === 'SPACING' ? 8 : node.gap; }
+
+function naturalWidth(node){
+  if (node.kind === 'leaf') return node.size.w;
+  if (node.kind === 'row') {
+    const n = node.children.length;
+    return node.children.reduce((s, c) => s + naturalWidth(c), 0) + gapNumeric(node) * Math.max(0, n - 1);
+  }
+  return Math.max(...node.children.map(naturalWidth)); // stack: cross axis = max width
+}
+function maxHeight(node){
+  if (node.kind === 'leaf') return node.size.h;
+  if (node.kind === 'row') return Math.max(...node.children.map(maxHeight));
+  const n = node.children.length;
+  return node.children.reduce((s, c) => s + maxHeight(c), 0) + gapNumeric(node) * Math.max(0, n - 1);
+}
+
+/* justify-content相当の主軸配置（Row=横/Stack=縦、どちらも同じ計算式）。 */
+function distribute(sizes, containerMain, gap, justify){
+  const n = sizes.length;
+  const content = sizes.reduce((a, b) => a + b, 0) + gap * Math.max(0, n - 1);
+  const extra = Math.max(0, containerMain - content);
+  let lead = 0, between = gap;
+  switch (justify) {
+    case 'start': lead = 0; between = gap; break;
+    case 'end': lead = extra; between = gap; break;
+    case 'center': lead = extra / 2; between = gap; break;
+    case 'between': lead = 0; between = n > 1 ? gap + extra / (n - 1) : gap; break;
+    case 'around': lead = extra / (2 * n); between = gap + extra / n; break;
+    case 'evenly': lead = extra / (n + 1); between = gap + extra / (n + 1); break;
+    default: fail(`未知のjustify値です: ${justify}`);
+  }
+  const positions = [];
+  let p = lead;
+  for (let i = 0; i < n; i++) { positions.push(p); p += sizes[i] + between; }
+  return positions;
+}
+
+/* solve: 木を解いてleaf順にrect({x,y,w,h}、原点相対)を返す。layout.rs::solve()のJS移植。 */
+function solveTree(node, containerW, containerH, originX, originY, out){
+  // leafの幅は親から実際に割り当てられたcontainerW（grow/shrink後の値）を使う。node.size.wは
+  // 「素のまま欲しい幅(basis)」であって描画位置ではない（このズレがoverflow時の重なりバグだった）。
+  if (node.kind === 'leaf') { out.push({ x: originX, y: originY, w: containerW, h: node.size.h }); return; }
+  const n = node.children.length;
+  const basis = node.children.map(c => node.kind === 'row' ? naturalWidth(c) : maxHeight(c));
+  const totalGrow = node.children.reduce((s, c) => s + (c.grow ? 1 : 0), 0);
+  const gap = gapNumeric(node);
+  const mainContainer = node.kind === 'row' ? containerW : containerH;
+  const contentMain = basis.reduce((a, b) => a + b, 0) + gap * Math.max(0, n - 1);
+  const leftover = Math.max(0, mainContainer - contentMain);
+  const overflow = Math.max(0, contentMain - mainContainer);
+  const resolved = basis.slice();
+  if (overflow > 0) {
+    // taffy/CSS既定のflex-shrink=1相当: 内容がコンテナに収まらない場合、全子要素をbasis比で
+    // 均等に縮小する（プレビュー用の近似。実際のウィジェットは固定サイズのため見た目には
+    // 収まりきらず重なる場合があるが、位置計算が破綻しないようにするための処理）。
+    const totalBasis = basis.reduce((a, b) => a + b, 0) || 1;
+    node.children.forEach((c, i) => { resolved[i] = Math.max(4, basis[i] - overflow * (basis[i] / totalBasis)); });
+  } else if (totalGrow > 0) {
+    node.children.forEach((c, i) => { if (c.grow) resolved[i] = basis[i] + leftover * (1 / totalGrow); });
+  }
+  const positions = distribute(resolved, mainContainer, gap, node.kind === 'row' ? node.justify : 'start');
+  node.children.forEach((c, i) => {
+    if (node.kind === 'row') {
+      solveTree(c, resolved[i], containerH, originX + positions[i], originY, out);
+    } else {
+      solveTree(c, containerW, resolved[i], originX, originY + positions[i], out);
+    }
+  });
+}
+
+function treeUsesSpacing(node){
+  if (node.kind === 'leaf') return false;
+  return node.gap === 'SPACING' || node.children.some(treeUsesSpacing);
+}
+
+/* =========================================================================
+ * Rust コード生成: <row>/<stack> 木 -> layout::row/row_grow/stack(...) 式
+ * ========================================================================= */
+function treeExpr(node){
+  if (node.kind === 'leaf') return `leaf(${fmt(node.size.w)}, ${fmt(node.size.h)})`;
+  const gapStr = node.gap === 'SPACING' ? 'outer_gap' : fmt(node.gap);
+  const childrenStr = node.children.map(treeExpr).join(', ');
+  if (node.kind === 'row') {
+    const ctor = node.grow ? 'row_grow' : 'row';
+    return `${ctor}(Justify::${capitalize(node.justify)}, ${gapStr}, vec![${childrenStr}])`;
+  }
+  return `stack(${gapStr}, vec![${childrenStr}])`;
+}
+
+function genTreeBlock(node){
+  const lines = [];
+  if (treeUsesSpacing(node)) lines.push('let outer_gap = ui.spacing().item_spacing.x;');
+  const h = fmt(maxHeight(node));
+  lines.push('let avail = ui.available_width();');
+  lines.push(`let tree = ${treeExpr(node)};`);
+  lines.push(`let rects = layout::solve(egui::vec2(avail, ${h}), &tree);`);
+  lines.push('let origin = ui.cursor().min;');
+  lines.push(`ui.allocate_space(egui::vec2(avail, ${h}));`);
+  lines.push('let mut r = rects.iter();');
+  for (const leaf of node.leaves) {
+    lines.push(`layout::place(ui, origin, *r.next().unwrap(), |ui| { ${leaf.rustStmt} });`);
+  }
+  return lines;
+}
+
+/* =========================================================================
+ * <panel>本体（<let>/<header>/<row>|<stack>/<space>/<jack>/<raw>の並び）
+ * ========================================================================= */
+function jackAttrs(el, ctx){
+  const kind = el.getAttribute('kind') || 'dest';
+  if (kind === 'source') return { kind };
+  const destIndex = reqAttr(el, 'dest-index');
+  const label = reqAttr(el, 'label');
+  const handle = resolvePath(reqAttr(el, 'handle'), ctx);
+  return { kind, destIndex, label, handle };
+}
+function genJackStmt(j){
+  if (j.kind === 'source') return 'crate::patchbay::texture_lfo_source_jack(ui, &mut tx_jacks);';
+  return `crate::patchbay::texture_lfo_dest_jack(ui, &*${j.handle}, ${j.destIndex}, "${j.label}", &mut tx_jacks);`;
+}
+
+function parseBody(el, ctx){
+  const stmts = [];
+  for (const child of elementChildren(el)) {
+    const tag = child.tagName;
+    if (tag === 'let') {
+      stmts.push({ kind: 'let', name: reqAttr(child, 'name'), expr: reqAttr(child, 'expr') });
+    } else if (tag === 'header') {
+      const items = elementChildren(child).map(c => {
+        if (c.tagName === 'raw') return { kind: 'raw', code: c.textContent.trim() };
+        if (c.tagName === 'jack') return { kind: 'jack', jack: jackAttrs(c, ctx) };
+        fail(`<header>内で未知の要素です: <${c.tagName}>`);
+      });
+      stmts.push({ kind: 'header', items, previewText: items.filter(i => i.kind === 'raw').length ? '(header)' : '' });
+    } else if (tag === 'row' || tag === 'stack') {
+      stmts.push({ kind: 'tree', tree: buildRowTree(child, ctx) });
+    } else if (tag === 'space') {
+      stmts.push({ kind: 'space', size: parseFloat(reqAttr(child, 'size')) });
+    } else if (tag === 'jack') {
+      stmts.push({ kind: 'jack', jack: jackAttrs(child, ctx) });
+    } else if (tag === 'raw') {
+      stmts.push({ kind: 'raw', code: child.textContent.trim() });
+    } else {
+      fail(`<panel>/<column>直下で未知の要素です: <${tag}>`);
+    }
+  }
+  return stmts;
+}
+
+function genBodyLines(body){
+  const lines = [];
+  for (const st of body) {
+    if (st.kind === 'let') lines.push(`let ${st.name} = ${st.expr};`);
+    else if (st.kind === 'header') {
+      const inner = st.items.map(i => i.kind === 'raw' ? i.code : genJackStmt(i.jack)).join('\n');
+      lines.push(`ui.horizontal(|ui| {\n${indent(inner, 4)}\n});`);
+    } else if (st.kind === 'tree') lines.push(...genTreeBlock(st.tree));
+    else if (st.kind === 'space') lines.push(`ui.add_space(${fmt(st.size)});`);
+    else if (st.kind === 'jack') lines.push(genJackStmt(st.jack));
+    else if (st.kind === 'raw') lines.push(st.code);
+  }
+  return lines;
+}
+
+function indent(text, n){
+  const pad = ' '.repeat(n);
+  return text.split('\n').map(l => l.length ? pad + l : l).join('\n');
+}
+
+/* =========================================================================
+ * トップレベル: <layout> の子 <panel>/<columns>
+ * ========================================================================= */
+function parsePanel(el){
+  const repeat = el.getAttribute('repeat');
+  const as_ = el.getAttribute('as');
+  if (repeat && !as_) fail('<panel repeat="...">にはas属性が必要です');
+  const index = el.getAttribute('index') || 'i';
+  const title = el.getAttribute('title') || '';
+  const ctx = { base: repeat ? as_ : 'params' };
+  return { kind: 'panel', repeat, as: as_, index, title, body: parseBody(el, ctx) };
+}
+function parseColumns(el){
+  const matchHeight = el.getAttribute('match-height') === 'true';
+  const cols = elementChildren(el).map(c => {
+    if (c.tagName !== 'column') fail('<columns>の子要素は<column>のみです');
+    const width = parseFloat(c.getAttribute('width') || '1');
+    const title = c.getAttribute('title') || '';
+    return { width, title, body: parseBody(c, { base: 'params' }) };
+  });
+  if (cols.length < 2) fail('<columns>には<column>が2個以上必要です');
+  return { kind: 'columns', matchHeight, columns: cols };
+}
+function parseLayout(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const perr = doc.querySelector('parsererror');
+  if (perr) fail('XML構文エラー: ' + perr.textContent.trim().split('\n')[0]);
+  const root = doc.documentElement;
+  if (root.tagName !== 'layout') fail('ルート要素は<layout>である必要があります');
+  const items = elementChildren(root).map(el => {
+    if (el.tagName === 'panel') return parsePanel(el);
+    if (el.tagName === 'columns') return parseColumns(el);
+    fail(`<layout>直下で未知の要素です: <${el.tagName}>`);
+  });
+  if (items.length === 0) fail('<layout>には1個以上の<panel>/<columns>が必要です');
+  return { items };
+}
+
+/* =========================================================================
+ * Rustコード生成（全体）
+ * ========================================================================= */
+const USE_BLOCK = `use crate::algorithm_diagram::algorithm_diagram;
+use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
+use crate::knob::{bool_checkbox, knob};
+use crate::layout::{self, leaf, row, row_grow, stack, Justify};
+use crate::param_handle::{BoolParamHandle, IntParamHandle};
+use crate::selector::{
+    enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES,
+};
+use crate::waveform::waveform_selector;
+use sound_core::eg::EgParams;`;
+
+function genPanel(p){
+  const bodyLines = genBodyLines(p.body);
+  const inner = [];
+  inner.push('ui.group(|ui| {');
+  inner.push('    ui.set_width(panel_width);');
+  inner.push('    ui.vertical(|ui| {');
+  bodyLines.forEach(l => inner.push(indent(l, 8)));
+  inner.push('    });');
+  inner.push('});');
+  if (!p.repeat) return inner.join('\n');
+  const out = [`for (${p.index}, ${p.as}) in params.${p.repeat}.iter().enumerate() {`];
+  inner.forEach(l => out.push(indent(l, 4)));
+  out.push('}');
+  return out.join('\n');
+}
+function genColumns(c){
+  const n = c.columns.length;
+  const totalRatio = c.columns.reduce((s, x) => s + x.width, 0);
+  const out = [];
+  out.push(`let columns_usable = full_width - inter_gap * ${fmt(n - 1)};`);
+  c.columns.forEach((col, i) => out.push(`let col_w_${i} = columns_usable * ${fmt(col.width)} / ${fmt(totalRatio)};`));
+  out.push('ui.horizontal(|ui| {');
+  c.columns.forEach((col, i) => {
+    const bodyLines = genBodyLines(col.body);
+    if (i === 0) {
+      out.push('    let col0_resp = ui.group(|ui| {');
+      out.push(`        ui.set_width(col_w_0);`);
+      out.push('        ui.vertical(|ui| {');
+      bodyLines.forEach(l => out.push(indent(l, 12)));
+      out.push('        });');
+      out.push('    });');
+      if (c.matchHeight) out.push('    let match_height = col0_resp.response.rect.height();');
+    } else {
+      out.push('    ui.group(|ui| {');
+      out.push(`        ui.set_width(col_w_${i});`);
+      if (c.matchHeight) out.push('        ui.set_min_height(match_height);');
+      out.push('        ui.vertical(|ui| {');
+      bodyLines.forEach(l => out.push(indent(l, 12)));
+      out.push('        });');
+      out.push('    });');
+    }
+  });
+  out.push('});');
+  return out.join('\n');
+}
+
+function generateRust(ir){
+  const parts = ir.items.map(it => it.kind === 'panel' ? genPanel(it) : genColumns(it));
+  const body = indent(parts.join('\n\n'), 8);
+  return `${USE_BLOCK}
+
+pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
+    let mut tx_jacks = crate::patchbay::JackLayout::new();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let full_width = ui.available_width();
+        let inter_gap = ui.spacing().item_spacing.x;
+        let panel_width = full_width - inter_gap;
+
+${body}
+
+        crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);
+    });
+}
+`;
+}
+
+/* =========================================================================
+ * SVGプレビュー（簡易・box+ラベルのみ。egui実描画の代わりに構造とサイズを確認する用途）
+ * ========================================================================= */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs){
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function drawTreeInto(svg, node, x, y, w, h){
+  if (node.kind === 'leaf') return; // leafの矩形はleaves経由でまとめて描く
+}
+function renderPreview(ir, previewWidth){
+  const svg = document.getElementById('previewSvg');
+  svg.innerHTML = '';
+  let y = 8;
+  const PAD = 10, PANEL_GAP = 10;
+
+  function drawBodyBlock(body, x, w, yStart){
+    let cy = yStart;
+    for (const st of body) {
+      if (st.kind === 'header') {
+        svg.appendChild(svgEl('text', { x: x + 4, y: cy + 12, fill: 'var(--ink)', 'font-size': 12, 'font-weight': 700 }));
+        svg.lastChild.textContent = st.items.some(i => i.kind === 'jack') ? '(header + jack)' : '(header)';
+        cy += 20;
+      } else if (st.kind === 'tree') {
+        const h = maxHeight(st.tree);
+        const rects = [];
+        solveTree(st.tree, w, h, x, cy, rects);
+        st.tree.leaves.forEach((leaf, i) => {
+          const r = rects[i];
+          svg.appendChild(svgEl('rect', {
+            x: r.x, y: r.y, width: r.w, height: r.h, rx: 3,
+            fill: 'color-mix(in srgb, ' + PREVIEW_COLOR[leaf.previewType] + ' 22%, transparent)',
+            stroke: PREVIEW_COLOR[leaf.previewType], 'stroke-width': 1,
+          }));
+          const t = svgEl('text', {
+            x: r.x + r.w / 2, y: r.y + r.h / 2, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+            fill: 'var(--ink)', 'font-size': 9,
+          });
+          t.textContent = leaf.previewLabel.length > 12 ? leaf.previewLabel.slice(0, 11) + '…' : leaf.previewLabel;
+          svg.appendChild(t);
+        });
+        cy += h + 6;
+      } else if (st.kind === 'space') {
+        cy += st.size;
+      } else if (st.kind === 'jack') {
+        svg.appendChild(svgEl('circle', { cx: x + 8, cy: cy + 8, r: 6, fill: 'var(--jack)' }));
+        cy += 20;
+      } else if (st.kind === 'raw' || st.kind === 'let') {
+        cy += 4;
+      }
+    }
+    return cy;
+  }
+
+  for (const item of ir.items) {
+    if (item.kind === 'panel') {
+      const bodyBottom = drawBodyBlock(item.body, PAD * 2, previewWidth - PAD * 4, y + 24);
+      const boxH = Math.max(40, bodyBottom - y);
+      svg.appendChild(svgEl('rect', {
+        x: PAD, y, width: previewWidth - PAD * 2, height: boxH, rx: 6,
+        fill: 'none', stroke: 'var(--line)', 'stroke-width': 1.5,
+      }));
+      const label = item.repeat ? `<panel repeat="${item.repeat}">` : (item.title || '<panel>');
+      const t = svgEl('text', { x: PAD + 6, y: y + 14, fill: 'var(--ink-2)', 'font-size': 10 });
+      t.textContent = label;
+      svg.appendChild(t);
+      y += boxH + PANEL_GAP;
+    } else {
+      const totalRatio = item.columns.reduce((s, c) => s + c.width, 0);
+      const usable = previewWidth - PAD * 2 - (item.columns.length - 1) * 8;
+      let cx = PAD;
+      let maxColBottom = y;
+      item.columns.forEach(col => {
+        const colW = usable * col.width / totalRatio;
+        const bottom = drawBodyBlock(col.body, cx + 6, colW - 12, y + 22);
+        maxColBottom = Math.max(maxColBottom, bottom);
+        cx += colW + 8;
+      });
+      const boxH = Math.max(40, maxColBottom - y);
+      cx = PAD;
+      item.columns.forEach(col => {
+        const colW = usable * col.width / totalRatio;
+        svg.appendChild(svgEl('rect', {
+          x: cx, y, width: colW, height: boxH, rx: 6, fill: 'none', stroke: 'var(--line)', 'stroke-width': 1.5,
+        }));
+        const t = svgEl('text', { x: cx + 6, y: y + 14, fill: 'var(--ink-2)', 'font-size': 10 });
+        t.textContent = col.title || '<column>';
+        svg.appendChild(t);
+        cx += colW + 8;
+      });
+      y += boxH + PANEL_GAP;
+    }
+  }
+  svg.setAttribute('height', y + 8);
+  svg.setAttribute('viewBox', `0 0 ${previewWidth} ${y + 8}`);
+}
+function renderLegend(){
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  Object.keys(PREVIEW_COLOR).forEach(k => {
+    const span = document.createElement('span');
+    const sw = document.createElement('span');
+    sw.className = 'sw';
+    sw.style.background = PREVIEW_COLOR[k];
+    span.appendChild(sw);
+    span.appendChild(document.createTextNode(k));
+    legend.appendChild(span);
+  });
+}
+
+/* =========================================================================
+ * 配線
+ * ========================================================================= */
+function run(){
+  const xmlText = document.getElementById('xmlSrc').value;
+  const errBox = document.getElementById('errBox');
+  const badge = document.getElementById('statusBadge');
+  const previewWidth = parseInt(document.getElementById('widthSlider').value, 10);
+  try {
+    const ir = parseLayout(xmlText);
+    renderPreview(ir, previewWidth);
+    document.getElementById('rustOut').textContent = generateRust(ir);
+    errBox.hidden = true;
+    badge.innerHTML = '<span class="ok">OK</span>';
+  } catch (e) {
+    errBox.hidden = false;
+    errBox.textContent = String(e.message || e);
+    badge.innerHTML = '';
+  }
+}
+
+document.getElementById('btnGen').addEventListener('click', run);
+document.getElementById('xmlSrc').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(run, 300); });
+
+/* ---- ファイルの開く/保存（ローカルファイルシステムとの唯一の橋渡し。サーバー・依存なし） ---- */
+let currentFileName = 'panel.xml';
+document.getElementById('fileNameLabel').textContent = currentFileName;
+document.getElementById('btnOpen').addEventListener('click', () => {
+  document.getElementById('fileInput').click();
+});
+document.getElementById('fileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('xmlSrc').value = String(reader.result);
+    currentFileName = file.name;
+    document.getElementById('fileNameLabel').textContent = currentFileName;
+    run();
+  };
+  reader.readAsText(file, 'utf-8');
+  e.target.value = ''; // 同じファイルを続けて選び直しても change が発火するようにリセットする
+});
+document.getElementById('btnSave').addEventListener('click', () => {
+  const text = document.getElementById('xmlSrc').value;
+  const blob = new Blob([text], { type: 'application/xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = currentFileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+document.getElementById('widthSlider').addEventListener('input', (e) => {
+  document.getElementById('widthVal').textContent = e.target.value + 'px';
+  run();
+});
+document.querySelectorAll('.pane-head .tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.pane-head .tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tabPreview').style.display = btn.dataset.tab === 'preview' ? 'block' : 'none';
+    document.getElementById('tabRust').style.display = btn.dataset.tab === 'rust' ? 'flex' : 'none';
+  });
+});
+document.getElementById('btnCopy').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('rustOut').textContent);
+});
+
+renderLegend();
+
+/* =========================================================================
+ * 初期サンプル: panel.rs draw_param_panel() 全体(OP/CHANNEL+CHIP LFO/TEXTURE LFO/
+ * PITCH FG/CUTOFF FG/GAIN FG/MASTER EFFECT)をXMLで再現する。
+ * ========================================================================= */
+document.getElementById('xmlSrc').value = `<layout>
+
+  <panel repeat="operators" as="op" index="i">
+    <let name="is_carrier" expr="crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&amp;i)"/>
+    <header>
+      <raw>ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
+let ratio = mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8);
+ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hover_text("MUL×FINEの実効周波数比（DT1は含まない）");</raw>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="DbLinear" tl="tl" ar="ar" d1r="d1r" d1l="d1l" d2r="d2r" rr="rr"
+        floor="floor" loop="op_loop" curve="curve" delay-value="0"/>
+      <row grow="true" justify="between">
+        <knob label="TL" handle="tl"/>
+        <knob label="AR" handle="ar"/>
+        <knob label="D1R" handle="d1r"/>
+        <knob label="D2R" handle="d2r"/>
+        <knob label="D1L" handle="d1l"/>
+        <knob label="RR" handle="rr"/>
+        <knob label="MUL" handle="mul"/>
+        <knob label="DT1" handle="dt1"/>
+        <knob label="KSR" handle="ksr"/>
+        <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
+        <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
+        <knob label="FINE" handle="op_fine_tune"/>
+        <waveform handle="waveform" index="i"/>
+        <knob label="FLOOR" handle="floor"/>
+        <checkbox-stack>
+          <checkbox label="AM" handle="ame"/>
+          <checkbox label="LOOP" handle="op_loop"/>
+          <checkbox label="CURVE" handle="curve"/>
+        </checkbox-stack>
+        <knob label="EGSFT" handle="eg_shift"/>
+        <knob label="LEVEL SCALE" handle="level_scale"/>
+      </row>
+    </row>
+  </panel>
+
+  <columns match-height="true">
+    <column width="1" title="CHANNEL">
+      <row justify="start" gap="spacing">
+        <algorithm-diagram handle="algorithm"/>
+        <row grow="true" justify="between">
+          <knob label="ALG" handle="algorithm"/>
+          <knob label="FB" handle="feedback"/>
+        </row>
+      </row>
+      <space size="2"/>
+      <jack kind="dest" dest-index="2" label="TX LFO (TL)" handle="texture_lfo_destination"/>
+    </column>
+    <column width="2" title="CHIP LFO">
+      <row justify="between">
+        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
+        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
+        <knob label="CH.AMD" handle="chip_lfo_amd"/>
+        <knob label="CH.DLY" handle="chip_lfo_delay"/>
+        <knob label="PMS" handle="pms"/>
+        <knob label="AMS" handle="ams"/>
+      </row>
+    </column>
+  </columns>
+
+  <panel title="TEXTURE LFO">
+    <header><raw>ui.label(egui::RichText::new("TEXTURE LFO").strong());</raw></header>
+    <row justify="between">
+      <knob label="TX.RATE" handle="texture_lfo_rate"/>
+      <knob label="TX.DEP" handle="texture_lfo_depth"/>
+      <knob label="TX.DLY" handle="texture_lfo_delay"/>
+      <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2"/>
+      <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3"/>
+      <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
+      <knob label="TX.OFS" handle="texture_lfo_offset"/>
+    </row>
+    <space size="2"/>
+    <jack kind="source"/>
+  </panel>
+
+  <panel title="PITCH FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("PITCH FG").strong());</raw>
+      <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.pitch_fg.eg.ar" d1r="params.pitch_fg.eg.d1r" d1l="params.pitch_fg.eg.d1l"
+        d2r="params.pitch_fg.eg.d2r" rr="params.pitch_fg.eg.rr" floor="params.pitch_fg.eg.floor"
+        loop="params.pitch_fg.eg.loop_enabled" curve="params.pitch_fg.eg.curve"
+        delay="params.pitch_fg.eg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="P.AR" handle="params.pitch_fg.eg.ar"/>
+        <knob label="P.D1R" handle="params.pitch_fg.eg.d1r"/>
+        <knob label="P.D1L" handle="params.pitch_fg.eg.d1l"/>
+        <knob label="P.D2R" handle="params.pitch_fg.eg.d2r"/>
+        <knob label="P.RR" handle="params.pitch_fg.eg.rr"/>
+        <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
+        <knob label="P.FLOOR" handle="params.pitch_fg.eg.floor"/>
+        <knob label="P.DLY" handle="params.pitch_fg.eg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.pitch_fg.eg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.pitch_fg.eg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="CUTOFF FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("CUTOFF FG").strong());</raw>
+      <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.cutoff_fg.eg.ar" d1r="params.cutoff_fg.eg.d1r" d1l="params.cutoff_fg.eg.d1l"
+        d2r="params.cutoff_fg.eg.d2r" rr="params.cutoff_fg.eg.rr" floor="params.cutoff_fg.eg.floor"
+        loop="params.cutoff_fg.eg.loop_enabled" curve="params.cutoff_fg.eg.curve"
+        delay="params.cutoff_fg.eg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="CUT" handle="params.cutoff"/>
+        <knob label="RES" handle="params.resonance"/>
+        <knob label="F.AR" handle="params.cutoff_fg.eg.ar"/>
+        <knob label="F.D1R" handle="params.cutoff_fg.eg.d1r"/>
+        <knob label="F.D1L" handle="params.cutoff_fg.eg.d1l"/>
+        <knob label="F.D2R" handle="params.cutoff_fg.eg.d2r"/>
+        <knob label="F.RR" handle="params.cutoff_fg.eg.rr"/>
+        <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
+        <knob label="F.FLOOR" handle="params.cutoff_fg.eg.floor"/>
+        <knob label="F.DLY" handle="params.cutoff_fg.eg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.cutoff_fg.eg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.cutoff_fg.eg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="GAIN FG">
+    <header>
+      <raw>ui.label(egui::RichText::new("GAIN FG").strong());</raw>
+      <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
+    </header>
+    <row justify="start" gap="spacing">
+      <eg-preview mapping="AmplitudeLinear" tl-value="255"
+        ar="params.gain_fg.ar" d1r="params.gain_fg.d1r" d1l="params.gain_fg.d1l"
+        d2r="params.gain_fg.d2r" rr="params.gain_fg.rr" floor="params.gain_fg.floor"
+        loop="params.gain_fg.loop_enabled" curve="params.gain_fg.curve"
+        delay="params.gain_fg.delay"/>
+      <row grow="true" justify="between">
+        <knob label="V.AR" handle="params.gain_fg.ar"/>
+        <knob label="V.D1R" handle="params.gain_fg.d1r"/>
+        <knob label="V.D1L" handle="params.gain_fg.d1l"/>
+        <knob label="V.D2R" handle="params.gain_fg.d2r"/>
+        <knob label="V.RR" handle="params.gain_fg.rr"/>
+        <knob label="V.FLOOR" handle="params.gain_fg.floor"/>
+        <knob label="V.DLY" handle="params.gain_fg.delay"/>
+        <checkbox-stack>
+          <checkbox label="LOOP" handle="params.gain_fg.loop_enabled"/>
+          <checkbox label="CURVE" handle="params.gain_fg.curve"/>
+        </checkbox-stack>
+      </row>
+    </row>
+  </panel>
+
+  <panel title="MASTER EFFECT">
+    <header><raw>ui.label(egui::RichText::new("MASTER EFFECT").strong());</raw></header>
+    <row justify="between">
+      <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="0"/>
+      <knob label="REV" handle="rev_send"/>
+      <knob label="R.TIME" handle="reverb_time"/>
+      <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="1"/>
+      <knob label="CHO" handle="cho_send"/>
+      <knob label="C.RATE" handle="chorus_mod_rate"/>
+      <knob label="C.DEP" handle="chorus_mod_depth"/>
+      <knob label="C.FB" handle="chorus_feedback"/>
+      <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+    </row>
+  </panel>
+
+</layout>
+`;
+run();
+</script>
+</body>
+</html>
