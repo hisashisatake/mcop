@@ -4,6 +4,8 @@
 
 mod algorithm_diagram;
 mod eg_preview;
+#[cfg(feature = "preview")]
+pub mod interpret; // フェーズB: panel.xmlのIRをランタイム解釈して実egui描画するプレビュー用インタープリタ。
 mod knob;
 mod layout;
 mod panel;

@@ -1,7 +1,7 @@
 # xml-panel-dsl — ym38x6-ui パネルレイアウトXML DSL
 
 `ym38x6-ui/src/panel.rs`（VST/gesture-app 共有の音色エディタ・ノブパネル）のレイアウトを
-XMLで宣言的に記述し、プレビュー（SVG）と `draw_param_panel()` 本体のRustコードを
+XMLで宣言的に記述し、実egui描画プレビューと `draw_param_panel()` 本体のRustコードを
 同じXMLパース結果から生成する、自己完結の HTML ツール。
 
 依存・ビルド不要。ブラウザで `index.html` を開くだけで動く（外部リソース参照なし）。
@@ -13,34 +13,39 @@ Start-Process tools\xml-panel-dsl\index.html
 [panel-editor](../panel-editor/)（ドラッグ編集式のJSモデル）の後継として設計。
 詳しい経緯は `docs/session_history.txt` の2026-07-22セッションを参照。
 
-## アーキテクチャ（2026-07-22改訂: ビルド時トランスパイル化）
+## アーキテクチャ（2026-07-22改訂: フェーズB・実egui描画プレビュー化）
 
 XMLパース・Rustコード生成・`<row>`/`<stack>`のレイアウト計算（taffy）は、egui非依存の
 純粋Rustクレート **`ym38x6-ui/panel-codegen`**（`ym38x6-ui/panel-layout`に依存）に一本化されている。
-両クレートは`ym38x6-ui`配下に置く（ビルド時にしか使われないym38x6-ui自身のためのツールという
-位置づけで、tools側がそれを参照する方向にするため）。これを2ターゲットで共有する：
+プレビュー描画自体は`ym38x6-ui`の`preview`フィーチャ配下の**インタープリタ**
+（`ym38x6-ui/src/interpret.rs`）が担う。IRの`Widget`記述子をmatchし、`panel-codegen`と同じ
+構造化記述子から実際の`knob`/`bool_checkbox`/`eg_preview`/`algorithm_diagram`等の関数を
+直接呼び出す（「コード生成→ブラウザでコンパイル」は不可能だが「IR→インタープリタ」は可能、
+という発想）。これを3ターゲットで共有する：
 
-- **ネイティブ**: `ym38x6-ui/build.rs`が`panel-codegen`をbuild-dependencyとして呼び、
+- **ネイティブ（VST/gesture-app）**: `ym38x6-ui/build.rs`が`panel-codegen`をbuild-dependencyとして呼び、
   `ym38x6-ui/src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
   `panel.rs`はこれを`include!`するだけで、手動でのコード貼り替えは不要
-  （XMLを編集して`cargo build`し直すだけで反映される）。
-- **ブラウザ（このツール）**: `panel-codegen`を`tools/xml-panel-dsl/codegen-wasm`で
-  wasm-bindgenラップし、`build-wasm.ps1`が`wasm32-unknown-unknown`向けにビルド。
+  （XMLを編集して`cargo build`し直すだけで反映される）。`preview`フィーチャは無効のままビルドされ、
+  XMLパーサー（roxmltree等）やインタープリタは製品バイナリに含まれない。
+- **ブラウザ（このツール）**: `ym38x6-ui/preview-wasm`が`ym38x6-ui`（`features=["preview"]`）を
+  wasm-bindgen＋eframeでラップし、`build-preview-wasm.ps1`が`wasm32-unknown-unknown`向けにビルド。
   生成された`--target no-modules`のJSグルーコードと、base64エンコードした
   wasmバイナリ本体を、`index.html`内の`<!-- BEGIN/END GENERATED -->`マーカー間に
   **直接埋め込む**（fetchはfile://上のCORSで使えないため、`wasm_bindgen.initSync()`に
   デコード済みbyte列を直接渡す）。これにより**wasmを使いながらも自己完結HTML1枚のまま**
-  （サーバー不要・file://で開くだけで動く）を維持している。
+  （サーバー不要・file://で開くだけで動く）を維持している。eframeのWebRunnerが
+  `--target no-modules`＋file://で実際に動くかが最大の技術リスクだったが、実機（Edge）で
+  ノブ・EGグラフ・アルゴ結線図・enumドロップダウン・パッチベイケーブルの実描画を確認済み。
 
 ```powershell
-# panel.xmlやpanel-codegenのロジックを変更したら再実行する
-powershell -File tools\xml-panel-dsl\build-wasm.ps1
+# panel.xmlやpanel-codegen/interpret.rsのロジックを変更したら再実行する
+pwsh -File tools\xml-panel-dsl\build-preview-wasm.ps1
 ```
 
-これにより、以前の「JS版レイアウトエンジンがRust版(`layout.rs`)を非公式に移植したもの」という
-二重実装（移植ズレでバグが3件見つかった経緯がある）を解消した。ブラウザのプレビューも
-本物のtaffy（`panel_layout::solve`をwasm経由で呼ぶ）で矩形計算するため、近似計算は無くなった。
-`index.html`側に残るJSは、DOM操作・SVG描画・ファイル開く/保存・タブ切替のグルーのみ。
+旧`codegen-wasm`（`generate_rust`/`parse_ir_preview`/`solve_tree_json`のみを公開しSVGで
+近似描画していた版）は`preview-wasm`へ統合され削除済み。`index.html`側に残るJSは、
+DOM操作・ファイル開く/保存・タブ切替・キャンバス起動のグルーのみ（SVG描画コードは全廃）。
 
 ## 位置づけ・割り切り（2026-07-22の方針決定）
 
@@ -50,6 +55,9 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
   `mul_fine_ratio`等のヘルパー関数は引き続き手書きのまま（XMLの`handle`属性が参照する
   「データ契約」なので、生成対象は描画コードのみ）。
 - 自己完結HTML1枚（wasmバイナリをbase64埋め込みすることで維持。詳細は上記アーキテクチャ節）。
+- **プレビューはパラメーター意味論を保証しない**。インタープリタのモックハンドルは
+  ハンドルパス文字列（例:`"op.tl"`）をキーにした汎用レンジ(0〜255・既定128)で、実際の
+  `PanelParams`のmin/max/デフォルトとは無関係（レイアウト・見た目の検証が目的）。
 
 ## ウィジェット自然サイズは実測不要と判明
 
@@ -149,10 +157,14 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 ## 既知の割り切り・未実装
 
 - `<stack grow="true">`は`panel-layout`に`stack_grow`が無いため未対応（パースエラーにする）。
-- プレビュー（SVG）の`<row>`/`<stack>`矩形計算は本物のtaffy（wasm経由）だが、パネル同士の
-  縦積み・`<columns>`の高さ合わせはSVG側の簡易な逐次配置計算（JS）のまま
-  （`panel.rs`実行時の`ui.group`逐次呼び出し・`response.rect.height()`計測を模した近似）。
-  実描画プレビュー化（フェーズB、eframeインタープリタ）でSVG自体を廃止予定。
+- インタープリタの`<raw>`はプレースホルダ（グレーの箱＋"raw"ラベル）描画のみ。生Rustは
+  解釈できないため（`panel.xml`本体では`<raw>`は未使用、文法としてのみ温存）。
+- `repeat="operators"`の要素数（4）は`interpret.rs`の`repeat_count()`に小さな対応表として
+  ハードコードしてある。新しい`repeat`名を増やす場合はそこへ追記する。
+- `enabled-if`/`<readout compute=...>`が参照する派生計算（`is_carrier`/`mul-fine-ratio`）は
+  `panel-codegen::Compute` enumの閉じた語彙。新しい計算を追加する場合は`ir.rs`にvariant追加、
+  `codegen.rs`（Rust文字列生成）と`interpret.rs`（実関数呼び出し）の両方にmatch節を足す
+  （網羅性チェックが両者の同期を守る）。
 - 生成（`ym38x6-ui/build.rs`）は`cargo check`時に自動反映される。`panel.rs`の構造体定義・
   ヘルパー関数はこのツールの生成対象外なので、既存の`panel.rs`上部はそのまま残し
   `draw_param_panel`本体だけが`include!`で差し替わる。

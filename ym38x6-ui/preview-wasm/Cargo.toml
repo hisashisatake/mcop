@@ -1,0 +1,32 @@
+[package]
+name = "preview-wasm"
+version = "0.1.0"
+edition = "2021"
+
+# ym38x6-ui配下(ワークスペースメンバーのディレクトリツリー内)に置いているため、ルートCargo.tomlの
+# excludeだけでは祖先ワークスペースへの自動参加を防げない(gesture-app/editor-wasm・旧codegen-wasmは
+# メンバーではないディレクトリ配下だったため`exclude`のみで足りたが、本クレートはym38x6-ui自身の
+# 直下にあるため事情が異なると判明した)。空の[workspace]テーブルで自分自身を独立ワークスペースの
+# ルートにし、祖先探索を打ち切る(cargoのエラーメッセージが提示する代替策)。
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+egui = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["glow"] }
+ym38x6-ui = { path = "..", features = ["preview"] }
+panel-codegen = { path = "../panel-codegen" }
+# wasm-bindgen-cli（ビルド時に別途インストールするツール）とクレートのバージョンは完全一致が
+# 必須なため厳密ピン。上げる場合は `cargo install wasm-bindgen-cli --version <同じ値> --force` も必要
+# （gesture-app/editor-wasm・旧codegen-wasmと同じ運用、同じバージョンを共有する）。
+wasm-bindgen = "=0.2.126"
+# #[wasm_bindgen]のasyncメソッド(start)展開が内部的に要求する(editor-wasmと同じ理由)。
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true

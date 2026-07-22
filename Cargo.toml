@@ -19,11 +19,12 @@ members = [
 # tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
 # 除外して独立クレートとして扱う（ビルドはmaturin専任、ym38x6-coreはpath依存で参照）。
-# gesture-app/editor-wasm・tools/xml-panel-dsl/codegen-wasm はwasm32-unknown-unknown専用クレート
+# gesture-app/editor-wasm・ym38x6-ui/preview-wasm はwasm32-unknown-unknown専用クレート
 # （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
 # cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
-# 個別に行う（editor-wasmはym38x6-uiを、codegen-wasmはym38x6-ui/panel-codegenをpath依存で参照）。
-exclude = ["tools/patchlab", "gesture-app/editor-wasm", "tools/xml-panel-dsl/codegen-wasm"]
+# 個別に行う（editor-wasmはym38x6-uiを、preview-wasmはym38x6-ui(preview feature)/panel-codegenを
+# path依存で参照。旧tools/xml-panel-dsl/codegen-wasmはpreview-wasmへ統合され削除済み）。
+exclude = ["tools/patchlab", "gesture-app/editor-wasm", "ym38x6-ui/preview-wasm"]
 resolver = "2"
 
 [profile.release]
