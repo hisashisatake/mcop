@@ -12,7 +12,6 @@ mod panel;
 mod param_handle;
 mod patchbay;
 mod selector;
-pub mod spike; // 【一時】XMLレイアウトDSL検証用。方針確定後に削除。
 mod waveform;
 
 pub use knob::{knob, spin_control, Knob};

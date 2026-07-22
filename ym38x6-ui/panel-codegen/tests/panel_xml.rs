@@ -1,7 +1,7 @@
 //! `ym38x6-ui/src/panel.xml`（実際の正本）を`generate_rust`に通し、構造が壊れていないことを
 //! 検証する。ここで確認する木構造（OPパネルの`eg-preview`+17ウィジェット均等割り付け等）は、
-//! `ym38x6-ui/src/spike.rs`の`draw_op_taffy`（垂直スライス検証で現行描画と同一と確認済みの
-//! 手書きtaffy版リファレンス）と1:1で対応する。
+//! かつての垂直スライス検証（旧`spike.rs`の`draw_op_taffy`、現行描画と同一と確認済みの
+//! 手書きtaffy版リファレンス。役目をpanel-codegen/interpret.rsが代替したため削除済み）と1:1で対応する。
 
 fn panel_xml() -> String {
     std::fs::read_to_string("../src/panel.xml").expect("panel.xml が見つかりません")
@@ -15,7 +15,7 @@ fn generates_without_error() {
     assert!(rust.trim_end().ends_with('}'));
 }
 
-/// OPパネルのレイアウト木が、`spike.rs`の`draw_op_taffy`で検証済みの構造
+/// OPパネルのレイアウト木が、旧`spike.rs`の`draw_op_taffy`(削除済み)で検証済みだった構造
 /// （eg-preview(84x66) + 17ウィジェットの`row_grow`均等割り付け、うちcheckbox-stackは実測70幅）
 /// と一致することを確認する。
 #[test]

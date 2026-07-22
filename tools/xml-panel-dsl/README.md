@@ -10,8 +10,8 @@ XMLで宣言的に記述し、実egui描画プレビューと `draw_param_panel(
 Start-Process tools\xml-panel-dsl\index.html
 ```
 
-[panel-editor](../panel-editor/)（ドラッグ編集式のJSモデル）の後継として設計。
-詳しい経緯は `docs/session_history.txt` の2026-07-22セッションを参照。
+旧panel-editor（ドラッグ編集式のJSモデル）の後継として設計。実運用に移行したため
+panel-editor自体は削除済み。詳しい経緯は `docs/session_history.txt` の2026-07-22セッションを参照。
 
 ## アーキテクチャ（2026-07-22改訂: フェーズB・実egui描画プレビュー化）
 

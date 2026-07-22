@@ -292,7 +292,7 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
 }
 
 /// `<row>`/`<stack>`の木を`panel_layout::solve`で解決し、各葉を実ウィジェットで描画する
-/// （`spike.rs`の`draw_op_taffy`・`codegen.rs`の`gen_tree_block`と同じ構造）。
+/// （`codegen.rs`の`gen_tree_block`と同じ構造）。
 fn draw_tree(ui: &mut egui::Ui, store: &mut HandleStore, node: &TreeNode, idx: Option<usize>) {
     let h = node.max_height();
     let avail = ui.available_width();
