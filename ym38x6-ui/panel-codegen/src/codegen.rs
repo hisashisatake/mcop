@@ -1,6 +1,5 @@
 //! [`crate::ir`] → Rustソース文字列。
 //!
-//! `tools/xml-panel-dsl/index.html`のJSコード生成（`genPanel`〜`generateRust`）の機械的移植。
 //! 出力は`draw_param_panel`関数の**本体アイテムのみ**（`use`文は含まない）。
 //! `ym38x6-ui/build.rs`が`include!`する生成物、およびブラウザツールの
 //! Rust出力タブの表示内容として、この1関数だけが唯一の生成対象になる
@@ -39,6 +38,108 @@ fn gap_str(gap: &Gap) -> String {
     }
 }
 
+/// 名前付き派生計算をRust式へ展開する（`Compute`のvariantごとに1本）。
+fn compute_expr(c: &Compute) -> String {
+    match c {
+        Compute::IsCarrier { index_var } => {
+            format!("crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&{index_var})")
+        }
+        Compute::MulFineRatio { mul, fine } => {
+            format!("mul_fine_ratio({mul}.value() as u8, {fine}.value() as u8)")
+        }
+    }
+}
+
+fn eg_field_expr(f: &EgField) -> String {
+    match f {
+        EgField::Handle(h) => format!("{h}.value() as u8"),
+        EgField::Literal(v) => v.clone(),
+    }
+}
+
+/// [`Widget`]をRust文（`layout::place`のクロージャ内に置かれる1文）へ変換する。
+fn gen_widget_stmt(w: &Widget) -> String {
+    match w {
+        Widget::Knob { label, handle } => format!("knob(ui, &*{handle}, \"{label}\");"),
+        Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
+        Widget::CheckboxStack { items } => format!(
+            "ui.vertical(|ui| {{ {} }});",
+            items
+                .iter()
+                .map(|(label, handle)| format!("bool_checkbox(ui, &*{handle}, \"{label}\");"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Widget::Waveform { handle, index } => format!("waveform_selector(ui, &*{handle}, ({index}) as usize);"),
+        Widget::Enum { label, handle, names, salt } => {
+            format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt});")
+        }
+        Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => format!(
+            "eg_preview(ui, EgAmplitudeMapping::{mapping}, {}, EgParams {{ ar: {}, d1r: {}, d1l: {}, d2r: {}, rr: {}, floor: {}, loop_enabled: {}, curve: {}, delay: {} }});",
+            eg_field_expr(tl),
+            eg_field_expr(ar),
+            eg_field_expr(d1r),
+            eg_field_expr(d1l),
+            eg_field_expr(d2r),
+            eg_field_expr(rr),
+            eg_field_expr(floor),
+            eg_field_expr(loop_enabled),
+            eg_field_expr(curve),
+            eg_field_expr(delay),
+        ),
+        Widget::AlgorithmDiagram { handle } => format!("algorithm_diagram(ui, {handle}.value() as u8);"),
+        Widget::Raw(code) => code.clone(),
+    }
+}
+
+fn wrap_enabled_if(stmt: String, pred: &Option<Predicate>) -> String {
+    match pred {
+        None => stmt,
+        Some(p) => {
+            let cond = compute_expr(&p.compute);
+            let cond = if p.negate { format!("!{cond}") } else { cond };
+            format!("ui.add_enabled_ui({cond}, |ui| {{ {stmt} }});")
+        }
+    }
+}
+
+fn gen_title_stmt(t: &Title) -> String {
+    match t {
+        Title::Static(s) => format!("ui.label(egui::RichText::new(\"{s}\").strong());"),
+        Title::Dynamic { before, offset, after, index_var } => format!(
+            "ui.label(egui::RichText::new(format!(\"{before}{{}}{after}\", {index_var} + {offset})).strong());"
+        ),
+    }
+}
+
+fn gen_readout_stmt(r: &Readout) -> String {
+    let value_expr = compute_expr(&r.compute);
+    // DSLの`{value...}`トークンをRustの位置引数プレースホルダ`{...}`へ変換する
+    // （`format`属性の値はそれ自体がRustのフォーマット構文なので、変換はトークン名の除去だけでよい）。
+    let fmt = r.format.replace("{value", "{");
+    let tooltip = r.tooltip.as_ref().map(|t| format!(".on_hover_text(\"{t}\")")).unwrap_or_default();
+    format!("ui.label(egui::RichText::new(format!(\"{fmt}\", {value_expr})).size(10.0).weak()){tooltip};")
+}
+
+fn gen_tree_block(node: &TreeNode) -> Vec<String> {
+    let mut lines = Vec::new();
+    if tree_uses_spacing(node) {
+        lines.push("let outer_gap = ui.spacing().item_spacing.x;".to_string());
+    }
+    let h = fmt_num(node.max_height());
+    lines.push("let avail = ui.available_width();".to_string());
+    lines.push(format!("let tree = {};", tree_expr(node)));
+    lines.push(format!("let rects = layout::solve(egui::vec2(avail, {h}), &tree);"));
+    lines.push("let origin = ui.cursor().min;".to_string());
+    lines.push(format!("ui.allocate_space(egui::vec2(avail, {h}));"));
+    lines.push("let mut r = rects.iter();".to_string());
+    for leaf in node.leaves() {
+        let stmt = wrap_enabled_if(gen_widget_stmt(&leaf.widget), &leaf.enabled_if);
+        lines.push(format!("layout::place(ui, origin, *r.next().unwrap(), |ui| {{ {stmt} }});"));
+    }
+    lines
+}
+
 fn tree_expr(node: &TreeNode) -> String {
     match node {
         TreeNode::Leaf(l) => format!("leaf({}, {})", fmt_num(l.size.w), fmt_num(l.size.h)),
@@ -63,27 +164,6 @@ fn tree_uses_spacing(node: &TreeNode) -> bool {
     }
 }
 
-fn gen_tree_block(node: &TreeNode) -> Vec<String> {
-    let mut lines = Vec::new();
-    if tree_uses_spacing(node) {
-        lines.push("let outer_gap = ui.spacing().item_spacing.x;".to_string());
-    }
-    let h = fmt_num(node.max_height());
-    lines.push("let avail = ui.available_width();".to_string());
-    lines.push(format!("let tree = {};", tree_expr(node)));
-    lines.push(format!("let rects = layout::solve(egui::vec2(avail, {h}), &tree);"));
-    lines.push("let origin = ui.cursor().min;".to_string());
-    lines.push(format!("ui.allocate_space(egui::vec2(avail, {h}));"));
-    lines.push("let mut r = rects.iter();".to_string());
-    for leaf in node.leaves() {
-        lines.push(format!(
-            "layout::place(ui, origin, *r.next().unwrap(), |ui| {{ {} }});",
-            leaf.rust_stmt
-        ));
-    }
-    lines
-}
-
 fn gen_jack_stmt(j: &Jack) -> String {
     match j {
         Jack::Source => "crate::patchbay::texture_lfo_source_jack(ui, &mut tx_jacks);".to_string(),
@@ -93,22 +173,24 @@ fn gen_jack_stmt(j: &Jack) -> String {
     }
 }
 
+fn gen_header_item_stmt(item: &HeaderItem) -> String {
+    match item {
+        HeaderItem::Title(t) => gen_title_stmt(t),
+        HeaderItem::Readout(r) => gen_readout_stmt(r),
+        HeaderItem::Jack(j) => gen_jack_stmt(j),
+        HeaderItem::Raw(code) => code.clone(),
+    }
+}
+
 fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
     let mut lines = Vec::new();
     for st in body {
         match st {
-            BodyStmt::Let { name, expr } => lines.push(format!("let {name} = {expr};")),
             BodyStmt::Header { items } => {
-                let inner = items
-                    .iter()
-                    .map(|i| match i {
-                        HeaderItem::Raw(code) => code.clone(),
-                        HeaderItem::Jack(j) => gen_jack_stmt(j),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let inner = items.iter().map(gen_header_item_stmt).collect::<Vec<_>>().join("\n");
                 lines.push(format!("ui.horizontal(|ui| {{\n{}\n}});", indent(&inner, 4)));
             }
+            BodyStmt::Title(t) => lines.push(gen_title_stmt(t)),
             BodyStmt::Tree(tree) => lines.extend(gen_tree_block(tree)),
             BodyStmt::Space { size } => lines.push(format!("ui.add_space({});", fmt_num(*size))),
             BodyStmt::Jack(j) => lines.push(gen_jack_stmt(j)),

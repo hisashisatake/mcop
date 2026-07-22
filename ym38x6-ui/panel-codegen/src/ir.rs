@@ -1,7 +1,11 @@
 //! `panel.xml`のパース結果（中間表現）。
 //!
-//! `tools/xml-panel-dsl/index.html`のJSロジック（旧`parseLayout`〜`buildLeafInfo`）の
-//! 構造をそのまま1:1でRust化したもの。フィールド名・分岐は極力JS版と対応させてある。
+//! ウィジェットは生成用文字列ではなく**構造化記述子**（[`Widget`]）として保持する。
+//! `codegen.rs`はこれをRust文字列へ、将来のインタープリタ（フェーズB）は実egui呼び出しへ変換する。
+//! 両者が同じ記述子を消費するため、ウィジェット選択のズレは原理的に発生しない。
+//!
+//! 生Rust注入（`<raw>`）は最終手段として文法上は残すが、`panel.xml`本体では使用しない
+//! （`<title>`/`<readout>`/`enabled-if`の閉じた語彙で代替する）。
 
 /// 固定サイズ（ウィジェットの自然サイズ）。
 #[derive(Clone, Copy, Debug)]
@@ -28,14 +32,74 @@ impl Gap {
     }
 }
 
-/// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）。
+/// `<eg-preview>`の各フィールド（`{field}="handle"`か`{field}-value="リテラル"`のどちらか）。
 #[derive(Clone, Debug)]
-pub struct LeafInfo {
-    pub size: Size,
-    /// `layout::place`のクロージャ内に埋め込むRust文（`enabled-if`があれば`ui.add_enabled_ui`でラップ済み）。
-    pub rust_stmt: String,
-    pub preview_label: String,
-    pub preview_type: String,
+pub enum EgField {
+    /// パラメーターハンドルへの解決済みパス（`.value() as u8`を付けて参照する）。
+    Handle(String),
+    /// リテラル値（そのまま埋め込む）。
+    Literal(String),
+}
+
+/// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）の種別・構造化記述子。
+#[derive(Clone, Debug)]
+pub enum Widget {
+    Knob { label: String, handle: String },
+    Checkbox { label: String, handle: String },
+    /// `(label, handle)`の並び。
+    CheckboxStack { items: Vec<(String, String)> },
+    Waveform { handle: String, index: String },
+    Enum { label: String, handle: String, names: String, salt: String },
+    #[allow(clippy::too_many_arguments)]
+    EgPreview {
+        mapping: String,
+        tl: EgField,
+        ar: EgField,
+        d1r: EgField,
+        d1l: EgField,
+        d2r: EgField,
+        rr: EgField,
+        floor: EgField,
+        loop_enabled: EgField,
+        curve: EgField,
+        delay: EgField,
+    },
+    AlgorithmDiagram { handle: String },
+    /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
+    Raw(String),
+}
+
+/// 名前付きの派生計算（閉じた語彙。新しい計算を増やす場合はここへvariantを追加する）。
+#[derive(Clone, Debug)]
+pub enum Compute {
+    /// キャリア判定: `carriers(params.algorithm.value() as u8).contains(&<loop変数>)`。
+    IsCarrier { index_var: String },
+    /// MUL×FINEの実効周波数比: `mul_fine_ratio(<mul>.value() as u8, <fine>.value() as u8)`。
+    MulFineRatio { mul: String, fine: String },
+}
+
+/// `enabled-if="[!]<述語名>"`の解決結果。
+#[derive(Clone, Debug)]
+pub struct Predicate {
+    pub compute: Compute,
+    pub negate: bool,
+}
+
+/// `<readout>`（派生値の読み取り表示、ヘッダ内専用）。
+#[derive(Clone, Debug)]
+pub struct Readout {
+    pub compute: Compute,
+    /// Rustの`format!`テンプレート。`{value...}`トークン（例: `{value:.2}`）が計算結果の埋め込み位置。
+    pub format: String,
+    pub tooltip: Option<String>,
+}
+
+/// パネル/カラムの見出し。`<title/>`（空）は親の`title=`属性を使う。
+#[derive(Clone, Debug)]
+pub enum Title {
+    Static(String),
+    /// `{index+N}`を1箇所だけ含む動的テンプレート（例: OP見出しの`"OP {index+1}"`）。
+    Dynamic { before: String, offset: i32, after: String, index_var: String },
 }
 
 /// `<row>`/`<stack>`の木構造。
@@ -44,6 +108,16 @@ pub enum TreeNode {
     Leaf(LeafInfo),
     Row { justify: String, gap: Gap, grow: bool, children: Vec<TreeNode> },
     Stack { gap: Gap, grow: bool, children: Vec<TreeNode> },
+}
+
+/// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）。
+#[derive(Clone, Debug)]
+pub struct LeafInfo {
+    pub size: Size,
+    pub widget: Widget,
+    pub enabled_if: Option<Predicate>,
+    pub preview_label: String,
+    pub preview_type: String,
 }
 
 impl TreeNode {
@@ -117,17 +191,23 @@ pub enum Jack {
 
 #[derive(Clone, Debug)]
 pub enum HeaderItem {
-    Raw(String),
+    Title(Title),
+    Readout(Readout),
     Jack(Jack),
+    /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
+    Raw(String),
 }
 
 #[derive(Clone, Debug)]
 pub enum BodyStmt {
-    Let { name: String, expr: String },
+    /// `ui.horizontal(|ui| {...})`でラップされる先頭行（見出し＋ジャック等を横並びにする）。
     Header { items: Vec<HeaderItem> },
+    /// ラップなしの見出し単体（`<column>`のtitle自動出力用。旧実装が裸の`ui.label`だったことの再現）。
+    Title(Title),
     Tree(TreeNode),
     Space { size: f32 },
     Jack(Jack),
+    /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),
 }
 

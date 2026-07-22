@@ -39,7 +39,8 @@ fn tree_node_to_json(node: &TreeNode) -> Value {
 
 fn stmt_to_json(st: &BodyStmt) -> Value {
     match st {
-        BodyStmt::Let { .. } | BodyStmt::Raw(_) => json!({ "kind": "spacer" }),
+        BodyStmt::Raw(_) => json!({ "kind": "spacer" }),
+        BodyStmt::Title(_) => json!({ "kind": "header", "has_jack": false }),
         BodyStmt::Header { items } => json!({
             "kind": "header",
             "has_jack": items.iter().any(|i| matches!(i, HeaderItem::Jack(_))),

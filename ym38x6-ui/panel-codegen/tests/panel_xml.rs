@@ -29,13 +29,61 @@ leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(130
 leaf(62.0, 66.0), leaf(70.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0)])]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
-    // VEL/V.GAINのenabled-ifラップ、waveform_selectorのindex、checkbox-stackのui.vertical化。
-    assert!(rust.contains("ui.add_enabled_ui(!is_carrier, |ui| { knob(ui, &*op.vel_sens, \"VEL\"); });"));
-    assert!(rust.contains("ui.add_enabled_ui(is_carrier, |ui| { knob(ui, &*op.velocity_gain, \"V.GAIN\"); });"));
+    // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される。`<let>`廃止に伴い
+    // 中間変数を経由しないが、計算内容は同一）、waveform_selectorのindex、checkbox-stackのui.vertical化。
+    assert!(rust.contains(
+        "ui.add_enabled_ui(!crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.vel_sens, \"VEL\"); });"
+    ));
+    assert!(rust.contains(
+        "ui.add_enabled_ui(crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.velocity_gain, \"V.GAIN\"); });"
+    ));
     assert!(rust.contains("waveform_selector(ui, &*op.waveform, (i) as usize);"));
     assert!(rust.contains(
         "ui.vertical(|ui| { bool_checkbox(ui, &*op.ame, \"AM\"); bool_checkbox(ui, &*op.op_loop, \"LOOP\"); bool_checkbox(ui, &*op.curve, \"CURVE\"); });"
     ));
+}
+
+/// OPパネルのヘッダ（動的タイトル`<title>OP {index+1}</title>` + `<readout>`）が、
+/// `<raw>`廃止前と同一のRustを生成することを確認する。
+#[test]
+fn op_header_title_and_readout() {
+    let xml = panel_xml();
+    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    assert!(rust.contains("ui.label(egui::RichText::new(format!(\"OP {}\", i + 1)).strong());"));
+    assert!(rust.contains(
+        "ui.label(egui::RichText::new(format!(\"×{:.2}\", mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8))).size(10.0).weak()).on_hover_text(\"MUL×FINEの実効周波数比（DT1は含まない）\");"
+    ));
+}
+
+/// コミット0da0584で`<column title=>`が実描画に配線されておらず脱落していた
+/// CHANNEL/CHIP LFOの見出しが復活していることを確認する（裸のui.label、horizontal非ラップ）。
+#[test]
+fn channel_and_chip_lfo_titles_present() {
+    let xml = panel_xml();
+    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    assert!(rust.contains("ui.label(egui::RichText::new(\"CHANNEL\").strong());"));
+    assert!(rust.contains("ui.label(egui::RichText::new(\"CHIP LFO\").strong());"));
+}
+
+/// `<header><title/>...`（空タグ）が親の`title=`属性から見出しを解決することを確認する
+/// （PITCH FG等、タイトル+ジャックを同じ行に並べるケース）。インデント込みで一致を見るのは
+/// 生成レイアウトのネスト段数（ScrollArea/group/vertical/horizontal）を暗黙に固定してしまう
+/// ため、行ごとに`trim()`して緩く照合する。
+#[test]
+fn header_title_from_attr_resolves() {
+    let xml = panel_xml();
+    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let lines: Vec<&str> = rust.lines().map(str::trim).collect();
+    let idx = lines
+        .iter()
+        .position(|l| *l == "ui.label(egui::RichText::new(\"PITCH FG\").strong());")
+        .expect("PITCH FGの見出し行が見つかりません");
+    assert_eq!(lines[idx - 1], "ui.horizontal(|ui| {");
+    assert_eq!(
+        lines[idx + 1],
+        "crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, 0, \"TX LFO\", &mut tx_jacks);"
+    );
+    assert_eq!(lines[idx + 2], "});");
 }
 
 /// XMLに書かれた8アイテム（OP repeat + CHANNEL/CHIP LFO columns + TEXTURE LFO + PITCH FG +

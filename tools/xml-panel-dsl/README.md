@@ -60,14 +60,17 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
 その実測値（70px、"CURVE"ラベル基準）は`panel-codegen`（`build_leaf_info`）と
 `panel.rs`の`CHECKBOX_W`の両方に反映済み。
 
-## XML語彙
+## XML語彙（2026-07-22改訂: 完全宣言化・生Rust全廃）
+
+`panel.xml`本体から`<let>`/`<raw>`を全廃し、見出し・派生値表示・条件グレーアウトを
+すべて閉じた語彙で表現する（詳細は下記の設計ノート参照）。
 
 ```
 <layout>                          ルート。<panel>/<columns>を任意個
   <panel repeat="operators" as="op" index="i" title="...">
-    <let name="is_carrier" expr="...(Rust式)"/>   任意個、本体の前に`let`文として出力
-    <header>                       ui.horizontal{}として出力（<raw>/<jack>のみ）
-      <raw>...Rustコード...</raw>
+    <header>                       ui.horizontal{}として出力
+      <title>...</title>          見出し（下記参照）
+      <readout compute="..." args="a,b" format="...{value...}..." tooltip="..."/>
       <jack kind="dest" dest-index="N" label="..." handle="..."/>
     </header>
     <row justify="start|between|around|evenly|center|end" grow="true" gap="spacing|<数値>">
@@ -75,7 +78,6 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
     </row>
     <space size="N"/>
     <jack kind="source"/>          または kind="dest" ...
-    <raw>...</raw>                 パネル本体直下のraw文（headerの外でも可）
   </panel>
 
   <columns match-height="true">
@@ -84,6 +86,37 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
   </columns>
 </layout>
 ```
+
+### 見出し（`<title>`・`title=`属性）
+
+- `<panel>`/`<column>`に`title=`属性があり、かつ`<header>`が無ければ、見出しが**自動挿入**される
+  （`<panel>`は`ui.horizontal`でラップ、`<column>`は裸の`ui.label`——旧`panel.rs`の見た目に合わせた区別）。
+- `<header>`内に明示的に`<title>`を書く場合:
+  - `<title/>`（空）… 親の`title=`属性の値を使う（PITCH FG等、見出しとジャックを同じ行に並べたい場合）。
+  - `<title>OP {index+1}</title>` … `{index+N}`を1箇所だけ含む動的テンプレート
+    （`N`は整数リテラル。リピートパネルのループ変数+Nに展開される。それ以外はプレーンテキスト）。
+
+### 派生値表示（`<readout>`、`<header>`内専用）
+
+`compute`は閉じた語彙（既存の実装済み計算のみを参照でき、任意のRust式は書けない）:
+
+| compute | args | 用途 |
+|---|---|---|
+| `mul-fine-ratio` | `mul,fine`（2個、ハンドル名） | MUL×FINEの実効周波数比 |
+
+`format`はRustの`format!`テンプレートで、`{value...}`（`{value}`または`{value:.2}`等）が計算結果の
+埋め込み位置。`tooltip`は任意（`.on_hover_text(...)`として付与）。
+
+### 条件グレーアウト（`enabled-if`）
+
+`enabled-if="[!]<述語名>"`。述語名も閉じた語彙（既存実装済みの判定のみ参照可）:
+
+| 述語名 | 意味 |
+|---|---|
+| `is_carrier` | そのOPがキャリアかどうか（`carriers(algorithm).contains(&<loop変数>)`） |
+
+新しい`compute`/`enabled-if`述語を増やす場合は、`panel-codegen`の`ir::Compute` enumへ
+variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（網羅性チェックで両者の同期が守られる）。
 
 ### レイアウト語彙（`<row>`/`<stack>`内、taffyの`Style`に1:1対応）
 
@@ -95,14 +128,14 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
 
 | 要素 | 必須属性 | 備考 |
 |---|---|---|
-| `<knob>` | `label`, `handle` | `enabled-if="<Rust式>"`で`ui.add_enabled_ui`ラップ |
+| `<knob>` | `label`, `handle` | `enabled-if="[!]<述語名>"`で`ui.add_enabled_ui`ラップ |
 | `<checkbox>` | `label`, `handle` | 単体（稀）|
 | `<checkbox-stack>` | 子に`<checkbox>`複数 | `ui.vertical`で縦積み。幅は常に70(実測値)固定 |
 | `<waveform>` | `handle` | `index`（省略時0） |
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
 | `<eg-preview>` | `mapping`(`DbLinear`/`AmplitudeLinear`) + 各EGParamsフィールド | 各フィールドは`{field}="handle"`か`{field}-value="リテラル"`のどちらか。フィールド: `tl`,`ar`,`d1r`,`d1l`,`d2r`,`rr`,`floor`,`loop`(→`loop_enabled`),`curve`,`delay` |
 | `<algorithm-diagram>` | `handle` | |
-| `<raw width height>` | テキスト内容 = Rustコード | `<row>`/`<stack>`内の最終手段（要サイズ指定） |
+| `<raw width height>` | テキスト内容 = Rustコード | **最終手段**（要サイズ指定）。文法上は温存しているが`panel.xml`本体では未使用 |
 
 ### handle解決ルール
 
@@ -110,7 +143,8 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
   （例: `handle="tl"` → `op.tl`）。
 - `.`を含む値は**フルパスとしてそのまま**使う（自分で`params.`から書く。
   例: `handle="params.pitch_fg.depth"`）。
-- `<panel>`直下（`repeat`なし）では暗黙のベースは`params`。
+- `<panel>`直下（`repeat`なし）では暗黙のベースは`params`。`<readout>`の`args`・
+  `enabled-if`の述語（`index_var`のみ）も同じ解決規則に従う。
 
 ## 既知の割り切り・未実装
 
@@ -118,6 +152,7 @@ powershell -File tools\xml-panel-dsl\build-wasm.ps1
 - プレビュー（SVG）の`<row>`/`<stack>`矩形計算は本物のtaffy（wasm経由）だが、パネル同士の
   縦積み・`<columns>`の高さ合わせはSVG側の簡易な逐次配置計算（JS）のまま
   （`panel.rs`実行時の`ui.group`逐次呼び出し・`response.rect.height()`計測を模した近似）。
+  実描画プレビュー化（フェーズB、eframeインタープリタ）でSVG自体を廃止予定。
 - 生成（`ym38x6-ui/build.rs`）は`cargo check`時に自動反映される。`panel.rs`の構造体定義・
   ヘルパー関数はこのツールの生成対象外なので、既存の`panel.rs`上部はそのまま残し
   `draw_param_panel`本体だけが`include!`で差し替わる。

@@ -1,11 +1,10 @@
 <layout>
 
   <panel repeat="operators" as="op" index="i">
-    <let name="is_carrier" expr="crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&amp;i)"/>
     <header>
-      <raw>ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
-let ratio = mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8);
-ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hover_text("MUL×FINEの実効周波数比（DT1は含まない）");</raw>
+      <title>OP {index+1}</title>
+      <readout compute="mul-fine-ratio" args="mul,op_fine_tune" format="×{value:.2}"
+        tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
     </header>
     <row justify="start" gap="spacing">
       <eg-preview mapping="DbLinear" tl="tl" ar="ar" d1r="d1r" d1l="d1l" d2r="d2r" rr="rr"
@@ -61,7 +60,6 @@ ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hove
   </columns>
 
   <panel title="TEXTURE LFO">
-    <header><raw>ui.label(egui::RichText::new("TEXTURE LFO").strong());</raw></header>
     <row justify="between">
       <knob label="TX.RATE" handle="texture_lfo_rate"/>
       <knob label="TX.DEP" handle="texture_lfo_depth"/>
@@ -77,7 +75,7 @@ ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hove
 
   <panel title="PITCH FG">
     <header>
-      <raw>ui.label(egui::RichText::new("PITCH FG").strong());</raw>
+      <title/>
       <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
     </header>
     <row justify="start" gap="spacing">
@@ -105,7 +103,7 @@ ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hove
 
   <panel title="CUTOFF FG">
     <header>
-      <raw>ui.label(egui::RichText::new("CUTOFF FG").strong());</raw>
+      <title/>
       <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
     </header>
     <row justify="start" gap="spacing">
@@ -135,7 +133,7 @@ ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hove
 
   <panel title="GAIN FG">
     <header>
-      <raw>ui.label(egui::RichText::new("GAIN FG").strong());</raw>
+      <title/>
       <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
     </header>
     <row justify="start" gap="spacing">
@@ -161,7 +159,6 @@ ui.label(egui::RichText::new(format!("×{ratio:.2}")).size(10.0).weak()).on_hove
   </panel>
 
   <panel title="MASTER EFFECT">
-    <header><raw>ui.label(egui::RichText::new("MASTER EFFECT").strong());</raw></header>
     <row justify="between">
       <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="0"/>
       <knob label="REV" handle="rev_send"/>
