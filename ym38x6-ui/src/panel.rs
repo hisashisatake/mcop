@@ -172,8 +172,9 @@ fn fg_eg_knobs(ui: &mut egui::Ui, prefix: &str, eg: &FgEgPanelParams, depth: Opt
 
 /// ノブ等の固定セル幅（各ウィジェットのallocate呼び出しと一致させる、下記`justified_row`用）。
 const KNOB_W: f32 = 62.0;
-/// bool_checkboxは可変幅（チェックボックス＋ラベル文字幅）のため近似値。
-const CHECKBOX_W: f32 = 50.0;
+/// bool_checkboxは可変幅（チェックボックス＋ラベル文字幅）。実測値（"CURVE"ラベルの実際の
+/// 描画幅、ym38x6-ui/examples/op_slice.rsで目視検証済み）。50では収まらず折り返されていた。
+const CHECKBOX_W: f32 = 70.0;
 const WAVEFORM_SELECTOR_W: f32 = 130.0;
 const ENUM_SELECTOR_W: f32 = 100.0;
 
