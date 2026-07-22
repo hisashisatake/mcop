@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 egui = "0.34"
 sound-core = { path = "../sound-core" }
+taffy = "0.9"
+
+[dev-dependencies]
+# 【一時】spike検証example(examples/op_slice.rs)用。方針確定後にexample・spikeごと削除。
+eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts"] }

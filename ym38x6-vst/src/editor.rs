@@ -56,6 +56,7 @@ fn build_panel_params<'a>(
         texture_lfo_fade_mode: vi(&params.texture_lfo_fade_mode, setter),
         texture_lfo_fade_time: vi(&params.texture_lfo_fade_time, setter),
         texture_lfo_offset: vi(&params.texture_lfo_offset, setter),
+        texture_lfo_destination: vi(&params.texture_lfo_destination, setter),
         chip_lfo_freq: vi(&params.chip_lfo_freq, setter),
         chip_lfo_pmd: vi(&params.chip_lfo_pmd, setter),
         chip_lfo_amd: vi(&params.chip_lfo_amd, setter),

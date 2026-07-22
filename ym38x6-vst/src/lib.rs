@@ -59,6 +59,7 @@ struct Ym38x6Plugin {
     texture_lfo_delay: u8,                          // NRPN(0,25)
     texture_lfo_fade_time: u8,                      // NRPN(0,26)
     texture_lfo_offset: u8,                         // NRPN(0,27)
+    last_texture_lfo_destination_param: u8,
     last_texture_lfo_waveform_param: u8,
     last_texture_lfo_fade_mode_param: u8,
     last_texture_lfo_rate_param: u8,
@@ -225,6 +226,7 @@ impl Default for Ym38x6Plugin {
             texture_lfo_delay: 0,
             texture_lfo_fade_time: 0,
             texture_lfo_offset: 128,
+            last_texture_lfo_destination_param: 0,
             last_texture_lfo_waveform_param: 0,
             last_texture_lfo_fade_mode_param: 0,
             last_texture_lfo_rate_param: 0,
@@ -663,6 +665,7 @@ impl Plugin for Ym38x6Plugin {
         self.texture_lfo_delay = 0;
         self.texture_lfo_fade_time = 0;
         self.texture_lfo_offset = 128;
+        self.last_texture_lfo_destination_param = 0;
         self.last_texture_lfo_waveform_param = 0;
         self.last_texture_lfo_fade_mode_param = 0;
         self.last_texture_lfo_rate_param = 0;
@@ -739,8 +742,13 @@ impl Plugin for Ym38x6Plugin {
             self.last_algorithm = algorithm;
         }
 
-        // 質感LFO（7個）：algorithmと同じ1シャドウ差分検知方式。NRPN(0,1)/(0,22)〜(0,27)直接
+        // 質感LFO（8個）：algorithmと同じ1シャドウ差分検知方式。NRPN(0,0)/(0,1)/(0,22)〜(0,27)直接
         // 書き込みと共存する（build_patch()が毎ブロック読むため、明示的な即時反映呼び出しは不要）。
+        let texture_lfo_destination_param = self.params.texture_lfo_destination.value() as u8;
+        if texture_lfo_destination_param != self.last_texture_lfo_destination_param {
+            self.texture_lfo_destination = Ym38x6LfoDestination::from_u8(texture_lfo_destination_param);
+            self.last_texture_lfo_destination_param = texture_lfo_destination_param;
+        }
         let texture_lfo_waveform_param = self.params.texture_lfo_waveform.value() as u8;
         if texture_lfo_waveform_param != self.last_texture_lfo_waveform_param {
             self.texture_lfo_waveform = texture_lfo_waveform_param;

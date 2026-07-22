@@ -79,6 +79,7 @@ fn build_panel_params(state: &Rc<RefCell<EditorState>>, dirty: &Rc<Cell<bool>>) 
         texture_lfo_fade_mode: ch!(texture_lfo_fade_mode, "Texture LFO Fade Mode", 0, 3, 0),
         texture_lfo_fade_time: ch!(texture_lfo_fade_time, "Texture LFO Fade Time", 0, 255, 0),
         texture_lfo_offset: ch!(texture_lfo_offset, "Texture LFO Offset", 0, 255, 128),
+        texture_lfo_destination: ch!(texture_lfo_destination, "Texture LFO Destination", 0, 3, 0),
         chip_lfo_freq: ch!(chip_lfo_freq, "Chip LFO Freq", 0, 255, 0),
         chip_lfo_pmd: ch!(chip_lfo_pmd, "Chip LFO PMD", 0, 255, 0),
         chip_lfo_amd: ch!(chip_lfo_amd, "Chip LFO AMD", 0, 255, 0),

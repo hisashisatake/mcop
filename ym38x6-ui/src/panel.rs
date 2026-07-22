@@ -117,6 +117,9 @@ pub struct PanelParams<'a> {
     pub texture_lfo_fade_mode: Box<dyn IntParamHandle + 'a>,
     pub texture_lfo_fade_time: Box<dyn IntParamHandle + 'a>,
     pub texture_lfo_offset: Box<dyn IntParamHandle + 'a>,
+    /// 質感LFOの行き先（0=Pitch/1=Volume/2=TL/3=Cutoff）。パネルではモジュラー風の
+    /// パッチケーブルUI（`texture_lfo_patchbay`）で選ぶ。内部は単一enumのまま。
+    pub texture_lfo_destination: Box<dyn IntParamHandle + 'a>,
     // CHIP LFO（旧TONE LFO。チップ内LFO、VCO差し替えで消えるレイヤー）
     pub chip_lfo_freq: Box<dyn IntParamHandle + 'a>,
     pub chip_lfo_pmd: Box<dyn IntParamHandle + 'a>,
@@ -160,8 +163,44 @@ fn fg_eg_knobs(ui: &mut egui::Ui, prefix: &str, eg: &FgEgPanelParams, depth: Opt
     }
     knob(ui, &*eg.floor, &format!("{prefix}FLOOR"));
     knob(ui, &*eg.delay, &format!("{prefix}DLY"));
-    bool_checkbox(ui, &*eg.loop_enabled, "LOOP");
-    bool_checkbox(ui, &*eg.curve, "CURVE");
+    // LOOP/CURVEは縦2段に積んで1スロット分の幅として扱う。
+    ui.vertical(|ui| {
+        bool_checkbox(ui, &*eg.loop_enabled, "LOOP");
+        bool_checkbox(ui, &*eg.curve, "CURVE");
+    });
+}
+
+/// ノブ等の固定セル幅（各ウィジェットのallocate呼び出しと一致させる、下記`justified_row`用）。
+const KNOB_W: f32 = 62.0;
+/// bool_checkboxは可変幅（チェックボックス＋ラベル文字幅）のため近似値。
+const CHECKBOX_W: f32 = 50.0;
+const WAVEFORM_SELECTOR_W: f32 = 130.0;
+const ENUM_SELECTOR_W: f32 = 100.0;
+
+/// 子要素の「自然幅」の合計とコンテナの利用可能幅との差を要素間の隙間へ均等配分し、
+/// 横一列に敷き詰める（CSSの`justify-content: space-between`相当）。要素自体のサイズは
+/// 変えず、余白だけを伸縮させてパネル幅いっぱいに均等割り付けする。
+/// `natural_widths`は`add_contents`内で追加する順序・個数と一致させること
+/// （knob=`KNOB_W`／bool_checkbox=`CHECKBOX_W`／waveform_selector=`WAVEFORM_SELECTOR_W`／
+/// enum_selector=`ENUM_SELECTOR_W`）。
+fn justified_row<R>(
+    ui: &mut egui::Ui,
+    natural_widths: &[f32],
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let available = ui.available_width();
+    let total: f32 = natural_widths.iter().sum();
+    let n = natural_widths.len();
+    let gap = if n > 1 {
+        ((available - total) / (n as f32 - 1.0)).max(0.0)
+    } else {
+        0.0
+    };
+    let prev_spacing = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = gap;
+    let result = ui.horizontal(|ui| add_contents(ui)).inner;
+    ui.spacing_mut().item_spacing.x = prev_spacing;
+    result
 }
 
 /// パラメーターグリッド（OP1〜4 / CHANNEL・TEXTURE LFO・CHIP LFO / PITCH FG / CUTOFF FG・
@@ -169,10 +208,21 @@ fn fg_eg_knobs(ui: &mut egui::Ui, prefix: &str, eg: &FgEgPanelParams, depth: Opt
 /// PRESETSサイドバー・ウィンドウ枠（ResizableWindow等）・外側のCentralPanelは呼び出し側
 /// （ホスト）が用意すること。
 pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
+    // 質感LFOパッチベイの1フレーム分のジャック配置（出力＋4行き先）。各パネルの描画時に
+    // 位置を埋め、末尾の`finish_texture_lfo_patchbay`でケーブルを描く（patchbay.rs参照）。
+    let mut tx_jacks = crate::patchbay::JackLayout::new();
+
     egui::ScrollArea::vertical().show(ui, |ui| {
+        // 以降の全パネルが揃える基準幅（OPの幅＝スクロール内容の全幅）。
+        let full_width = ui.available_width();
+        // CHANNEL-CHIP LFO間の余白と同じ量を、各全幅パネルの右端にも確保する。
+        let inter_gap = ui.spacing().item_spacing.x;
+        let panel_width = full_width - inter_gap;
+
         // ---- Operators（各opを横一列で表示し、OP1→OP4を縦に積む。最優先で上に表示） ----
         for (i, op) in params.operators.iter().enumerate() {
             ui.group(|ui| {
+                ui.set_width(panel_width);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("OP {}", i + 1)).strong());
@@ -208,7 +258,13 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                             params.algorithm.value() as u8,
                         )
                         .contains(&i);
-                        ui.horizontal_wrapped(|ui| {
+                        // AM/LOOP/CURVEは縦3段に積んで1スロット分の幅として扱う。
+                        let widths = [
+                            KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W,
+                            KNOB_W, KNOB_W, KNOB_W, WAVEFORM_SELECTOR_W, KNOB_W, CHECKBOX_W,
+                            KNOB_W, KNOB_W,
+                        ];
+                        justified_row(ui, &widths, |ui| {
                             knob(ui, &*op.tl, "TL");
                             knob(ui, &*op.ar, "AR");
                             knob(ui, &*op.d1r, "D1R");
@@ -225,11 +281,13 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                                 knob(ui, &*op.velocity_gain, "V.GAIN");
                             });
                             knob(ui, &*op.op_fine_tune, "FINE");
-                            bool_checkbox(ui, &*op.ame, "AM");
                             waveform_selector(ui, &*op.waveform, i);
                             knob(ui, &*op.floor, "FLOOR");
-                            bool_checkbox(ui, &*op.op_loop, "LOOP");
-                            bool_checkbox(ui, &*op.curve, "CURVE");
+                            ui.vertical(|ui| {
+                                bool_checkbox(ui, &*op.ame, "AM");
+                                bool_checkbox(ui, &*op.op_loop, "LOOP");
+                                bool_checkbox(ui, &*op.curve, "CURVE");
+                            });
                             knob(ui, &*op.eg_shift, "EGSFT");
                             knob(ui, &*op.level_scale, "LEVEL SCALE");
                         });
@@ -238,40 +296,42 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             });
         }
 
-        // ---- チャンネル固有 / 質感LFO / チップ内LFO（横一列） ----
+        // ---- チャンネル固有 / チップ内LFO（横一列の2列。CHANNEL=1/3・CHIP LFO=2/3幅、
+        //      右端にもCHANNEL-CHIP LFO間と同じ余白を残す） ----
+        let two_col_usable = full_width - inter_gap * 2.0;
+        let channel_width = two_col_usable / 3.0;
+        let chip_lfo_width = two_col_usable * 2.0 / 3.0;
         ui.horizontal(|ui| {
-            ui.group(|ui| {
+            let channel_resp = ui.group(|ui| {
+                ui.set_width(channel_width);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("CHANNEL").strong());
                     ui.horizontal(|ui| {
                         algorithm_diagram(ui, params.algorithm.value() as u8);
-                        ui.horizontal_wrapped(|ui| {
+                        justified_row(ui, &[KNOB_W, KNOB_W], |ui| {
                             knob(ui, &*params.algorithm, "ALG");
                             knob(ui, &*params.feedback, "FB");
                         });
                     });
+                    ui.add_space(2.0);
+                    crate::patchbay::texture_lfo_dest_jack(
+                        ui,
+                        &*params.texture_lfo_destination,
+                        2,
+                        "TX LFO (TL)",
+                        &mut tx_jacks,
+                    );
                 });
             });
+            // CHIP LFOの縦幅はCHANNELの実測高さに合わせる（内容量が少なく本来はより低いため）。
+            let channel_height = channel_resp.response.rect.height();
 
             ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("TEXTURE LFO").strong());
-                    ui.horizontal_wrapped(|ui| {
-                        knob(ui, &*params.texture_lfo_rate, "TX.RATE");
-                        knob(ui, &*params.texture_lfo_depth, "TX.DEP");
-                        knob(ui, &*params.texture_lfo_delay, "TX.DLY");
-                        enum_selector(ui, &*params.texture_lfo_waveform, "TX.WAVE", &LFO_WAVEFORM_NAMES, 2);
-                        enum_selector(ui, &*params.texture_lfo_fade_mode, "TX.FADE", &LFO_FADE_MODE_NAMES, 3);
-                        knob(ui, &*params.texture_lfo_fade_time, "TX.F.TM");
-                        knob(ui, &*params.texture_lfo_offset, "TX.OFS");
-                    });
-                });
-            });
-
-            ui.group(|ui| {
+                ui.set_width(chip_lfo_width);
+                ui.set_min_height(channel_height);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("CHIP LFO").strong());
-                    ui.horizontal_wrapped(|ui| {
+                    justified_row(ui, &[KNOB_W; 6], |ui| {
                         knob(ui, &*params.chip_lfo_freq, "CH.FRQ");
                         knob(ui, &*params.chip_lfo_pmd, "CH.PMD");
                         knob(ui, &*params.chip_lfo_amd, "CH.AMD");
@@ -283,13 +343,51 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
             });
         });
 
+        // ---- 質感LFO（単独で全幅の1行） ----
+        ui.group(|ui| {
+            ui.set_width(panel_width);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("TEXTURE LFO").strong());
+                justified_row(
+                    ui,
+                    &[KNOB_W, KNOB_W, KNOB_W, ENUM_SELECTOR_W, ENUM_SELECTOR_W, KNOB_W, KNOB_W],
+                    |ui| {
+                        knob(ui, &*params.texture_lfo_rate, "TX.RATE");
+                        knob(ui, &*params.texture_lfo_depth, "TX.DEP");
+                        knob(ui, &*params.texture_lfo_delay, "TX.DLY");
+                        enum_selector(ui, &*params.texture_lfo_waveform, "TX.WAVE", &LFO_WAVEFORM_NAMES, 2);
+                        enum_selector(ui, &*params.texture_lfo_fade_mode, "TX.FADE", &LFO_FADE_MODE_NAMES, 3);
+                        knob(ui, &*params.texture_lfo_fade_time, "TX.F.TM");
+                        knob(ui, &*params.texture_lfo_offset, "TX.OFS");
+                    },
+                );
+                // 出力ジャック。行き先（Pitch/Cutoff/Gain各FGパネル・CHANNELパネルのTL）は
+                // それぞれのパネルヘッダーにジャックとして配置し、太いパッチケーブルで結ぶ
+                // （見た目のみのモジュラーメタファー。内部は従来どおり単一enumを1つ選ぶだけ）。
+                ui.add_space(2.0);
+                crate::patchbay::texture_lfo_source_jack(ui, &mut tx_jacks);
+            });
+        });
+
         // ---- PITCH FG（新規） ----
         ui.group(|ui| {
+            ui.set_width(panel_width);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("PITCH FG").strong());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("PITCH FG").strong());
+                    crate::patchbay::texture_lfo_dest_jack(
+                        ui,
+                        &*params.texture_lfo_destination,
+                        0,
+                        "TX LFO",
+                        &mut tx_jacks,
+                    );
+                });
                 ui.horizontal(|ui| {
                     eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.pitch_fg.eg.to_eg_params());
-                    ui.horizontal_wrapped(|ui| {
+                    // LOOP/CURVEが縦2段の1スロットに統合された分、幅リストは8個(knob)+1個(チェック列)。
+                    let widths = [KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, CHECKBOX_W];
+                    justified_row(ui, &widths, |ui| {
                         fg_eg_knobs(ui, "P.", &params.pitch_fg.eg, Some(&*params.pitch_fg.depth));
                     });
                 });
@@ -298,11 +396,26 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
 
         // ---- CUTOFF FG（旧Filter EG） ----
         ui.group(|ui| {
+            ui.set_width(panel_width);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("CUTOFF FG").strong());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("CUTOFF FG").strong());
+                    crate::patchbay::texture_lfo_dest_jack(
+                        ui,
+                        &*params.texture_lfo_destination,
+                        3,
+                        "TX LFO",
+                        &mut tx_jacks,
+                    );
+                });
                 ui.horizontal(|ui| {
                     eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.cutoff_fg.eg.to_eg_params());
-                    ui.horizontal_wrapped(|ui| {
+                    // LOOP/CURVEが縦2段の1スロットに統合された分、幅リストは10個(knob)+1個(チェック列)。
+                    let widths = [
+                        KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W,
+                        KNOB_W, CHECKBOX_W,
+                    ];
+                    justified_row(ui, &widths, |ui| {
                         knob(ui, &*params.cutoff, "CUT");
                         knob(ui, &*params.resonance, "RES");
                         fg_eg_knobs(ui, "F.", &params.cutoff_fg.eg, Some(&*params.cutoff_fg.depth));
@@ -313,11 +426,23 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
 
         // ---- GAIN FG（旧VCA EG） ----
         ui.group(|ui| {
+            ui.set_width(panel_width);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("GAIN FG").strong());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("GAIN FG").strong());
+                    crate::patchbay::texture_lfo_dest_jack(
+                        ui,
+                        &*params.texture_lfo_destination,
+                        1,
+                        "TX LFO",
+                        &mut tx_jacks,
+                    );
+                });
                 ui.horizontal(|ui| {
                     eg_preview(ui, EgAmplitudeMapping::AmplitudeLinear, 255, params.gain_fg.to_eg_params());
-                    ui.horizontal_wrapped(|ui| {
+                    // LOOP/CURVEが縦2段の1スロットに統合された分、幅リストは7個(knob)+1個(チェック列)。
+                    let widths = [KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, KNOB_W, CHECKBOX_W];
+                    justified_row(ui, &widths, |ui| {
                         fg_eg_knobs(ui, "V.", &params.gain_fg, None);
                     });
                 });
@@ -326,9 +451,14 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
 
         // ---- マスターエフェクト ----
         ui.group(|ui| {
+            ui.set_width(panel_width);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("MASTER EFFECT").strong());
-                ui.horizontal_wrapped(|ui| {
+                let widths = [
+                    ENUM_SELECTOR_W, KNOB_W, KNOB_W, ENUM_SELECTOR_W, KNOB_W, KNOB_W, KNOB_W,
+                    KNOB_W, KNOB_W,
+                ];
+                justified_row(ui, &widths, |ui| {
                     enum_selector(ui, &*params.reverb_type, "REV TYPE", &REVERB_TYPE_NAMES, 0);
                     knob(ui, &*params.rev_send, "REV");
                     knob(ui, &*params.reverb_time, "R.TIME");
@@ -341,5 +471,8 @@ pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {
                 });
             });
         });
+
+        // 質感LFOパッチケーブル：全ジャック位置が出揃ったので、ドラッグ着地判定とケーブル描画を行う。
+        crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);
     });
 }
