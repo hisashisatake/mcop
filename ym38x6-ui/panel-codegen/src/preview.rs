@@ -40,7 +40,6 @@ fn tree_node_to_json(node: &TreeNode) -> Value {
 fn stmt_to_json(st: &BodyStmt) -> Value {
     match st {
         BodyStmt::Raw(_) => json!({ "kind": "spacer" }),
-        BodyStmt::Title(_) => json!({ "kind": "header", "has_jack": false }),
         BodyStmt::Header { items } => json!({
             "kind": "header",
             "has_jack": items.iter().any(|i| matches!(i, HeaderItem::Jack(_))),
@@ -63,30 +62,28 @@ fn body_to_json(body: &[BodyStmt]) -> Value {
     Value::Array(body.iter().map(stmt_to_json).collect())
 }
 
-fn item_to_json(item: &Item) -> Value {
-    match item {
-        Item::Panel(p) => json!({
-            "kind": "panel",
-            "repeat": p.repeat,
-            "title": p.title,
-            "body": body_to_json(&p.body),
-        }),
-        Item::Columns(c) => json!({
-            "kind": "columns",
-            "columns": c.columns.iter().map(|col| json!({
-                "width": col.width,
-                "title": col.title,
-                "body": body_to_json(&col.body),
-            })).collect::<Vec<_>>(),
-        }),
-    }
+fn panel_to_json(p: &Panel) -> Value {
+    json!({
+        "repeat": p.repeat,
+        "title": p.title,
+        "span": p.span,
+        "body": body_to_json(&p.body),
+    })
+}
+
+fn group_to_json(g: &PanelsGroup) -> Value {
+    json!({
+        "kind": "panels",
+        "match_height": g.match_height,
+        "panels": g.panels.iter().map(panel_to_json).collect::<Vec<_>>(),
+    })
 }
 
 /// XML全文をパースし、ブラウザ側プレビュー描画に必要な構造をJSONで返す。
 /// `tree`種別の`node`フィールドは[`solve_tree_json`]にそのまま渡せる形。
 pub fn parse_ir_preview(xml: &str) -> Result<String, String> {
     let layout = parse_layout(xml)?;
-    let value = json!({ "items": layout.items.iter().map(item_to_json).collect::<Vec<_>>() });
+    let value = json!({ "groups": layout.groups.iter().map(group_to_json).collect::<Vec<_>>() });
     serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 

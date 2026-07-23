@@ -11,7 +11,7 @@ struct Ctx {
     base: String,
     /// リピートループの変数名（既定"i"）。`enabled-if`の述語や`<title>`の`{index+N}`が参照する。
     index: String,
-    /// 親`<panel>`/`<column>`の`title=`属性値（`<title/>`の空タグ解決用）。
+    /// 親`<panel>`の`title=`属性値（`<title/>`の空タグ解決用）。
     title: String,
 }
 
@@ -282,32 +282,28 @@ fn parse_body(el: Node, ctx: &Ctx) -> Result<Vec<BodyStmt>, String> {
             }
             "jack" => stmts.push(BodyStmt::Jack(jack_attrs(child, ctx)?)),
             "raw" => stmts.push(BodyStmt::Raw(text_content(child).trim().to_string())),
-            other => return Err(format!("<panel>/<column>直下で未知の要素です: <{other}>")),
+            other => return Err(format!("<panel>直下で未知の要素です: <{other}>")),
         }
     }
     Ok(stmts)
 }
 
-/// bodyに既に見出し（`<header>`または自動挿入前の`<title>`相当）が無ければ、
-/// `title=`属性から見出しを自動挿入する。`is_bare`が`true`なら`BodyStmt::Title`（裸のラベル、
-/// `<column>`向け）、`false`なら`BodyStmt::Header`（横並びラップ、`<panel>`向け）で挿入する。
-fn auto_insert_title(body: &mut Vec<BodyStmt>, title: &str, is_bare: bool) {
+/// bodyに既に見出し（`<header>`相当）が無ければ、`title=`属性から見出しを自動挿入する
+/// （横並びラップ、`ui.horizontal`）。
+fn auto_insert_title(body: &mut Vec<BodyStmt>, title: &str) {
     if title.is_empty() {
         return;
     }
-    let has_heading = body.iter().any(|s| matches!(s, BodyStmt::Header { .. } | BodyStmt::Title(_)));
+    let has_heading = body.iter().any(|s| matches!(s, BodyStmt::Header { .. }));
     if has_heading {
         return;
     }
-    let stmt = if is_bare {
-        BodyStmt::Title(Title::Static(title.to_string()))
-    } else {
-        BodyStmt::Header { items: vec![HeaderItem::Title(Title::Static(title.to_string()))] }
-    };
-    body.insert(0, stmt);
+    body.insert(0, BodyStmt::Header { items: vec![HeaderItem::Title(Title::Static(title.to_string()))] });
 }
 
-fn parse_panel(el: Node) -> Result<Panel, String> {
+/// `<panel>`をパースする。`span`属性は生の文字列のみ読み取り、まだ解決しない
+/// （`<panels>`内の他の`<panel>`のspanが出揃ってから[`resolve_spans`]でグループ単位に解決する）。
+fn parse_panel(el: Node) -> Result<(Panel, Option<u32>), String> {
     let repeat = el.attribute("repeat").map(|s| s.to_string());
     let as_ = el.attribute("as").map(|s| s.to_string());
     if repeat.is_some() && as_.is_none() {
@@ -315,31 +311,70 @@ fn parse_panel(el: Node) -> Result<Panel, String> {
     }
     let index = el.attribute("index").unwrap_or("i").to_string();
     let title = el.attribute("title").unwrap_or("").to_string();
+    let span_raw = match el.attribute("span") {
+        Some(v) => Some(
+            v.parse::<u32>().map_err(|_| "<panel>のspanは0〜12の整数で指定してください".to_string())?,
+        ),
+        None => None,
+    };
     let base = if repeat.is_some() { as_.clone().unwrap() } else { "params".to_string() };
     let ctx = Ctx { base, index: index.clone(), title: title.clone() };
     let mut body = parse_body(el, &ctx)?;
-    auto_insert_title(&mut body, &title, false);
-    Ok(Panel { repeat, as_, index, title, body })
+    auto_insert_title(&mut body, &title);
+    Ok((Panel { repeat, as_, index, title, span: 0, body }, span_raw))
 }
 
-fn parse_columns(el: Node) -> Result<Columns, String> {
-    let match_height = el.attribute("match-height") == Some("true");
-    let mut cols = Vec::new();
-    for c in element_children(el) {
-        if c.tag_name().name() != "column" {
-            return Err("<columns>の子要素は<column>のみです".to_string());
+/// `<panels>`内の各`<panel>`の`span`を解決する。CSSの12カラムグリッド（Bootstrap等）を参考にした規約:
+/// - 全`<panel>`が`span`省略 → 12を均等割り（12が要素数で割り切れない場合はエラー、明示指定を促す）
+/// - 1個でも`span`が指定されていれば、**全`<panel>`に明示指定が必要**（一部省略は不可）で、
+///   合計はちょうど12でなければならない（書き漏れ等のミスをパースエラーで検出するため）
+fn resolve_spans(panels: &mut [Panel], spans_raw: &[Option<u32>]) -> Result<(), String> {
+    let n = panels.len();
+    if spans_raw.iter().all(|s| s.is_none()) {
+        if 12 % n as u32 != 0 {
+            return Err(format!(
+                "<panels>内の<panel>が{n}個ではspanを12で均等割りできません。各<panel>にspan=\"...\"を明示してください"
+            ));
         }
-        let width: f32 = c.attribute("width").unwrap_or("1").parse().unwrap_or(1.0);
-        let title = c.attribute("title").unwrap_or("").to_string();
-        let ctx = Ctx { base: "params".to_string(), index: "i".to_string(), title: title.clone() };
-        let mut body = parse_body(c, &ctx)?;
-        auto_insert_title(&mut body, &title, true);
-        cols.push(Column { width, title, body });
+        let even = 12 / n as u32;
+        for p in panels.iter_mut() {
+            p.span = even;
+        }
+        return Ok(());
     }
-    if cols.len() < 2 {
-        return Err("<columns>には<column>が2個以上必要です".to_string());
+    if spans_raw.iter().any(|s| s.is_none()) {
+        return Err(
+            "<panels>内で一部の<panel>だけspanを省略することはできません（全て明示するか、全て省略するかのどちらかにしてください）"
+                .to_string(),
+        );
     }
-    Ok(Columns { match_height, columns: cols })
+    let total: u32 = spans_raw.iter().map(|s| s.unwrap()).sum();
+    if total != 12 {
+        return Err(format!("<panels>内の<panel>のspan合計は12である必要があります（現在の合計: {total}）"));
+    }
+    for (p, s) in panels.iter_mut().zip(spans_raw.iter()) {
+        p.span = s.unwrap();
+    }
+    Ok(())
+}
+
+fn parse_panels_group(el: Node) -> Result<PanelsGroup, String> {
+    let match_height = el.attribute("match-height") == Some("true");
+    let mut panels = Vec::new();
+    let mut spans_raw = Vec::new();
+    for c in element_children(el) {
+        if c.tag_name().name() != "panel" {
+            return Err("<panels>の子要素は<panel>のみです".to_string());
+        }
+        let (panel, span_raw) = parse_panel(c)?;
+        panels.push(panel);
+        spans_raw.push(span_raw);
+    }
+    if panels.is_empty() {
+        return Err("<panels>には<panel>が1個以上必要です".to_string());
+    }
+    resolve_spans(&mut panels, &spans_raw)?;
+    Ok(PanelsGroup { match_height, panels })
 }
 
 /// `panel.xml`の全文をパースし、[`Layout`]を返す。
@@ -349,16 +384,93 @@ pub fn parse_layout(xml_text: &str) -> Result<Layout, String> {
     if root.tag_name().name() != "layout" {
         return Err("ルート要素は<layout>である必要があります".to_string());
     }
-    let mut items = Vec::new();
+    let mut groups = Vec::new();
     for el in element_children(root) {
         match el.tag_name().name() {
-            "panel" => items.push(Item::Panel(parse_panel(el)?)),
-            "columns" => items.push(Item::Columns(parse_columns(el)?)),
-            other => return Err(format!("<layout>直下で未知の要素です: <{other}>")),
+            "panels" => groups.push(parse_panels_group(el)?),
+            other => return Err(format!("<layout>直下で未知の要素です: <{other}>（<panels>で囲んでください）")),
         }
     }
-    if items.is_empty() {
-        return Err("<layout>には1個以上の<panel>/<columns>が必要です".to_string());
+    if groups.is_empty() {
+        return Err("<layout>には1個以上の<panels>が必要です".to_string());
     }
-    Ok(Layout { items })
+    Ok(Layout { groups })
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::parse_layout;
+
+    fn wrap(inner: &str) -> String {
+        format!("<layout><panels>{inner}</panels></layout>")
+    }
+
+    #[test]
+    fn single_panel_defaults_span_to_12() {
+        let xml = wrap(r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.groups[0].panels[0].span, 12);
+    }
+
+    #[test]
+    fn two_panels_without_span_split_evenly() {
+        let xml = wrap(
+            r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.groups[0].panels[0].span, 6);
+        assert_eq!(layout.groups[0].panels[1].span, 6);
+    }
+
+    #[test]
+    fn explicit_spans_summing_to_12_are_kept() {
+        let xml = wrap(
+            r#"<panel span="4" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="8" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.groups[0].panels[0].span, 4);
+        assert_eq!(layout.groups[0].panels[1].span, 8);
+    }
+
+    #[test]
+    fn explicit_spans_not_summing_to_12_is_error() {
+        let xml = wrap(
+            r#"<panel span="4" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="4" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("合計は12"), "{err}");
+    }
+
+    #[test]
+    fn mixing_explicit_and_omitted_span_is_error() {
+        let xml = wrap(
+            r#"<panel span="4" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("一部の<panel>だけ"), "{err}");
+    }
+
+    #[test]
+    fn omitted_span_not_evenly_divisible_is_error() {
+        let xml = wrap(
+            r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel title="B"><row><knob label="Y" handle="y"/></row></panel>
+               <panel title="C"><row><knob label="Z" handle="z"/></row></panel>
+               <panel title="D"><row><knob label="W" handle="w"/></row></panel>
+               <panel title="E"><row><knob label="V" handle="v"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("均等割りできません"), "{err}");
+    }
+
+    #[test]
+    fn bare_panel_at_layout_root_is_rejected() {
+        let xml = r#"<layout><panel title="A"><row><knob label="X" handle="x"/></row></panel></layout>"#;
+        let err = parse_layout(xml).unwrap_err();
+        assert!(err.contains("<panels>で囲んでください"), "{err}");
+    }
 }

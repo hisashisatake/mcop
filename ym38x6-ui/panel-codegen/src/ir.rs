@@ -94,7 +94,7 @@ pub struct Readout {
     pub tooltip: Option<String>,
 }
 
-/// パネル/カラムの見出し。`<title/>`（空）は親の`title=`属性を使う。
+/// パネルの見出し。`<title/>`（空）は親の`title=`属性を使う。
 #[derive(Clone, Debug)]
 pub enum Title {
     Static(String),
@@ -202,8 +202,6 @@ pub enum HeaderItem {
 pub enum BodyStmt {
     /// `ui.horizontal(|ui| {...})`でラップされる先頭行（見出し＋ジャック等を横並びにする）。
     Header { items: Vec<HeaderItem> },
-    /// ラップなしの見出し単体（`<column>`のtitle自動出力用。旧実装が裸の`ui.label`だったことの再現）。
-    Title(Title),
     Tree(TreeNode),
     Space { size: f32 },
     Jack(Jack),
@@ -211,35 +209,27 @@ pub enum BodyStmt {
     Raw(String),
 }
 
+/// `<panel>`（常に`<panels>`の子として1個以上並ぶ）。
 #[derive(Clone, Debug)]
 pub struct Panel {
     pub repeat: Option<String>,
     pub as_: Option<String>,
     pub index: String,
     pub title: String,
+    /// 12分割グリッドでの占有幅（Bootstrap等のcol-span相当）。
+    /// 同じ`<panels>`内の全`<panel>`のspan合計は常に12（parse.rsで検証・省略時は均等割りで解決済み）。
+    pub span: u32,
     pub body: Vec<BodyStmt>,
 }
 
+/// `<panels>`。`<panel>`を1個以上持つ（1個なら実質フル幅の単独パネル、2個以上ならNカラム）。
 #[derive(Clone, Debug)]
-pub struct Column {
-    pub width: f32,
-    pub title: String,
-    pub body: Vec<BodyStmt>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Columns {
+pub struct PanelsGroup {
     pub match_height: bool,
-    pub columns: Vec<Column>,
-}
-
-#[derive(Clone, Debug)]
-pub enum Item {
-    Panel(Panel),
-    Columns(Columns),
+    pub panels: Vec<Panel>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Layout {
-    pub items: Vec<Item>,
+    pub groups: Vec<PanelsGroup>,
 }

@@ -68,37 +68,52 @@ DOM操作・ファイル開く/保存・タブ切替・キャンバス起動の�
 その実測値（70px、"CURVE"ラベル基準）は`panel-codegen`（`build_leaf_info`）と
 `panel.rs`の`CHECKBOX_W`の両方に反映済み。
 
-## XML語彙（2026-07-22改訂: 完全宣言化・生Rust全廃）
+## XML語彙（2026-07-23改訂: `<columns>`/`<column>`廃止・`<panels>`/`<panel>`へ統一）
 
 `panel.xml`本体から`<let>`/`<raw>`を全廃し、見出し・派生値表示・条件グレーアウトを
 すべて閉じた語彙で表現する（詳細は下記の設計ノート参照）。
 
-```
-<layout>                          ルート。<panel>/<columns>を任意個
-  <panel repeat="operators" as="op" index="i" title="...">
-    <header>                       ui.horizontal{}として出力
-      <title>...</title>          見出し（下記参照）
-      <readout compute="..." args="a,b" format="...{value...}..." tooltip="..."/>
-      <jack kind="dest" dest-index="N" label="..." handle="..."/>
-    </header>
-    <row justify="start|between|around|evenly|center|end" grow="true" gap="spacing|<数値>">
-      ...レイアウト語彙・内容語彙（下記）...
-    </row>
-    <space size="N"/>
-    <jack kind="source"/>          または kind="dest" ...
-  </panel>
+**`<layout>`直下は常に`<panels>`のみ**（`<panel>`を単独で置くことはできない）。
+1枚だけのパネルも`<panels><panel>...</panel></panels>`と書く（旧`<columns>`/`<column>`は廃止、
+「単独パネルか複数カラムか」でタグを使い分ける必要をなくした）。
 
-  <columns match-height="true">
-    <column width="1" title="...">...<panel>と同じ本体...</column>
-    <column width="2" title="...">...</column>
-  </columns>
+```
+<layout>                                  ルート。<panels>を1個以上
+  <panels match-height="true">            <panel>を1個以上（1個なら実質フル幅、2個以上でNカラム）
+    <panel repeat="operators" as="op" index="i" title="..." span="4">
+      <header>                            ui.horizontal{}として出力
+        <title>...</title>                見出し（下記参照）
+        <readout compute="..." args="a,b" format="...{value...}..." tooltip="..."/>
+        <jack kind="dest" dest-index="N" label="..." handle="..."/>
+      </header>
+      <row justify="start|between|around|evenly|center|end" grow="true" gap="spacing|<数値>">
+        ...レイアウト語彙・内容語彙（下記）...
+      </row>
+      <space size="N"/>
+      <jack kind="source"/>              または kind="dest" ...
+    </panel>
+    <panel span="8" title="...">...</panel>
+  </panels>
 </layout>
 ```
 
+### `span`（12カラムグリッド、Bootstrap等のcol-span相当）
+
+同じ`<panels>`内の`<panel>`は、CSSでおなじみの12分割グリッドの考え方で幅を指定する。
+
+- `span="N"`（1〜12の整数）… 12分の`N`の幅を占める。**同じ`<panels>`内の全`<panel>`の
+  span合計はちょうど12でなければならない**（書き漏れ等のミスをパースエラーで検出するため。
+  例: CHANNEL(4)+CHIP LFO(8)=12）。
+- `span`を**全`<panel>`で省略**すると12を要素数で均等割りする
+  （1個なら12、2個なら6+6）。**一部の`<panel>`だけ省略するのは不可**（曖昧さを避けるため、
+  明示するなら全部・省略するなら全部、のどちらか）。
+- 均等割りが整数にならない場合（例: 5分割で12/5）はパースエラーになるので、その場合は
+  各`<panel>`に明示的な`span=`を書く。
+
 ### 見出し（`<title>`・`title=`属性）
 
-- `<panel>`/`<column>`に`title=`属性があり、かつ`<header>`が無ければ、見出しが**自動挿入**される
-  （`<panel>`は`ui.horizontal`でラップ、`<column>`は裸の`ui.label`——旧`panel.rs`の見た目に合わせた区別）。
+- `<panel>`に`title=`属性があり、かつ`<header>`が無ければ、見出しが`ui.horizontal`ラップで
+  **自動挿入**される（`<panels>`内の`<panel>`が1個でも複数でも同じ扱い）。
 - `<header>`内に明示的に`<title>`を書く場合:
   - `<title/>`（空）… 親の`title=`属性の値を使う（PITCH FG等、見出しとジャックを同じ行に並べたい場合）。
   - `<title>OP {index+1}</title>` … `{index+N}`を1箇所だけ含む動的テンプレート

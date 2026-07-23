@@ -56,7 +56,8 @@ fn op_header_title_and_readout() {
 }
 
 /// コミット0da0584で`<column title=>`が実描画に配線されておらず脱落していた
-/// CHANNEL/CHIP LFOの見出しが復活していることを確認する（裸のui.label、horizontal非ラップ）。
+/// CHANNEL/CHIP LFOの見出しが復活していることを確認する
+/// （`<panels>`/`<panel>`統一後は他の見出しと同じ`ui.horizontal`ラップになる）。
 #[test]
 fn channel_and_chip_lfo_titles_present() {
     let xml = panel_xml();
@@ -86,8 +87,8 @@ fn header_title_from_attr_resolves() {
     assert_eq!(lines[idx + 2], "});");
 }
 
-/// XMLに書かれた8アイテム（OP repeat + CHANNEL/CHIP LFO columns + TEXTURE LFO + PITCH FG +
-/// CUTOFF FG + GAIN FG + MASTER EFFECT）が全て生成されている（要素の脱落がない）ことを確認する。
+/// XMLに書かれた7つの`<panels>`グループ（OP repeat + CHANNEL/CHIP LFO(span4/8) + TEXTURE LFO +
+/// PITCH FG + CUTOFF FG + GAIN FG + MASTER EFFECT）が全て生成されている（要素の脱落がない）ことを確認する。
 #[test]
 fn all_panels_present() {
     let xml = panel_xml();
@@ -115,8 +116,12 @@ fn preview_roundtrip_solves_op_panel() {
     let xml = panel_xml();
     let preview_json = panel_codegen::parse_ir_preview(&xml).expect("parse_ir_preview が失敗しました");
     let value: serde_json::Value = serde_json::from_str(&preview_json).unwrap();
-    let items = value["items"].as_array().unwrap();
-    let op_panel = items.iter().find(|it| it["repeat"] == "operators").expect("OPパネルが見つかりません");
+    let groups = value["groups"].as_array().unwrap();
+    let op_panel = groups
+        .iter()
+        .flat_map(|g| g["panels"].as_array().unwrap())
+        .find(|p| p["repeat"] == "operators")
+        .expect("OPパネルが見つかりません");
     let body = op_panel["body"].as_array().unwrap();
     let tree_stmt = body.iter().find(|st| st["kind"] == "tree").expect("tree文が見つかりません");
     assert_eq!(tree_stmt["max_height"].as_f64().unwrap(), 66.0);

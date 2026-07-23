@@ -190,7 +190,6 @@ fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
                 let inner = items.iter().map(gen_header_item_stmt).collect::<Vec<_>>().join("\n");
                 lines.push(format!("ui.horizontal(|ui| {{\n{}\n}});", indent(&inner, 4)));
             }
-            BodyStmt::Title(t) => lines.push(gen_title_stmt(t)),
             BodyStmt::Tree(tree) => lines.extend(gen_tree_block(tree)),
             BodyStmt::Space { size } => lines.push(format!("ui.add_space({});", fmt_num(*size))),
             BodyStmt::Jack(j) => lines.push(gen_jack_stmt(j)),
@@ -200,20 +199,29 @@ fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
     lines
 }
 
-fn gen_panel(p: &Panel) -> String {
+/// 1個の`<panel>`（`ui.group`本体、`repeat`があればfor文でラップ）を生成する。
+/// `width_expr`はこのパネルが占める幅を表すRust式（変数名）。`match_height`が`true`かつ
+/// このパネルがグループ先頭（`capture_height`）なら`let resp = ...`で高さを捕捉し、
+/// 先頭以外は捕捉済みの`match_height`変数へ`set_min_height`する
+/// （`<panels match-height="true">`、グループが1個の`<panel>`のみの場合は実質無効）。
+fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bool) -> Vec<String> {
     let body_lines = gen_body_lines(&p.body);
-    let mut inner = vec![
-        "ui.group(|ui| {".to_string(),
-        "    ui.set_width(panel_width);".to_string(),
-        "    ui.vertical(|ui| {".to_string(),
-    ];
+    let group_stmt = if capture_height { "let group_resp = ui.group(|ui| {" } else { "ui.group(|ui| {" };
+    let mut inner = vec![group_stmt.to_string(), format!("    ui.set_width({width_expr});")];
+    if match_height && !capture_height {
+        inner.push("    ui.set_min_height(match_height);".to_string());
+    }
+    inner.push("    ui.vertical(|ui| {".to_string());
     for l in &body_lines {
         inner.push(indent(l, 8));
     }
     inner.push("    });".to_string());
     inner.push("});".to_string());
+    if capture_height && match_height {
+        inner.push("let match_height = group_resp.response.rect.height();".to_string());
+    }
     match &p.repeat {
-        None => inner.join("\n"),
+        None => inner,
         Some(repeat) => {
             let as_ = p.as_.as_deref().unwrap_or("");
             let mut out = vec![format!("for ({}, {as_}) in params.{repeat}.iter().enumerate() {{", p.index)];
@@ -221,50 +229,40 @@ fn gen_panel(p: &Panel) -> String {
                 out.push(indent(l, 4));
             }
             out.push("}".to_string());
-            out.join("\n")
+            out
         }
     }
 }
 
-fn gen_columns(c: &Columns) -> String {
-    let n = c.columns.len();
-    let total_ratio: f32 = c.columns.iter().map(|col| col.width).sum();
-    let mut out = Vec::new();
-    out.push(format!("let columns_usable = full_width - inter_gap * {};", fmt_num(n as f32 - 1.0)));
-    for (i, col) in c.columns.iter().enumerate() {
-        out.push(format!(
-            "let col_w_{i} = columns_usable * {} / {};",
-            fmt_num(col.width),
-            fmt_num(total_ratio)
-        ));
+/// `<panels>`（`<panel>`を1個以上持つ、12分割グリッドの1行）を生成する。
+/// 幅計算はspan/12ベース（`<panel>`のspan合計は必ず12、parse.rsで検証済み）。
+/// gapは列間の(n-1)個ぶんのみ引く。ただしn=1（単独パネル行）でも従来通り右マージン
+/// 1個ぶん(inter_gap)を引くため、gap本数は`max(n-1, 1)`とする
+/// （n=1: usable=full_width-inter_gap、n=2: usable=full_width-inter_gapで、
+/// どちらも旧`gen_panel`/旧`gen_columns`と数値上完全に一致する）。
+///
+/// **n=1のとき`ui.horizontal`ではラップしない**（`repeat`ありパネルだと、for文全体が
+/// 1個の`ui.horizontal`クロージャに閉じ込められ、本来ScrollArea直下で縦積みされるべき
+/// 複数回の`ui.group`が横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ
+/// `ui.horizontal`で横並びにする）。
+fn gen_panels_group(g: &PanelsGroup) -> String {
+    let n = g.panels.len();
+    let gap_count = if n <= 1 { 1 } else { n - 1 };
+    let mut out = vec![format!("let usable = full_width - inter_gap * {};", fmt_num(gap_count as f32))];
+    for (i, p) in g.panels.iter().enumerate() {
+        out.push(format!("let w_{i} = usable * {} / 12.0;", fmt_num(p.span as f32)));
+    }
+    if n == 1 {
+        out.extend(gen_panel(&g.panels[0], "w_0", false, false));
+        return out.join("\n");
     }
     out.push("ui.horizontal(|ui| {".to_string());
-    for (i, col) in c.columns.iter().enumerate() {
-        let body_lines = gen_body_lines(&col.body);
-        if i == 0 {
-            out.push("    let col0_resp = ui.group(|ui| {".to_string());
-            out.push("        ui.set_width(col_w_0);".to_string());
-            out.push("        ui.vertical(|ui| {".to_string());
-            for l in &body_lines {
-                out.push(indent(l, 12));
-            }
-            out.push("        });".to_string());
-            out.push("    });".to_string());
-            if c.match_height {
-                out.push("    let match_height = col0_resp.response.rect.height();".to_string());
-            }
-        } else {
-            out.push("    ui.group(|ui| {".to_string());
-            out.push(format!("        ui.set_width(col_w_{i});"));
-            if c.match_height {
-                out.push("        ui.set_min_height(match_height);".to_string());
-            }
-            out.push("        ui.vertical(|ui| {".to_string());
-            for l in &body_lines {
-                out.push(indent(l, 12));
-            }
-            out.push("        });".to_string());
-            out.push("    });".to_string());
+    for (i, p) in g.panels.iter().enumerate() {
+        let width_expr = format!("w_{i}");
+        let capture_height = i == 0 && g.match_height;
+        let lines = gen_panel(p, &width_expr, g.match_height, capture_height);
+        for l in &lines {
+            out.push(indent(l, 4));
         }
     }
     out.push("});".to_string());
@@ -273,22 +271,14 @@ fn gen_columns(c: &Columns) -> String {
 
 /// [`Layout`]全体から`draw_param_panel`関数（本体アイテムのみ）を生成する。
 pub fn generate_rust(layout: &Layout) -> String {
-    let parts: Vec<String> = layout
-        .items
-        .iter()
-        .map(|it| match it {
-            Item::Panel(p) => gen_panel(p),
-            Item::Columns(c) => gen_columns(c),
-        })
-        .collect();
+    let parts: Vec<String> = layout.groups.iter().map(gen_panels_group).collect();
     let body = indent(&parts.join("\n\n"), 8);
     format!(
         "pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {{\n    \
          let mut tx_jacks = crate::patchbay::JackLayout::new();\n    \
          egui::ScrollArea::vertical().show(ui, |ui| {{\n        \
          let full_width = ui.available_width();\n        \
-         let inter_gap = ui.spacing().item_spacing.x;\n        \
-         let panel_width = full_width - inter_gap;\n\n\
+         let inter_gap = ui.spacing().item_spacing.x;\n\n\
          {body}\n\n        \
          crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);\n    \
          }});\n\
