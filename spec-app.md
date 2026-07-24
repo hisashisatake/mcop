@@ -169,3 +169,46 @@ F-Numberの更新:             フレームごと（≒16ms以内）
 
 前のコードの状態を記憶し、次のコードに遷移制約をかける。
 ジェスチャーが禁則進行を引き起こす場合はスナップで補正。
+
+## 音色エディタ（editor-wasm）が最新化されない問題（2026-07-25調査）
+
+`panel.xml`を編集して`scripts/build-editor-wasm.ps1`を実行しても、`tauri dev`を完全再起動しても
+音色エディタの表示が古いままになることがある。原因は2つ重なっていた。
+
+**原因1: WebView2のHTTPディスクキャッシュ**
+
+`tauri.conf.json`は`devUrl`（Viteのようなホットリロードサーバー）を使わず、
+`frontendDist: "../src"`をWebView2の内蔵プロトコルで直接配信している。WebView2のプロファイルは
+`%LOCALAPPDATA%\<identifier>\EBWebView\Default\Cache`（`identifier`は`tauri.conf.json`の値、
+本アプリでは`com.ym38x6.app`）にディスク永続化されており、**アプリを完全終了してもキャッシュは消えない**。
+`main.js`の`import('./editor-wasm/editor_wasm.js')`と、生成された`editor_wasm.js`内の
+`fetch(new URL('editor_wasm_bg.wasm', import.meta.url))`はどちらも素の`fetch`でキャッシュ無効化の
+指定がなく、ビルドが最新化されていてもWebViewが古い`.js`/`.wasm`をキャッシュから読み続ける。
+
+対策（`main.js`の`toggleEditor()`に実装済み）: エディタ初回起動時にタイムスタンプ付きクエリ文字列
+（`?t=${Date.now()}`）を`import()`とwasm本体のfetch URLの両方に付与し、毎回ディスクから確実に
+再取得させる。`__wbg_init`（wasm-bindgen生成の`editor_wasm.js`）は`{module_or_path: "..."}`という
+プレーンな相対パス文字列を渡せる（`import.meta.url`で`new URL()`を組み立てる必要はない。`main.js`は
+`<script src="main.js">`で読み込まれる非モジュールスクリプトのため、`import.meta`を直接使うと
+`Cannot use 'import.meta' outside a module`という構文エラーになり、この関数含め`main.js`全体が
+一切実行されなくなるので注意）。
+
+**原因2: `gesture-app/editor-wasm`専用ビルドキャッシュの取りこぼし**
+
+`editor-wasm`はwasm32専用クレートのためrustup版cargo・独自の`target/`ディレクトリ
+（`gesture-app/editor-wasm/target/`、ワークスペース本体の`target/`とは別）でビルドされる。
+`ym38x6-ui/build.rs`は`cargo:rerun-if-changed=src/panel.xml`で変更検知しているが、この
+wasm32専用targetディレクトリ側だけ`panel.xml`編集を検知し損ね、古い生成コード
+（`$OUT_DIR/panel_generated.rs`）を使い続ける事故が発生した（ネイティブ側の`cargo build -p ym38x6-ui`
+では正しく最新化されることを確認済みで、wasm32側特有の問題）。原因の完全特定はできていないが、
+発生時の回避策は次の通り。
+
+```powershell
+# gesture-app/editor-wasm専用のビルドキャッシュを丸ごと削除してクリーンビルドする
+Remove-Item -Recurse -Force gesture-app\editor-wasm\target
+powershell -File gesture-app\scripts\build-editor-wasm.ps1
+```
+
+`panel.xml`編集がどうしても反映されない（生成コードのwidth/justify/margin等の値を
+`gesture-app\editor-wasm\target\wasm32-unknown-unknown\release\build\ym38x6-ui-*\out\panel_generated.rs`
+で直接grepして未反映を確認できる場合）は、まずこのクリーンビルドを試す。

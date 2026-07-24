@@ -356,8 +356,14 @@ async function toggleEditor() {
   editorVisible = !editorVisible;
   editorOverlay.style.display = editorVisible ? 'block' : 'none';
   if (editorVisible && !editorHandle) {
-    editorModule = await import('./editor-wasm/editor_wasm.js');
-    await editorModule.default();
+    // WebView2のHTTPディスクキャッシュ（%LOCALAPPDATA%/<identifier>/EBWebView、アプリ完全再起動でも
+    // 消えない）がeditor_wasm.js/editor_wasm_bg.wasmを古いまま返し続ける事故があったため、
+    // 両方のURLにタイムスタンプを付けて確実にディスクから再取得させる。
+    const cacheBust = Date.now();
+    editorModule = await import(`./editor-wasm/editor_wasm.js?t=${cacheBust}`);
+    await editorModule.default({
+      module_or_path: `./editor-wasm/editor_wasm_bg.wasm?t=${cacheBust}`,
+    });
     editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
   } else if (!editorVisible && editorHandle) {
