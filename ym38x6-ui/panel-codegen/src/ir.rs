@@ -46,8 +46,6 @@ pub enum EgField {
 pub enum Widget {
     Knob { label: String, handle: String },
     Checkbox { label: String, handle: String },
-    /// `(label, handle)`の並び。
-    CheckboxStack { items: Vec<(String, String)> },
     Waveform { handle: String, index: String },
     Enum { label: String, handle: String, names: String, salt: String },
     #[allow(clippy::too_many_arguments)]

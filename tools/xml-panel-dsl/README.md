@@ -64,9 +64,10 @@ DOM操作・ファイル開く/保存・タブ切替・キャンバス起動の�
 `knob`/`waveform_selector`/`eg_preview`/`algorithm_diagram`/`enum_selector`は全て
 `ui.allocate_exact_size`/`ui.allocate_ui_with_layout`で内部的に固定サイズを強制しているため、
 `panel.rs`の`KNOB_W`等の定数は近似値ではなくウィジェット自身の宣言値と完全一致する
-（ソースを読めば自明）。**実測が必要だったのは`bool_checkbox`（内容依存の可変幅）だけ**で、
-その実測値（70px、"CURVE"ラベル基準）は`panel-codegen`（`build_leaf_info`）と
-`panel.rs`の`CHECKBOX_W`の両方に反映済み。
+（ソースを読めば自明）。**実測が必要だったのは`bool_checkbox`（内容依存の可変サイズ）だけ**で、
+`build_leaf_info`の宣言サイズは70×20（幅は"CURVE"ラベル基準の実測値、高さはegui既定
+`interact_size.y`(18.0)に対する実測ベースの近似値）。他ウィジェットと違い66px（行の高さ規約）
+より小さいのは意図的で、`<stack>`（後述）でN個縦積みしても行の高さが膨張しないようにするため。
 
 ## XML語彙（2026-07-23改訂: `<columns>`/`<column>`廃止・`<panels>`/`<panel>`へ統一）
 
@@ -144,16 +145,20 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 ### レイアウト語彙（`<row>`/`<stack>`内、taffyの`Style`に1:1対応）
 
 - `<row justify="...">` / `<stack>` — 入れ子可。`grow="true"`で親の余剰スペースを取りにいく
-  （`layout.rs`の`row_grow`に対応）。`gap`は数値、または`"spacing"`で
+  （`layout.rs`の`row_grow`に対応。`<stack grow="true">`は未対応、後述）。`gap`は数値、または`"spacing"`で
   `ui.spacing().item_spacing.x`を参照する記号値（`outer_gap`変数として生成）。
+- `<stack>`は任意のleafウィジェット（`<knob>`/`<checkbox>`/`<waveform>`/`<enum>`等）を縦積みできる
+  汎用コンテナ（旧`<checkbox-stack>`はこれに統合され廃止）。予約サイズは各子要素の宣言サイズの
+  縦積み合計（幅は最大幅）になるため、`<row>`直下で他ウィジェットと並べる場合は行の高さへの
+  影響を意識する（例: knob(66px)を2個stackすると132px相当になり行全体が伸びる。checkboxは
+  宣言高さが20pxと小さいため、2〜3個stackしても66px行の中に収まる）。
 
 ### 内容語彙（leafウィジェット、`<row>`/`<stack>`直下にのみ置ける）
 
 | 要素 | 必須属性 | 備考 |
 |---|---|---|
 | `<knob>` | `label`, `handle` | `enabled-if="[!]<述語名>"`で`ui.add_enabled_ui`ラップ |
-| `<checkbox>` | `label`, `handle` | 単体（稀）|
-| `<checkbox-stack>` | 子に`<checkbox>`複数 | `ui.vertical`で縦積み。幅は常に70(実測値)固定 |
+| `<checkbox>` | `label`, `handle` | 単体、または`<stack>`直下 |
 | `<waveform>` | `handle` | `index`（省略時0） |
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
 | `<eg-preview>` | `mapping`(`DbLinear`/`AmplitudeLinear`) + 各EGParamsフィールド | 各フィールドは`{field}="handle"`か`{field}-value="リテラル"`のどちらか。フィールド: `tl`,`ar`,`d1r`,`d1l`,`d2r`,`rr`,`floor`,`loop`(→`loop_enabled`),`curve`,`delay` |

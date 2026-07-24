@@ -62,14 +62,6 @@ fn gen_widget_stmt(w: &Widget) -> String {
     match w {
         Widget::Knob { label, handle } => format!("knob(ui, &*{handle}, \"{label}\");"),
         Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
-        Widget::CheckboxStack { items } => format!(
-            "ui.vertical(|ui| {{ {} }});",
-            items
-                .iter()
-                .map(|(label, handle)| format!("bool_checkbox(ui, &*{handle}, \"{label}\");"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
         Widget::Waveform { handle, index } => format!("waveform_selector(ui, &*{handle}, ({index}) as usize);"),
         Widget::Enum { label, handle, names, salt } => {
             format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt});")

@@ -121,28 +121,16 @@ fn build_leaf_info(el: Node, ctx: &Ctx) -> Result<LeafInfo, String> {
         "checkbox" => {
             let label = req_attr(el, "label")?;
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
+            // 実測値: 幅70は"CURVE"ラベル基準（bool_checkboxはallocate_exact_sizeせず内容依存幅のため）。
+            // 高さ20はegui既定`interact_size.y`(18.0)に対する実測ベースの近似値。<row>直下の単独配置では
+            // 隣接ウィジェット(knob等66px)がRowのmax_heightを支配するため実害なく、<stack>直下では
+            // この実高さのおかげでN個重ねても行高さが66pxのまま膨張しない。
             (
                 Widget::Checkbox { label: label.clone(), handle },
                 label,
                 "checkbox".to_string(),
-                Size { w: 70.0, h: 66.0 },
+                Size { w: 70.0, h: 20.0 },
             )
-        }
-        "checkbox-stack" => {
-            let mut items: Vec<(String, String)> = Vec::new();
-            for c in element_children(el) {
-                if c.tag_name().name() != "checkbox" {
-                    return Err("<checkbox-stack>の子要素は<checkbox>のみです".to_string());
-                }
-                let label = req_attr(c, "label")?;
-                let handle = resolve_path(&req_attr(c, "handle")?, ctx);
-                items.push((label, handle));
-            }
-            if items.is_empty() {
-                return Err("<checkbox-stack>には1個以上<checkbox>が必要です".to_string());
-            }
-            let preview_label = items.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>().join("/");
-            (Widget::CheckboxStack { items }, preview_label, "checkbox-stack".to_string(), Size { w: 70.0, h: 66.0 })
         }
         "waveform" => {
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);

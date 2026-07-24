@@ -246,14 +246,6 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let key = scoped(handle, idx);
             bool_checkbox(ui, store.bool_(&key), label);
         }
-        Widget::CheckboxStack { items } => {
-            ui.vertical(|ui| {
-                for (label, handle) in items {
-                    let key = scoped(handle, idx);
-                    bool_checkbox(ui, store.bool_(&key), label);
-                }
-            });
-        }
         Widget::Waveform { handle, index } => {
             let key = scoped(handle, idx);
             let salt = resolve_dyn_index(index, idx);

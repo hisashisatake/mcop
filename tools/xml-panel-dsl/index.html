@@ -1945,11 +1945,11 @@ document.getElementById('xmlSrc').value = `<layout>
           <knob label="FINE" handle="op_fine_tune"/>
           <waveform handle="waveform" index="i"/>
           <knob label="FLOOR" handle="floor"/>
-          <checkbox-stack>
+          <stack gap="spacing">
             <checkbox label="AM" handle="ame"/>
             <checkbox label="LOOP" handle="op_loop"/>
             <checkbox label="CURVE" handle="curve"/>
-          </checkbox-stack>
+          </stack>
           <knob label="EGSFT" handle="eg_shift"/>
           <knob label="LEVEL SCALE" handle="level_scale"/>
         </row>
@@ -2018,10 +2018,10 @@ document.getElementById('xmlSrc').value = `<layout>
           <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
           <knob label="P.FLOOR" handle="params.pitch_fg.eg.floor"/>
           <knob label="P.DLY" handle="params.pitch_fg.eg.delay"/>
-          <checkbox-stack>
+          <stack gap="spacing">
             <checkbox label="LOOP" handle="params.pitch_fg.eg.loop_enabled"/>
             <checkbox label="CURVE" handle="params.pitch_fg.eg.curve"/>
-          </checkbox-stack>
+          </stack>
         </row>
       </row>
     </panel>
@@ -2050,10 +2050,10 @@ document.getElementById('xmlSrc').value = `<layout>
           <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
           <knob label="F.FLOOR" handle="params.cutoff_fg.eg.floor"/>
           <knob label="F.DLY" handle="params.cutoff_fg.eg.delay"/>
-          <checkbox-stack>
+          <stack gap="spacing">
             <checkbox label="LOOP" handle="params.cutoff_fg.eg.loop_enabled"/>
             <checkbox label="CURVE" handle="params.cutoff_fg.eg.curve"/>
-          </checkbox-stack>
+          </stack>
         </row>
       </row>
     </panel>
@@ -2079,10 +2079,10 @@ document.getElementById('xmlSrc').value = `<layout>
           <knob label="V.RR" handle="params.gain_fg.rr"/>
           <knob label="V.FLOOR" handle="params.gain_fg.floor"/>
           <knob label="V.DLY" handle="params.gain_fg.delay"/>
-          <checkbox-stack>
+          <stack gap="spacing">
             <checkbox label="LOOP" handle="params.gain_fg.loop_enabled"/>
             <checkbox label="CURVE" handle="params.gain_fg.curve"/>
-          </checkbox-stack>
+          </stack>
         </row>
       </row>
     </panel>
