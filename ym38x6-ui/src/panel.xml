@@ -1,5 +1,18 @@
 <layout>
 
+  <style>
+    <!-- 横並び<panels>グループ内、パネル間の隙間。 -->
+    <panels gap="8"/>
+    <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。
+         outer-marginの右側を増やすと、単独パネル行の右端の余裕を確保できる。 -->
+    <panel inner-margin="6" outer-margin="0"/>
+    <!-- 全ウィジェット共通の既定マージン。個々のタグ（<knob margin="...">等）や
+         インスタンス属性（<knob margin="..." .../>）で上書きできる。 -->
+    <widget margin="0"/>
+    <eg-preview width="84" height="66"/>
+    <algorithm-diagram width="150" height="100"/>
+  </style>
+
   <panels>
     <panel repeat="operators" as="op" index="i">
       <header>

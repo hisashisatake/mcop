@@ -10,8 +10,10 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, Ui, Vec2};
 
-const WIDTH: f32 = 150.0;
-const HEIGHT: f32 = 100.0;
+/// `<style>`省略時の既定サイズ。`panel-codegen/src/ir.rs`の`Style::default().algorithm_diagram_size`と
+/// 一致させること（`panel-codegen`は`ym38x6-ui`に依存できないため値を複製している）。
+const DEFAULT_WIDTH: f32 = 150.0;
+const DEFAULT_HEIGHT: f32 = 100.0;
 const PAD: f32 = 6.0;
 const BOX_SIZE: f32 = 15.0;
 const ARROWHEAD_LEN: f32 = 5.0;
@@ -123,25 +125,29 @@ pub(crate) fn carriers(algorithm: u8) -> &'static [usize] {
 }
 
 /// 始点/終点を結ぶ直線＋先端の三角矢印を描く。ボックスの縁から生えるように、
-/// 始点/終点それぞれをBOX_SIZE/2ぶん線分の内側へ寄せる。
-fn draw_arrow(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32) {
+/// 始点/終点それぞれを`box_size`/2ぶん線分の内側へ寄せる。`scale`は全体の等方拡大率
+/// （ウィジェットサイズが既定値からどれだけ拡大/縮小されたか）。
+#[allow(clippy::too_many_arguments)]
+fn draw_arrow(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, box_size: f32, scale: f32) {
     let delta = to - from;
     let len = delta.length();
     if len < 1.0 {
         return;
     }
     let dir = delta / len;
-    let shrink = BOX_SIZE / 2.0 + 1.0;
+    let shrink = box_size / 2.0 + scale;
     let start = from + dir * shrink.min(len / 2.0);
     let end = to - dir * shrink.min(len / 2.0);
 
-    painter.add(Shape::line_segment([start, end], Stroke::new(1.3, color)));
+    painter.add(Shape::line_segment([start, end], Stroke::new(1.3 * scale, color)));
 
+    let arrowhead_len = ARROWHEAD_LEN * scale;
+    let arrowhead_width = ARROWHEAD_WIDTH * scale;
     let normal = Vec2::new(-dir.y, dir.x);
     let tip = end;
-    let base = end - dir * ARROWHEAD_LEN;
-    let left = base + normal * ARROWHEAD_WIDTH;
-    let right = base - normal * ARROWHEAD_WIDTH;
+    let base = end - dir * arrowhead_len;
+    let left = base + normal * arrowhead_width;
+    let right = base - normal * arrowhead_width;
     painter.add(Shape::convex_polygon(vec![tip, left, right], color, Stroke::NONE));
 }
 
@@ -149,8 +155,8 @@ fn draw_arrow(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32) {
 /// ボックス左辺（入力側）へ戻る直線ループで描く（自分の出力を自分の入力へ回り込ませる形。
 /// 参照画像のOPQマニュアル図に合わせ、円弧ではなく直線のみで構成する）。
 /// ym38x6-coreの全アルゴリズムでfeedback_op=0（OP1固定）のため、常にcenters\[0\]に対して描く。
-fn draw_feedback_loop(painter: &egui::Painter, box_center: Pos2) {
-    let half = BOX_SIZE / 2.0;
+fn draw_feedback_loop(painter: &egui::Painter, box_center: Pos2, box_size: f32, scale: f32) {
+    let half = box_size / 2.0;
     // box_center.yそのままにして、変調経路（緑）の出口と同じ高さで分岐点を重ねる
     // （描画順は呼び出し側でフィードバック→緑の順にし、重なった部分は緑が上に来るようにする）。
     let side_y = box_center.y;
@@ -158,8 +164,8 @@ fn draw_feedback_loop(painter: &egui::Painter, box_center: Pos2) {
     let in_point = Pos2::new(box_center.x - half, side_y);
     // ボックス幅そのままだと回り込みが分かりにくいため、左右にwidth_extraぶん張り出してから
     // 上へ回り込ませる（out_point/in_pointからいったん外側へ、そこから上→横→下の順）。
-    let width_extra = BOX_SIZE * 0.5;
-    let height = BOX_SIZE * 1.2;
+    let width_extra = box_size * 0.5;
+    let height = box_size * 1.2;
     let out_side = Pos2::new(out_point.x + width_extra, side_y);
     let in_side = Pos2::new(in_point.x - width_extra, side_y);
     let top_y = side_y - height;
@@ -168,31 +174,38 @@ fn draw_feedback_loop(painter: &egui::Painter, box_center: Pos2) {
 
     painter.add(Shape::line(
         vec![out_point, out_side, up_right, up_left, in_side, in_point],
-        Stroke::new(1.2, COLOR_FEEDBACK),
+        Stroke::new(1.2 * scale, COLOR_FEEDBACK),
     ));
 
     // ループ終端（in_point、ボックス左辺）に右向き（in_side→in_pointの実際の進行方向）の矢頭を付ける。
+    let arrowhead_len = ARROWHEAD_LEN * scale;
+    let arrowhead_width = ARROWHEAD_WIDTH * scale;
     let dir = Vec2::new(1.0, 0.0);
     let normal = Vec2::new(-dir.y, dir.x);
-    let base = in_point - dir * ARROWHEAD_LEN * 0.8;
-    let left = base + normal * ARROWHEAD_WIDTH * 0.8;
-    let right = base - normal * ARROWHEAD_WIDTH * 0.8;
+    let base = in_point - dir * arrowhead_len * 0.8;
+    let left = base + normal * arrowhead_width * 0.8;
+    let right = base - normal * arrowhead_width * 0.8;
     painter.add(Shape::convex_polygon(vec![in_point, left, right], COLOR_FEEDBACK, Stroke::NONE));
 }
 
-/// ALGノブの値(0〜7)から結線図を描く。CHANNELパネル内、ALG/FBノブの隣に配置する
-/// 固定サイズの液晶風ウィジェット。
-pub fn algorithm_diagram(ui: &mut Ui, algorithm: u8) {
+/// ALGノブの値(0〜7)から結線図を描く。CHANNELパネル内、ALG/FBノブの隣に配置する液晶風ウィジェット。
+/// `size`はpanel.xmlの`<style><algorithm-diagram>`（または個々のタグの`width`/`height`属性）で
+/// 決まる占有サイズ。既定サイズ(`DEFAULT_WIDTH`×`DEFAULT_HEIGHT`)からの等方拡大率を全ての装飾
+/// （パディング・ボックス・矢印・フォント・線幅）へ一律に乗じる。
+pub fn algorithm_diagram(ui: &mut Ui, size: Vec2, algorithm: u8) {
     let algorithm = algorithm.min(7);
-    let (rect, _response) = ui.allocate_exact_size(Vec2::new(WIDTH, HEIGHT), egui::Sense::hover());
+    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
     let painter = ui.painter();
+    let scale = (size.x / DEFAULT_WIDTH).min(size.y / DEFAULT_HEIGHT);
+    let pad = PAD * scale;
+    let box_size = BOX_SIZE * scale;
 
     // 背景（ベゼル＋液晶面のニュアンス。eg_preview.rsと共通の見た目）
     painter.rect_filled(rect, 3.0, Color32::from_gray(35));
-    let inner = rect.shrink(PAD);
+    let inner = rect.shrink(pad);
     painter.rect_filled(inner, 2.0, Color32::from_gray(72));
 
     let to_screen = |p: Pos2| Pos2::new(inner.left() + p.x * inner.width(), inner.top() + p.y * inner.height());
@@ -201,24 +214,24 @@ pub fn algorithm_diagram(ui: &mut Ui, algorithm: u8) {
     // ボックスを土台として先に描き、矢印は全て後から重ねる（先に矢印→後でボックスの順だと
     // 矢頭がボックス塗りつぶしに隠れて消えてしまうため）。
     for (i, &c) in centers.iter().enumerate() {
-        let box_rect = Rect::from_center_size(c, Vec2::splat(BOX_SIZE));
+        let box_rect = Rect::from_center_size(c, Vec2::splat(box_size));
         painter.rect_filled(box_rect, 2.0, COLOR_BOX);
-        painter.rect_stroke(box_rect, 2.0, Stroke::new(1.0, COLOR_BOX_STROKE), egui::StrokeKind::Inside);
-        painter.text(c, Align2::CENTER_CENTER, format!("{}", i + 1), FontId::monospace(9.0), COLOR_TEXT);
+        painter.rect_stroke(box_rect, 2.0, Stroke::new(1.0 * scale, COLOR_BOX_STROKE), egui::StrokeKind::Inside);
+        painter.text(c, Align2::CENTER_CENTER, format!("{}", i + 1), FontId::monospace(9.0 * scale), COLOR_TEXT);
     }
 
     // フィードバック（赤）を先に描き、変調経路/キャリア出力（緑・水色）を後から重ねて描く。
     // OP1の出口では分岐点が同じ高さで重なるため、後から描く緑を上（前面）にする。
     // 全アルゴリズム共通でfeedback_op=0（OP1固定）。
-    draw_feedback_loop(&painter, centers[0]);
+    draw_feedback_loop(&painter, centers[0], box_size, scale);
 
     for &(from, to) in routes(algorithm) {
-        draw_arrow(&painter, centers[from], centers[to], COLOR_ROUTE);
+        draw_arrow(&painter, centers[from], centers[to], COLOR_ROUTE, box_size, scale);
     }
 
     for &c in carriers(algorithm) {
         let start = centers[c];
         let end = Pos2::new(inner.right(), start.y);
-        draw_arrow(&painter, start, end, COLOR_CARRIER);
+        draw_arrow(&painter, start, end, COLOR_CARRIER, box_size, scale);
     }
 }

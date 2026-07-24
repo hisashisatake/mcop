@@ -7,11 +7,52 @@
 //! 生Rust注入（`<raw>`）は最終手段として文法上は残すが、`panel.xml`本体では使用しない
 //! （`<title>`/`<readout>`/`enabled-if`の閉じた語彙で代替する）。
 
+pub use panel_layout::Margin;
+
 /// 固定サイズ（ウィジェットの自然サイズ）。
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
     pub w: f32,
     pub h: f32,
+}
+
+/// `<style>`の解決結果（`<layout>`全体で1個、省略時は既定値）。
+/// パネルのマージンは全パネル共通（`<panel>`単位の個別上書きは持たない）、
+/// ウィジェットのマージンは既定値(`<widget margin>`)→タグ別上書き(`tag_margin`)→
+/// インスタンス属性(`margin="..."`)の3段カスケードで解決する（後勝ち）。
+#[derive(Clone, Debug)]
+pub struct Style {
+    /// 横並び`<panels>`グループ内、パネル間の隙間。
+    pub panels_gap: f32,
+    /// パネル枠（`ui.group`相当）の内側余白。`egui::Margin`がi8ベースのため整数のみ。
+    pub panel_inner_margin: Margin,
+    /// パネル枠の外側余白。整数のみ。
+    pub panel_outer_margin: Margin,
+    /// 全ウィジェット共通の既定マージン。
+    pub widget_margin: Margin,
+    /// タグ名（`"knob"`等）→マージンの個別上書き（`<style>`内の`<knob margin="...">`等）。
+    pub tag_margin: std::collections::HashMap<String, Margin>,
+    /// `<eg-preview>`の既定サイズ（インスタンス側`width`/`height`属性で個別上書き可能）。
+    pub eg_preview_size: Size,
+    /// `<algorithm-diagram>`の既定サイズ（インスタンス側`width`/`height`属性で個別上書き可能）。
+    pub algorithm_diagram_size: Size,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            panels_gap: 8.0,
+            panel_inner_margin: Margin::same(6.0),
+            panel_outer_margin: Margin::ZERO,
+            widget_margin: Margin::ZERO,
+            tag_margin: std::collections::HashMap::new(),
+            // ym38x6-ui/src/eg_preview.rsのDEFAULT_WIDTH/DEFAULT_HEIGHTと一致させること
+            // （panel-codegenはym38x6-uiに依存できないため値を複製している）。
+            eg_preview_size: Size { w: 84.0, h: 66.0 },
+            // ym38x6-ui/src/algorithm_diagram.rsのDEFAULT_WIDTH/DEFAULT_HEIGHTと一致させること。
+            algorithm_diagram_size: Size { w: 150.0, h: 100.0 },
+        }
+    }
 }
 
 /// `<row>`/`<stack>`の`gap`属性。`"spacing"`は実行時の`ui.spacing().item_spacing.x`を指す
@@ -111,18 +152,28 @@ pub enum TreeNode {
 /// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）。
 #[derive(Clone, Debug)]
 pub struct LeafInfo {
+    /// ウィジェット自身の自然サイズ（マージンを含まない）。
     pub size: Size,
+    /// このウィジェットの周囲余白（3段カスケードで解決済み）。
+    pub margin: Margin,
     pub widget: Widget,
     pub enabled_if: Option<Predicate>,
     pub preview_label: String,
     pub preview_type: String,
 }
 
+impl LeafInfo {
+    /// taffyに占有領域として渡す外形サイズ（`size` + `margin`）。
+    pub fn outer_size(&self) -> Size {
+        Size { w: self.size.w + self.margin.horizontal(), h: self.size.h + self.margin.vertical() }
+    }
+}
+
 impl TreeNode {
-    /// 木全体の高さ（JS版`maxHeight`と同一の再帰計算。leafはh、rowは子の最大、stackは子の合計+gap）。
+    /// 木全体の高さ（JS版`maxHeight`と同一の再帰計算。leafは外形h、rowは子の最大、stackは子の合計+gap）。
     pub fn max_height(&self) -> f32 {
         match self {
-            TreeNode::Leaf(l) => l.size.h,
+            TreeNode::Leaf(l) => l.outer_size().h,
             TreeNode::Row { children, .. } => {
                 children.iter().map(|c| c.max_height()).fold(f32::MIN, f32::max)
             }
@@ -150,7 +201,10 @@ impl TreeNode {
     /// プレビュー側はブラウザ内でパニックさせないためのフォールバック）。
     pub fn to_layout_node(&self) -> panel_layout::Node {
         match self {
-            TreeNode::Leaf(l) => panel_layout::leaf(l.size.w, l.size.h),
+            TreeNode::Leaf(l) => {
+                let outer = l.outer_size();
+                panel_layout::leaf(outer.w, outer.h)
+            }
             TreeNode::Row { justify, gap, grow, children } => {
                 let kids: Vec<panel_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
                 let j = justify_from_str(justify);
@@ -230,4 +284,5 @@ pub struct PanelsGroup {
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub groups: Vec<PanelsGroup>,
+    pub style: Style,
 }

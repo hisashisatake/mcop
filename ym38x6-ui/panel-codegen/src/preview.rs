@@ -20,7 +20,10 @@ fn gap_to_json(gap: &Gap) -> Value {
 
 fn tree_node_to_json(node: &TreeNode) -> Value {
     match node {
-        TreeNode::Leaf(l) => json!({ "kind": "leaf", "w": l.size.w, "h": l.size.h }),
+        TreeNode::Leaf(l) => {
+            let outer = l.outer_size();
+            json!({ "kind": "leaf", "w": outer.w, "h": outer.h })
+        }
         TreeNode::Row { justify, gap, grow, children } => json!({
             "kind": "row",
             "justify": justify,

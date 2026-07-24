@@ -14,8 +14,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use panel_codegen::{
-    BodyStmt, Compute, EgField, HeaderItem, Jack, Layout, LeafInfo, Panel, PanelsGroup, Predicate, Readout,
-    Title, TreeNode, Widget,
+    BodyStmt, Compute, EgField, HeaderItem, Jack, Layout, LeafInfo, Margin, Panel, PanelsGroup, Predicate, Readout,
+    Style, Title, TreeNode, Widget,
 };
 use sound_core::eg::EgParams;
 
@@ -272,12 +272,12 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
                 curve: eg_field_value(store, curve, idx),
                 delay: eg_field_value(store, delay, idx),
             };
-            eg_preview(ui, mapping_v, tl_v, eg);
+            eg_preview(ui, egui::vec2(leaf.size.w, leaf.size.h), mapping_v, tl_v, eg);
         }
         Widget::AlgorithmDiagram { handle } => {
             let key = scoped(handle, idx);
             let v = store.int(&key).value() as u8;
-            algorithm_diagram(ui, v);
+            algorithm_diagram(ui, egui::vec2(leaf.size.w, leaf.size.h), v);
         }
         Widget::Raw(_) => draw_raw_placeholder(ui, egui::vec2(leaf.size.w, leaf.size.h)),
     }
@@ -297,7 +297,7 @@ fn draw_tree(ui: &mut egui::Ui, store: &mut HandleStore, node: &TreeNode, idx: O
             Some(pred) => eval_predicate(store, pred, idx),
             None => true,
         };
-        layout::place(ui, origin, *rect, |ui| {
+        layout::place(ui, origin, *rect, leaf.margin, |ui| {
             ui.add_enabled_ui(enabled, |ui| draw_widget(ui, store, leaf, idx));
         });
     }
@@ -331,25 +331,37 @@ fn draw_body(ui: &mut egui::Ui, store: &mut HandleStore, body: &[BodyStmt], idx:
 }
 
 /// 1個の`<panel>`を描画する。`min_height`は`<panels match-height="true">`でグループ先頭から
-/// 捕捉した高さ（先頭自身には`None`を渡す）。戻り値はこのパネルの`ui.group`応答（先頭の高さ捕捉用、
-/// `repeat`ありパネルは複数回`ui.group`するため最後の応答を返す）。
+/// 捕捉した中身の高さ（先頭自身には`None`を渡す）。戻り値はこのパネルの`Frame::show`応答
+/// （先頭の高さ捕捉用、`repeat`ありパネルは複数回描画するため最後の応答を返す）。
+/// `codegen.rs`の`gen_panel`と同じくFrame外形高さからマージン・枠線ぶんを差し引いて
+/// `set_min_height`に渡す（`Frame::show`のresponse.rectは`inner_margin`+枠線+`outer_margin`を
+/// 含む外形のため、そのまま次のパネルの中身へ渡すと二重に積み増しされる）。
+#[allow(clippy::too_many_arguments)]
 fn draw_panel(
     ui: &mut egui::Ui,
     store: &mut HandleStore,
     p: &Panel,
     width: f32,
     min_height: Option<f32>,
+    style: &Style,
+    base_spacing: egui::Vec2,
     jacks: &mut JackLayout,
 ) -> egui::Response {
+    let inner_margin = margin_to_egui(&style.panel_inner_margin);
+    let outer_margin = margin_to_egui(&style.panel_outer_margin);
     let mut draw_one = |ui: &mut egui::Ui, idx: Option<usize>| {
-        ui.group(|ui| {
-            ui.set_width(width);
-            if let Some(h) = min_height {
-                ui.set_min_height(h);
-            }
-            ui.vertical(|ui| draw_body(ui, store, &p.body, idx, jacks));
-        })
-        .response
+        egui::Frame::group(ui.style())
+            .inner_margin(inner_margin)
+            .outer_margin(outer_margin)
+            .show(ui, |ui| {
+                ui.set_width(width);
+                if let Some(h) = min_height {
+                    ui.set_min_height(h);
+                }
+                ui.spacing_mut().item_spacing = base_spacing;
+                ui.vertical(|ui| draw_body(ui, store, &p.body, idx, jacks));
+            })
+            .response
     };
     match &p.repeat {
         None => draw_one(ui, None),
@@ -364,38 +376,48 @@ fn draw_panel(
 }
 
 /// `<panels>`（`<panel>`を1個以上持つ、12分割グリッドの1行）を描画する。
-/// `codegen.rs`の`gen_panels_group`と同じgap本数の割り切り（n=1でもinter_gap 1個ぶん引く）を踏襲する。
+/// `codegen.rs`の`gen_panels_group`と同じ幅計算（パネル外形が利用可能幅にちょうど収まる式）を踏襲する。
 /// **n=1のとき`ui.horizontal`ではラップしない**（`repeat`ありパネルだと、内部のfor文全体が
-/// 1個の`ui.horizontal`クロージャに閉じ込められ、本来縦積みされるべき複数回の`ui.group`が
+/// 1個の`ui.horizontal`クロージャに閉じ込められ、本来縦積みされるべき複数回の`Frame::show`が
 /// 横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ`ui.horizontal`で横並びにする）。
+#[allow(clippy::too_many_arguments)]
 fn draw_panels_group(
     ui: &mut egui::Ui,
     store: &mut HandleStore,
     g: &PanelsGroup,
     full_width: f32,
-    inter_gap: f32,
+    frame_stroke: f32,
+    style: &Style,
+    base_spacing: egui::Vec2,
     jacks: &mut JackLayout,
 ) {
     let n = g.panels.len();
-    let gap_count = if n <= 1 { 1 } else { n - 1 };
-    let usable = full_width - inter_gap * gap_count as f32;
+    let overhead = style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal() + frame_stroke * 2.0;
+    let usable = full_width - style.panels_gap * n.saturating_sub(1) as f32 - overhead * n as f32;
     if n == 1 {
         let w = usable * g.panels[0].span as f32 / 12.0;
-        draw_panel(ui, store, &g.panels[0], w, None, jacks);
+        draw_panel(ui, store, &g.panels[0], w, None, style, base_spacing, jacks);
         return;
     }
     let match_height = g.match_height;
+    let margin_v = style.panel_inner_margin.vertical() + style.panel_outer_margin.vertical();
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = style.panels_gap;
         let mut captured_height: Option<f32> = None;
         for (i, p) in g.panels.iter().enumerate() {
             let w = usable * p.span as f32 / 12.0;
             let min_height = if match_height && i > 0 { captured_height } else { None };
-            let resp = draw_panel(ui, store, p, w, min_height, jacks);
+            let resp = draw_panel(ui, store, p, w, min_height, style, base_spacing, jacks);
             if i == 0 && match_height {
-                captured_height = Some(resp.rect.height());
+                captured_height = Some(resp.rect.height() - margin_v - frame_stroke * 2.0);
             }
         }
     });
+}
+
+/// [`panel_codegen::Margin`]（f32・全パネル共通）をパース時に検証済みの`egui::Margin`（i8）へ変換する。
+fn margin_to_egui(m: &Margin) -> egui::Margin {
+    egui::Margin { left: m.left as i8, right: m.right as i8, top: m.top as i8, bottom: m.bottom as i8 }
 }
 
 /// `panel.xml`（をパースした[`Layout`]）をランタイム解釈し、`params: &PanelParams`を必要とせず
@@ -404,11 +426,13 @@ fn draw_panels_group(
 pub fn draw_panel_from_ir(ui: &mut egui::Ui, layout_ir: &Layout, store: &mut HandleStore) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         let full_width = ui.available_width();
-        let inter_gap = ui.spacing().item_spacing.x;
+        let base_spacing = ui.spacing().item_spacing;
+        let frame_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke.width;
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
         let mut jacks = JackLayout::new();
 
         for group in &layout_ir.groups {
-            draw_panels_group(ui, store, group, full_width, inter_gap, &mut jacks);
+            draw_panels_group(ui, store, group, full_width, frame_stroke, &layout_ir.style, base_spacing, &mut jacks);
         }
 
         finish_texture_lfo_patchbay(ui, store.int("params.texture_lfo_destination"), jacks);

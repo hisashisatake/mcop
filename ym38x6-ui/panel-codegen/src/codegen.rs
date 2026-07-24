@@ -38,6 +38,25 @@ fn gap_str(gap: &Gap) -> String {
     }
 }
 
+/// パネルのマージン（i8ベース、`parse_panel_margin`で整数検証済み）を`egui::Margin`リテラルへ。
+fn egui_margin_literal(m: &Margin) -> String {
+    format!(
+        "egui::Margin {{ left: {}, right: {}, top: {}, bottom: {} }}",
+        m.left as i32, m.right as i32, m.top as i32, m.bottom as i32
+    )
+}
+
+/// ウィジェットのマージン（f32）を`layout::Margin`リテラルへ。
+fn layout_margin_literal(m: &Margin) -> String {
+    format!(
+        "layout::Margin {{ top: {}, right: {}, bottom: {}, left: {} }}",
+        fmt_num(m.top),
+        fmt_num(m.right),
+        fmt_num(m.bottom),
+        fmt_num(m.left)
+    )
+}
+
 /// 名前付き派生計算をRust式へ展開する（`Compute`のvariantごとに1本）。
 fn compute_expr(c: &Compute) -> String {
     match c {
@@ -58,7 +77,9 @@ fn eg_field_expr(f: &EgField) -> String {
 }
 
 /// [`Widget`]をRust文（`layout::place`のクロージャ内に置かれる1文）へ変換する。
-fn gen_widget_stmt(w: &Widget) -> String {
+/// `size`はそのleafの自然サイズ（マージンを含まない）。`eg-preview`/`algorithm-diagram`のみ、
+/// 可変サイズを描画関数へ渡すために使う。
+fn gen_widget_stmt(w: &Widget, size: Size) -> String {
     match w {
         Widget::Knob { label, handle } => format!("knob(ui, &*{handle}, \"{label}\");"),
         Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
@@ -67,7 +88,9 @@ fn gen_widget_stmt(w: &Widget) -> String {
             format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt});")
         }
         Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => format!(
-            "eg_preview(ui, EgAmplitudeMapping::{mapping}, {}, EgParams {{ ar: {}, d1r: {}, d1l: {}, d2r: {}, rr: {}, floor: {}, loop_enabled: {}, curve: {}, delay: {} }});",
+            "eg_preview(ui, egui::vec2({}, {}), EgAmplitudeMapping::{mapping}, {}, EgParams {{ ar: {}, d1r: {}, d1l: {}, d2r: {}, rr: {}, floor: {}, loop_enabled: {}, curve: {}, delay: {} }});",
+            fmt_num(size.w),
+            fmt_num(size.h),
             eg_field_expr(tl),
             eg_field_expr(ar),
             eg_field_expr(d1r),
@@ -79,7 +102,9 @@ fn gen_widget_stmt(w: &Widget) -> String {
             eg_field_expr(curve),
             eg_field_expr(delay),
         ),
-        Widget::AlgorithmDiagram { handle } => format!("algorithm_diagram(ui, {handle}.value() as u8);"),
+        Widget::AlgorithmDiagram { handle } => {
+            format!("algorithm_diagram(ui, egui::vec2({}, {}), {handle}.value() as u8);", fmt_num(size.w), fmt_num(size.h))
+        }
         Widget::Raw(code) => code.clone(),
     }
 }
@@ -126,15 +151,19 @@ fn gen_tree_block(node: &TreeNode) -> Vec<String> {
     lines.push(format!("ui.allocate_space(egui::vec2(avail, {h}));"));
     lines.push("let mut r = rects.iter();".to_string());
     for leaf in node.leaves() {
-        let stmt = wrap_enabled_if(gen_widget_stmt(&leaf.widget), &leaf.enabled_if);
-        lines.push(format!("layout::place(ui, origin, *r.next().unwrap(), |ui| {{ {stmt} }});"));
+        let stmt = wrap_enabled_if(gen_widget_stmt(&leaf.widget, leaf.size), &leaf.enabled_if);
+        let margin = layout_margin_literal(&leaf.margin);
+        lines.push(format!("layout::place(ui, origin, *r.next().unwrap(), {margin}, |ui| {{ {stmt} }});"));
     }
     lines
 }
 
 fn tree_expr(node: &TreeNode) -> String {
     match node {
-        TreeNode::Leaf(l) => format!("leaf({}, {})", fmt_num(l.size.w), fmt_num(l.size.h)),
+        TreeNode::Leaf(l) => {
+            let outer = l.outer_size();
+            format!("leaf({}, {})", fmt_num(outer.w), fmt_num(outer.h))
+        }
         TreeNode::Row { justify, gap, grow, children } => {
             let ctor = if *grow { "row_grow" } else { "row" };
             let children_str = children.iter().map(tree_expr).collect::<Vec<_>>().join(", ");
@@ -191,18 +220,32 @@ fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
     lines
 }
 
-/// 1個の`<panel>`（`ui.group`本体、`repeat`があればfor文でラップ）を生成する。
+/// 1個の`<panel>`（`egui::Frame::group`本体、`repeat`があればfor文でラップ）を生成する。
 /// `width_expr`はこのパネルが占める幅を表すRust式（変数名）。`match_height`が`true`かつ
-/// このパネルがグループ先頭（`capture_height`）なら`let resp = ...`で高さを捕捉し、
-/// 先頭以外は捕捉済みの`match_height`変数へ`set_min_height`する
-/// （`<panels match-height="true">`、グループが1個の`<panel>`のみの場合は実質無効）。
-fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bool) -> Vec<String> {
+/// このパネルがグループ先頭（`capture_height`）なら`let group_resp = ...`で外形高さを捕捉し、
+/// 先頭以外は捕捉済みの`match_height`（マージン・枠線ぶんを差し引いた中身の高さ）を
+/// `set_min_height`する（`<panels match-height="true">`、グループが1個の`<panel>`のみの場合は実質無効）。
+///
+/// `Frame::show`が返す`response.rect`は`inner_margin`+枠線+`outer_margin`を含む外形なので、
+/// 捕捉した高さをそのまま次のパネルの中身（`ui.set_min_height`は`inner_margin`の内側に効く）へ
+/// 渡すとマージンぶん二重に積み増しされる。`margin_v`（style由来のコンパイル時定数）と
+/// 実行時の`frame_stroke`を差し引いて中身の高さへ変換してから使う。
+fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bool, style: &Style) -> Vec<String> {
     let body_lines = gen_body_lines(&p.body);
-    let group_stmt = if capture_height { "let group_resp = ui.group(|ui| {" } else { "ui.group(|ui| {" };
-    let mut inner = vec![group_stmt.to_string(), format!("    ui.set_width({width_expr});")];
+    let inner_margin = egui_margin_literal(&style.panel_inner_margin);
+    let outer_margin = egui_margin_literal(&style.panel_outer_margin);
+    let frame_expr =
+        format!("egui::Frame::group(ui.style()).inner_margin({inner_margin}).outer_margin({outer_margin})");
+    let group_stmt = if capture_height {
+        format!("let group_resp = {frame_expr}.show(ui, |ui| {{")
+    } else {
+        format!("{frame_expr}.show(ui, |ui| {{")
+    };
+    let mut inner = vec![group_stmt, format!("    ui.set_width({width_expr});")];
     if match_height && !capture_height {
         inner.push("    ui.set_min_height(match_height);".to_string());
     }
+    inner.push("    ui.spacing_mut().item_spacing = base_spacing;".to_string());
     inner.push("    ui.vertical(|ui| {".to_string());
     for l in &body_lines {
         inner.push(indent(l, 8));
@@ -210,7 +253,8 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     inner.push("    });".to_string());
     inner.push("});".to_string());
     if capture_height && match_height {
-        inner.push("let match_height = group_resp.response.rect.height();".to_string());
+        let margin_v = fmt_num(style.panel_inner_margin.vertical() + style.panel_outer_margin.vertical());
+        inner.push(format!("let match_height = group_resp.response.rect.height() - {margin_v} - frame_stroke * 2.0;"));
     }
     match &p.repeat {
         None => inner,
@@ -228,31 +272,39 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
 
 /// `<panels>`（`<panel>`を1個以上持つ、12分割グリッドの1行）を生成する。
 /// 幅計算はspan/12ベース（`<panel>`のspan合計は必ず12、parse.rsで検証済み）。
-/// gapは列間の(n-1)個ぶんのみ引く。ただしn=1（単独パネル行）でも従来通り右マージン
-/// 1個ぶん(inter_gap)を引くため、gap本数は`max(n-1, 1)`とする
-/// （n=1: usable=full_width-inter_gap、n=2: usable=full_width-inter_gapで、
-/// どちらも旧`gen_panel`/旧`gen_columns`と数値上完全に一致する）。
+/// `<style><panels gap>`は列間(n-1)個ぶんのみ引く。パネル自身の枠（inner/outer margin＋枠線）は
+/// 各パネルの`overhead`として`n`個ぶん引き、パネルの**外形**が利用可能幅にちょうど収まるようにする
+/// （旧実装は中身の幅だけを`set_width`しており、`ui.group`が外側に足す既定マージンぶんはみ出していた）。
 ///
 /// **n=1のとき`ui.horizontal`ではラップしない**（`repeat`ありパネルだと、for文全体が
 /// 1個の`ui.horizontal`クロージャに閉じ込められ、本来ScrollArea直下で縦積みされるべき
-/// 複数回の`ui.group`が横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ
+/// 複数回の`Frame::show`が横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ
 /// `ui.horizontal`で横並びにする）。
-fn gen_panels_group(g: &PanelsGroup) -> String {
+fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
     let n = g.panels.len();
-    let gap_count = if n <= 1 { 1 } else { n - 1 };
-    let mut out = vec![format!("let usable = full_width - inter_gap * {};", fmt_num(gap_count as f32))];
+    let gap = fmt_num(style.panels_gap);
+    let margin_h = fmt_num(style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal());
+    let mut out = vec![
+        format!("let overhead = {margin_h} + frame_stroke * 2.0;"),
+        format!(
+            "let usable = full_width - {gap} * {} - overhead * {};",
+            fmt_num(n.saturating_sub(1) as f32),
+            fmt_num(n as f32)
+        ),
+    ];
     for (i, p) in g.panels.iter().enumerate() {
         out.push(format!("let w_{i} = usable * {} / 12.0;", fmt_num(p.span as f32)));
     }
     if n == 1 {
-        out.extend(gen_panel(&g.panels[0], "w_0", false, false));
+        out.extend(gen_panel(&g.panels[0], "w_0", false, false, style));
         return out.join("\n");
     }
     out.push("ui.horizontal(|ui| {".to_string());
+    out.push(format!("    ui.spacing_mut().item_spacing.x = {gap};"));
     for (i, p) in g.panels.iter().enumerate() {
         let width_expr = format!("w_{i}");
         let capture_height = i == 0 && g.match_height;
-        let lines = gen_panel(p, &width_expr, g.match_height, capture_height);
+        let lines = gen_panel(p, &width_expr, g.match_height, capture_height, style);
         for l in &lines {
             out.push(indent(l, 4));
         }
@@ -263,14 +315,17 @@ fn gen_panels_group(g: &PanelsGroup) -> String {
 
 /// [`Layout`]全体から`draw_param_panel`関数（本体アイテムのみ）を生成する。
 pub fn generate_rust(layout: &Layout) -> String {
-    let parts: Vec<String> = layout.groups.iter().map(gen_panels_group).collect();
+    let style = &layout.style;
+    let parts: Vec<String> = layout.groups.iter().map(|g| gen_panels_group(g, style)).collect();
     let body = indent(&parts.join("\n\n"), 8);
     format!(
         "pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {{\n    \
          let mut tx_jacks = crate::patchbay::JackLayout::new();\n    \
          egui::ScrollArea::vertical().show(ui, |ui| {{\n        \
          let full_width = ui.available_width();\n        \
-         let inter_gap = ui.spacing().item_spacing.x;\n\n\
+         let base_spacing = ui.spacing().item_spacing;\n        \
+         let frame_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke.width;\n        \
+         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);\n\n\
          {body}\n\n        \
          crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);\n    \
          }});\n\

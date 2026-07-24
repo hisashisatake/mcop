@@ -13,9 +13,11 @@
 //! している（egui非依存、`build.rs`とブラウザ用wasmツールが同一コードとして共有する）。
 //! ここではeguiとの橋渡し（[`solve`]/[`place`]の型変換）のみを行う。
 
-pub use panel_layout::{leaf, row, row_grow, stack, Justify, Node};
+pub use panel_layout::{leaf, row, row_grow, stack, Justify, Margin, Node};
 
 /// [`panel_layout::solve`]を呼び、egui型（[`egui::Vec2`]/[`egui::Rect`]）で受け渡しする薄いラッパー。
+/// `solve`に渡す葉のサイズは`ir::LeafInfo::outer_size()`（ウィジェット自然サイズ+マージン）なので、
+/// ここで返す矩形も外形（マージンを含む）。実際の描画は[`place`]がマージンぶん内側へ縮めてから行う。
 pub fn solve(container: egui::Vec2, root: &Node) -> Vec<egui::Rect> {
     let container = panel_layout::Vec2::new(container.x, container.y);
     panel_layout::solve(container, root)
@@ -24,10 +26,14 @@ pub fn solve(container: egui::Vec2, root: &Node) -> Vec<egui::Rect> {
         .collect()
 }
 
-/// [`solve`]が返した相対矩形`r`を、描画原点`origin`ぶん平行移動した位置へウィジェットを配置する。
-/// 中身は矩形左上詰め（`scope_builder`は親レイアウト＝top-down/leftを継承）で描かれ、
-/// 現行の各セル（top-left配置）と同じ見え方になる。
-pub fn place(ui: &mut egui::Ui, origin: egui::Pos2, r: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
+/// [`solve`]が返した外形矩形`r`を、描画原点`origin`ぶん平行移動したうえで`margin`ぶん内側へ縮め、
+/// ウィジェット自然サイズぶんの矩形へウィジェットを配置する。中身は左上詰め（`scope_builder`は
+/// 親レイアウト＝top-down/leftを継承）で描かれ、現行の各セル（top-left配置）と同じ見え方になる。
+pub fn place(ui: &mut egui::Ui, origin: egui::Pos2, r: egui::Rect, margin: Margin, add: impl FnOnce(&mut egui::Ui)) {
     let abs = r.translate(origin.to_vec2());
-    ui.scope_builder(egui::UiBuilder::new().max_rect(abs), |ui| add(ui));
+    let inset = egui::Rect::from_min_max(
+        egui::pos2(abs.min.x + margin.left, abs.min.y + margin.top),
+        egui::pos2(abs.max.x - margin.right, abs.max.y - margin.bottom),
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inset), |ui| add(ui));
 }

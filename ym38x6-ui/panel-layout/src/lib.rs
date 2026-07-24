@@ -28,6 +28,32 @@ pub struct Rect {
     pub h: f32,
 }
 
+/// CSS風の4辺マージン（egui非依存）。`panel-codegen`（IRの`LeafInfo::margin`）と
+/// `ym38x6-ui`（`layout::place`での描画時インセット）の双方が同じ型を共有する。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Margin {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl Margin {
+    pub const ZERO: Self = Self { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+
+    pub const fn same(v: f32) -> Self {
+        Self { top: v, right: v, bottom: v, left: v }
+    }
+
+    pub fn horizontal(&self) -> f32 {
+        self.left + self.right
+    }
+
+    pub fn vertical(&self) -> f32 {
+        self.top + self.bottom
+    }
+}
+
 /// 横並び（Row）での主軸方向の分配方式。CSS `justify-content`に対応。
 #[derive(Clone, Copy)]
 pub enum Justify {

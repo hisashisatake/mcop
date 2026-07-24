@@ -37,6 +37,98 @@ fn req_attr(el: Node, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("<{}> に {} 属性が必要です", el.tag_name().name(), name))
 }
 
+/// `width`/`height`属性を数値として読む。省略時は`default`を使う。
+fn attr_f32_or(el: Node, name: &str, default: f32) -> Result<f32, String> {
+    match el.attribute(name) {
+        Some(v) => v.parse().map_err(|_| format!("<{}>の{name}は数値で指定してください", el.tag_name().name())),
+        None => Ok(default),
+    }
+}
+
+/// CSSショートハンド記法のマージン値をパースする（`"4"`=4辺/`"4 8"`=上下・左右/`"4 8 6 2"`=上右下左）。
+fn parse_margin(raw: &str) -> Result<Margin, String> {
+    let nums: Vec<f32> = raw
+        .split_whitespace()
+        .map(|p| p.parse::<f32>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("marginは数値で指定してください: \"{raw}\""))?;
+    match nums.len() {
+        1 => Ok(Margin::same(nums[0])),
+        2 => Ok(Margin { top: nums[0], bottom: nums[0], left: nums[1], right: nums[1] }),
+        4 => Ok(Margin { top: nums[0], right: nums[1], bottom: nums[2], left: nums[3] }),
+        n => Err(format!("marginは1個(4辺)/2個(上下 左右)/4個(上 右 下 左)の数値で指定してください（{n}個指定されました）: \"{raw}\"")),
+    }
+}
+
+/// パネルのマージン（`egui::Margin`がi8ベースのため-128〜127の整数のみ許可）をパースする。
+fn parse_panel_margin(raw: &str) -> Result<Margin, String> {
+    let m = parse_margin(raw)?;
+    for v in [m.top, m.right, m.bottom, m.left] {
+        if v.fract() != 0.0 || !(-128.0..=127.0).contains(&v) {
+            return Err(format!("パネルのマージンは-128〜127の整数で指定してください: \"{raw}\""));
+        }
+    }
+    Ok(m)
+}
+
+/// `<style>`（`<layout>`直下、省略可・1個まで）をパースする。
+fn parse_style(el: Node) -> Result<Style, String> {
+    let mut style = Style::default();
+    for c in element_children(el) {
+        match c.tag_name().name() {
+            "panels" => {
+                if let Some(v) = c.attribute("gap") {
+                    style.panels_gap =
+                        v.parse().map_err(|_| "<style><panels>のgapは数値で指定してください".to_string())?;
+                }
+            }
+            "panel" => {
+                if let Some(v) = c.attribute("inner-margin") {
+                    style.panel_inner_margin = parse_panel_margin(v)?;
+                }
+                if let Some(v) = c.attribute("outer-margin") {
+                    style.panel_outer_margin = parse_panel_margin(v)?;
+                }
+            }
+            "widget" => {
+                if let Some(v) = c.attribute("margin") {
+                    style.widget_margin = parse_margin(v)?;
+                }
+            }
+            "eg-preview" => {
+                style.eg_preview_size.w = attr_f32_or(c, "width", style.eg_preview_size.w)?;
+                style.eg_preview_size.h = attr_f32_or(c, "height", style.eg_preview_size.h)?;
+                if let Some(v) = c.attribute("margin") {
+                    style.tag_margin.insert("eg-preview".to_string(), parse_margin(v)?);
+                }
+            }
+            "algorithm-diagram" => {
+                style.algorithm_diagram_size.w = attr_f32_or(c, "width", style.algorithm_diagram_size.w)?;
+                style.algorithm_diagram_size.h = attr_f32_or(c, "height", style.algorithm_diagram_size.h)?;
+                if let Some(v) = c.attribute("margin") {
+                    style.tag_margin.insert("algorithm-diagram".to_string(), parse_margin(v)?);
+                }
+            }
+            tag @ ("knob" | "checkbox" | "waveform" | "enum" | "raw") => {
+                if let Some(v) = c.attribute("margin") {
+                    style.tag_margin.insert(tag.to_string(), parse_margin(v)?);
+                }
+            }
+            other => return Err(format!("<style>内で未知の要素です: <{other}>")),
+        }
+    }
+    Ok(style)
+}
+
+/// leafウィジェット共通の`margin`属性を3段カスケード（インスタンス属性→`<style>`タグ別→
+/// `<style><widget>`既定値）で解決する。
+fn resolve_widget_margin(el: Node, tag: &str, style: &Style) -> Result<Margin, String> {
+    match el.attribute("margin") {
+        Some(v) => parse_margin(v),
+        None => Ok(style.tag_margin.get(tag).copied().unwrap_or(style.widget_margin)),
+    }
+}
+
 fn eg_field(el: Node, ctx: &Ctx, name: &str) -> Result<EgField, String> {
     if let Some(v) = el.attribute(name) {
         Ok(EgField::Handle(resolve_path(v, ctx)))
@@ -105,12 +197,13 @@ fn parse_title(el: Node, ctx: &Ctx) -> Result<Title, String> {
     Ok(Title::Static(text))
 }
 
-fn build_leaf_info(el: Node, ctx: &Ctx) -> Result<LeafInfo, String> {
+fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, String> {
     let tag = el.tag_name().name();
     let enabled_if = match el.attribute("enabled-if") {
         Some(raw) => Some(parse_enabled_if(raw, ctx)?),
         None => None,
     };
+    let margin = resolve_widget_margin(el, tag, style)?;
 
     let (widget, preview_label, preview_type, size): (Widget, String, String, Size) = match tag {
         "knob" => {
@@ -169,16 +262,15 @@ fn build_leaf_info(el: Node, ctx: &Ctx) -> Result<LeafInfo, String> {
                 curve: eg_field(el, ctx, "curve")?,
                 delay: eg_field(el, ctx, "delay")?,
             };
-            (widget, "EG".to_string(), "eg-preview".to_string(), Size { w: 84.0, h: 66.0 })
+            let w = attr_f32_or(el, "width", style.eg_preview_size.w)?;
+            let h = attr_f32_or(el, "height", style.eg_preview_size.h)?;
+            (widget, "EG".to_string(), "eg-preview".to_string(), Size { w, h })
         }
         "algorithm-diagram" => {
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
-            (
-                Widget::AlgorithmDiagram { handle },
-                "ALG".to_string(),
-                "algorithm-diagram".to_string(),
-                Size { w: 150.0, h: 100.0 },
-            )
+            let w = attr_f32_or(el, "width", style.algorithm_diagram_size.w)?;
+            let h = attr_f32_or(el, "height", style.algorithm_diagram_size.h)?;
+            (Widget::AlgorithmDiagram { handle }, "ALG".to_string(), "algorithm-diagram".to_string(), Size { w, h })
         }
         "raw" => {
             let w: f32 = req_attr(el, "width")?
@@ -196,10 +288,10 @@ fn build_leaf_info(el: Node, ctx: &Ctx) -> Result<LeafInfo, String> {
         other => return Err(format!("<row>/<stack>内で未知の要素です: <{other}>")),
     };
 
-    Ok(LeafInfo { size, widget, enabled_if, preview_label, preview_type })
+    Ok(LeafInfo { size, margin, widget, enabled_if, preview_label, preview_type })
 }
 
-fn build_row_tree(el: Node, ctx: &Ctx) -> Result<TreeNode, String> {
+fn build_row_tree(el: Node, ctx: &Ctx, style: &Style) -> Result<TreeNode, String> {
     let tag = el.tag_name().name();
     if tag == "row" || tag == "stack" {
         let gap = match el.attribute("gap") {
@@ -221,7 +313,7 @@ fn build_row_tree(el: Node, ctx: &Ctx) -> Result<TreeNode, String> {
         }
         let children = kids
             .into_iter()
-            .map(|c| build_row_tree(c, ctx))
+            .map(|c| build_row_tree(c, ctx, style))
             .collect::<Result<Vec<_>, _>>()?;
         if tag == "row" {
             Ok(TreeNode::Row { justify, gap, grow, children })
@@ -229,7 +321,7 @@ fn build_row_tree(el: Node, ctx: &Ctx) -> Result<TreeNode, String> {
             Ok(TreeNode::Stack { gap, grow, children })
         }
     } else {
-        Ok(TreeNode::Leaf(build_leaf_info(el, ctx)?))
+        Ok(TreeNode::Leaf(build_leaf_info(el, ctx, style)?))
     }
 }
 
@@ -244,7 +336,7 @@ fn jack_attrs(el: Node, ctx: &Ctx) -> Result<Jack, String> {
     Ok(Jack::Dest { dest_index, label, handle })
 }
 
-fn parse_body(el: Node, ctx: &Ctx) -> Result<Vec<BodyStmt>, String> {
+fn parse_body(el: Node, ctx: &Ctx, style: &Style) -> Result<Vec<BodyStmt>, String> {
     let mut stmts = Vec::new();
     for child in element_children(el) {
         match child.tag_name().name() {
@@ -261,7 +353,7 @@ fn parse_body(el: Node, ctx: &Ctx) -> Result<Vec<BodyStmt>, String> {
                 }
                 stmts.push(BodyStmt::Header { items });
             }
-            "row" | "stack" => stmts.push(BodyStmt::Tree(build_row_tree(child, ctx)?)),
+            "row" | "stack" => stmts.push(BodyStmt::Tree(build_row_tree(child, ctx, style)?)),
             "space" => {
                 let size: f32 = req_attr(child, "size")?
                     .parse()
@@ -291,7 +383,7 @@ fn auto_insert_title(body: &mut Vec<BodyStmt>, title: &str) {
 
 /// `<panel>`をパースする。`span`属性は生の文字列のみ読み取り、まだ解決しない
 /// （`<panels>`内の他の`<panel>`のspanが出揃ってから[`resolve_spans`]でグループ単位に解決する）。
-fn parse_panel(el: Node) -> Result<(Panel, Option<u32>), String> {
+fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<u32>), String> {
     let repeat = el.attribute("repeat").map(|s| s.to_string());
     let as_ = el.attribute("as").map(|s| s.to_string());
     if repeat.is_some() && as_.is_none() {
@@ -307,7 +399,7 @@ fn parse_panel(el: Node) -> Result<(Panel, Option<u32>), String> {
     };
     let base = if repeat.is_some() { as_.clone().unwrap() } else { "params".to_string() };
     let ctx = Ctx { base, index: index.clone(), title: title.clone() };
-    let mut body = parse_body(el, &ctx)?;
+    let mut body = parse_body(el, &ctx, style)?;
     auto_insert_title(&mut body, &title);
     Ok((Panel { repeat, as_, index, title, span: 0, body }, span_raw))
 }
@@ -346,7 +438,7 @@ fn resolve_spans(panels: &mut [Panel], spans_raw: &[Option<u32>]) -> Result<(), 
     Ok(())
 }
 
-fn parse_panels_group(el: Node) -> Result<PanelsGroup, String> {
+fn parse_panels_group(el: Node, style: &Style) -> Result<PanelsGroup, String> {
     let match_height = el.attribute("match-height") == Some("true");
     let mut panels = Vec::new();
     let mut spans_raw = Vec::new();
@@ -354,7 +446,7 @@ fn parse_panels_group(el: Node) -> Result<PanelsGroup, String> {
         if c.tag_name().name() != "panel" {
             return Err("<panels>の子要素は<panel>のみです".to_string());
         }
-        let (panel, span_raw) = parse_panel(c)?;
+        let (panel, span_raw) = parse_panel(c, style)?;
         panels.push(panel);
         spans_raw.push(span_raw);
     }
@@ -372,17 +464,27 @@ pub fn parse_layout(xml_text: &str) -> Result<Layout, String> {
     if root.tag_name().name() != "layout" {
         return Err("ルート要素は<layout>である必要があります".to_string());
     }
+    let children = element_children(root);
+    let style_elements: Vec<Node> = children.iter().filter(|c| c.tag_name().name() == "style").copied().collect();
+    if style_elements.len() > 1 {
+        return Err("<style>は<layout>直下に1個までです".to_string());
+    }
+    let style = match style_elements.first() {
+        Some(el) => parse_style(*el)?,
+        None => Style::default(),
+    };
     let mut groups = Vec::new();
-    for el in element_children(root) {
+    for el in children {
         match el.tag_name().name() {
-            "panels" => groups.push(parse_panels_group(el)?),
+            "style" => {} // 上でパース済み
+            "panels" => groups.push(parse_panels_group(el, &style)?),
             other => return Err(format!("<layout>直下で未知の要素です: <{other}>（<panels>で囲んでください）")),
         }
     }
     if groups.is_empty() {
         return Err("<layout>には1個以上の<panels>が必要です".to_string());
     }
-    Ok(Layout { groups })
+    Ok(Layout { groups, style })
 }
 
 #[cfg(test)]
@@ -460,5 +562,123 @@ mod span_tests {
         let xml = r#"<layout><panel title="A"><row><knob label="X" handle="x"/></row></panel></layout>"#;
         let err = parse_layout(xml).unwrap_err();
         assert!(err.contains("<panels>で囲んでください"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::parse_layout;
+    use crate::ir::{BodyStmt, TreeNode};
+
+    fn wrap(style: &str, inner: &str) -> String {
+        format!("<layout>{style}<panels>{inner}</panels></layout>")
+    }
+
+    /// `<panel title="...">`は`<header>`省略時に自動でタイトル見出し(`BodyStmt::Header`)が
+    /// 先頭へ挿入される（`auto_insert_title`）ため、`<row>`は常にbody[1]に入る。
+    fn first_row_children(xml: &str) -> Vec<TreeNode> {
+        let layout = parse_layout(xml).unwrap();
+        let BodyStmt::Tree(TreeNode::Row { children, .. }) = &layout.groups[0].panels[0].body[1] else {
+            panic!("<row>が見つかりません")
+        };
+        children.clone()
+    }
+
+    #[test]
+    fn no_style_uses_defaults() {
+        let xml = wrap("", r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.style.panels_gap, 8.0);
+        assert_eq!(layout.style.panel_inner_margin.top, 6.0);
+        assert_eq!(layout.style.panel_outer_margin.top, 0.0);
+        assert_eq!(layout.style.widget_margin.top, 0.0);
+        assert_eq!(layout.style.eg_preview_size.w, 84.0);
+        assert_eq!(layout.style.algorithm_diagram_size.w, 150.0);
+    }
+
+    #[test]
+    fn style_overrides_defaults() {
+        let style = r#"<style>
+            <panels gap="12"/>
+            <panel inner-margin="4" outer-margin="0 10 0 0"/>
+            <widget margin="2"/>
+            <eg-preview width="120" height="90"/>
+            <algorithm-diagram width="200" height="130"/>
+        </style>"#;
+        let xml = wrap(style, r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.style.panels_gap, 12.0);
+        assert_eq!(layout.style.panel_inner_margin.top, 4.0);
+        assert_eq!(layout.style.panel_outer_margin.right, 10.0);
+        assert_eq!(layout.style.panel_outer_margin.top, 0.0);
+        assert_eq!(layout.style.widget_margin.top, 2.0);
+        assert_eq!(layout.style.eg_preview_size.w, 120.0);
+        assert_eq!(layout.style.eg_preview_size.h, 90.0);
+        assert_eq!(layout.style.algorithm_diagram_size.w, 200.0);
+    }
+
+    #[test]
+    fn margin_shorthand_forms() {
+        assert_eq!(super::parse_margin("4").unwrap().top, 4.0);
+        assert_eq!(super::parse_margin("4").unwrap().left, 4.0);
+        let m2 = super::parse_margin("4 8").unwrap();
+        assert_eq!((m2.top, m2.bottom, m2.left, m2.right), (4.0, 4.0, 8.0, 8.0));
+        let m4 = super::parse_margin("1 2 3 4").unwrap();
+        assert_eq!((m4.top, m4.right, m4.bottom, m4.left), (1.0, 2.0, 3.0, 4.0));
+        assert!(super::parse_margin("1 2 3").is_err());
+    }
+
+    #[test]
+    fn panel_margin_rejects_non_integer() {
+        let style = r#"<style><panel inner-margin="4.5"/></style>"#;
+        let xml = wrap(style, r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("整数"), "{err}");
+    }
+
+    #[test]
+    fn second_style_tag_is_rejected() {
+        let xml = wrap(
+            "<style/><style/>",
+            r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("1個までです"), "{err}");
+    }
+
+    #[test]
+    fn widget_margin_cascade_instance_wins_over_tag_wins_over_default() {
+        // <style>既定=1、<knob>タグ別上書き=2、インスタンス属性=3。優先順位はインスタンス→タグ→既定。
+        let style = r#"<style><widget margin="1"/><knob margin="2"/></style>"#;
+        let xml = wrap(
+            style,
+            r#"<panel title="A"><row>
+                <knob label="A" handle="a"/>
+                <knob label="B" handle="b" margin="3"/>
+                <checkbox label="C" handle="c"/>
+            </row></panel>"#,
+        );
+        let children = first_row_children(&xml);
+        let TreeNode::Leaf(knob_tag_default) = &children[0] else { panic!("leaf not found") };
+        let TreeNode::Leaf(knob_instance) = &children[1] else { panic!("leaf not found") };
+        let TreeNode::Leaf(checkbox_widget_default) = &children[2] else { panic!("leaf not found") };
+        assert_eq!(knob_tag_default.margin.top, 2.0); // <knob>タグ別上書き
+        assert_eq!(knob_instance.margin.top, 3.0); // インスタンス属性が最優先
+        assert_eq!(checkbox_widget_default.margin.top, 1.0); // <widget>既定へフォールバック
+    }
+
+    #[test]
+    fn eg_preview_instance_width_overrides_style_default() {
+        let xml = wrap(
+            "",
+            r#"<panel title="A"><row>
+                <eg-preview width="200" ar="ar" d1r="d1r" d1l="d1l" d2r="d2r" rr="rr"
+                  tl="tl" floor="floor" loop="op_loop" curve="curve" delay-value="0"/>
+            </row></panel>"#,
+        );
+        let children = first_row_children(&xml);
+        let TreeNode::Leaf(leaf) = &children[0] else { panic!("leaf not found") };
+        assert_eq!(leaf.size.w, 200.0);
+        assert_eq!(leaf.size.h, 66.0); // heightは省略したのでstyle既定値のまま
     }
 }

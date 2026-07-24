@@ -79,7 +79,9 @@ DOM操作・ファイル開く/保存・タブ切替・キャンバス起動の�
 「単独パネルか複数カラムか」でタグを使い分ける必要をなくした）。
 
 ```
-<layout>                                  ルート。<panels>を1個以上
+<layout>                                  ルート。<style>(省略可・1個まで)+<panels>を1個以上
+  <style>                                マージン・eg-preview/algorithm-diagramの既定サイズ（後述）
+  </style>
   <panels match-height="true">            <panel>を1個以上（1個なら実質フル幅、2個以上でNカラム）
     <panel repeat="operators" as="op" index="i" title="..." span="4">
       <header>                            ui.horizontal{}として出力
@@ -97,6 +99,28 @@ DOM操作・ファイル開く/保存・タブ切替・キャンバス起動の�
   </panels>
 </layout>
 ```
+
+### `<style>`（マージン・eg-preview/algorithm-diagramの既定サイズ、`<layout>`直下に0〜1個）
+
+```xml
+<style>
+  <panels gap="8"/>                                 <!-- 横並びパネル間の隙間 -->
+  <panel inner-margin="6" outer-margin="0"/>        <!-- パネル枠の内側/外側余白（全パネル共通） -->
+  <widget margin="0"/>                              <!-- 全ウィジェット共通の既定マージン -->
+  <knob margin="0 2"/>                              <!-- タグ別の上書き（任意、knob/checkbox/waveform/enum/raw対応） -->
+  <eg-preview width="84" height="66"/>
+  <algorithm-diagram width="150" height="100"/>
+</style>
+```
+
+マージン値はCSSショートハンド記法（`"4"`=4辺/`"4 8"`=上下・左右/`"4 8 6 2"`=上・右・下・左）。
+`<panel>`のマージンは`egui::Margin`がi8ベースのため-128〜127の整数のみ。ウィジェットのマージンは小数可。
+
+ウィジェットのマージンは3段カスケード（後勝ち）で解決する: `<style><widget margin>`（既定）→
+`<style>`内のタグ別上書き（`<knob margin="...">`等）→インスタンス属性（`<knob margin="..." .../>`）。
+`<eg-preview>`/`<algorithm-diagram>`のサイズも同様に、`<style>`の既定値をインスタンス側の
+`width`/`height`属性で個別上書きできる（サイズを変えると中身の装飾も等方スケールする）。
+`<style>`省略時はここに書いた値が既定値として使われる。
 
 ### `span`（12カラムグリッド、Bootstrap等のcol-span相当）
 
@@ -162,8 +186,11 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 | `<waveform>` | `handle` | `index`（省略時0） |
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
 | `<eg-preview>` | `mapping`(`DbLinear`/`AmplitudeLinear`) + 各EGParamsフィールド | 各フィールドは`{field}="handle"`か`{field}-value="リテラル"`のどちらか。フィールド: `tl`,`ar`,`d1r`,`d1l`,`d2r`,`rr`,`floor`,`loop`(→`loop_enabled`),`curve`,`delay` |
-| `<algorithm-diagram>` | `handle` | |
+| `<algorithm-diagram>` | `handle` | `width`/`height`で個別サイズ上書き（`<style>`既定は150×100） |
 | `<raw width height>` | テキスト内容 = Rustコード | **最終手段**（要サイズ指定）。文法上は温存しているが`panel.xml`本体では未使用 |
+
+全leafウィジェット共通で`margin="..."`属性が使える（`<style>`の既定値・タグ別上書きをさらに上書きする、前節参照）。
+`<eg-preview>`は`width`/`height`で個別サイズ上書きも可能（`<style>`既定は84×66）。
 
 ### handle解決ルール
 

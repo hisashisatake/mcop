@@ -51,8 +51,10 @@
 use egui::{Color32, Pos2, Shape, Stroke, Ui, Vec2};
 use sound_core::eg::{ar_to_delta, decay_to_delta, rr_to_delta, EgParams};
 
-const WIDTH: f32 = 84.0;
-const HEIGHT: f32 = 66.0;
+/// `<style>`省略時の既定サイズ。`panel-codegen/src/ir.rs`の`Style::default().eg_preview_size`と
+/// 一致させること（`panel-codegen`は`ym38x6-ui`に依存できないため値を複製している）。
+const DEFAULT_WIDTH: f32 = 84.0;
+const DEFAULT_HEIGHT: f32 = 66.0;
 const PAD: f32 = 6.0;
 
 /// 縦軸の下限（dB、無音とみなす床）。
@@ -190,10 +192,11 @@ fn eased_progress(t: f32) -> f32 {
 /// `dashed`が真なら破線（フリーズ中＝目標に到達せず現在レベルに留まり続けることを示す。
 /// この場合`curved`は無視し直線のまま簡略表示する）。`curved`が真なら角の立つ直線ではなく
 /// レイズドコサインで丸めたランプ（Curve=1、spec-sound.md「ループ可能EG」節）を描く。
-fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool, curved: bool) {
-    let stroke = Stroke::new(1.5, color);
+/// `scale`は既定サイズからの等方拡大率（線幅・破線ピッチへ一律に乗じる）。
+fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool, curved: bool, scale: f32) {
+    let stroke = Stroke::new(1.5 * scale, color);
     if dashed {
-        painter.extend(Shape::dashed_line(&[from, to], stroke, DASH_LENGTH, DASH_GAP));
+        painter.extend(Shape::dashed_line(&[from, to], stroke, DASH_LENGTH * scale, DASH_GAP * scale));
         return;
     }
     if !curved {
@@ -212,21 +215,28 @@ fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dash
 }
 
 /// TL(0〜255)と`EgParams`（AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delay）から、AR/DR/SR=緑・
-/// RR=赤の2色に塗り分けた折れ線グラフを描く。パネル左側に配置する固定サイズの液晶風ウィジェット。
+/// RR=赤の2色に塗り分けた折れ線グラフを描く。パネル左側に配置する液晶風ウィジェット。
 /// TLを持たないFILTER/VCAはtl=255（減衰なし）で呼び出す。`eg`はFM EG/FGスロットが共有する
 /// `sound_core::eg::EgParams`をそのまま受け取る（新規の別部品を作らない設計、spec-sound.md参照）。
-/// `mapping`はEGレベルをdBへ変換する方式（OP=[EgAmplitudeMapping::DbLinear]、
-/// FILTER/VCA=[EgAmplitudeMapping::AmplitudeLinear]）。
-pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams) {
-    let (rect, _response) = ui.allocate_exact_size(Vec2::new(WIDTH, HEIGHT), egui::Sense::hover());
+/// `size`はpanel.xmlの`<style><eg-preview>`（または個々のタグの`width`/`height`属性）で決まる
+/// 占有サイズ。既定サイズ(`DEFAULT_WIDTH`×`DEFAULT_HEIGHT`)からの等方拡大率をパディング・線幅・
+/// 破線ピッチ・頂点ドット半径へ一律に乗じる。`mapping`はEGレベルをdBへ変換する方式
+/// （OP=[EgAmplitudeMapping::DbLinear]、FILTER/VCA=[EgAmplitudeMapping::AmplitudeLinear]）。
+pub fn eg_preview(ui: &mut Ui, size: Vec2, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams) {
+    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
     let painter = ui.painter();
+    // 既定サイズからの等方拡大率（`scale`という名前は下でタイムライン用に既に使われているため
+    // `ui_scale`と呼ぶ）。
+    let ui_scale = (size.x / DEFAULT_WIDTH).min(size.y / DEFAULT_HEIGHT);
+    let pad = PAD * ui_scale;
+    let dot_radius = DOT_RADIUS * ui_scale;
 
     // 背景（ベゼル＋液晶面のニュアンス）
     painter.rect_filled(rect, 3.0, Color32::from_gray(35));
-    let inner = rect.shrink(PAD);
+    let inner = rect.shrink(pad);
     painter.rect_filled(inner, 2.0, Color32::from_gray(72));
 
     let db_to_y = |db: f32| inner.bottom() - ((db.max(DB_FLOOR) - DB_FLOOR) / -DB_FLOOR) * inner.height();
@@ -236,7 +246,10 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams
     // AR=0は「フリーズしたまま発音しない」特殊値（spec.md準拠）。床のフラット線のみ描いて終える。
     if eg.ar == 0 {
         let y = db_to_y(DB_FLOOR);
-        painter.add(Shape::line(vec![Pos2::new(x0, y), Pos2::new(x0 + width, y)], Stroke::new(1.5, COLOR_SILENT)));
+        painter.add(Shape::line(
+            vec![Pos2::new(x0, y), Pos2::new(x0 + width, y)],
+            Stroke::new(1.5 * ui_scale, COLOR_SILENT),
+        ));
         return;
     }
 
@@ -274,7 +287,7 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams
     let mut x = x0 + delay_width;
     if delay_width > 0.0 {
         let y = db_to_y(DB_FLOOR);
-        painter.add(Shape::line(vec![Pos2::new(x0, y), Pos2::new(x, y)], Stroke::new(1.5, COLOR_SILENT)));
+        painter.add(Shape::line(vec![Pos2::new(x0, y), Pos2::new(x, y)], Stroke::new(1.5 * ui_scale, COLOR_SILENT)));
     }
 
     if eg.loop_enabled != 0 {
@@ -283,26 +296,26 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams
         // 現在位置（Floor）からRRで真の無音へ離脱する形でプレビューする。
         let floor_db = (tl_db + level_contribution_db(mapping, eg.floor as f32 / 255.0)).max(DB_FLOOR);
         let mut cur = Pos2::new(x, db_to_y(floor_db));
-        painter.circle_filled(cur, DOT_RADIUS, COLOR_DOT_START);
+        painter.circle_filled(cur, dot_radius, COLOR_DOT_START);
         for _ in 0..2 {
             let peak_x = (x + attack_weight * scale).min(right_edge);
             let peak = Pos2::new(peak_x, db_to_y(tl_db));
-            draw_ramp(painter, cur, peak, COLOR_HELD, false, curved);
+            draw_ramp(painter, cur, peak, COLOR_HELD, false, curved, ui_scale);
             x = peak_x;
             cur = peak;
 
             let floor_x = (x + decay1_weight * scale).min(right_edge);
             let floor_pt = Pos2::new(floor_x, db_to_y(floor_db));
-            draw_ramp(painter, cur, floor_pt, COLOR_HELD, false, curved);
+            draw_ramp(painter, cur, floor_pt, COLOR_HELD, false, curved, ui_scale);
             x = floor_x;
             cur = floor_pt;
         }
-        painter.circle_filled(cur, DOT_RADIUS, COLOR_DOT_HOLD);
+        painter.circle_filled(cur, dot_radius, COLOR_DOT_HOLD);
 
         let release_end_x = (x + release_weight * scale).min(right_edge);
         let release_end = Pos2::new(release_end_x, db_to_y(DB_FLOOR));
-        draw_ramp(painter, cur, release_end, COLOR_RELEASE, false, curved);
-        painter.circle_filled(release_end, DOT_RADIUS, COLOR_DOT_END);
+        draw_ramp(painter, cur, release_end, COLOR_RELEASE, false, curved, ui_scale);
+        painter.circle_filled(release_end, dot_radius, COLOR_DOT_END);
         return;
     }
 
@@ -331,23 +344,23 @@ pub fn eg_preview(ui: &mut Ui, mapping: EgAmplitudeMapping, tl: u8, eg: EgParams
     let hold_pt = Pos2::new(x, db_to_y(hold_db));
     // AR区間はフリーズしない（ar==0は上で早期return済み）ので常に実線。D1R/D2R区間はrate=0のとき
     // 目標に到達せず現在レベルに留まり続けるだけなので破線にして「フリーズ中」だと視覚的に示す。
-    draw_ramp(painter, start_pt, tl_pt, COLOR_HELD, false, curved);
-    draw_ramp(painter, tl_pt, sl_pt, COLOR_HELD, eg.d1r == 0, curved);
-    draw_ramp(painter, sl_pt, hold_pt, COLOR_HELD, eg.d1r == 0 || eg.d2r == 0, curved);
+    draw_ramp(painter, start_pt, tl_pt, COLOR_HELD, false, curved, ui_scale);
+    draw_ramp(painter, tl_pt, sl_pt, COLOR_HELD, eg.d1r == 0, curved, ui_scale);
+    draw_ramp(painter, sl_pt, hold_pt, COLOR_HELD, eg.d1r == 0 || eg.d2r == 0, curved, ui_scale);
 
     let release_start = hold_pt;
     x += release_weight * scale;
     // 固定スケールでは通常x < 右端（短い音ほど手前で終わる）。最長エンベロープでちょうど
     // 右端に達する。浮動小数点誤差の安全弁としてclampは残す。
     let release_end = Pos2::new(x.min(right_edge), db_to_y(DB_FLOOR));
-    draw_ramp(painter, release_start, release_end, COLOR_RELEASE, false, curved);
+    draw_ramp(painter, release_start, release_end, COLOR_RELEASE, false, curved, ui_scale);
 
     // 各交点（頂点）に色分けした丸印を打つ（計算結果の目視確認用）。
-    painter.circle_filled(start_pt, DOT_RADIUS, COLOR_DOT_START);
-    painter.circle_filled(tl_pt, DOT_RADIUS, COLOR_DOT_TL);
-    painter.circle_filled(sl_pt, DOT_RADIUS, COLOR_DOT_SL);
-    painter.circle_filled(hold_pt, DOT_RADIUS, COLOR_DOT_HOLD);
-    painter.circle_filled(release_end, DOT_RADIUS, COLOR_DOT_END);
+    painter.circle_filled(start_pt, dot_radius, COLOR_DOT_START);
+    painter.circle_filled(tl_pt, dot_radius, COLOR_DOT_TL);
+    painter.circle_filled(sl_pt, dot_radius, COLOR_DOT_SL);
+    painter.circle_filled(hold_pt, dot_radius, COLOR_DOT_HOLD);
+    painter.circle_filled(release_end, dot_radius, COLOR_DOT_END);
 }
 
 #[cfg(test)]
