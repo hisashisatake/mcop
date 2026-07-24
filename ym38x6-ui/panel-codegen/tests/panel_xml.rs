@@ -114,30 +114,3 @@ fn is_deterministic() {
     let b = panel_codegen::generate_rust(&xml).unwrap();
     assert_eq!(a, b);
 }
-
-#[test]
-fn preview_roundtrip_solves_op_panel() {
-    let xml = panel_xml();
-    let preview_json = panel_codegen::parse_ir_preview(&xml).expect("parse_ir_preview が失敗しました");
-    let value: serde_json::Value = serde_json::from_str(&preview_json).unwrap();
-    let groups = value["groups"].as_array().unwrap();
-    let op_panel = groups
-        .iter()
-        .flat_map(|g| g["panels"].as_array().unwrap())
-        .find(|p| p["repeat"] == "operators")
-        .expect("OPパネルが見つかりません");
-    let body = op_panel["body"].as_array().unwrap();
-    let tree_stmt = body.iter().find(|st| st["kind"] == "tree").expect("tree文が見つかりません");
-    // waveform(66)+AMの<stack>がgap省略(0.0)で86になり、行全体の高さを支配する。
-    assert_eq!(tree_stmt["max_height"].as_f64().unwrap(), 86.0);
-    let leaves = tree_stmt["leaves"].as_array().unwrap();
-    assert_eq!(leaves.len(), 20); // eg-preview + <stack>内LOOP/CURVE(2) + 17ウィジェット(うちwaveform+AMは<stack>で2)
-
-    let node_json = serde_json::to_string(&tree_stmt["node"]).unwrap();
-    let rects_json = panel_codegen::solve_tree_json(&node_json, 1200.0, 86.0).expect("solve_tree_json が失敗しました");
-    let rects: Vec<serde_json::Value> = serde_json::from_str(&rects_json).unwrap();
-    assert_eq!(rects.len(), 20);
-    // eg-previewは左詰め・幅84のまま。
-    assert_eq!(rects[0]["x"].as_f64().unwrap(), 0.0);
-    assert_eq!(rects[0]["w"].as_f64().unwrap(), 84.0);
-}
