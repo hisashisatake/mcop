@@ -45,10 +45,14 @@
   button:hover{border-color:var(--accent); color:var(--accent)}
   button.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
   button.primary:hover{filter:brightness(1.06); color:#fff}
-  main{flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-height:0}
-  @media (max-width:900px){ main{grid-template-columns:1fr; overflow:auto} }
+  main{flex:1; display:grid; grid-template-columns:var(--split,50%) 6px minmax(0,1fr); min-height:0}
+  @media (max-width:900px){ main{grid-template-columns:1fr; overflow:auto} .splitter{display:none} }
   .pane{min-height:0; display:flex; flex-direction:column; overflow:hidden}
-  .pane.left{border-right:1px solid var(--line)}
+  .splitter{
+    cursor:col-resize; background:var(--line); position:relative;
+  }
+  .splitter:hover, .splitter.dragging{background:var(--accent)}
+  body.splitting{user-select:none; cursor:col-resize}
   .pane-head{
     display:flex; align-items:center; gap:10px; padding:8px 14px;
     border-bottom:1px solid var(--line); background:var(--surface);
@@ -116,6 +120,7 @@
       </div>
       <div class="pane-body"><textarea id="xmlSrc" spellcheck="false"></textarea></div>
     </section>
+    <div class="splitter" id="splitter"></div>
     <section class="pane right">
       <div class="pane-head">
         <button class="tab active" data-tab="preview">プレビュー</button>
@@ -1846,6 +1851,102 @@ function run(){
 
 document.getElementById('btnGen').addEventListener('click', run);
 document.getElementById('xmlSrc').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(run, 300); });
+
+/* ---- Tabキーで4スペースインデント（選択時は複数行ブロックインデント/デデント）。
+ * textareaの既定動作（フォーカス移動）をpreventDefaultで止める。編集自体は`.value`の直接代入では
+ * なくdocument.execCommand('insertText', ...)で行う（非推奨APIだがChromium/Edgeでは現役かつ
+ * ブラウザの元に戻す(Ctrl+Z)履歴に正しく積まれる。直接.value代入だとネイティブのundoスタックが
+ * 途切れ、直後のCtrl+Zで戻せなくなることを実機で確認したため採用）。 ---- */
+(() => {
+  const IND = '    '; // 4スペース
+  const ta = document.getElementById('xmlSrc');
+
+  function lineBounds(text, pos) {
+    const start = text.lastIndexOf('\n', pos - 1) + 1;
+    let end = text.indexOf('\n', pos);
+    if (end === -1) end = text.length;
+    return [start, end];
+  }
+
+  // [rangeStart, rangeEnd) を選択状態にしてから置換テキストをinsertTextで流し込み、
+  // 最後にカーソル/選択位置をfinalStart/finalEndへ調整する（選択変更自体はundo対象外）。
+  function replaceRange(rangeStart, rangeEnd, replacement, finalStart, finalEnd) {
+    ta.setSelectionRange(rangeStart, rangeEnd);
+    document.execCommand('insertText', false, replacement);
+    ta.setSelectionRange(finalStart, finalEnd);
+  }
+
+  ta.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const text = ta.value;
+    const selStart = ta.selectionStart;
+    const selEnd = ta.selectionEnd;
+
+    if (selStart === selEnd) {
+      // 選択なし: キャレット位置に4スペースを挿入（Shift+Tabなら行頭から最大4スペース除去）。
+      if (!e.shiftKey) {
+        replaceRange(selStart, selEnd, IND, selStart + IND.length, selStart + IND.length);
+      } else {
+        const [lineStart] = lineBounds(text, selStart);
+        const removeLen = Math.min(IND.length, (text.slice(lineStart).match(/^ */) || [''])[0].length);
+        const newPos = Math.max(lineStart, selStart - removeLen);
+        replaceRange(lineStart, lineStart + removeLen, '', newPos, newPos);
+      }
+    } else {
+      // 選択あり: 選択にかかる各行の行頭を一括インデント/デデントする。
+      const [blockStart] = lineBounds(text, selStart);
+      let [, blockEnd] = lineBounds(text, selEnd);
+      // 選択終端がちょうど行頭(直前の改行)にある場合、その空行は対象に含めない。
+      if (selEnd > selStart && text[selEnd - 1] === '\n') blockEnd = selEnd - 1;
+      const block = text.slice(blockStart, blockEnd);
+      const lines = block.split('\n');
+      let firstLineDelta = 0;
+      let totalDelta = 0;
+      const newLines = lines.map((line, i) => {
+        if (!e.shiftKey) {
+          if (i === 0) firstLineDelta = IND.length;
+          totalDelta += IND.length;
+          return IND + line;
+        }
+        const removeLen = Math.min(IND.length, (line.match(/^ */) || [''])[0].length);
+        if (i === 0) firstLineDelta = -removeLen;
+        totalDelta -= removeLen;
+        return line.slice(removeLen);
+      });
+      const newBlock = newLines.join('\n');
+      replaceRange(blockStart, blockEnd, newBlock, selStart + firstLineDelta, selEnd + totalDelta);
+    }
+  });
+})();
+
+/* ---- エディタ/プレビュー境界のスプリッタ（ドラッグでmainのgrid-template-columnsを可変にする）。
+ * eframeキャンバスは既存のResizeObserverでペイン幅の変化に追随するため、配線はここだけで完結する。 ---- */
+(() => {
+  const splitter = document.getElementById('splitter');
+  const main = document.querySelector('main');
+  let dragging = false;
+
+  splitter.addEventListener('mousedown', (e) => {
+    dragging = true;
+    splitter.classList.add('dragging');
+    document.body.classList.add('splitting');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const rect = main.getBoundingClientRect();
+    let pct = ((e.clientX - rect.left) / rect.width) * 100;
+    pct = Math.min(85, Math.max(15, pct));
+    main.style.setProperty('--split', pct + '%');
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('dragging');
+    document.body.classList.remove('splitting');
+  });
+})();
 
 /* ---- ファイルの開く/保存（ローカルファイルシステムとの唯一の橋渡し。サーバー・依存なし） ---- */
 let currentFileName = 'panel.xml';

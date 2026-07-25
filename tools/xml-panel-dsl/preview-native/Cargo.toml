@@ -1,0 +1,20 @@
+[package]
+name = "xml-panel-dsl-preview-native"
+version = "0.1.0"
+edition = "2021"
+
+# tools/xml-panel-dsl配下(ワークスペースメンバーではないディレクトリ配下)に置いているため、
+# gesture-app/editor-wasm・旧codegen-wasmと同じくルートCargo.tomlのexcludeのみで足りる
+# （ym38x6-ui/preview-wasmのような空[workspace]テーブルは不要。tools/xml-panel-dsl自体が
+# ワークスペースメンバーではないため）。
+
+[[bin]]
+name = "xml-panel-dsl-preview-native"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.34"
+ym38x6-ui = { path = "../../../ym38x6-ui", features = ["preview"] }
+panel-codegen = { path = "../../../ym38x6-ui/panel-codegen" }
+rfd = "0.15"

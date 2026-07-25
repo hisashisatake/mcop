@@ -47,6 +47,41 @@ pwsh -File tools\xml-panel-dsl\build-preview-wasm.ps1
 近似描画していた版）は`preview-wasm`へ統合され削除済み。`index.html`側に残るJSは、
 DOM操作・ファイル開く/保存・タブ切替・キャンバス起動のグルーのみ（SVG描画コードは全廃）。
 
+## ネイティブプレビュー `preview-native`（2026-07-25追加: エディタ強化・プレビュー分離）
+
+ブラウザ版（`preview-wasm`、WebGLキャンバス）は、プレビューを別ウィンドウへ分離・ドッキングする
+機能が原理的に実現できない（キャンバスを別ウィンドウへ移すとWebGLコンテキストが失われる。
+wasmの`web-sys::window()`もメインウィンドウ固定のためポップアップに2つ目のeframeを起こすのも不可）。
+この機能を含むフル機能版として、`tools/xml-panel-dsl/preview-native`にeframe **ネイティブ**アプリを
+新設した。プレビュー描画自体は`ym38x6-ui::interpret::draw_panel_from_ir`（`preview-wasm`と共有）を
+そのまま呼ぶだけで、`panel.xml`の生成経路（build.rs/interpret.rs）には一切変更を加えていない。
+
+```powershell
+cd tools\xml-panel-dsl\preview-native
+cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen不要）
+```
+
+ワークスペースの`members`には含めず`exclude`のみ（`gesture-app/editor-wasm`と同じ扱い。
+`tools/xml-panel-dsl`自体がワークスペースメンバーではないため、`preview-wasm`のような
+空`[workspace]`テーブルは不要）。`cargo check --workspace`には影響しない。
+
+- **エディタのTabインデント**（4スペース、選択時は複数行ブロックインデント/デデント）:
+  `egui::TextEditState::load/store`でカーソル位置を直接操作し、`Tab`キーイベントを
+  ウィジェット描画前に`ctx.input_mut(|i| i.consume_key(...))`で横取りする
+  （`Modifiers::matches_logically`は「余分なshift/altを無視」する向きに緩いため、
+  `Shift+Tab`を`Tab`単体より先にconsumeしないと単独Tab判定に食われる点に注意）。
+  ブラウザ版`index.html`にも同等のJS実装を追加済み（`document.execCommand('insertText', ...)`で
+  行う。`.value`の直接代入だとブラウザのCtrl+Z履歴が壊れることを実機で確認したため）。
+- **プレビューの分離・ドッキング**: egui 0.34のマルチビューポート（`show_viewport_immediate`、
+  `&mut self`へアクセスできる方の版）。分離ウィンドウを閉じる（`close_requested()`検知）と
+  自動的にドッキング状態へ戻る。
+- **エディタ/プレビュー境界のリサイズ**: `egui::Panel::left(...).resizable(true)`で標準対応
+  （ブラウザ版にも同等のドラッグ可能なスプリッタdivを追加済み）。
+- **日本語ラベルの文字化け対策**: eframeの既定フォントにはCJKグリフが無く豆腐(□)化するため、
+  起動時に`C:\Windows\Fonts\YuGothR.ttc`（Windows標準の游ゴシック、`.ttc`は`FontData.index`で
+  面を指定）をフォールバックフォントとして追加している（このマシン専用ツールのためバイナリへの
+  フォント埋め込みはせず、システムフォントを都度読む）。
+
 ## 位置づけ・割り切り（2026-07-22の方針決定）
 
 - **ドラッグ&ドロップ編集UIは持たない**。XML手書き＋プレビュー専用ツール。
