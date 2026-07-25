@@ -647,7 +647,7 @@ FMチップに内蔵された「音作り」用のLFO（プリセット・NRPN�
 | 項目 | 値域 | 既定 | 備考 |
 |------|------|------|------|
 | Waveform | 0〜4（5種） | 0=矩形波 | 下記Waveform enum |
-| Destination | 0〜3 | 0=Pitch | 下記Destination enum |
+| Destination | 0〜4 | 0=Pitch | 下記Destination enum |
 | Rate | 0〜255 | 0 | 0.01Hz〜20Hz（指数） |
 | Depth | 0〜255 | 0 | 揺れ量（既定0＝鳴らない） |
 | Delay | 0〜255 | 0 | キーオンから効果開始までの遅延。0〜10秒（線形）。Fadeとは独立 |
@@ -675,11 +675,14 @@ FMチップに内蔵された「音作り」用のLFO（プリセット・NRPN�
 | 1 | Volume | **Vcaゲイン乗算合流・VCF後** |
 | 2 | TL（キャリア一括） | TL（VCF前）・38x6拡張のみ |
 | 3 | Cutoff | Cutoff（VCF前）・38x6拡張のみ |
+| 4 | 未接続（Unplugged） | どこにも適用されない・38x6拡張のみ |
 
 各行き先ではFG・チップ内LFOと**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が
 積み重なる）。Volume（Destination=1）は`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`でVca段（VCF後）へ乗算合流、
 TL（Destination=2）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
 （質感LFOは焼き込み専用のためCCによる加算補正はなく、演奏系CC1/76/77/78はPitch FGへ行く）。
+未接続（Destination=4）はLFO自体は`tick`し続けるがどのターゲットへも出力しない。ym38x6-uiの質感LFO
+パッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、直前の行き先から未接続へ切り替わる。
 
 **Fade Mode enum：**
 
@@ -696,7 +699,7 @@ Delay（既存のハードカットオーバー）とは独立して共存する
 
 既存`sound-core/src/lfo.rs`（`PerformanceLfo`、8波形実装済み）から三角/サイン/のこぎりを除いた
 **5波形に絞った1基**を`ChannelParams`が所有する。適用先は`PerformanceLfoTarget`トレイト
-（Destination 0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff）。`set_channel_params`が他のフィールドと
+（Destination 0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff/4=未接続）。`set_channel_params`が他のフィールドと
 同様に毎ブロック発音中ボイスへ伝播するため、NRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに
 反映される。演奏系CC（CC1/76/77/78）は質感LFOには繋がらず[Pitch FG](#ファンクションジェネレーターfgpitchcutoffgain)へ行く。
 
@@ -736,10 +739,12 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 **プリセット選択（1個）：**
 Program（0=Manual：DAWパラメーター/NRPNで手動チューニングしたパッチを使う。1〜128=Program 0〜127：CC0/CC32で選択中のbankの該当プリセットへ切り替える。VST3でMIDI Program Changeの代替として使う、Bank Select / Program Changeセクション参照）
 
-**チャンネル単位（48個）：**
-Algorithm / Feedback / 質感LFO Rate / 質感LFO Depth / 質感LFO Delay / 質感LFO Waveform / 質感LFO Fade Mode / 質感LFO Fade Time / 質感LFO Offset / チップ内LFO Freq / チップ内LFO PMD / チップ内LFO AMD / チップ内LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Pitch FG AR / Pitch FG D1R / Pitch FG D1L / Pitch FG D2R / Pitch FG RR / Pitch FG Depth / Pitch FG Floor / Pitch FG Delay / Pitch FG Loop / Pitch FG Curve / Cutoff FG AR / Cutoff FG D1R / Cutoff FG D1L / Cutoff FG D2R / Cutoff FG RR / Cutoff FG Depth / Cutoff FG Floor / Cutoff FG Delay / Cutoff FG Loop / Cutoff FG Curve / Gain FG AR / Gain FG D1R / Gain FG D1L / Gain FG D2R / Gain FG RR / Gain FG Floor / Gain FG Delay / Gain FG Loop / Gain FG Curve / Reverb Send / Chorus Send
+**チャンネル単位（49個）：**
+Algorithm / Feedback / 質感LFO Destination / 質感LFO Rate / 質感LFO Depth / 質感LFO Delay / 質感LFO Waveform / 質感LFO Fade Mode / 質感LFO Fade Time / 質感LFO Offset / チップ内LFO Freq / チップ内LFO PMD / チップ内LFO AMD / チップ内LFO Delay / PMS / AMS / Filter Cutoff / Filter Resonance / Pitch FG AR / Pitch FG D1R / Pitch FG D1L / Pitch FG D2R / Pitch FG RR / Pitch FG Depth / Pitch FG Floor / Pitch FG Delay / Pitch FG Loop / Pitch FG Curve / Cutoff FG AR / Cutoff FG D1R / Cutoff FG D1L / Cutoff FG D2R / Cutoff FG RR / Cutoff FG Depth / Cutoff FG Floor / Cutoff FG Delay / Cutoff FG Loop / Cutoff FG Curve / Gain FG AR / Gain FG D1R / Gain FG D1L / Gain FG D2R / Gain FG RR / Gain FG Floor / Gain FG Delay / Gain FG Loop / Gain FG Curve / Reverb Send / Chorus Send
 
-（質感LFOは7個＝Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。DestinationのみNRPN専用のためDAWパラメーターには含めない。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設した結果48個になった。）
+（質感LFOは8個＝Destination/Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。Destinationは
+Algorithm同様、離散enumだがNRPN(0,0)とDAWパラメーターの両方で公開する（シャドウ差分検知方式、
+ym38x6-vst/src/lib.rs参照）。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設して48個、その後Destinationの二重公開に合わせて49個になった。）
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -754,7 +759,7 @@ NRPN/CCとnice-plugパラメーターを併用する項目とは異なる点に�
 
 Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Oscillation / AT Destination / Poly AT Destination / 質感LFO Destination / Reverb Type / Chorus Type
 
-※「Algorithm」「質感LFO Waveform」「質感LFO Fade Mode」「Pitch/Cutoff/Gain FG Loop」「Pitch/Cutoff/Gain FG Curve」は例外的に、対応するNRPNに加えて上記チャンネル単位のnice-plugパラメーターとしても公開する（DAWオートメーション/GUIノブ操作とNRPN/外部MIDIコントローラーの両方から設定できる）。
+※「Algorithm」「質感LFO Destination」「質感LFO Waveform」「質感LFO Fade Mode」「Pitch/Cutoff/Gain FG Loop」「Pitch/Cutoff/Gain FG Curve」は例外的に、対応するNRPNに加えて上記チャンネル単位のnice-plugパラメーターとしても公開する（DAWオートメーション/GUIノブ操作とNRPN/外部MIDIコントローラーの両方から設定できる）。
 
 ### MIDI CC（GM2準拠）
 
@@ -1028,7 +1033,7 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| 質感LFO Destination | 0, 0 | 0=Pitch / 1=Volume / 2=TL（キャリア一括、38x6拡張のみ） / 3=Cutoff（38x6拡張のみ） |
+| 質感LFO Destination | 0, 0 | 0=Pitch / 1=Volume / 2=TL（キャリア一括、38x6拡張のみ） / 3=Cutoff（38x6拡張のみ） / 4=未接続（38x6拡張のみ） |
 | 質感LFO Waveform | 0, 1 | 0=矩形波 / 1=台形波 / 2=S&H / 3=Random / 4=Chaos |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |

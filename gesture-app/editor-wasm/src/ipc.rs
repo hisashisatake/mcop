@@ -205,7 +205,7 @@ struct ChannelDto {
     #[serde(default)]
     gain_fg_curve: u8,
     // 質感LFO（旧パフォーマンスLFO。宣言順インデックス waveform=0〜4/fade_mode=0〜3、
-    // destinationは0=Pitch/1=Volume/2=TL/3=Cutoff。offsetは中心128＝オフセットなし）。
+    // destinationは0=Pitch/1=Volume/2=TL/3=Cutoff/4=未接続。offsetは中心128＝オフセットなし）。
     #[serde(default)]
     texture_lfo_waveform: u8,
     #[serde(default)]

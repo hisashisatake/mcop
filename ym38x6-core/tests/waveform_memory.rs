@@ -253,6 +253,39 @@ fn texture_lfo_cutoff_destination_shifts_output() {
     assert!(differs, "カットオフLFO変調（オートワウ）により出力波形が変化するはず");
 }
 
+/// Destination=4（未接続）は、質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へ
+/// ドロップした状態を表す。Depthをいくら上げてもどの変調ターゲットにも出力されないため、
+/// Depth=0とDepth=255で出力波形が一致するはず（前段のPitch/Cutoffテストとは逆に「一致」を確認する）。
+#[test]
+fn texture_lfo_unplugged_destination_produces_no_modulation() {
+    let sample_rate = 44100.0;
+
+    let mut patch = waveform_memory_patch(0, sustained_adsr());
+    patch.channel.texture_lfo =
+        TextureLfo { waveform: 0, destination: 4, rate: 220, depth: 0, ..TextureLfo::default() };
+
+    let mut engine_flat = Ym38x6Engine::new(sample_rate);
+    engine_flat.set_patch(patch);
+    engine_flat.note_on(0, 440.0, 127);
+    let mut warm_flat = vec![0.0f32; 200];
+    engine_flat.render(&mut warm_flat, 1);
+    let mut buf_flat = vec![0.0f32; 400];
+    engine_flat.render(&mut buf_flat, 1);
+
+    let mut patch_mod = patch;
+    patch_mod.channel.texture_lfo.depth = 255;
+    let mut engine_mod = Ym38x6Engine::new(sample_rate);
+    engine_mod.set_patch(patch_mod);
+    engine_mod.note_on(0, 440.0, 127);
+    let mut warm_mod = vec![0.0f32; 200];
+    engine_mod.render(&mut warm_mod, 1);
+    let mut buf_mod = vec![0.0f32; 400];
+    engine_mod.render(&mut buf_mod, 1);
+
+    let differs = buf_flat.iter().zip(buf_mod.iter()).any(|(a, b)| (a - b).abs() > 1e-6);
+    assert!(!differs, "未接続の質感LFOはDepthを変えても出力に影響しないはず");
+}
+
 /// 同一波形・同一周波数・同一パッチの2音を別チャンネルIDで同時発音すると、
 /// 出力は1音の場合のちょうど2倍になる（各ボイス独立・加算合成）。
 #[test]

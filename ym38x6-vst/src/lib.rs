@@ -477,7 +477,8 @@ impl Ym38x6Plugin {
             RpnSelection::Rpn(0, 5) => {
                 self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
-            // NRPN(0,0): 質感LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ）。
+            // NRPN(0,0): 質感LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ、
+            // 4以上=未接続。質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップした状態）。
             // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
             // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
             RpnSelection::Nrpn(0, 0) => {
@@ -485,7 +486,8 @@ impl Ym38x6Plugin {
                     0 => Ym38x6LfoDestination::Pitch,
                     1 => Ym38x6LfoDestination::Volume,
                     2 => Ym38x6LfoDestination::TlCarrier,
-                    _ => Ym38x6LfoDestination::Cutoff,
+                    3 => Ym38x6LfoDestination::Cutoff,
+                    _ => Ym38x6LfoDestination::Unplugged,
                 };
             }
             // NRPN(0,1): 質感LFO Waveform（0〜4、質感LFOの5波形パレットへ直接対応）。

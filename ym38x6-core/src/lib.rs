@@ -92,7 +92,7 @@ pub use sound_core::{
 pub struct TextureLfo {
     /// 0=矩形波/1=台形波/2=S&H/3=Random/4=Chaos。
     pub waveform: u8,
-    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff（`Ym38x6LfoDestination`と同じ並び）。
+    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff/4=未接続（`Ym38x6LfoDestination`と同じ並び）。
     pub destination: u8,
     pub rate: u8,
     pub depth: u8,
@@ -395,16 +395,20 @@ pub enum Ym38x6LfoDestination {
     /// フィルターCutoffへの持続的な変調（オートワウ）。Filter EG Depth（キーオン一発の変調）
     /// とは独立に積み重なる（`Channel::tick`でLFOがシフトした基準Cutoffを、Filter EGがさらに変調する）。
     Cutoff,
+    /// どこにも接続されていない（質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へ
+    /// ドロップした状態）。LFOは`tick`し続けるが、いずれの変調ターゲットへも出力しない。
+    Unplugged,
 }
 
 impl Ym38x6LfoDestination {
     /// 0〜255からの変換（質感LFOの`Destination`フィールド用、`FilterType::from_u8`と同じ慣習）。
-    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3以上=Cutoff。
+    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff/4=未接続/5以上=Pitchへフォールバック。
     pub fn from_u8(value: u8) -> Self {
         match value {
             1 => Self::Volume,
             2 => Self::TlCarrier,
             3 => Self::Cutoff,
+            4 => Self::Unplugged,
             _ => Self::Pitch,
         }
     }
@@ -583,6 +587,13 @@ impl Channel {
         // 再利用する（それらは元々CC77(ベース)+CC1(加算)を取る関数で、cc1=0なら実質ベース値のみ）。
         let texture_lfo_value = self.perf_lfo.tick(sample_rate);
         let texture_lfo = self.channel_params.texture_lfo;
+        // 行き先は排他的（同時に1個のみ）。前tickで別destinationが書いたデルタが残らないよう、
+        // matchで書くのは選ばれたdestinationの1個だけにし、残りは明示的に0へ戻す
+        // （Unplugged＝「4個とも0のまま」が正しく無変調になるための前提でもある）。
+        self.pitch_mod_cents = 0.0;
+        self.volume_mod_delta = 0.0;
+        self.tl_carrier_mod_delta = 0.0;
+        self.cutoff_mod_delta = 0.0;
         match Ym38x6LfoDestination::from_u8(texture_lfo.destination) {
             Ym38x6LfoDestination::Pitch => {
                 let cents = pitch_depth_cents(texture_lfo.depth, 0, 0);
@@ -598,6 +609,7 @@ impl Channel {
             Ym38x6LfoDestination::Cutoff => {
                 self.cutoff_mod_delta = texture_lfo_value * cutoff_depth(texture_lfo.depth, 0);
             }
+            Ym38x6LfoDestination::Unplugged => {}
         }
 
         // Pitch FG（新規）：ループ可能EGでビブラート/シンセタムを作る一次源。

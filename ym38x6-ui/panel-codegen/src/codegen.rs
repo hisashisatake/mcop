@@ -194,6 +194,18 @@ fn gen_jack_stmt(j: &Jack) -> String {
     }
 }
 
+/// パネルの`body`に`Jack::Source`（質感LFOの出力ジャック）が含まれるか判定する。
+/// 該当するのは`panel.xml`中のTEXTURE LFOパネル1個のみ。このパネルの外形矩形（`Frame::show`の
+/// `response.rect`）を`tx_jacks.set_source_panel_rect`へ渡し、質感LFOパッチベイの「ケーブルを
+/// パネル自身へドロップして未接続化する」判定（`patchbay::finish_texture_lfo_patchbay`）に使う。
+fn panel_has_source_jack(body: &[BodyStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        BodyStmt::Header { items } => items.iter().any(|item| matches!(item, HeaderItem::Jack(Jack::Source))),
+        BodyStmt::Jack(j) => matches!(j, Jack::Source),
+        _ => false,
+    })
+}
+
 fn gen_header_item_stmt(item: &HeaderItem) -> String {
     match item {
         HeaderItem::Title(t) => gen_title_stmt(t),
@@ -236,7 +248,8 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     let outer_margin = egui_margin_literal(&style.panel_outer_margin);
     let frame_expr =
         format!("egui::Frame::group(ui.style()).inner_margin({inner_margin}).outer_margin({outer_margin})");
-    let group_stmt = if capture_height {
+    let has_source_jack = panel_has_source_jack(&p.body);
+    let group_stmt = if capture_height || has_source_jack {
         format!("let group_resp = {frame_expr}.show(ui, |ui| {{")
     } else {
         format!("{frame_expr}.show(ui, |ui| {{")
@@ -252,6 +265,9 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     }
     inner.push("    });".to_string());
     inner.push("});".to_string());
+    if has_source_jack {
+        inner.push("tx_jacks.set_source_panel_rect(group_resp.response.rect);".to_string());
+    }
     if capture_height && match_height {
         let margin_v = fmt_num(style.panel_inner_margin.vertical() + style.panel_outer_margin.vertical());
         inner.push(format!("let match_height = group_resp.response.rect.height() - {margin_v} - frame_stroke * 2.0;"));

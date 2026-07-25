@@ -1,4 +1,4 @@
-use egui::{self, Color32, Id, LayerId, Order, Painter, Pos2, Sense, Stroke, Vec2};
+use egui::{self, Color32, Id, LayerId, Order, Painter, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::param_handle::IntParamHandle;
 
@@ -9,6 +9,12 @@ const DEST_COLORS: [Color32; 4] = [
     Color32::from_rgb(0xE8, 0xC7, 0x5C), // TL: 黄
     Color32::from_rgb(0x7C, 0xD8, 0x7C), // CUTOFF: 緑
 ];
+
+/// どこにも接続されていない状態を表すdestination値。`Ym38x6LfoDestination::Unplugged`
+/// （ym38x6-core、discriminant=4）と一致させること。4個の行き先ジャックのような専用の
+/// 描画は持たず、ケーブルをTEXTURE LFOパネル自身（`source_panel_rect`）へドロップすることで
+/// この状態に遷移する。
+const UNPLUGGED: usize = 4;
 
 const JACK_RADIUS: f32 = 9.0;
 /// クリック当たり判定・ドラッグ着地判定に使う半径（描画より広めに取る）。
@@ -30,6 +36,9 @@ const CABLE_LAYER_KEY: &str = "ym38x6_tx_patchbay_cable_layer";
 #[derive(Default)]
 pub struct JackLayout {
     source: Option<Pos2>,
+    /// TEXTURE LFOパネル自体の外形矩形（呼び出し側の`draw_panel`/`gen_panel`が
+    /// `set_source_panel_rect`で埋める）。ここへケーブルをドロップすると未接続化する。
+    source_panel_rect: Option<Rect>,
     dests: [Option<Pos2>; 4],
     drag_live_pos: Option<Pos2>,
     drag_release_pos: Option<Pos2>,
@@ -38,6 +47,13 @@ pub struct JackLayout {
 impl JackLayout {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// TEXTURE LFOパネルの外形矩形を記録する（`Frame::show`の`response.rect`）。
+    /// このパネルの`body`を描画する呼び出し側（`interpret.rs`のプレビュー描画、
+    /// `codegen.rs`が生成する`draw_param_panel`）だけが呼ぶ想定。
+    pub fn set_source_panel_rect(&mut self, rect: Rect) {
+        self.source_panel_rect = Some(rect);
     }
 }
 
@@ -99,10 +115,13 @@ fn draw_cable(painter: &Painter, a: Pos2, b: Pos2, color: Color32, sway: Vec2) {
     painter.circle_filled(b, 4.0, color);
 }
 
-/// 質感LFOの出力ジャック（固定・非ドラッグ）。TEXTURE LFOパネル内で1回呼ぶ。
+/// 質感LFOの出力ジャック。TEXTURE LFOパネル内で1回呼ぶ。
+/// 未接続時（行き先ジャックが全て非アクティブでドラッグできない）でも新規接続を作れるよう、
+/// こちら側からもドラッグで行き先ジャックへ挿せる（着地判定は`finish_texture_lfo_patchbay`で
+/// 行き先ジャックのドラッグと共通、TEXTURE LFOパネル自身へ戻せば未接続化も同様に効く）。
 pub fn texture_lfo_source_jack(ui: &mut egui::Ui, layout: &mut JackLayout) {
     ui.horizontal(|ui| {
-        let (rect, _resp) = ui.allocate_exact_size(Vec2::splat(JACK_RADIUS * 2.0), Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(JACK_RADIUS * 2.0), Sense::click_and_drag());
         let center = rect.center();
         layout.source = Some(center);
 
@@ -110,6 +129,17 @@ pub fn texture_lfo_source_jack(ui: &mut egui::Ui, layout: &mut JackLayout) {
         painter.circle_filled(center, JACK_RADIUS, Color32::LIGHT_GRAY);
         painter.circle_stroke(center, JACK_RADIUS, Stroke::new(1.5, Color32::WHITE));
         painter.circle_filled(center, JACK_RADIUS * 0.35, Color32::from_black_alpha(170));
+
+        if resp.dragged() {
+            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                layout.drag_live_pos = Some(p);
+            }
+        }
+        if resp.drag_stopped() {
+            layout.drag_release_pos = Some(ui.input(|i| i.pointer.interact_pos()).unwrap_or(center));
+        }
+        let cursor = if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab };
+        let _ = resp.on_hover_cursor(cursor);
 
         ui.label(egui::RichText::new("LFO OUT").size(9.0).strong());
     });
@@ -129,7 +159,7 @@ pub fn texture_lfo_dest_jack(
     label: &str,
     layout: &mut JackLayout,
 ) {
-    let current = handle.value().clamp(0, 3) as usize;
+    let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
     let active = current == dest_index;
     let color = DEST_COLORS[dest_index];
 
@@ -189,27 +219,36 @@ pub fn texture_lfo_dest_jack(
 }
 
 /// 全ジャックの配置が出揃った後（`draw_param_panel`末尾）で1回呼ぶ。
-/// ドラッグ解放時の着地判定（最寄りジャックへのスナップ）と、実際のケーブル描画を行う。
+/// ドラッグ解放時の着地判定（TEXTURE LFOパネル自身へのドロップ＝未接続化、または
+/// 最寄りジャックへのスナップ）と、実際のケーブル描画を行う。
 /// ケーブルはForegroundレイヤーへ描くため、途中のパネル（`ui.group`）のクリップ矩形を
 /// またいでも全区間が見える。クリップ自体はスクロールビューポート（`ui.clip_rect()`）に
 /// 合わせるため、スクロールで隠れた領域まで描画がはみ出すことはない。
 pub fn finish_texture_lfo_patchbay(ui: &mut egui::Ui, handle: &dyn IntParamHandle, layout: JackLayout) {
     if let Some(release_pos) = layout.drag_release_pos {
-        let current = handle.value().clamp(0, 3) as usize;
-        let mut best: Option<(usize, f32)> = None;
-        for (i, pos) in layout.dests.iter().enumerate() {
-            if let Some(p) = pos {
-                let d = p.distance(release_pos);
-                let closer = match best {
-                    Some((_, bd)) => d < bd,
-                    None => true,
-                };
-                if d <= HIT_RADIUS && closer {
-                    best = Some((i, d));
+        let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
+        // TEXTURE LFOパネル自身（ケーブルの出所）へドロップした場合は無条件に未接続化する。
+        // 行き先ジャックはこのパネルの外にあるため、他の候補と競合することはない。
+        let dropped_on_source_panel = layout.source_panel_rect.is_some_and(|r| r.contains(release_pos));
+        let target = if dropped_on_source_panel {
+            Some(UNPLUGGED)
+        } else {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, pos) in layout.dests.iter().enumerate() {
+                if let Some(p) = pos {
+                    let d = p.distance(release_pos);
+                    let closer = match best {
+                        Some((_, bd)) => d < bd,
+                        None => true,
+                    };
+                    if d <= HIT_RADIUS && closer {
+                        best = Some((i, d));
+                    }
                 }
             }
-        }
-        if let Some((i, _)) = best {
+            best.map(|(i, _)| i)
+        };
+        if let Some(i) = target {
             if i != current {
                 handle.begin_edit();
                 handle.set(i as i32);
@@ -219,8 +258,7 @@ pub fn finish_texture_lfo_patchbay(ui: &mut egui::Ui, handle: &dyn IntParamHandl
         }
     }
 
-    let current = handle.value().clamp(0, 3) as usize;
-    let (Some(source), Some(settled)) = (layout.source, layout.dests[current]) else {
+    let Some(source) = layout.source else {
         return;
     };
 
@@ -229,9 +267,17 @@ pub fn finish_texture_lfo_patchbay(ui: &mut egui::Ui, handle: &dyn IntParamHandl
     let painter = Painter::new(ui.ctx().clone(), layer_id, clip_rect);
 
     if let Some(live) = layout.drag_live_pos {
+        // ドラッグ中は未接続（current==UNPLUGGED、行き先ジャックの現在地なし）でも
+        // LFO OUTジャック自身から新規接続を引き出せるよう、接続状態によらず灰色の
+        // 追従ケーブルを描く（行き先ジャック側からのドラッグと同じ見た目にする）。
         draw_cable(&painter, source, live, Color32::GRAY, Vec2::ZERO);
     } else {
-        let sway = wobble_offset(ui);
-        draw_cable(&painter, source, settled, DEST_COLORS[current], sway);
+        let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
+        // 未接続（current==UNPLUGGED）時は`dests`の範囲外になり`None`が返るため、
+        // 確定済みケーブルは描かない。
+        if let Some(settled) = layout.dests.get(current).copied().flatten() {
+            let sway = wobble_offset(ui);
+            draw_cable(&painter, source, settled, DEST_COLORS[current], sway);
+        }
     }
 }

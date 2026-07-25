@@ -174,7 +174,7 @@ fn ym38x6_set_performance_lfo(
     let depth = match dest {
         Ym38x6LfoDestination::Volume | Ym38x6LfoDestination::TlCarrier => volume_depth(cc77, cc1) * 255.0,
         Ym38x6LfoDestination::Cutoff => cutoff_depth(cc77, cc1),
-        Ym38x6LfoDestination::Pitch => 0.0,
+        Ym38x6LfoDestination::Pitch | Ym38x6LfoDestination::Unplugged => 0.0,
     }
     .round()
     .clamp(0.0, 255.0) as u8;

@@ -170,7 +170,7 @@ pub struct ChannelParamsDto {
     pub gain_fg_curve: u8,
     /// 質感LFO全項目（`ChannelParams.texture_lfo`のDTO表現）。waveform/fade_modeは宣言順
     /// インデックス（waveform=0〜4の直接値、旧8波形経由の変換は撤去済み）、destinationは
-    /// 0=Pitch/1=Volume/2=TL/3=Cutoff、offsetは中心128（オフセットなし）の0〜255表現。
+    /// 0=Pitch/1=Volume/2=TL/3=Cutoff/4=未接続、offsetは中心128（オフセットなし）の0〜255表現。
     /// rate/depth/delay/destinationは旧DTOでは往復で破棄されていたが、エディタ経由の
     /// send_patchでも実際に反映されるようここで保持する（main.jsのランタイム制御が
     /// 書いた値をエディタが上書きしないようにする役割も兼ねる）。

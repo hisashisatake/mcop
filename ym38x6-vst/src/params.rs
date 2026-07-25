@@ -124,7 +124,7 @@ pub(crate) struct Ym38x6Params {
     pub texture_lfo_fade_time: IntParam,
     #[id = "texture_lfo_offset"]
     pub texture_lfo_offset: IntParam,
-    /// 質感LFOの行き先(0=Pitch/1=Volume/2=TL/3=Cutoff、Ym38x6LfoDestitationと同じ並び)。
+    /// 質感LFOの行き先(0=Pitch/1=Volume/2=TL/3=Cutoff/4=未接続、Ym38x6LfoDestitationと同じ並び)。
     /// NRPN(0,0)と共存（algorithm等と同じ1シャドウ差分検知方式、lib.rs参照）。
     #[id = "texture_lfo_destination"]
     pub texture_lfo_destination: IntParam,
@@ -259,8 +259,8 @@ impl Default for Ym38x6Params {
             texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（op_fine_tune等と同じ中心128の慣習）。
             texture_lfo_offset: IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
-            // 0=Pitch/1=Volume/2=TL/3=Cutoff。既定0＝Pitch（NRPN(0,0)の既定と一致）。
-            texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 3 }),
+            // 0=Pitch/1=Volume/2=TL/3=Cutoff/4=未接続。既定0＝Pitch（NRPN(0,0)の既定と一致）。
+            texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
 
             chip_lfo_freq: IntParam::new("Chip LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
             chip_lfo_pmd: IntParam::new("Chip LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),

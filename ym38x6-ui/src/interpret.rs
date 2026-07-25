@@ -211,6 +211,17 @@ fn draw_title(ui: &mut egui::Ui, t: &Title, idx: Option<usize>) {
     ui.label(egui::RichText::new(text).strong());
 }
 
+/// パネルの`body`に`Jack::Source`（質感LFOの出力ジャック）が含まれるか判定する。
+/// 該当するのはTEXTURE LFOパネル1個のみ（`codegen.rs`の同名ヘルパーと対をなす、
+/// IR→Rust文字列生成 vs IR→実egui呼び出しの違いだけで判定ロジックは同一）。
+fn panel_has_source_jack(body: &[BodyStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        BodyStmt::Header { items } => items.iter().any(|item| matches!(item, HeaderItem::Jack(Jack::Source))),
+        BodyStmt::Jack(j) => matches!(j, Jack::Source),
+        _ => false,
+    })
+}
+
 fn draw_jack(ui: &mut egui::Ui, store: &mut HandleStore, j: &Jack, idx: Option<usize>, jacks: &mut JackLayout) {
     match j {
         Jack::Source => texture_lfo_source_jack(ui, jacks),
@@ -349,8 +360,9 @@ fn draw_panel(
 ) -> egui::Response {
     let inner_margin = margin_to_egui(&style.panel_inner_margin);
     let outer_margin = margin_to_egui(&style.panel_outer_margin);
+    let has_source_jack = panel_has_source_jack(&p.body);
     let mut draw_one = |ui: &mut egui::Ui, idx: Option<usize>| {
-        egui::Frame::group(ui.style())
+        let resp = egui::Frame::group(ui.style())
             .inner_margin(inner_margin)
             .outer_margin(outer_margin)
             .show(ui, |ui| {
@@ -361,7 +373,11 @@ fn draw_panel(
                 ui.spacing_mut().item_spacing = base_spacing;
                 ui.vertical(|ui| draw_body(ui, store, &p.body, idx, jacks));
             })
-            .response
+            .response;
+        if has_source_jack {
+            jacks.set_source_panel_rect(resp.rect);
+        }
+        resp
     };
     match &p.repeat {
         None => draw_one(ui, None),
