@@ -20,22 +20,13 @@ fn default_xml_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../ym38x6-ui/src/panel.xml")
 }
 
-const FALLBACK_XML: &str = r#"<layout>
-  <panels>
-    <panel title="EMPTY">
-      <row justify="start">
-        <knob label="EXAMPLE" handle="params.example"/>
-      </row>
-    </panel>
-  </panels>
-</layout>
-"#;
-
+/// 起動時は`panel.xml`正本をそのまま読む（このツールの主用途が正本の往復編集のため）。
+/// 読めなかった場合はサンプルXMLで代用せず空で開始する（正本と紛らわしいコピーを持たない）。
 fn load_default_xml() -> (String, String) {
     let path = default_xml_path();
     match std::fs::read_to_string(&path) {
         Ok(text) => (text, "panel.xml".to_string()),
-        Err(_) => (FALLBACK_XML.to_string(), "(sample)".to_string()),
+        Err(_) => (String::new(), "(未読込)".to_string()),
     }
 }
 
@@ -176,7 +167,7 @@ impl App {
             rust_out: String::new(),
             show_rust: false,
             undocked: false,
-            panel_width: 900.0,
+            panel_width: 1300.0,
         };
         app.reparse();
         app
@@ -184,6 +175,13 @@ impl App {
 
     /// `self.xml`を元にレイアウト（プレビュー用）とRust出力（コピー用）を再計算する。
     fn reparse(&mut self) {
+        // 空（＝正本を読めなかった、または全消しした直後）はエラー扱いにせず、案内文のまま待つ。
+        if self.xml.trim().is_empty() {
+            self.layout = None;
+            self.error = None;
+            self.rust_out.clear();
+            return;
+        }
         match panel_codegen::parse_layout(&self.xml) {
             Ok(layout) => {
                 self.layout = Some(layout);

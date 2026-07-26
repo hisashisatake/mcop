@@ -47,6 +47,23 @@ pwsh -File tools\xml-panel-dsl\build-preview-wasm.ps1
 近似描画していた版）は`preview-wasm`へ統合され削除済み。`index.html`側に残るJSは、
 DOM操作・ファイル開く/保存・プレビュー分離・キャンバス起動のグルーのみ（SVG描画コードは全廃）。
 
+**初期状態は空（2026-07-26）**。以前は`panel.xml`のコピーを初期サンプルとして`index.html`に
+埋め込んでいたが、正本を編集するたびに黙って陳腐化するため撤去した（実際に2026-07-26時点で
+「正本と同一内容」というコメントを付けたまま数世代分ずれていた）。起動後は
+**「ファイルを開く」か、エディタへのドラッグ&ドロップ**で`ym38x6-ui/src/panel.xml`を読み込む。
+
+`file://`で開いたページから`ym38x6-ui/src/panel.xml`を**自動で読み込むことはできない**。
+`fetch()`は`file:`スキームを一切サポートせず、`XMLHttpRequest`もブラウザ起動時に
+`--allow-file-access-from-files`を付けない限りブロックされるためで、wasmバイナリをbase64で
+埋め込んでいるのと同じ制約（このツールがサーバー不要である代償）。自動読み込みを実現するには
+ローカルHTTPサーバー経由にする必要があり、自己完結という利点そのものを失うため採らない。
+正本を常に自動で開きたい場合は`preview-native`（後述）を使う。
+
+**キャンバス内に描く文字列はASCIIに限る**。wasm版のeguiは既定フォントしか持たずCJKグリフが
+無いため、日本語を`ui.label`等へ渡すと豆腐(□)になる（`preview-native`はシステムの游ゴシックを
+フォールバックできるがwasmで同じことをするとフォントをbase64で抱え込み自己完結HTMLが破綻する）。
+日本語のエラー本文は`index.html`側のDOM（`#errBox`）が表示するので、キャンバス側は短い英語で足りる。
+
 **Rust出力タブは廃止済み（2026-07-26）**。`preview-wasm`は代わりにXMLの妥当性検査のみを行う
 `validate_xml`を公開し、上部OK/NGバッジの表示に使う。`panel_codegen::generate_rust`自体
 （実際に`ym38x6-ui/build.rs`が使う本番のコード生成関数）は削除しておらず、生成結果を
@@ -67,6 +84,14 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 cd tools\xml-panel-dsl\preview-native
 cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen不要）
 ```
+
+**起動時に`ym38x6-ui/src/panel.xml`正本を自動で読み込み、rfdの保存ダイアログで同じパスへ
+上書きできる**（`CARGO_MANIFEST_DIR`基準の相対パスなのでCWDに依存しない）。ブラウザ版は
+サンドボックスの制約でこれができない（読み込みは手動、保存はダウンロードフォルダ行き）ため、
+`build.rs`が`rerun-if-changed=src/panel.xml`で拾う「編集→`cargo build`→VST/gesture-appへ反映」
+というループを1ステップで閉じられるのはこちらだけ。**正本を実際に編集する作業はpreview-native、
+依存ゼロで気軽に開くのがブラウザ版**、という役割分担になっている。
+正本が読めなかった場合はサンプルXMLで代用せず空で開始する（紛らわしいコピーを持たないため）。
 
 ワークスペースの`members`には含めず`exclude`のみ（`gesture-app/editor-wasm`と同じ扱い。
 `tools/xml-panel-dsl`自体がワークスペースメンバーではないため、`preview-wasm`のような

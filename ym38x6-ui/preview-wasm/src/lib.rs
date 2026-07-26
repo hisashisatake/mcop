@@ -72,14 +72,19 @@ impl eframe::App for PreviewApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             XML_STATE.with(|s| {
                 let s = s.borrow();
-                if let Some(err) = &s.error {
-                    ui.colored_label(egui::Color32::from_rgb(230, 80, 70), err);
+                // キャンバス内に描く文字列は必ずASCIIにする。wasm版のeguiは既定フォントしか持たず
+                // CJKグリフが無いため日本語は豆腐(□)になる（preview-nativeはシステムの游ゴシックを
+                // フォールバック読み込みできるが、wasmで同じことをするとフォントをbase64で
+                // 抱え込むことになり自己完結HTMLのサイズが破綻する）。日本語のエラー本文は
+                // index.html側のDOM（#errBox）が表示するので、ここでは短い英語で足りる。
+                if s.error.is_some() {
+                    ui.colored_label(egui::Color32::from_rgb(230, 80, 70), "XML parse error (see message above the canvas)");
                     ui.separator();
                 }
                 match &s.layout {
                     Some(layout) => draw_panel_from_ir(ui, layout, &mut self.store),
                     None => {
-                        ui.label("XMLを開くか編集すると、ここに実描画プレビューが表示されます。");
+                        ui.label("Open or edit panel.xml to see the live preview here.");
                     }
                 }
             });
