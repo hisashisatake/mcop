@@ -6,18 +6,41 @@ use serde::{Deserialize, Serialize};
 // パラメーターマッピング
 // ---------------------------------------------------------------------------
 
-/// rate=0 → 0.01Hz, rate=255 → 20Hz（指数マッピング）
+/// rate=0 → 0.01Hz, rate=255 → 20Hz（指数マッピング）。
+///
+/// rateは1ノート中不変のパッチ値だが、以前は`PerformanceLfo::tick()`から毎サンプル
+/// `powf()`を呼んでいた。`tl_to_gain`等と同じ256要素テーブルパターンで初回アクセス時に
+/// 1回だけ構築し（`OnceLock`、全チャンネル共有）、以降は配列参照のみで済ませる。
+/// 数式は変更していないため出力は従来とビット単位で同一。
 fn rate_to_hz(rate: u8) -> f32 {
-    const F_MIN: f32 = 0.01;
-    const F_MAX: f32 = 20.0;
-    F_MIN * (F_MAX / F_MIN).powf(rate as f32 / 255.0)
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const F_MIN: f32 = 0.01;
+        const F_MAX: f32 = 20.0;
+        let mut table = [0.0f32; 256];
+        for (rate, slot) in table.iter_mut().enumerate() {
+            *slot = F_MIN * (F_MAX / F_MIN).powf(rate as f32 / 255.0);
+        }
+        table
+    });
+    table[rate as usize]
 }
 
 /// delay=0 → 0秒, delay=255 → 10秒（線形マッピング）。
 /// `sound_core::eg`のFG Delayフェーズからも再利用するため`pub(crate)`。
+/// `PerformanceLfo::tick`から毎サンプル呼ばれる（delay+fade_timeの2回）ため、
+/// `rate_to_hz`と同じ256要素テーブル化で除算を配列参照に置き換える（値はビット単位で同一）。
 pub(crate) fn delay_to_seconds(delay: u8) -> f32 {
-    const D_MAX: f32 = 10.0;
-    delay as f32 / 255.0 * D_MAX
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const D_MAX: f32 = 10.0;
+        let mut table = [0.0f32; 256];
+        for (delay, slot) in table.iter_mut().enumerate() {
+            *slot = delay as f32 / 255.0 * D_MAX;
+        }
+        table
+    });
+    table[delay as usize]
 }
 
 /// 三角波: phase=0→-1, 0.25→0, 0.5→1, 0.75→0

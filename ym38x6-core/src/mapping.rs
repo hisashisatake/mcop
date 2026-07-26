@@ -182,11 +182,23 @@ pub fn feedback_to_scale(feedback: u8) -> f32 {
 
 /// [feedback_to_scale]の最大値を可変にした版（フィードバック帰還方式の実験・測定用）。
 /// 通常の発音は`feedback_to_scale`（max=1.8）を使う。
+///
+/// 以前は`Channel::tick()`から毎サンプル`powf()`を呼んでいた。`max`は可変引数のため、
+/// 指数カーブ部分`2^(7*(fb/255-1))`のみを256要素テーブル化し（`OnceLock`、全チャンネル共有）、
+/// `max ×テーブル値`の形にする。乗算のオペランド値が従来と同一のため出力はビット単位で同一。
 pub fn feedback_to_scale_with_max(feedback: u8, max: f32) -> f32 {
     if feedback == 0 {
         return 0.0;
     }
-    max * 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0))
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (feedback, slot) in table.iter_mut().enumerate() {
+            *slot = 2.0f32.powf(7.0 * (feedback as f32 / 255.0 - 1.0));
+        }
+        table
+    });
+    max * table[feedback as usize]
 }
 
 /// オペレーター間FM変調の深さスケール（固定の内部定数、暫定値）。
