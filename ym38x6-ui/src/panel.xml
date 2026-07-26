@@ -5,13 +5,42 @@
     <panels gap="8"/>
     <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。
          outer-marginの右側を増やすと、単独パネル行の右端の余裕を確保できる。 -->
-    <panel inner-margin="6" outer-margin="0"/>
+    <panel inner-margin="6" outer-margin="3"/>
     <!-- 全ウィジェット共通の既定マージン。個々のタグ（<knob margin="...">等）や
          インスタンス属性（<knob margin="..." .../>）で上書きできる。 -->
-    <widget margin="0"/>
-    <eg-preview width="84" height="66"/>
-    <algorithm-diagram width="150" height="100"/>
+    <widget margin="5 0 0 0"/>
+    <eg-preview width="130" height="100"/>
+    <algorithm-diagram width="130" height="100"/>
   </style>
+
+  <panels match-height="true">
+    <panel span="4" title="CHANNEL">
+      <header>
+        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="between" gap="spacing">
+        <algorithm-diagram handle="algorithm"/>
+        <row grow="true" justify="between">
+          <knob label="ALG" handle="algorithm" margin="0 60"/>
+          <knob label="FB" handle="feedback" margin="0 30"/>
+        </row>
+      </row>
+    </panel>
+    <panel span="8" title="CHIP LFO">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
+        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
+        <knob label="CH.AMD" handle="chip_lfo_amd"/>
+        <knob label="CH.DLY" handle="chip_lfo_delay"/>
+        <knob label="PMS" handle="pms"/>
+        <knob label="AMS" handle="ams"/>
+      </row>
+    </panel>
+  </panels>
 
   <panels>
     <panel repeat="operators" as="op" index="i">
@@ -24,7 +53,7 @@
         <eg-preview mapping="DbLinear" tl="tl" ar="ar" d1r="d1r" d1l="d1l" d2r="d2r" rr="rr"
           floor="floor" loop="op_loop" curve="curve" delay-value="0"/>
         <stack gap="spacing">
-          <checkbox label="LOOP" handle="op_loop"/>
+          <checkbox label="LOOP" handle="op_loop" margin="18 0 0 0"/>
           <checkbox label="CURVE" handle="curve"/>
         </stack>
         <row grow="true" justify="between">
@@ -52,49 +81,43 @@
     </panel>
   </panels>
 
-  <panels match-height="true">
-    <panel span="4" title="CHANNEL">
-      <header>
-        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
-        <title/>
-      </header>
-      <row justify="start" gap="spacing">
-        <algorithm-diagram handle="algorithm"/>
-        <row grow="true" justify="between">
-          <knob label="ALG" handle="algorithm"/>
-          <knob label="FB" handle="feedback"/>
-        </row>
-      </row>
-    </panel>
-    <panel span="8" title="CHIP LFO">
+  <panels>
+    <panel span="3" title="MASTER EFFECT (REVERB)">
       <header>
         <title/>
       </header>
       <row justify="between">
-        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
-        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
-        <knob label="CH.AMD" handle="chip_lfo_amd"/>
-        <knob label="CH.DLY" handle="chip_lfo_delay"/>
-        <knob label="PMS" handle="pms"/>
-        <knob label="AMS" handle="ams"/>
+        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="0"/>
+        <knob label="REV" handle="rev_send"/>
+        <knob label="R.TIME" handle="reverb_time"/>
       </row>
     </panel>
-  </panels>
-
-  <panels>
-    <panel title="TEXTURE LFO">
+    <panel span="4" title="MASTER EFFECT (CHORUS)">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="1"/>
+        <knob label="CHO" handle="cho_send"/>
+        <knob label="C.RATE" handle="chorus_mod_rate"/>
+        <knob label="C.DEP" handle="chorus_mod_depth"/>
+        <knob label="C.FB" handle="chorus_feedback"/>
+        <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+      </row>
+    </panel>
+    <panel span="5" title="TEXTURE LFO">
       <header>
         <jack kind="source"/>
         <title/>
       </header>
       <row justify="between">
+        <stack>
+            <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2" margin="0 0 -10 0"/>
+            <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3" margin="-10 0 -20 0"/>
+        </stack>
         <knob label="TX.RATE" handle="texture_lfo_rate"/>
         <knob label="TX.DEP" handle="texture_lfo_depth"/>
         <knob label="TX.DLY" handle="texture_lfo_delay"/>
-        <stack>
-            <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2"/>
-            <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3"/>
-        </stack>
         <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
         <knob label="TX.OFS" handle="texture_lfo_offset"/>
       </row>
@@ -115,7 +138,7 @@
           loop="params.pitch_fg.eg.loop_enabled" curve="params.pitch_fg.eg.curve"
           delay="params.pitch_fg.eg.delay"/>
         <stack gap="spacing">
-          <checkbox label="LOOP" handle="params.pitch_fg.eg.loop_enabled"/>
+          <checkbox label="LOOP" handle="params.pitch_fg.eg.loop_enabled" margin="18 0 0 0"/>
           <checkbox label="CURVE" handle="params.pitch_fg.eg.curve"/>
         </stack>
         <row grow="true" justify="between">
@@ -145,7 +168,7 @@
           loop="params.cutoff_fg.eg.loop_enabled" curve="params.cutoff_fg.eg.curve"
           delay="params.cutoff_fg.eg.delay"/>
         <stack gap="spacing">
-          <checkbox label="LOOP" handle="params.cutoff_fg.eg.loop_enabled"/>
+          <checkbox label="LOOP" handle="params.cutoff_fg.eg.loop_enabled" margin="18 0 0 0"/>
           <checkbox label="CURVE" handle="params.cutoff_fg.eg.curve"/>
         </stack>
         <row grow="true" justify="between">
@@ -177,7 +200,7 @@
           loop="params.gain_fg.loop_enabled" curve="params.gain_fg.curve"
           delay="params.gain_fg.delay"/>
         <stack gap="spacing">
-          <checkbox label="LOOP" handle="params.gain_fg.loop_enabled"/>
+          <checkbox label="LOOP" handle="params.gain_fg.loop_enabled" margin="18 0 0 0"/>
           <checkbox label="CURVE" handle="params.gain_fg.curve"/>
         </stack>
         <row grow="true" justify="between">
@@ -189,32 +212,6 @@
           <knob label="V.FLOOR" handle="params.gain_fg.floor"/>
           <knob label="V.DLY" handle="params.gain_fg.delay"/>
         </row>
-      </row>
-    </panel>
-  </panels>
-
-  <panels>
-    <panel title="MASTER EFFECT (REVERB)">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="0"/>
-        <knob label="REV" handle="rev_send"/>
-        <knob label="R.TIME" handle="reverb_time"/>
-      </row>
-    </panel>
-    <panel title="MASTER EFFECT (CHORUS)">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="1"/>
-        <knob label="CHO" handle="cho_send"/>
-        <knob label="C.RATE" handle="chorus_mod_rate"/>
-        <knob label="C.DEP" handle="chorus_mod_depth"/>
-        <knob label="C.FB" handle="chorus_feedback"/>
-        <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
       </row>
     </panel>
   </panels>

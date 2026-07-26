@@ -1,8 +1,8 @@
 //! `tools/xml-panel-dsl/index.html`から呼ばれる、panel.xmlの実egui描画プレビュー（フェーズB）。
 //! `ym38x6-ui`の`preview`フィーチャ（`interpret.rs`）をeframeのWebRunnerでcanvasに描画し、
-//! ユーザーがXMLを編集するたびに`set_xml`で再パース・再描画する。旧`codegen-wasm`の
-//! `generate_rust`（Rust出力タブ用）もここへ統合した（wasm32-unknown-unknown専用クレート、
-//! ワークスペースから除外。ビルドはrustup配下のcargoで個別に行う。gesture-app/editor-wasmと同型）。
+//! ユーザーがXMLを編集するたびに`set_xml`で再パース・再描画する（wasm32-unknown-unknown専用
+//! クレート、ワークスペースから除外。ビルドはrustup配下のcargoで個別に行う。
+//! gesture-app/editor-wasmと同型）。
 
 use std::cell::RefCell;
 
@@ -48,11 +48,12 @@ pub fn set_xml(xml: &str) {
     request_repaint();
 }
 
-/// XML全文から`draw_param_panel`関数（本体アイテムのみ）を生成する（Rust出力タブ用、
-/// 旧`codegen-wasm::generate_rust`をそのまま移管）。
+/// XMLが妥当かどうかだけを検査する（index.htmlの上部OK/NGバッジ用）。
+/// 実際の描画反映は`set_xml`、生成Rustコードの実体は`ym38x6-ui/build.rs`が使う
+/// `panel_codegen::generate_rust`（index.html側では表示しない）が担う。
 #[wasm_bindgen]
-pub fn generate_rust(xml: &str) -> Result<String, JsError> {
-    panel_codegen::generate_rust(xml).map_err(|e| JsError::new(&e))
+pub fn validate_xml(xml: &str) -> Result<(), JsError> {
+    panel_codegen::parse_layout(xml).map(|_| ()).map_err(|e| JsError::new(&e))
 }
 
 struct PreviewApp {

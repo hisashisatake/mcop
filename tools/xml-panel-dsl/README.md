@@ -45,13 +45,20 @@ pwsh -File tools\xml-panel-dsl\build-preview-wasm.ps1
 
 旧`codegen-wasm`（`generate_rust`/`parse_ir_preview`/`solve_tree_json`のみを公開しSVGで
 近似描画していた版）は`preview-wasm`へ統合され削除済み。`index.html`側に残るJSは、
-DOM操作・ファイル開く/保存・タブ切替・キャンバス起動のグルーのみ（SVG描画コードは全廃）。
+DOM操作・ファイル開く/保存・プレビュー分離・キャンバス起動のグルーのみ（SVG描画コードは全廃）。
+
+**Rust出力タブは廃止済み（2026-07-26）**。`preview-wasm`は代わりにXMLの妥当性検査のみを行う
+`validate_xml`を公開し、上部OK/NGバッジの表示に使う。`panel_codegen::generate_rust`自体
+（実際に`ym38x6-ui/build.rs`が使う本番のコード生成関数）は削除しておらず、生成結果を
+目視したい場合は下記`preview-native`の「Rust出力を表示」チェックボックスを使う
+（プレビューと生成コード表示を1ウィンドウに同居させる意味が薄いため、HTML版はプレビュー専用に寄せた）。
 
 ## ネイティブプレビュー `preview-native`（2026-07-25追加: エディタ強化・プレビュー分離）
 
-ブラウザ版（`preview-wasm`、WebGLキャンバス）は、プレビューを別ウィンドウへ分離・ドッキングする
-機能が原理的に実現できない（キャンバスを別ウィンドウへ移すとWebGLコンテキストが失われる。
-wasmの`web-sys::window()`もメインウィンドウ固定のためポップアップに2つ目のeframeを起こすのも不可）。
+ブラウザ版（`preview-wasm`、WebGLキャンバス）は、**同一wasmインスタンス内で**プレビューを
+別ウィンドウへ分離・ドッキングする機能が原理的に実現できない（キャンバスを別ウィンドウへ
+移すとWebGLコンテキストが失われる。wasmの`web-sys::window()`もメインウィンドウ固定のため
+ポップアップに2つ目のeframeを起こすのも不可）。
 この機能を含むフル機能版として、`tools/xml-panel-dsl/preview-native`にeframe **ネイティブ**アプリを
 新設した。プレビュー描画自体は`ym38x6-ui::interpret::draw_panel_from_ir`（`preview-wasm`と共有）を
 そのまま呼ぶだけで、`panel.xml`の生成経路（build.rs/interpret.rs）には一切変更を加えていない。
@@ -74,13 +81,42 @@ cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen
   行う。`.value`の直接代入だとブラウザのCtrl+Z履歴が壊れることを実機で確認したため）。
 - **プレビューの分離・ドッキング**: egui 0.34のマルチビューポート（`show_viewport_immediate`、
   `&mut self`へアクセスできる方の版）。分離ウィンドウを閉じる（`close_requested()`検知）と
-  自動的にドッキング状態へ戻る。
+  自動的にドッキング状態へ戻る（ブラウザ版`index.html`にも別方式で同等機能を追加済み、後述）。
 - **エディタ/プレビュー境界のリサイズ**: `egui::Panel::left(...).resizable(true)`で標準対応
   （ブラウザ版にも同等のドラッグ可能なスプリッタdivを追加済み）。
 - **日本語ラベルの文字化け対策**: eframeの既定フォントにはCJKグリフが無く豆腐(□)化するため、
   起動時に`C:\Windows\Fonts\YuGothR.ttc`（Windows標準の游ゴシック、`.ttc`は`FontData.index`で
   面を指定）をフォールバックフォントとして追加している（このマシン専用ツールのためバイナリへの
   フォント埋め込みはせず、システムフォントを都度読む）。
+
+## ブラウザ版のプレビュー分離（2026-07-26追加: window.open + postMessage）
+
+`preview-native`が解決した「同一wasmインスタンス内ではWebGLキャンバスを別ウィンドウへ移せない」
+という制約は、キャンバス自体を移動しようとする限り回避できない。`index.html`側はこれを、
+**キャンバスを移動するのではなく、`index.html`自身を`?popout=1`付きでもう1枚開き、
+そこで独立した2個目の`preview-wasm`インスタンスを起こす**という別方式で回避している
+（新規ウィンドウは完全に別のブラウジングコンテキストなので、同一インスタンス内マルチビュー
+ポートの制約はそもそも関係ない）。
+
+- 分離ウィンドウ側（`?popout=1`）は`body.popout`クラスでエディタペイン・ヘッダー・
+  パネルタブを`display:none`にし、`<canvas>`をウィンドウ全面に表示する
+  （CSSのみで切替。JS側の分岐は`IS_POPOUT`定数1個）。
+- 編集中のXMLはDOM共有ではなく`postMessage`で同期する（`file://`はブラウザによっては
+  ウィンドウ間でオリジンが不透明扱いになることがあるため、`targetOrigin`は`"*"`固定。
+  `window.open()`の戻り値・`window.opener`とも、`postMessage`/`closed`/`focus()`は
+  クロスオリジンでも仕様上アクセス可能なため問題ない）。ハンドシェイクは
+  分離側の`PreviewHandle.start()`完了後に`popout-ready`を送り返す方式（親側はこれを
+  受け取るまで`xml`メッセージを送らないため、初期化順序のレースは起きない）。
+- 分離中は親側のローカルプレビューを`canvasWrap`ごと非表示にするだけでなく、
+  `PreviewHandle.destroy()`（+`free()`）で描画ループ自体を止める（`display:none`の
+  キャンバスも`requestAnimationFrame`はタブが可視である限り止まらず、CPU/GPUを
+  無駄に使い続けるため）。分離ウィンドウが閉じたことは`popoutWin.closed`のポーリング
+  （500ms）で検知し、閉じたらローカル側の`PreviewHandle`を作り直して復帰する。
+- `preview-native`のマルチビューポート方式（1プロセス内でOSウィンドウを追加）と比べ、
+  実体は「もう1個ページを開いてXMLを流し込むだけ」なので実装・保守コストが低い。
+  代わりに真のドッキング（1ウィンドウ内での分離）ではなく別ウィンドウ2枚constructionになる、
+  波形メモリ等の状態を持つわけではないので初期化コスト（wasm再インスタンス化）が
+  分離のたびに発生する、という違いがある。
 
 ## 位置づけ・割り切り（2026-07-22の方針決定）
 
