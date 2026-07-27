@@ -1,0 +1,64 @@
+# perf-bench
+
+38x6エンジンのレンダリング性能を、実際の曲データ（tools/smf2wav）で安全に計測・検証するスキル。
+「速くなったか」だけでなく「音が変わっていないか（出力WAVのビット一致）」を必ずセットで確認する。
+
+## 使い方
+
+```
+/perf-bench <bank.38x6> <song.mid> [--pairs N]
+```
+
+例:
+```
+/perf-bench "tools/opz2x6/private/out/Yamaha Factory Bank A.38x6" "C:\Users\satake\Documents\REAPER Media\Media\LastWave_single_track.mid"
+```
+
+- `--pairs`: 交互A/B計測のペア数（既定5）
+
+## 前提
+
+- 必ずリリースビルドで計測する（デバッグビルドの絶対値・相対比較は意味を持たない）:
+  ```powershell
+  cargo build --release -p smf2wav
+  ```
+- 比較には「変更前のexe」と「変更後のexe」の両方が要る。最適化に着手する**前**に一度ベースラインをビルドし、スクラッチパッドへ退避しておく:
+  ```powershell
+  Copy-Item "target\release\smf2wav.exe" "<scratchpad>\smf2wav_baseline.exe" -Force
+  ```
+  着手後に気づいた場合は `git stash` で変更前状態に戻し、再ビルド→退避→`git stash pop` で復帰する。
+
+## 手順
+
+1. **ベースライン確保**（未取得なら）: 上記の通り現在のexeを退避する。
+2. **変更を実装**する。
+3. **リビルド**して `smf2wav_opt.exe` として別名保存する。
+4. **交互A/B計測**（baseline→opt→baseline→opt…の順で交互に走らせ、マシン負荷の偏りによるバイアスを避ける）:
+   ```powershell
+   foreach ($i in 1..N) {
+     $tb = Measure-Command { & baseline.exe $bank $song out.wav --no-normalize }
+     $to = Measure-Command { & opt.exe      $bank $song out.wav --no-normalize }
+     # 記録
+   }
+   ```
+   単発計測は使わない。両方の中央値を比較する（外れ値に強い）。
+5. **ビット一致検証**: 音を変えないはずの最適化なら、両exeで書き出したWAVの`Get-FileHash`が完全一致することを確認する。**一致しない場合は速度比較より優先して原因を特定する**（意図した音の変化か、バグか）。決定論化・バグ修正など意図的に出力が変わる変更の場合は、なぜ一致しなくてよいかを明示する。
+6. 結果（中央値・倍率・ハッシュ一致有無）を報告する。
+
+## ホットスポットの切り分け（TEMP-PROFILING）
+
+どの処理が重いか特定したい場合、該当コードを一時的に無効化して計測する:
+
+```rust
+if true { return dry; } // TEMP-PROFILING: VCF/VCAコストの切り分け（後で戻す）
+```
+
+- 必ず `TEMP-PROFILING` とコメントし、他の変更と混同しないようにする
+- 計測が終わったら**必ず全て取り除く**（コミット前に `git diff` で残っていないか確認する）
+- 複数箇所を順に切り分けると、どの区間が支配的コストかが分かる（例: 変調前処理・VCF/VCA・マスターエフェクトを個別に無効化して差分を見る）
+
+## このプロジェクトで既知の落とし穴
+
+- **`HashMap`のイテレーション順は非決定論**: プロセスごとのランダムシードにより、同一入力でも実行のたびに浮動小数点加算順が変わり出力WAVがビット一致しないことがある。決定論的な順序が必要な場所（ボイス合算等）は`BTreeMap`を使う。
+- **u8パラメーター→f32変換の`powf()`/`tan()`は`OnceLock`の256要素テーブルでLUT化する**のがこのプロジェクトの既定パターン（`mapping.rs`の`tl_to_gain`が最初の実装例）。1ノート中（または1オーディオブロック中）不変の値を毎サンプル超越関数で計算している箇所を見つけたら、同じパターンを適用する。
+- 音色によって負荷が大きく変わる。リリースの長い音色はボイススチール上限までリリース裾ボイスが積み上がり支配的コストになる。単一の短い音色だけでなく、実際に重いと報告された曲・バンクの組み合わせで計測すること。
