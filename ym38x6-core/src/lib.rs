@@ -736,12 +736,18 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 const TOTAL_SLOTS: usize = 256;
 
 /// 同時発音数の既定上限。「無制限チャンネル管理」の安全弁で、通常の演奏では
-/// 到達しない値に設定してある（この曲を含む一般的なMIDIの瞬間可聴ポリは数〜十数）。
+/// 到達しない値に設定してある（一般的なMIDIの瞬間可聴ポリは数〜十数）。
 /// 長いリリース（RR）を持つパッチ×高密度なノート列では、聴感上無音のリリース裾ボイスが
 /// `is_idle()`に達するまで（数十秒）チャンネルに残り続け、上限が無いと際限なく積み上がって
 /// レンダリング負荷が膨らむ。上限到達時は最も奪ってよいボイス（release中かつ最も静かなもの）
 /// を1つ削除してから新規ボイスを確保する（`Channel::steal_score`参照）。
-const DEFAULT_MAX_VOICES: usize = 48;
+///
+/// 【2026-07-28 48→64】実測（tools/smf2wav `--max-voices`）で、通常曲（LastWave_single_track.mid、
+/// opz Bank Aのリリースの長い音色含む）はピーク31〜36止まりで48にすら到達せず、48/64/128の
+/// どれでも速度差が無いことを確認した。一方、意図的に同時発音を384まで積み上げるストレスSMFでは
+/// 上限に比例してレンダリング時間が伸びる（48=1.0倍・64=1.31倍・128=2.52倍、上限に実際到達時のみ）。
+/// 通常演奏への影響がほぼ無い範囲でヘッドルームを増やすため、きりの良い64へ引き上げた。
+const DEFAULT_MAX_VOICES: usize = 64;
 
 pub struct Ym38x6Engine {
     sample_rate: f32,
@@ -772,7 +778,7 @@ impl Ym38x6Engine {
         }
     }
 
-    /// 同時発音数の上限を変更する（既定`DEFAULT_MAX_VOICES`=48）。診断・テスト用途にも使う。
+    /// 同時発音数の上限を変更する（既定`DEFAULT_MAX_VOICES`=64）。診断・テスト用途にも使う。
     pub fn set_max_voices(&mut self, max_voices: usize) {
         self.max_voices = max_voices.max(1);
     }

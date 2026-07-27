@@ -55,6 +55,8 @@ struct Args {
     feedback_scale_max: Option<f32>,
     /// 試聴の時短用: 出力をこの秒数（テール込み）で打ち切る（None=全長）。
     max_secs: Option<f32>,
+    /// EXPERIMENT(max-voices): 同時発音数上限を上書きする（None=エンジン既定48）。
+    max_voices: Option<usize>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -66,6 +68,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut feedback_two_sample = false;
     let mut feedback_scale_max: Option<f32> = None;
     let mut max_secs: Option<f32> = None;
+    let mut max_voices: Option<usize> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -131,6 +134,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 feedback_scale_max = Some(m);
                 i += 2;
             }
+            // EXPERIMENT(max-voices): 同時発音数上限のA/B計測用。
+            "--max-voices" => {
+                let v = args.get(i + 1).ok_or("--max-voices に値がありません")?;
+                let n = v.parse::<usize>().map_err(|_| format!("--max-voices の値が不正: {v}"))?;
+                if n == 0 {
+                    return Err(format!("--max-voices は1以上を指定してください: {v}"));
+                }
+                max_voices = Some(n);
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -159,6 +172,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         feedback_two_sample,
         feedback_scale_max,
         max_secs,
+        max_voices,
     })
 }
 
@@ -178,7 +192,8 @@ fn run(args: &[String]) -> Result<(), String> {
     let smf_data = std::fs::read(&args.song)
         .map_err(|e| format!("{}: {e}", args.song.display()))?;
 
-    let mut buf = render_smf(&smf_data, &bank, args.sample_rate, args.tail_secs, args.max_secs)?;
+    let mut buf =
+        render_smf(&smf_data, &bank, args.sample_rate, args.tail_secs, args.max_secs, args.max_voices)?;
     // マスターリバーブ（send>0 のときのみ）。DAW での聴感を再現する後段適用。
     apply_reverb(&mut buf, 1, args.sample_rate, &args.reverb);
     if args.normalize {

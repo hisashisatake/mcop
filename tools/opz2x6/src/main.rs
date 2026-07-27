@@ -388,7 +388,7 @@ fn render_smf_to_wav(
     let patches: Vec<_> = voices.iter().map(|v| conv::voice_to_patch_opts(v, opts)).collect();
     let bank = smf2wav::PatchBank::from_patches(&patches)?;
 
-    let mut buf = smf2wav::render_smf(&smf_data, &bank, SR, 2.0, None)?;
+    let mut buf = smf2wav::render_smf(&smf_data, &bank, SR, 2.0, None, None)?;
     smf2wav::normalize_peak(&mut buf, 0.5);
 
     let smf_dir = output_dir.join("smf");

@@ -565,10 +565,15 @@ pub fn render_smf(
     sample_rate: f32,
     tail_secs: f32,
     max_secs: Option<f32>,
+    max_voices: Option<usize>,
 ) -> Result<Vec<f32>, String> {
     let (division, events) = parse_smf(data)?;
 
     let mut engine = Ym38x6Engine::new(sample_rate);
+    // EXPERIMENT(max-voices): 同時発音数上限のA/B計測用（Noneはエンジン既定を使う）。
+    if let Some(n) = max_voices {
+        engine.set_max_voices(n);
+    }
     // SMF内蔵のマスターエフェクト（CC91/93・NRPN(0,2)〜(0,8)で駆動）。既定 send=0 で透過。
     // main.rs の `--reverb-*`（fx.rs）はこれとは独立した後段の診断用リバーブ。
     let mut effects = MasterEffects::new(sample_rate);
@@ -1108,7 +1113,7 @@ mod tests {
 
         // CC1 無し
         let smf_a = build_smf(&[note_on.clone(), note_off.clone()]);
-        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0)).unwrap();
+        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0), None).unwrap();
 
         // tick240 で CC1=127（発音中）
         let smf_b = build_smf(&[
@@ -1116,7 +1121,7 @@ mod tests {
             (240u32, vec![0xB0, 1, 127]),
             (240u32, vec![0x80, 69, 0]), // note_off の delta を分割（合計480）
         ]);
-        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0)).unwrap();
+        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0), None).unwrap();
 
         // どちらも無音でない
         assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "CC1無し出力が無音");
@@ -1150,7 +1155,7 @@ mod tests {
             (240, vec![0x80, 60, 0]),                  // Note Off
         ];
         let smf = build_smf(&events);
-        let buf = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0)).unwrap();
+        let buf = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "混在CC/NRPN出力が無音");
     }
 
@@ -1180,7 +1185,7 @@ mod tests {
 
         // ペダル無し: note off で即 release に入り、テール終端では無音のはず。
         let smf_no_pedal = build_smf(&[(0u32, vec![0x90, 69, 100]), (480u32, vec![0x80, 69, 0])]);
-        let buf_no_pedal = render_smf(&smf_no_pedal, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let buf_no_pedal = render_smf(&smf_no_pedal, &bank, sr, 0.2, Some(1.0), None).unwrap();
         let no_pedal_tail_rms = rms(&buf_no_pedal[buf_no_pedal.len() - tail_window..]);
         assert!(no_pedal_tail_rms < 1e-3, "ペダル無しなのに末尾で鳴り続けている: rms={no_pedal_tail_rms}");
 
@@ -1190,7 +1195,7 @@ mod tests {
             (0u32, vec![0x90, 69, 100]),
             (480u32, vec![0x80, 69, 0]),
         ]);
-        let buf_pedal = render_smf(&smf_pedal, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let buf_pedal = render_smf(&smf_pedal, &bank, sr, 0.2, Some(1.0), None).unwrap();
         let pedal_tail_rms = rms(&buf_pedal[buf_pedal.len() - tail_window..]);
         assert!(pedal_tail_rms > 0.05, "ペダル保持中なのに音が消えている: rms={pedal_tail_rms}");
     }
@@ -1211,7 +1216,7 @@ mod tests {
             (10u32, vec![0x90, 69, 100]), // 弾き直し（鍵盤はまだ押されたまま、Note Offは送らない）
             (230u32, vec![0xB0, 64, 0]), // CC64 OFF（鍵盤はまだ押されているので切れてはいけない）
         ]);
-        let buf = render_smf(&smf, &bank, sr, 0.2, Some(1.0)).unwrap();
+        let buf = render_smf(&smf, &bank, sr, 0.2, Some(1.0), None).unwrap();
         let tail_rms = rms(&buf[buf.len() - tail_window..]);
         assert!(
             tail_rms > 0.05,
@@ -1233,7 +1238,7 @@ mod tests {
             (10u32, vec![0xB0, 66, 127]), // CC66 ON（A latch）
             (10u32, vec![0x80, 69, 0]),   // Note Off A（sostenutoで保留されるはず）
         ]);
-        let buf_latched = render_smf(&smf_latched, &bank, sr, 0.2, None).unwrap();
+        let buf_latched = render_smf(&smf_latched, &bank, sr, 0.2, None, None).unwrap();
         let tail_latched = rms(&buf_latched[buf_latched.len() - tail_window..]);
         assert!(tail_latched > 0.05, "CC66 ON時点で押下中のノートが保持されていない: rms={tail_latched}");
 
@@ -1243,7 +1248,7 @@ mod tests {
             (10u32, vec![0x90, 72, 100]), // Note On C（CC66 ON後に押す）
             (240u32, vec![0x80, 72, 0]),  // Note Off C（latch対象外なので即release）
         ]);
-        let buf_unlatched = render_smf(&smf_unlatched, &bank, sr, 0.2, None).unwrap();
+        let buf_unlatched = render_smf(&smf_unlatched, &bank, sr, 0.2, None, None).unwrap();
         let tail_unlatched = rms(&buf_unlatched[buf_unlatched.len() - tail_window..]);
         assert!(
             tail_unlatched < 1e-3,
@@ -1267,7 +1272,7 @@ mod tests {
             (10u32, vec![0xB0, 64, 127]), // CC64 ON
             (10u32, vec![0xB0, 66, 0]),   // CC66 OFF（CC64がまだ踏まれている）
         ]);
-        let buf1 = render_smf(&smf_cc64_still_down, &bank, sr, 0.2, None).unwrap();
+        let buf1 = render_smf(&smf_cc64_still_down, &bank, sr, 0.2, None, None).unwrap();
         let tail1 = rms(&buf1[buf1.len() - tail_window..]);
         assert!(tail1 > 0.05, "CC64保持中なのにCC66 OFFで音が消えた: rms={tail1}");
 
@@ -1280,7 +1285,7 @@ mod tests {
             (10u32, vec![0xB0, 66, 0]),
             (10u32, vec![0xB0, 64, 0]), // CC64 OFFでようやく解放
         ]);
-        let buf2 = render_smf(&smf_both_off, &bank, sr, 0.2, None).unwrap();
+        let buf2 = render_smf(&smf_both_off, &bank, sr, 0.2, None, None).unwrap();
         let tail2 = rms(&buf2[buf2.len() - tail_window..]);
         assert!(tail2 < 1e-3, "両ペダルOFF後も音が消えない: rms={tail2}");
     }
@@ -1301,14 +1306,14 @@ mod tests {
         let window = 200;
 
         let smf_hard = build_smf(&[(0u32, vec![0x90, 69, 100])]);
-        let buf_hard = render_smf(&smf_hard, &bank, sr, tail_secs, None).unwrap();
+        let buf_hard = render_smf(&smf_hard, &bank, sr, tail_secs, None, None).unwrap();
         let rms_hard = rms(&buf_hard[buf_hard.len() - window..]);
 
         let smf_soft = build_smf(&[
             (0u32, vec![0xB0, 67, 127]), // CC67 ON（最大深さ）
             (1u32, vec![0x90, 69, 100]),
         ]);
-        let buf_soft = render_smf(&smf_soft, &bank, sr, tail_secs, None).unwrap();
+        let buf_soft = render_smf(&smf_soft, &bank, sr, tail_secs, None, None).unwrap();
         let rms_soft = rms(&buf_soft[buf_soft.len() - window..]);
 
         assert!(
@@ -1328,7 +1333,7 @@ mod tests {
         let head_window = 16; // 直後2msの窓
 
         let smf_120 = build_smf(&[(0u32, vec![0x90, 69, 100]), (240u32, vec![0xB0, 120, 127])]);
-        let buf_120 = render_smf(&smf_120, &bank, sr, tail_secs, None).unwrap();
+        let buf_120 = render_smf(&smf_120, &bank, sr, tail_secs, None, None).unwrap();
         // CC直前（定常状態）の振幅を基準に、絶対値でなく相対比較する
         // （EGカーブの形状に依存しないようにするため）。
         let steady_120 = rms(&buf_120[buf_120.len() - tail_len - head_window..buf_120.len() - tail_len]);
@@ -1339,7 +1344,7 @@ mod tests {
         );
 
         let smf_123 = build_smf(&[(0u32, vec![0x90, 69, 100]), (240u32, vec![0xB0, 123, 127])]);
-        let buf_123 = render_smf(&smf_123, &bank, sr, tail_secs, None).unwrap();
+        let buf_123 = render_smf(&smf_123, &bank, sr, tail_secs, None, None).unwrap();
         let steady_123 = rms(&buf_123[buf_123.len() - tail_len - head_window..buf_123.len() - tail_len]);
         let head_123 = rms(&buf_123[buf_123.len() - tail_len..buf_123.len() - tail_len + head_window]);
         assert!(
@@ -1366,7 +1371,7 @@ mod tests {
             (240u32, vec![0x80, 69, 0]),  // Note Off（保留）
             (10u32, vec![0xB0, 121, 0]),  // Reset All Controllers
         ]);
-        let buf1 = render_smf(&smf_pending_release, &bank, sr, 0.2, None).unwrap();
+        let buf1 = render_smf(&smf_pending_release, &bank, sr, 0.2, None, None).unwrap();
         let tail1 = rms(&buf1[buf1.len() - tail_window..]);
         assert!(tail1 < 1e-3, "CC121で保留ノートが解放されていない: rms={tail1}");
 
@@ -1377,7 +1382,7 @@ mod tests {
             (10u32, vec![0x90, 69, 100]), // Note On
             (240u32, vec![0x80, 69, 0]),  // Note Off
         ]);
-        let buf2 = render_smf(&smf_pedal_state, &bank, sr, 0.2, None).unwrap();
+        let buf2 = render_smf(&smf_pedal_state, &bank, sr, 0.2, None, None).unwrap();
         let tail2 = rms(&buf2[buf2.len() - tail_window..]);
         assert!(
             tail2 < 1e-3,
