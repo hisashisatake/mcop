@@ -12,10 +12,22 @@
 // ---------------------------------------------------------------------------
 
 /// チップ内LFOの周波数(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
+///
+/// 以前は`ChipLfo::tick()`から毎サンプル`powf()`を呼んでいた。`tl_to_gain`等と同じ
+/// 256要素テーブルパターンで初回アクセス時に1回だけ構築し（`OnceLock`、全チャンネル共有）、
+/// 以降は配列参照のみで済ませる。数式は変更していないため出力は従来とビット単位で同一。
 pub fn chip_lfo_freq_to_hz(freq: u8) -> f32 {
-    const F_MIN: f32 = 3.0;
-    const F_MAX: f32 = 80.0;
-    F_MIN * (F_MAX / F_MIN).powf(freq as f32 / 255.0)
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const F_MIN: f32 = 3.0;
+        const F_MAX: f32 = 80.0;
+        let mut table = [0.0f32; 256];
+        for (freq, slot) in table.iter_mut().enumerate() {
+            *slot = F_MIN * (F_MAX / F_MIN).powf(freq as f32 / 255.0);
+        }
+        table
+    });
+    table[freq as usize]
 }
 
 /// PMS(0〜255)→ピッチ変調の最大幅（セント）。
@@ -23,12 +35,19 @@ pub fn chip_lfo_freq_to_hz(freq: u8) -> f32 {
 /// 実機PMS=0と同じ「ピッチ変調なし」の特殊値。pms=1〜255は実機PMS=1(+/-5セント)〜
 /// PMS=7(+/-700セント)の理論値を両端アンカーとした指数カーブにマッピングする。
 pub fn pms_to_cents_range(pms: u8) -> f32 {
-    const MIN_CENTS: f32 = 5.0;
-    const MAX_CENTS: f32 = 700.0;
-    if pms == 0 {
-        return 0.0;
-    }
-    MIN_CENTS * (MAX_CENTS / MIN_CENTS).powf((pms as f32 - 1.0) / 254.0)
+    // pms=0（オフ特殊値）はテーブル構築時に0.0として焼き込む。数式は不変
+    // （`chip_lfo_freq_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()の排除）。
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const MIN_CENTS: f32 = 5.0;
+        const MAX_CENTS: f32 = 700.0;
+        let mut table = [0.0f32; 256];
+        for (pms, slot) in table.iter_mut().enumerate().skip(1) {
+            *slot = MIN_CENTS * (MAX_CENTS / MIN_CENTS).powf((pms as f32 - 1.0) / 254.0);
+        }
+        table
+    });
+    table[pms as usize]
 }
 
 /// AMS(0〜255)→振幅変調の最大深さ(0.0〜1.0)。
@@ -38,13 +57,20 @@ pub fn pms_to_cents_range(pms: u8) -> f32 {
 /// depth = 1 - 10^(-dB/20) で線形振幅深度に変換する
 /// (operator.rsのamp_factor = (1 - chip_lfo_amp_mod).clamp(0,1)と整合)。
 pub fn ams_to_depth(ams: u8) -> f32 {
-    const MIN_DB: f32 = 23.9;
-    const MAX_DB: f32 = 95.6;
-    if ams == 0 {
-        return 0.0;
-    }
-    let db = MIN_DB * (MAX_DB / MIN_DB).powf((ams as f32 - 1.0) / 254.0);
-    1.0 - 10f32.powf(-db / 20.0)
+    // ams=0（オフ特殊値）はテーブル構築時に0.0として焼き込む。数式は不変
+    // （`chip_lfo_freq_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()×2の排除）。
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const MIN_DB: f32 = 23.9;
+        const MAX_DB: f32 = 95.6;
+        let mut table = [0.0f32; 256];
+        for (ams, slot) in table.iter_mut().enumerate().skip(1) {
+            let db = MIN_DB * (MAX_DB / MIN_DB).powf((ams as f32 - 1.0) / 254.0);
+            *slot = 1.0 - 10f32.powf(-db / 20.0);
+        }
+        table
+    });
+    table[ams as usize]
 }
 
 /// チップ内LFO本体：三角波固定（spec.md準拠）+ Delay。

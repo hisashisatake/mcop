@@ -111,6 +111,15 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 | `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
 | `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
 
+## エンジン性能検証スキル（tools/smf2wav）
+
+`.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
+`~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
+
+| スキル | 使い方 | 概要 |
+|---|---|---|
+| `/perf-bench` | `/perf-bench bank.38x6 song.mid` | tools/smf2wavで実曲を交互A/B計測し、出力WAVのビット一致も検証しながらレンダリング性能を最適化する |
+
 ### グローバル専用スキル（プロジェクトコード非依存）
 
 以下はこのプロジェクトでよく使うが、プロジェクトのソースコード（tools/等）を呼び出さない汎用Claude技法のため、

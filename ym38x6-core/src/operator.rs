@@ -146,6 +146,12 @@ pub struct Operator {
     cached_env_ratio: f32,
     env_amp_cache_valid: bool,
     env_amp_resync_counter: u32,
+    /// 実効TL→リニアゲイン（`effective_tl`→`level_scale_atten`減算→`tl_to_gain`）のキャッシュ。
+    /// キー(tl, velocity, vel_sens, level_scale, note)は1ノート中不変のため、毎サンプル
+    /// 呼んでいたfloat round込みの実効TL計算をキーが変わった時だけに削減する
+    /// （計算式は不変のため出力はビット単位で同一）。
+    cached_tl_gain: f32,
+    cached_tl_gain_key: Option<(u8, u8, u8, u8, u8)>,
 }
 
 /// env_ampの等比数列キャッシュを強制的に再同期する間隔（サンプル数）。約93ms@44.1kHz。
@@ -178,6 +184,8 @@ impl Operator {
             cached_env_ratio: 1.0,
             env_amp_cache_valid: false,
             env_amp_resync_counter: 0,
+            cached_tl_gain: 0.0,
+            cached_tl_gain_key: None,
         }
     }
 
@@ -353,15 +361,24 @@ impl Operator {
         // Velocity Sensitivityは明るさ専用：モジュレーターのTL（=変調量）にのみ効かせる。
         // キャリアでは無視し、音量はチャンネル側のvelocity_to_volume_gainに一本化する。
         let vel_sens = if self.is_carrier { 0 } else { self.params.velocity_sensitivity };
-        let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
-        let eff_tl = eff_tl.saturating_sub(level_scale_atten(self.params.level_scale, note));
+        let tl_gain_key = (self.params.tl, self.velocity, vel_sens, self.params.level_scale, note);
+        let tl_gain = if self.cached_tl_gain_key == Some(tl_gain_key) {
+            self.cached_tl_gain
+        } else {
+            let eff_tl = effective_tl(self.params.tl, self.velocity, vel_sens);
+            let eff_tl = eff_tl.saturating_sub(level_scale_atten(self.params.level_scale, note));
+            let v = tl_to_gain(eff_tl);
+            self.cached_tl_gain = v;
+            self.cached_tl_gain_key = Some(tl_gain_key);
+            v
+        };
         let amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
         // dBリニアエンベロープ（OPN/OPM互換）: env_level=1.0→0dB, 0.0→-db_range。
         // db_rangeは通常96dB（eg_shift=0）。EGSFTはこのEG減衰レンジのみを圧縮し（TLは別掛けで不変）、
         // チップの `env_attenuation >> eg_shift` と厳密一致する。
         let db_range = eg_shift_to_db_range(self.params.eg_shift);
         let env_amp = self.compute_env_amp(env_level, db_range);
-        sample * env_amp * tl_to_gain(eff_tl) * amp_factor
+        sample * env_amp * tl_gain * amp_factor
     }
 }
 

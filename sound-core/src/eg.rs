@@ -80,6 +80,21 @@ pub fn rr_to_delta(rate: u8, sample_rate: f32) -> f32 {
     1.0 / (rr_seconds_table()[rate as usize] * sample_rate)
 }
 
+/// u8(0〜255)→レベル(0.0〜1.0)。`v as f32 / 255.0`と同値の256要素テーブル
+/// （D1L/Floorのレベル換算は`Eg::tick`から毎サンプル×EG基数分呼ばれるため、
+/// 除算を配列参照に置き換える。値はテーブル構築時に同じ除算で求めるためビット単位で同一）。
+fn u8_to_level(v: u8) -> f32 {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (v, slot) in table.iter_mut().enumerate() {
+            *slot = v as f32 / 255.0;
+        }
+        table
+    });
+    table[v as usize]
+}
+
 // ---------------------------------------------------------------------------
 // EgParams（5段OPM形式のEGパラメーター + Loop/Floor/Curve拡張）
 // ---------------------------------------------------------------------------
@@ -263,8 +278,8 @@ impl Eg {
     /// `params`はAR/D1R/D1L/D2R/RRとLoop/Floor/Curveを持つ0〜255の生パラメーター値。
     /// `rate_scale`はAR/D1R/D2R/RRの時定数に掛ける倍率（KSR等、FM以外は1.0を渡す）。
     pub fn tick(&mut self, sample_rate: f32, params: EgParams, rate_scale: f32) -> f32 {
-        let sustain_level = params.d1l as f32 / 255.0;
-        let floor_level = params.floor as f32 / 255.0;
+        let sustain_level = u8_to_level(params.d1l);
+        let floor_level = u8_to_level(params.floor);
         if self.phase == EgPhase::Delay {
             let delay_seconds = delay_to_seconds(params.delay);
             if self.elapsed < delay_seconds {

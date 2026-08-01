@@ -5,7 +5,7 @@ pub mod operator;
 pub mod preset;
 pub mod waveform;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -736,19 +736,30 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 const TOTAL_SLOTS: usize = 256;
 
 /// 同時発音数の既定上限。「無制限チャンネル管理」の安全弁で、通常の演奏では
-/// 到達しない値に設定してある（この曲を含む一般的なMIDIの瞬間可聴ポリは数〜十数）。
+/// 到達しない値に設定してある（一般的なMIDIの瞬間可聴ポリは数〜十数）。
 /// 長いリリース（RR）を持つパッチ×高密度なノート列では、聴感上無音のリリース裾ボイスが
 /// `is_idle()`に達するまで（数十秒）チャンネルに残り続け、上限が無いと際限なく積み上がって
 /// レンダリング負荷が膨らむ。上限到達時は最も奪ってよいボイス（release中かつ最も静かなもの）
 /// を1つ削除してから新規ボイスを確保する（`Channel::steal_score`参照）。
-const DEFAULT_MAX_VOICES: usize = 48;
+///
+/// 【2026-07-28 48→64】実測（tools/smf2wav `--max-voices`）で、通常曲（LastWave_single_track.mid、
+/// opz Bank Aのリリースの長い音色含む）はピーク31〜36止まりで48にすら到達せず、48/64/128の
+/// どれでも速度差が無いことを確認した。一方、意図的に同時発音を384まで積み上げるストレスSMFでは
+/// 上限に比例してレンダリング時間が伸びる（48=1.0倍・64=1.31倍・128=2.52倍、上限に実際到達時のみ）。
+/// 通常演奏への影響がほぼ無い範囲でヘッドルームを増やすため、きりの良い64へ引き上げた。
+const DEFAULT_MAX_VOICES: usize = 64;
 
 pub struct Ym38x6Engine {
     sample_rate: f32,
-    channels: HashMap<usize, Channel>,
+    /// ボイスID→チャンネル。`BTreeMap`はID昇順の決定論的イテレーション順を保証する
+    /// （旧`HashMap`はプロセスごとにランダムなシード由来の順序で全ボイスを合算しており、
+    /// 浮動小数点加算の順序が実行ごとに変わる＝同一入力でも出力WAVがビット一致しなかった）。
+    channels: BTreeMap<usize, Channel>,
     wave_tables: Vec<Option<WaveTable>>,
     current_patch: Ym38x6Patch,
     max_voices: usize,
+    /// `render()`のモノラルミックス作業バッファ（ブロックごとに再利用、`Vec`再確保を避ける）。
+    mix_buf: Vec<f32>,
 }
 
 impl Ym38x6Engine {
@@ -759,14 +770,15 @@ impl Ym38x6Engine {
         }
         Self {
             sample_rate,
-            channels: HashMap::new(),
+            channels: BTreeMap::new(),
             wave_tables,
             current_patch: Ym38x6Patch::default(),
             max_voices: DEFAULT_MAX_VOICES,
+            mix_buf: Vec::new(),
         }
     }
 
-    /// 同時発音数の上限を変更する（既定`DEFAULT_MAX_VOICES`=48）。診断・テスト用途にも使う。
+    /// 同時発音数の上限を変更する（既定`DEFAULT_MAX_VOICES`=64）。診断・テスト用途にも使う。
     pub fn set_max_voices(&mut self, max_voices: usize) {
         self.max_voices = max_voices.max(1);
     }
@@ -952,18 +964,29 @@ impl Vco for Ym38x6Engine {
         }
     }
 
+    /// ブロック単位のレンダリング。ループはチャンネル外側×サンプル内側
+    /// （旧実装のサンプル外側×チャンネル内側から入れ替え）。1ボイスの状態が内側ループの間
+    /// キャッシュに乗り続けるため、リリース裾で数十ボイスが積み上がった時の実効速度が大きく上がる。
+    /// 各サンプルへの加算はチャンネルのイテレーション順（ID昇順）で旧実装と同一のため、
+    /// 出力は従来とビット単位で一致する（ミックスバッファ経由でも `0.0 + a + b + …` の順序は不変）。
     fn render(&mut self, output: &mut [f32], num_channels: usize) {
         let num_channels = num_channels.max(1);
         let sample_rate = self.sample_rate;
         let wave_tables = &self.wave_tables;
-        for frame in output.chunks_mut(num_channels) {
-            let mut mix = 0.0f32;
-            for ch in self.channels.values_mut() {
+        let frames = output.len().div_ceil(num_channels);
+        self.mix_buf.clear();
+        self.mix_buf.resize(frames, 0.0);
+        for ch in self.channels.values_mut() {
+            for mix in self.mix_buf.iter_mut() {
+                // ブロック途中でリリースが完了したら（is_idle）以降のサンプルは無音のため打ち切る
+                // （旧実装のサンプルごとのis_idle()スキップと等価）。
                 if ch.is_idle() {
-                    continue;
+                    break;
                 }
-                mix += ch.tick(sample_rate, wave_tables);
+                *mix += ch.tick(sample_rate, wave_tables);
             }
+        }
+        for (frame, &mix) in output.chunks_mut(num_channels).zip(self.mix_buf.iter()) {
             for s in frame.iter_mut() {
                 *s += mix;
             }
@@ -1049,6 +1072,57 @@ mod tests {
         assert!(engine.channels.contains_key(&0));
         assert!(engine.channels.contains_key(&1), "retriggerが他ボイスを巻き込んで奪ってはいけない");
         assert_eq!(engine.channels.len(), 2);
+    }
+
+    /// ブロック一括レンダリングと1サンプルずつのレンダリングがビット単位で一致することを確認する
+    /// （render()のチャンネル外側×サンプル内側へのループ入れ替えが、旧来のサンプル外側処理と
+    /// 数値的に完全等価であることの回帰テスト）。フィードバック・フィルター・リリース途中の
+    /// idle化まで通る条件で、複数ボイス＋途中note_offを含めて比較する。
+    #[test]
+    fn block_render_matches_sample_by_sample_render() {
+        let mut patch = loud_patch(0);
+        patch.channel.feedback = 100; // フィードバック経路（feedback_buffer2含む）を通す
+        patch.channel.filter_cutoff = 200;
+        patch.channel.filter_resonance = 80;
+        for op in patch.operators.iter_mut() {
+            op.d1r = 120;
+            op.d1l = 180;
+            op.rr = 200; // 後半ブロック内でリリースが完了しidle化する速さ
+        }
+
+        let mut block = Ym38x6Engine::new(44100.0);
+        let mut single = Ym38x6Engine::new(44100.0);
+        for engine in [&mut block, &mut single] {
+            engine.set_patch(patch);
+            engine.note_on(0, 220.0, 100);
+            engine.note_on(1, 330.0, 90);
+            engine.note_on(2, 440.0, 127);
+        }
+
+        const HALF: usize = 2048;
+        let mut out_block = vec![0.0f32; HALF * 2];
+        let mut out_single = vec![0.0f32; HALF * 2];
+
+        // 前半: 3ボイス発音中
+        block.render(&mut out_block[..HALF], 1);
+        for i in 0..HALF {
+            single.render(&mut out_single[i..i + 1], 1);
+        }
+        // 同一サンプル位置でnote_offし、後半でリリース〜idle化まで比較する
+        for engine in [&mut block, &mut single] {
+            engine.note_off(0);
+            engine.note_off(1);
+            engine.note_off(2);
+        }
+        block.render(&mut out_block[HALF..], 1);
+        for i in HALF..HALF * 2 {
+            single.render(&mut out_single[i..i + 1], 1);
+        }
+
+        assert!(out_block.iter().any(|&s| s != 0.0), "expected non-silent output");
+        for (i, (a, b)) in out_block.iter().zip(out_single.iter()).enumerate() {
+            assert_eq!(a, b, "sample {i} differs: block={a}, single={b}");
+        }
     }
 
     #[test]

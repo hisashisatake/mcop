@@ -11,10 +11,22 @@
 use crate::eg::{Eg, EgParams};
 
 /// Cutoff(0〜255)→Hz（対数、0≒20Hz、255≒20kHz、暫定）。
+///
+/// 以前は`VoiceFilter::process()`から毎サンプル`powf()`を呼んでいた。`tl_to_gain`等と
+/// 同じ256要素テーブルパターンで初回アクセス時に1回だけ構築し（`OnceLock`、全チャンネル共有）、
+/// 以降は配列参照のみで済ませる。数式は変更していないため出力は従来とビット単位で同一。
 pub fn cutoff_to_hz(cutoff: u8) -> f32 {
-    const F_MIN: f32 = 20.0;
-    const F_MAX: f32 = 20000.0;
-    F_MIN * (F_MAX / F_MIN).powf(cutoff as f32 / 255.0)
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const F_MIN: f32 = 20.0;
+        const F_MAX: f32 = 20000.0;
+        let mut table = [0.0f32; 256];
+        for (cutoff, slot) in table.iter_mut().enumerate() {
+            *slot = F_MIN * (F_MAX / F_MIN).powf(cutoff as f32 / 255.0);
+        }
+        table
+    });
+    table[cutoff as usize]
 }
 
 /// 実効Cutoff = clamp(Cutoffベース値 + Cutoff FG出力 × (Depth-128)/128 × 255, 0, 255)
@@ -79,11 +91,20 @@ impl FilterType {
 pub struct Svf {
     ic1eq: f32,
     ic2eq: f32,
+    /// 係数(k/a1/a2/a3)のキャッシュキー（cutoff_hzのビット表現, resonance, self_oscillation）。
+    /// Cutoffは上流で0〜255に量子化されているため、EG/LFOスイープ中でも同値が連続しやすく、
+    /// 毎サンプル呼んでいた`tan()`＋除算2回をキーが変わった時だけに削減できる
+    /// （係数の計算式自体は不変のため出力は従来とビット単位で同一）。
+    coeff_key: Option<(u32, u8, bool)>,
+    k: f32,
+    a1: f32,
+    a2: f32,
+    a3: f32,
 }
 
 impl Svf {
     pub fn new() -> Self {
-        Self { ic1eq: 0.0, ic2eq: 0.0 }
+        Self { ic1eq: 0.0, ic2eq: 0.0, coeff_key: None, k: 0.0, a1: 0.0, a2: 0.0, a3: 0.0 }
     }
 
     /// 1サンプル処理する。`filter_type`に応じてLP/HP/BPいずれかの出力を返す。
@@ -96,12 +117,16 @@ impl Svf {
         self_oscillation: bool,
         filter_type: FilterType,
     ) -> f32 {
-        let g = (std::f32::consts::PI * cutoff_hz / sample_rate).tan();
-        let k = 1.0 / resonance_to_q(resonance, self_oscillation);
-
-        let a1 = 1.0 / (1.0 + g * (g + k));
-        let a2 = g * a1;
-        let a3 = g * a2;
+        let key = (cutoff_hz.to_bits(), resonance, self_oscillation);
+        if self.coeff_key != Some(key) {
+            let g = (std::f32::consts::PI * cutoff_hz / sample_rate).tan();
+            self.k = 1.0 / resonance_to_q(resonance, self_oscillation);
+            self.a1 = 1.0 / (1.0 + g * (g + self.k));
+            self.a2 = g * self.a1;
+            self.a3 = g * self.a2;
+            self.coeff_key = Some(key);
+        }
+        let (k, a1, a2, a3) = (self.k, self.a1, self.a2, self.a3);
 
         let v3 = input - self.ic2eq;
         let v1 = a1 * self.ic1eq + a2 * v3;

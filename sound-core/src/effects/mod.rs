@@ -26,6 +26,12 @@ pub struct MasterEffects {
     reverb_send: u8,
     chorus_send: u8,
     chorus_send_to_reverb: u8,
+    /// Reverb/Chorusのwet内部状態（ディレイライン等）に一度でも信号が入った可能性があるか。
+    /// 両センドが0のまま一度もwetが作られていなければ、wet出力は厳密に0＝出力はdryそのもの
+    /// なので、`process()`はバッファに触れず即リターンできる（FDNリバーブ8ライン+コーラスの
+    /// 毎サンプル計算を丸ごと省く。エフェクト未使用のVST/smf2wavで常時効く）。
+    /// 一度センドが非0になったら以降は常時処理する（センドを0に戻してもテールが残るため）。
+    wet_state_active: bool,
 }
 
 impl MasterEffects {
@@ -36,6 +42,7 @@ impl MasterEffects {
             reverb_send: 0,
             chorus_send: 0,
             chorus_send_to_reverb: 0,
+            wet_state_active: false,
         }
     }
 
@@ -89,6 +96,14 @@ impl AudioProcessor for MasterEffects {
     /// インターリーブ済み出力バッファに対し、フレーム単位でReverb/Chorusを適用する。
     /// `num_channels == 1`の場合はモノラルとして扱い、L=Rで処理した結果を平均する。
     fn process(&mut self, buffer: &mut [f32], num_channels: usize) {
+        // 完全ドライバイパス: 両センドが0で、かつwet状態が一度も作られていなければ
+        // wet出力は厳密に0（ディレイラインはすべて無音）なので何もしない。
+        // chorus_send_to_reverbはコーラス入力（dry×chorus_send=0）経由のため単独では影響しない。
+        if self.reverb_send != 0 || self.chorus_send != 0 {
+            self.wet_state_active = true;
+        } else if !self.wet_state_active {
+            return;
+        }
         let reverb_send = self.reverb_send as f32 / 255.0;
         let chorus_send = self.chorus_send as f32 / 255.0;
         let chorus_send_to_reverb = self.chorus_send_to_reverb as f32 / 255.0;
@@ -140,6 +155,28 @@ mod tests {
         for (a, b) in original.iter().zip(buffer.iter()) {
             assert!((a - b).abs() < 1e-9, "送りレベル0のときdry信号がそのまま通過するはず: {a} vs {b}");
         }
+    }
+
+    /// 一度センドを非0にしてwet状態を作った後は、センドを0に戻してもテール（残響）が
+    /// 出力され続けることを確認する（完全ドライバイパスの`wet_state_active`ラッチが
+    /// テールを切り落とさないことの回帰テスト）。
+    #[test]
+    fn dry_bypass_does_not_cut_reverb_tail_after_send_returns_to_zero() {
+        let mut effects = MasterEffects::new(44100.0);
+        effects.set_reverb_send(255);
+
+        // インパルスを入れてwet状態を作る
+        let mut buffer = vec![0.0f32; 2 * 2048];
+        buffer[0] = 1.0;
+        buffer[1] = 1.0;
+        effects.process(&mut buffer, 2);
+
+        // センドを0へ戻し、無音入力を処理してもテールが出続ける
+        effects.set_reverb_send(0);
+        let mut tail_buffer = vec![0.0f32; 2 * 4096];
+        effects.process(&mut tail_buffer, 2);
+        let tail_energy: f32 = tail_buffer.iter().map(|x| x * x).sum();
+        assert!(tail_energy > 0.0, "センドを0に戻してもwetテールは残るはず");
     }
 
     #[test]
