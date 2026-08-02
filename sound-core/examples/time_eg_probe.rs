@@ -8,6 +8,10 @@
 //!   b1に対し、b2は非対称、b3は階段状——TimeEgの多点ループが任意の折れ線を描けることを示す。
 //! C群（カットオフに適用）: TimeEgは1周の合計時間が定義できるため、
 //!   同じ形のまま`speed_scale`だけでテンポに同期できることを示す（c1=8分、c2=4分）。
+//! D群（カットオフに適用）: b3で聴こえた「階段感」は実は傾きの微小な折れ目であり、
+//!   区間が完全に静止するプラトーではなかった。`segment_start == segment_end`
+//!   （目標レベルが直前と同値）の段を挟むと`TimeEg`は追加実装なしで本物の静止区間を作れる
+//!   ため、d1でElektron的な「上昇→静止→上昇→静止」ステップシーケンサーを試す。
 //!
 //! 実行: cargo run -p sound-core --example time_eg_probe -- <出力ディレクトリ>
 
@@ -159,6 +163,122 @@ fn main() {
         c2_scale,
     );
 
+    // --- D群：真のプラトー（カットオフに適用） ---
+
+    // d1: 3段の上りステップ、各段の後に本物の静止区間（レベル維持のホールド段）を挟む。
+    // b3は直線内の折れ目による「錯覚の階段」だったが、こちらは実際に動きが止まる。
+    let d1 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 90, 0),   // 第1段への上昇(速い)
+                (45, 90, 0),   // 静止(プラトー): level同値なのでレベルは動かない
+                (15, 170, 0),  // 第2段への上昇
+                (45, 170, 0),  // 静止(プラトー)
+                (15, 255, 0),  // 第3段への上昇
+                (45, 255, 0),  // 静止(プラトー)
+                (25, 20, 0),   // 速いリセット
+                (110, 0, 0),   // リリース
+            ]),
+            stage_count: 8,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 6,
+            release_start: 7,
+        },
+        1.0,
+    );
+
+    // d2: d1と同じ3段ステップだが、静止時間を約3分の1に短縮。
+    // 「止まっている」感覚がどこまで残るかの下限を探る。
+    let d2 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 90, 0),
+                (15, 90, 0),
+                (15, 170, 0),
+                (15, 170, 0),
+                (15, 255, 0),
+                (15, 255, 0),
+                (25, 20, 0),
+                (110, 0, 0),
+            ]),
+            stage_count: 8,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 6,
+            release_start: 7,
+        },
+        1.0,
+    );
+
+    // d3: d1と同じ3段ステップだが、静止時間を2倍に延長。
+    // ため感が出るか、間延びして退屈になるかを探る。
+    let d3 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 90, 0),
+                (90, 90, 0),
+                (15, 170, 0),
+                (90, 170, 0),
+                (15, 255, 0),
+                (90, 255, 0),
+                (25, 20, 0),
+                (110, 0, 0),
+            ]),
+            stage_count: 8,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 6,
+            release_start: 7,
+        },
+        1.0,
+    );
+
+    // d4: 3段ではなく4段の階段。専用リセット段は置かず、最上段(L4)から最下段(L1)へ
+    // ループが直接戻ることで段数を確保する(T/L方式は距離でなく時間を指定するため、
+    // 上りと同じ所要時間で下りの巻き戻しにも使い回せる)。最後の段だけ静止を省き、
+    // そのままループ先頭(下り)へ抜けることで8段の枠に収めている。
+    let d4 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (12, 70, 0),
+                (18, 70, 0),
+                (12, 130, 0),
+                (18, 130, 0),
+                (12, 190, 0),
+                (18, 190, 0),
+                (12, 255, 0), // 第4段への上昇。静止なしでそのままループ先頭へ折り返す
+                (100, 0, 0),  // リリース
+            ]),
+            stage_count: 8,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 6,
+            release_start: 7,
+        },
+        1.0,
+    );
+
+    // d5: 階段状ではなく、高い位置と低い位置を静止を挟んで交互に切り替える2値スイッチ。
+    // d1のような専用リセット段が要らない(高→低の移動そのものがループの一部)。
+    let d5 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 230, 0), // 高い位置へ
+                (40, 230, 0), // 静止(高)
+                (15, 40, 0),  // 低い位置へ
+                (40, 40, 0),  // 静止(低)
+                (100, 0, 0),  // リリース
+            ]),
+            stage_count: 5,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 3,
+            release_start: 4,
+        },
+        1.0,
+    );
+
     write_wav(&out_dir.join("a1_current_fast.wav"), &a1);
     write_wav(&out_dir.join("a2_current_slow.wav"), &a2);
     write_wav(&out_dir.join("a3_time_split.wav"), &a3);
@@ -167,8 +287,13 @@ fn main() {
     write_wav(&out_dir.join("b3_time_stair.wav"), &b3);
     write_wav(&out_dir.join("c1_sync_8th.wav"), &c1);
     write_wav(&out_dir.join("c2_sync_quarter.wav"), &c2);
+    write_wav(&out_dir.join("d1_time_plateau.wav"), &d1);
+    write_wav(&out_dir.join("d2_plateau_short.wav"), &d2);
+    write_wav(&out_dir.join("d3_plateau_long.wav"), &d3);
+    write_wav(&out_dir.join("d4_plateau_4steps.wav"), &d4);
+    write_wav(&out_dir.join("d5_plateau_switch.wav"), &d5);
 
-    println!("wrote 8 probe WAVs to {}", out_dir.display());
+    println!("wrote 13 probe WAVs to {}", out_dir.display());
 }
 
 /// `entries`（time, level, curve）を先頭から`TimeStage`配列へ詰める。残りは既定値(0,0,0)。
