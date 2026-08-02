@@ -1326,6 +1326,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fm-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sound-core",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3214,6 +3222,17 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "op505-core"
+version = "0.1.0"
+dependencies = [
+ "fm-common",
+ "serde",
+ "serde_json",
+ "sound-core",
+ "ym38x6-core",
+]
 
 [[package]]
 name = "open"
@@ -6323,6 +6342,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 name = "ym38x6-core"
 version = "0.1.0"
 dependencies = [
+ "fm-common",
  "serde",
  "serde_json",
  "sound-core",

@@ -1,10 +1,11 @@
 [package]
-name = "ym38x6-core"
+name = "op505-core"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 sound-core = { path = "../../sound-core" }
 fm-common = { path = "../../fm-common" }
+ym38x6-core = { path = "../../ym38x6/core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

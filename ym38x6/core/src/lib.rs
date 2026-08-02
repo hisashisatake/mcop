@@ -1,9 +1,11 @@
-pub mod algorithm;
-pub mod chip_lfo;
-pub mod mapping;
 pub mod operator;
 pub mod preset;
-pub mod waveform;
+
+// EG非依存の汎用FM部品（アルゴリズム結線表・パラメーターマッピング・チップ内LFO・波形生成）は
+// `fm-common`へ切り出し済み（fork-on-write方針でop505-coreと共有）。既存の外部消費者
+// （ym38x6-vst・gesture-app・各コンバーター）は`ym38x6_core::algorithm::ALGORITHMS`等の
+// 従来パスのまま参照できるよう、モジュールごと同名で再エクスポートする。
+pub use fm_common::{algorithm, chip_lfo, mapping, waveform};
 
 use std::collections::BTreeMap;
 
@@ -85,46 +87,13 @@ pub use sound_core::{
 // パッチ（チャンネル + オペレーター4個分のパラメーター一式）
 // ---------------------------------------------------------------------------
 
-/// 質感LFO（spec-sound.md「質感LFO（5波形専用・焼き込み）」節）。旧「チャンネルLFO」を再編し、
-/// FGのループ（Floor⇄peak）では表せない5波形（矩形/台形/S&H/Random/Chaos）だけを担う、
-/// 焼き込み専用（演奏CCによる補正を受けない）の1基。全項目を`ChannelParams`が所有する。
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TextureLfo {
-    /// 0=矩形波/1=台形波/2=S&H/3=Random/4=Chaos。
-    pub waveform: u8,
-    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff/4=未接続（`Ym38x6LfoDestination`と同じ並び）。
-    pub destination: u8,
-    pub rate: u8,
-    pub depth: u8,
-    pub delay: u8,
-    /// 0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT。
-    pub fade_mode: u8,
-    pub fade_time: u8,
-    /// 波形の中心シフト(0〜255、中心128＝オフセットなし)。
-    pub offset: u8,
-}
+// 質感LFO（TextureLfo）とその変換関数はEG非依存のためfm-commonへ切り出し済み。
+// 外部消費者（vst/gesture-app）は`ym38x6_core::TextureLfo`のまま参照できるよう再エクスポートする。
+pub use fm_common::{texture_lfo_to_shape, TextureLfo};
 
-impl Default for TextureLfo {
-    /// 既定Depth=0で鳴らない（旧パッチ挙動と互換の「無効」状態）。
-    fn default() -> Self {
-        Self { waveform: 0, destination: 0, rate: 0, depth: 0, delay: 0, fade_mode: 0, fade_time: 0, offset: 128 }
-    }
-}
-
-/// 質感LFOの5波形インデックス(0〜4)を、内部で再利用する`sound_core::PerformanceLfo`の
-/// 8波形`LfoWaveform`へ写像する（三角/サイン/のこぎりには写像しない＝新エンコーディングの範囲外）。
-fn texture_lfo_waveform_to_engine(waveform: u8) -> LfoWaveform {
-    match waveform {
-        1 => LfoWaveform::Trapezoid,
-        2 => LfoWaveform::SampleHold,
-        3 => LfoWaveform::Random,
-        4 => LfoWaveform::Chaos,
-        _ => LfoWaveform::Square,
-    }
-}
-
-/// [texture_lfo_waveform_to_engine]の逆方向。旧`perf_lfo_shape`からの後方互換マイグレーション専用
-/// （三角/サイン/のこぎりは質感LFOのパレット外のため`None`を返す）。
+/// [fm_common::texture_lfo]内の順方向写像の逆方向。旧`perf_lfo_shape`からの後方互換
+/// マイグレーション専用（三角/サイン/のこぎりは質感LFOのパレット外のため`None`を返す）。
+/// ym38x6固有の後方互換コードのためfm-commonへは移動せず、ここに残す。
 fn texture_lfo_waveform_from_engine(waveform: LfoWaveform) -> Option<u8> {
     match waveform {
         LfoWaveform::Square => Some(0),
@@ -133,17 +102,6 @@ fn texture_lfo_waveform_from_engine(waveform: LfoWaveform) -> Option<u8> {
         LfoWaveform::Random => Some(3),
         LfoWaveform::Chaos => Some(4),
         LfoWaveform::Triangle | LfoWaveform::Sine | LfoWaveform::Saw => None,
-    }
-}
-
-/// 質感LFOの波形/Fade/Offset設定を、`sound_core::PerformanceLfo`が受け取る
-/// `PerformanceLfoShape`へ変換する（rate/delay/destination/depthは別途セッターで設定する）。
-fn texture_lfo_to_shape(texture_lfo: TextureLfo) -> PerformanceLfoShape {
-    PerformanceLfoShape {
-        waveform: texture_lfo_waveform_to_engine(texture_lfo.waveform),
-        fade_mode: lfo_fade_mode_from_index(texture_lfo.fade_mode),
-        fade_time: texture_lfo.fade_time,
-        offset: lfo_offset_from_param(texture_lfo.offset),
     }
 }
 
@@ -382,37 +340,12 @@ pub struct Ym38x6Patch {
 
 // ---------------------------------------------------------------------------
 // パフォーマンスLFOの適用先（38x6拡張Destination）
+//
+// EG非依存のためfm-commonへ`FmLfoDestination`として切り出し済み。外部消費者
+// （vst/gesture-app）は`ym38x6_core::Ym38x6LfoDestination`のまま参照できるよう別名で再エクスポートする。
 // ---------------------------------------------------------------------------
 
-/// パフォーマンスLFOの適用先。共通Destination（Pitch/Volume）に加え、
-/// 38x6固有の拡張Destination（TLキャリア一括）を持つ。
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum Ym38x6LfoDestination {
-    #[default]
-    Pitch,
-    Volume,
-    TlCarrier,
-    /// フィルターCutoffへの持続的な変調（オートワウ）。Filter EG Depth（キーオン一発の変調）
-    /// とは独立に積み重なる（`Channel::tick`でLFOがシフトした基準Cutoffを、Filter EGがさらに変調する）。
-    Cutoff,
-    /// どこにも接続されていない（質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へ
-    /// ドロップした状態）。LFOは`tick`し続けるが、いずれの変調ターゲットへも出力しない。
-    Unplugged,
-}
-
-impl Ym38x6LfoDestination {
-    /// 0〜255からの変換（質感LFOの`Destination`フィールド用、`FilterType::from_u8`と同じ慣習）。
-    /// 0=Pitch/1=Volume/2=TL（キャリア一括）/3=Cutoff/4=未接続/5以上=Pitchへフォールバック。
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Volume,
-            2 => Self::TlCarrier,
-            3 => Self::Cutoff,
-            4 => Self::Unplugged,
-            _ => Self::Pitch,
-        }
-    }
-}
+pub use fm_common::FmLfoDestination as Ym38x6LfoDestination;
 
 // ---------------------------------------------------------------------------
 // チャンネル（4オペレーター + アルゴリズム結線）

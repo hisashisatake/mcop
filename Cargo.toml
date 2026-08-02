@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "sound-core",
+    "fm-common",
     "ym38x6/core",
+    "op505/core",
     "ym38x6/ui",
     "ym38x6/ui/panel-layout",
     "ym38x6/ui/panel-codegen",
