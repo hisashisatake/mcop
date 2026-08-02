@@ -14,7 +14,7 @@ use sound_core::{TimeEg, TimeEgParams, WaveTable};
 /// オペレーター単位パラメーター一式。ym38x6の`ar/d1r/d1l/d2r/rr/floor/loop_enabled/curve`
 /// （8フィールド）を`eg: TimeEgParams`（N点折れ線＋ループ範囲＋多段リリース）1つに統合する。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct McopOperatorParams {
+pub struct Op505OperatorParams {
     pub tl: u8,
     pub eg: TimeEgParams,
     /// MUL（周波数比、0〜15）。OPM/OPN/OPQ/OPZ共通のMultiple(4bit)に準拠。
@@ -46,7 +46,7 @@ fn default_velocity_gain() -> u8 {
     255
 }
 
-impl Default for McopOperatorParams {
+impl Default for Op505OperatorParams {
     fn default() -> Self {
         Self {
             tl: 0,
@@ -66,7 +66,7 @@ impl Default for McopOperatorParams {
 }
 
 pub struct Operator {
-    pub params: McopOperatorParams,
+    pub params: Op505OperatorParams,
     frequency: f32,
     phase: f32,
     eg: TimeEg,
@@ -101,7 +101,7 @@ pub struct Operator {
 const ENV_AMP_RESYNC_INTERVAL: u32 = 4096;
 
 impl Operator {
-    pub fn new(params: McopOperatorParams) -> Self {
+    pub fn new(params: Op505OperatorParams) -> Self {
         Self {
             params,
             frequency: 440.0,
@@ -302,8 +302,8 @@ mod tests {
     /// Attack→Decay1(d1l相当)→Decay2(0へ張り付き、Idleにはならない)の3段。
     /// stage_count=3・loop_start=loop_end=2で「Decay2の0張り付き」を表現し、
     /// release_start=2からのリリースは0→0の即時遷移（次段が無いのでIdleへ）。
-    fn fast_params() -> McopOperatorParams {
-        McopOperatorParams {
+    fn fast_params() -> Op505OperatorParams {
+        Op505OperatorParams {
             tl: 255,
             eg: TimeEgParams {
                 stages: stages_with(&[(1, 255, 0), (1, 128, 0), (1, 0, 0)]),
@@ -327,8 +327,8 @@ mod tests {
     }
 
     /// サスティンを満レベルで即座に保持するノイズ用パラメーター（time=0＝瞬時ジャンプ）。
-    fn noise_params(wf: u8) -> McopOperatorParams {
-        McopOperatorParams {
+    fn noise_params(wf: u8) -> Op505OperatorParams {
+        Op505OperatorParams {
             eg: TimeEgParams {
                 stages: stages_with(&[(0, 255, 0)]),
                 stage_count: 1,
@@ -381,7 +381,7 @@ mod tests {
     fn eg_shift_raises_sustained_amplitude() {
         let sr = 44100.0;
         let wave = gen_op_sine();
-        let base = McopOperatorParams {
+        let base = Op505OperatorParams {
             eg: TimeEgParams {
                 stages: stages_with(&[(1, 255, 0), (1, 128, 0)]),
                 stage_count: 2,
@@ -393,7 +393,7 @@ mod tests {
             ..fast_params()
         };
         let settle = |eg_shift: u8| -> f32 {
-            let mut op = Operator::new(McopOperatorParams { eg_shift, ..base });
+            let mut op = Operator::new(Op505OperatorParams { eg_shift, ..base });
             op.note_on(440.0, 127);
             for _ in 0..2000 {
                 op.tick(sr, &wave, 0.0, 69);
@@ -534,7 +534,7 @@ mod tests {
     fn env_amp_cache_stays_close_to_direct_computation() {
         let sr = 44100.0;
         let wave = sound_core::gen_square();
-        let params = McopOperatorParams {
+        let params = Op505OperatorParams {
             tl: 255,
             eg: TimeEgParams {
                 stages: stages_with(&[(60, 255, 0), (90, 180, 0), (70, 40, 0), (80, 0, 0)]),
@@ -577,7 +577,7 @@ mod tests {
     fn loop_enabled_operator_oscillates_between_floor_and_peak() {
         let sr = 44100.0;
         let wave = gen_op_sine();
-        let params = McopOperatorParams {
+        let params = Op505OperatorParams {
             eg: TimeEgParams {
                 stages: stages_with(&[(100, 255, 0), (90, 0, 0), (90, 255, 0)]),
                 stage_count: 3,

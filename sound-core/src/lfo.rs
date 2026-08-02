@@ -27,7 +27,7 @@ fn rate_to_hz(rate: u8) -> f32 {
 }
 
 /// delay=0 → 0秒, delay=255 → 10秒（線形マッピング）。
-/// `sound_core::eg`のFG Delayフェーズ、`mcop-core`のAdapter（delay→プラトー段変換）からも
+/// `sound_core::eg`のFG Delayフェーズ、`op505-core`のAdapter（delay→プラトー段変換）からも
 /// 再利用するため`pub`。
 /// `PerformanceLfo::tick`から毎サンプル呼ばれる（delay+fade_timeの2回）ため、
 /// `rate_to_hz`と同じ256要素テーブル化で除算を配列参照に置き換える（値はビット単位で同一）。

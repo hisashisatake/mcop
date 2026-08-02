@@ -2,7 +2,7 @@ pub mod operator;
 pub mod preset;
 
 // EG非依存の汎用FM部品（アルゴリズム結線表・パラメーターマッピング・チップ内LFO・波形生成）は
-// `fm-common`へ切り出し済み（fork-on-write方針でmcop-coreと共有）。既存の外部消費者
+// `fm-common`へ切り出し済み（fork-on-write方針でop505-coreと共有）。既存の外部消費者
 // （ym38x6-vst・gesture-app・各コンバーター）は`ym38x6_core::algorithm::ALGORITHMS`等の
 // 従来パスのまま参照できるよう、モジュールごと同名で再エクスポートする。
 pub use fm_common::{algorithm, chip_lfo, mapping, waveform};

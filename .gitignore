@@ -6,7 +6,7 @@ docs/
 handoff/
 # 変換ツールの入出力データ置き場（コミット対象外）
 ym38x6/tools/*/private/
-mcop/*/private/
+op505/*/private/
 # Claude Codeの個人設定（権限allowリスト等。共有しない）
 .claude/settings.local.json
 **/__pycache__

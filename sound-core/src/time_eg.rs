@@ -51,7 +51,7 @@ pub fn time_to_seconds(time: u8) -> f32 {
 }
 
 /// `time_to_seconds`の逆写像。秒数からtime値(0〜255)を逆算する
-/// （`mcop-core`のAdapter、レート方式EGパラメーターからの変換で使用）。
+/// （`op505-core`のAdapter、レート方式EGパラメーターからの変換で使用）。
 /// 0秒以下は`time=0`（瞬時）、30秒以上は`time=255`にクランプする。
 pub fn seconds_to_time(seconds: f32) -> u8 {
     const T_MIN: f32 = 0.001;

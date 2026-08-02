@@ -1,4 +1,4 @@
-//! fm-common: FM合成チップ間（`ym38x6-core`/`mcop-core`）で共有する、EG非依存の汎用部品。
+//! fm-common: FM合成チップ間（`ym38x6-core`/`op505-core`）で共有する、EG非依存の汎用部品。
 //!
 //! アルゴリズム結線表・TL/KSR等のパラメーターマッピング・チップ内LFO・波形生成・質感LFOは
 //! どのEG方式（レート方式/N点Time-Level方式）を採るFM合成チップにも共通して使える。

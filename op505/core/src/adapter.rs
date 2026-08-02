@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Adapter: 既存.38x6（レート方式5段EG、`ym38x6_core::Ym38x6Patch`）を
-// mcopのN点Time/Level方式（`McopPatch`）へ変換する。
+// op505のN点Time/Level方式（`Op505Patch`）へ変換する。
 //
 // キーオン部（AR/D1R/D2R区間）はレートテーブルの秒数×レベル差から各セグメントの
 // 所要時間を逆算する厳密変換。リリースはキーオフ時の開始レベルが実行時にしか
@@ -11,7 +11,7 @@
 use sound_core::{seconds_to_time, EgParams, TimeEgParams, TimeStage, MAX_STAGES};
 use ym38x6_core::{OperatorParams, Ym38x6Patch};
 
-use crate::{McopBipolarFg, McopChannelParams, McopOperatorParams, McopPatch};
+use crate::{Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch};
 
 fn seconds_for_ar(rate: u8) -> Option<f32> {
     if rate == 0 {
@@ -186,9 +186,9 @@ pub fn convert_fg_eg(eg: &EgParams) -> TimeEgParams {
     result
 }
 
-/// `.38x6`（`Ym38x6Patch`）をmcopの`McopPatch`へ変換する。クランプ・特殊ケース変換が
+/// `.38x6`（`Ym38x6Patch`）をop505の`Op505Patch`へ変換する。クランプ・特殊ケース変換が
 /// 発生した箇所は警告としてラベル付きで返す（例: `"op2: decay2(d2r) 45.3秒は..."`）。
-pub fn convert_patch(src: &Ym38x6Patch) -> (McopPatch, Vec<String>) {
+pub fn convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
     let mut warnings = Vec::new();
 
     let operators = std::array::from_fn(|i| {
@@ -205,7 +205,7 @@ pub fn convert_patch(src: &Ym38x6Patch) -> (McopPatch, Vec<String>) {
             &mut warnings,
             &format!("op{i}"),
         );
-        McopOperatorParams {
+        Op505OperatorParams {
             tl: src_op.tl,
             eg,
             mul: src_op.mul,
@@ -282,7 +282,7 @@ pub fn convert_patch(src: &Ym38x6Patch) -> (McopPatch, Vec<String>) {
         ));
     }
 
-    let channel = McopChannelParams {
+    let channel = Op505ChannelParams {
         algorithm: ch.algorithm,
         feedback: ch.feedback,
         chip_lfo_freq: ch.chip_lfo_freq,
@@ -295,13 +295,13 @@ pub fn convert_patch(src: &Ym38x6Patch) -> (McopPatch, Vec<String>) {
         filter_resonance: ch.filter_resonance,
         filter_type: ch.filter_type,
         filter_self_oscillation: ch.filter_self_oscillation,
-        pitch_fg: McopBipolarFg { eg: pitch_fg_eg, depth: ch.pitch_fg.depth },
-        cutoff_fg: McopBipolarFg { eg: cutoff_fg_eg, depth: ch.cutoff_fg.depth },
+        pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: ch.pitch_fg.depth },
+        cutoff_fg: Op505BipolarFg { eg: cutoff_fg_eg, depth: ch.cutoff_fg.depth },
         gain_fg: gain_fg_eg,
         texture_lfo: ch.texture_lfo,
     };
 
-    (McopPatch { operators, channel }, warnings)
+    (Op505Patch { operators, channel }, warnings)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,7 +445,7 @@ mod tests {
         let src = Ym38x6Patch::default();
         let (patch, _warnings) = convert_patch(&src);
         let json = serde_json::to_string(&patch).expect("serialize");
-        let restored: McopPatch = serde_json::from_str(&json).expect("deserialize");
+        let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(patch, restored);
     }
 }

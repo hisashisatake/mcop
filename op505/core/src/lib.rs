@@ -1,16 +1,16 @@
-//! mcop-core: ym38x6のEG（レート方式5段）をN点Time/Level方式（`sound_core::TimeEg`）に
+//! op505-core: ym38x6のEG（レート方式5段）をN点Time/Level方式（`sound_core::TimeEg`）に
 //! 全面移行した新チップのコアクレート。
 //!
 //! EG非依存の安定部分（アルゴリズム結線・波形・チップ内LFO・パラメーターマッピングテーブル・
 //! 質感LFO）は`fm-common`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
-//! （fork-on-write方針。将来mcop独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
+//! （fork-on-write方針。将来op505独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
 //! `ym38x6-core`への依存は`adapter.rs`（既存`.38x6`からの変換）のみに限定する。
 //! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
 //! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
 pub mod adapter;
 pub mod operator;
-pub use operator::McopOperatorParams;
+pub use operator::Op505OperatorParams;
 
 use std::collections::BTreeMap;
 
@@ -36,19 +36,19 @@ use sound_core::{
 
 /// Pitch/Cutoff FG：バイポーラDepth(中心128)＋TimeEgParams。ym38x6の`BipolarFg`のTimeEg版。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct McopBipolarFg {
+pub struct Op505BipolarFg {
     pub eg: TimeEgParams,
     pub depth: u8,
 }
 
 /// Gain FG：Depthなし、TimeEgParamsそのもの（ym38x6の`GainFg`のTimeEg版）。
-pub type McopGainFg = TimeEgParams;
+pub type Op505GainFg = TimeEgParams;
 
-/// `McopChannelParams`の一部（`chip_lfo_*`等）を除く、チャンネル単位パラメーター一式。
+/// `Op505ChannelParams`の一部（`chip_lfo_*`等）を除く、チャンネル単位パラメーター一式。
 /// ym38x6の`ChannelParams`から、旧`ChannelParamsWire`後方互換層（フィールドリネーム・
 /// 旧filter_eg_*/vca_eg_*からの移行）を取り除いた素直な新フォーマット。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct McopChannelParams {
+pub struct Op505ChannelParams {
     pub algorithm: u8,
     pub feedback: u8,
     pub chip_lfo_freq: u8,
@@ -63,11 +63,11 @@ pub struct McopChannelParams {
     pub filter_self_oscillation: bool,
     /// Pitch FG：ピッチ変調の一次源。バイポーラDepth(中心128)でキーオン一発のピッチ
     /// 下降/上昇とループ時のビブラートの両方を作れる。
-    pub pitch_fg: McopBipolarFg,
+    pub pitch_fg: Op505BipolarFg,
     /// Cutoff FG：バイポーラDepth化されたカットオフ変調。
-    pub cutoff_fg: McopBipolarFg,
+    pub cutoff_fg: Op505BipolarFg,
     /// Gain FG：静止を挟んだ2値スイッチ（トレモロ/ゲート）等、TimeEgの本命ユースケース。
-    pub gain_fg: McopGainFg,
+    pub gain_fg: Op505GainFg,
     /// 質感LFO（旧チャンネルLFOを5波形に絞って再編、焼き込み専用）。型は`ym38x6-core`を再利用する
     /// （EG非依存のため、fork-on-write方針で独自進化させたくなるまでは複製しない）。
     pub texture_lfo: TextureLfo,
@@ -76,7 +76,7 @@ pub struct McopChannelParams {
 /// `Gain FG`の透過既定：stage0(time=0,level=255)を即座に到達しそのまま静止（loop_endも0）、
 /// リリースも同じ段（level=255のまま）＝ゲートを一切閉じない。発音終了は各オペレーターの
 /// idle判定のみで行う（ym38x6の`default_gain_fg`の設計意図を踏襲）。
-fn default_gain_fg() -> McopGainFg {
+fn default_gain_fg() -> Op505GainFg {
     TimeEgParams {
         stages: {
             let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
@@ -91,7 +91,7 @@ fn default_gain_fg() -> McopGainFg {
     }
 }
 
-impl Default for McopChannelParams {
+impl Default for Op505ChannelParams {
     fn default() -> Self {
         Self {
             algorithm: 0,
@@ -106,8 +106,8 @@ impl Default for McopChannelParams {
             filter_resonance: 0,
             filter_type: 0,
             filter_self_oscillation: true,
-            pitch_fg: McopBipolarFg::default(),
-            cutoff_fg: McopBipolarFg::default(),
+            pitch_fg: Op505BipolarFg::default(),
+            cutoff_fg: Op505BipolarFg::default(),
             gain_fg: default_gain_fg(),
             texture_lfo: TextureLfo::default(),
         }
@@ -116,9 +116,9 @@ impl Default for McopChannelParams {
 
 /// 4op分のオペレーターパラメーター + チャンネルパラメーターの一式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct McopPatch {
-    pub operators: [McopOperatorParams; 4],
-    pub channel: McopChannelParams,
+pub struct Op505Patch {
+    pub operators: [Op505OperatorParams; 4],
+    pub channel: Op505ChannelParams,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ const FEEDBACK_SCALE_MAX: f32 = 1.8;
 
 struct Channel {
     operators: [Operator; 4],
-    channel_params: McopChannelParams,
+    channel_params: Op505ChannelParams,
     /// フィードバックオペレーターの直前の出力（自己変調に使う）。
     feedback_buffer: f32,
     /// 2サンプル平均帰還用の、さらに1つ前の出力out[n-2]（実機OPM/OPN/OPZ準拠、常時有効）。
@@ -164,7 +164,7 @@ struct Channel {
 }
 
 impl Channel {
-    fn new(frequency: f32, velocity: u8, patch: McopPatch) -> Self {
+    fn new(frequency: f32, velocity: u8, patch: Op505Patch) -> Self {
         let note = frequency_to_note(frequency);
         let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
         let operators = std::array::from_fn(|i| {
@@ -212,7 +212,7 @@ impl Channel {
     /// 残響レベルを保持したまま再キーオンする（実機OPMのKey-On挙動、ym38x6のretriggerと同じ
     /// 使い分け：オペレーターは`retrigger()`で残響を保つが、FG群はym38x6と同じく`note_on()`で
     /// クリーンに再スタートする）。
-    fn retrigger(&mut self, frequency: f32, velocity: u8, patch: McopPatch) {
+    fn retrigger(&mut self, frequency: f32, velocity: u8, patch: Op505Patch) {
         let note = frequency_to_note(frequency);
         let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
         for (i, op) in self.operators.iter_mut().enumerate() {
@@ -408,7 +408,7 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 }
 
 // ---------------------------------------------------------------------------
-// mcop エンジン
+// op505 エンジン
 // ---------------------------------------------------------------------------
 
 const TOTAL_SLOTS: usize = 256;
@@ -417,18 +417,18 @@ const TOTAL_SLOTS: usize = 256;
 /// 基づく値をそのまま引き継ぐ（通常演奏でヘッドルームを持ちつつストレス時の負荷増大を抑える）。
 const DEFAULT_MAX_VOICES: usize = 64;
 
-pub struct McopEngine {
+pub struct Op505Engine {
     sample_rate: f32,
     /// ボイスID→チャンネル。`BTreeMap`でID昇順の決定論的イテレーション順を保証する
     /// （浮動小数点加算順序を固定し、同一入力で出力WAVがビット一致するようにする）。
     channels: BTreeMap<usize, Channel>,
     wave_tables: Vec<Option<WaveTable>>,
-    current_patch: McopPatch,
+    current_patch: Op505Patch,
     max_voices: usize,
     mix_buf: Vec<f32>,
 }
 
-impl McopEngine {
+impl Op505Engine {
     pub fn new(sample_rate: f32) -> Self {
         let mut wave_tables: Vec<Option<WaveTable>> = (0..TOTAL_SLOTS).map(|_| None).collect();
         for i in 0..waveform::BUILTIN_WAVEFORM_COUNT {
@@ -438,7 +438,7 @@ impl McopEngine {
             sample_rate,
             channels: BTreeMap::new(),
             wave_tables,
-            current_patch: McopPatch::default(),
+            current_patch: Op505Patch::default(),
             max_voices: DEFAULT_MAX_VOICES,
             mix_buf: Vec::new(),
         }
@@ -459,13 +459,13 @@ impl McopEngine {
         }
     }
 
-    pub fn set_patch(&mut self, patch: McopPatch) {
+    pub fn set_patch(&mut self, patch: Op505Patch) {
         self.current_patch = patch;
     }
 
     /// `set_patch`と同様に`current_patch`を更新した上で、現在発音中の全チャンネルにも
     /// 反映する（GUI/DAWノブ変更相当）。
-    pub fn set_patch_live(&mut self, patch: McopPatch) {
+    pub fn set_patch_live(&mut self, patch: Op505Patch) {
         self.current_patch = patch;
         let channel_ids: Vec<usize> = self.channels.keys().copied().collect();
         for channel in channel_ids {
@@ -476,11 +476,11 @@ impl McopEngine {
         }
     }
 
-    pub fn current_patch(&self) -> McopPatch {
+    pub fn current_patch(&self) -> Op505Patch {
         self.current_patch
     }
 
-    pub fn set_channel_params(&mut self, channel: usize, params: McopChannelParams) {
+    pub fn set_channel_params(&mut self, channel: usize, params: Op505ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.perf_lfo.set_rate(params.texture_lfo.rate);
             ch.perf_lfo.set_delay(params.texture_lfo.delay);
@@ -489,7 +489,7 @@ impl McopEngine {
         }
     }
 
-    pub fn set_operator_params(&mut self, channel: usize, op_index: usize, params: McopOperatorParams) {
+    pub fn set_operator_params(&mut self, channel: usize, op_index: usize, params: Op505OperatorParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.operators[op_index].params = params;
         }
@@ -533,7 +533,7 @@ impl McopEngine {
     }
 }
 
-impl Vco for McopEngine {
+impl Vco for Op505Engine {
     fn note_on(&mut self, channel: usize, frequency: f32, velocity: u8) {
         let patch = self.current_patch;
         if let Some(ch) = self.channels.get_mut(&channel) {
@@ -634,8 +634,8 @@ mod tests {
     }
 
     /// 全Opがアルゴリズム7（全並列）で即音量最大・サスティン無限のテスト用パッチ。
-    fn loud_patch(velocity_sensitivity: u8) -> McopPatch {
-        let op_params = McopOperatorParams {
+    fn loud_patch(velocity_sensitivity: u8) -> Op505Patch {
+        let op_params = Op505OperatorParams {
             tl: 255,
             eg: instant_sustain_eg(),
             mul: 1,
@@ -649,7 +649,7 @@ mod tests {
             level_scale: 0,
             velocity_gain: 255,
         };
-        let mut patch = McopPatch::default();
+        let mut patch = Op505Patch::default();
         patch.operators = [op_params; 4];
         patch.channel.algorithm = 7;
         patch
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn voice_steal_caps_channel_count() {
-        let mut engine = McopEngine::new(44100.0);
+        let mut engine = Op505Engine::new(44100.0);
         engine.set_patch(loud_patch(0));
         engine.set_max_voices(4);
         for ch in 0..8 {
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn voice_steal_prefers_released_over_held() {
-        let mut engine = McopEngine::new(44100.0);
+        let mut engine = Op505Engine::new(44100.0);
         engine.set_patch(loud_patch(0));
         engine.set_max_voices(2);
         engine.note_on(0, 440.0, 100);
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn retrigger_does_not_trigger_steal() {
-        let mut engine = McopEngine::new(44100.0);
+        let mut engine = Op505Engine::new(44100.0);
         engine.set_patch(loud_patch(0));
         engine.set_max_voices(2);
         engine.note_on(0, 440.0, 100);
@@ -719,8 +719,8 @@ mod tests {
             op.eg = eg;
         }
 
-        let mut block = McopEngine::new(44100.0);
-        let mut single = McopEngine::new(44100.0);
+        let mut block = Op505Engine::new(44100.0);
+        let mut single = Op505Engine::new(44100.0);
         for engine in [&mut block, &mut single] {
             engine.set_patch(patch);
             engine.note_on(0, 220.0, 100);
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn note_on_produces_non_silent_output() {
-        let mut engine = McopEngine::new(44100.0);
+        let mut engine = Op505Engine::new(44100.0);
         engine.set_patch(loud_patch(0));
         engine.note_on(0, 440.0, 100);
         let mut buf = vec![0.0f32; 512];
@@ -773,7 +773,7 @@ mod tests {
             patch.channel.filter_cutoff = 180;
             patch.channel.filter_resonance = 255;
             patch.channel.filter_self_oscillation = true;
-            let mut engine = McopEngine::new(sr);
+            let mut engine = Op505Engine::new(sr);
             engine.set_patch(patch);
             engine.note_on(0, 440.0, 100);
             let mut buf = vec![0.0f32; 4096];
@@ -783,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn mcop_patch_serde_json_round_trips() {
+    fn op505_patch_serde_json_round_trips() {
         let mut patch = loud_patch(64);
         patch.channel.gain_fg = TimeEgParams {
             stages: stages_with(&[(15, 230, 0), (40, 230, 0), (15, 40, 0), (40, 40, 0)]),
@@ -794,7 +794,7 @@ mod tests {
             release_start: 3,
         };
         let json = serde_json::to_string(&patch).expect("serialize");
-        let restored: McopPatch = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(patch, restored, "McopPatch should round-trip through JSON unchanged");
+        let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(patch, restored, "Op505Patch should round-trip through JSON unchanged");
     }
 }

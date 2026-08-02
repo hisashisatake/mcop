@@ -1,4 +1,4 @@
-//! mcop-coreの試聴プローブ（使い捨て診断用）。
+//! op505-coreの試聴プローブ（使い捨て診断用）。
 //!
 //! - m1: TimeEgプローブ（`sound-core/examples/time_eg_probe.rs`）のe3（静止を挟んだ音量2値
 //!   スイッチ）と全く同じ形をGain FGに設定し、FM合成後の質感で成立するか確認する（本命ユースケース）。
@@ -7,16 +7,16 @@
 //! - m3: Pitch FGに階段状プラトー（TimeEgプローブのd1と同じ形）を設定し、
 //!   アルペジオ的なピッチステップを聴く。
 //! - Adapter聴き比べ: 既存`.38x6`（GM2 Bank0 Acoustic Grand Piano、および引数で渡した
-//!   `.38x6`ファイル）をAdapterでmcop形式へ変換し、`Ym38x6Engine`と`McopEngine`で
-//!   同じフレーズを鳴らして`orig_*.wav`/`mcop_*.wav`として並べて出力する。変換警告はstdoutへ。
-//! - `.mcop`書き出しサンプル: Adapter変換結果をJSONとして保存する（フォーマット実物確認用）。
+//!   `.38x6`ファイル）をAdapterでOP505形式へ変換し、`Ym38x6Engine`と`Op505Engine`で
+//!   同じフレーズを鳴らして`orig_*.wav`/`op505_*.wav`として並べて出力する。変換警告はstdoutへ。
+//! - `.op505`書き出しサンプル: Adapter変換結果をJSONとして保存する（フォーマット実物確認用）。
 //!
-//! 実行: cargo run -p mcop-core --example mcop_probe -- <出力ディレクトリ> [<入力.38x6>...]
+//! 実行: cargo run -p op505-core --example op505_probe -- <出力ディレクトリ> [<入力.38x6>...]
 
 use std::path::Path;
 
-use mcop_core::adapter::convert_patch;
-use mcop_core::{McopBipolarFg, McopEngine, McopOperatorParams, McopPatch};
+use op505_core::adapter::convert_patch;
+use op505_core::{Op505BipolarFg, Op505Engine, Op505OperatorParams, Op505Patch};
 use sound_core::{TimeEgParams, TimeStage, Vco, MAX_STAGES};
 use ym38x6_core::{gm2_bank0_patch, PresetFile, Ym38x6Engine, Ym38x6Patch};
 
@@ -31,9 +31,9 @@ fn main() {
     let out_dir = Path::new(&out_dir);
     let extra_patch_paths: Vec<String> = args.collect();
 
-    write_wav(&out_dir.join("m1_gain_switch.wav"), &render_mcop(m1_patch(), NOTE_FREQ));
-    write_wav(&out_dir.join("m2_op_eg_multistage.wav"), &render_mcop(m2_patch(), NOTE_FREQ));
-    write_wav(&out_dir.join("m3_pitch_fg_steps.wav"), &render_mcop(m3_patch(), 220.0));
+    write_wav(&out_dir.join("m1_gain_switch.wav"), &render_op505(m1_patch(), NOTE_FREQ));
+    write_wav(&out_dir.join("m2_op_eg_multistage.wav"), &render_op505(m2_patch(), NOTE_FREQ));
+    write_wav(&out_dir.join("m3_pitch_fg_steps.wav"), &render_op505(m3_patch(), 220.0));
     println!("wrote m1/m2/m3 probe WAVs to {}", out_dir.display());
 
     // Adapter聴き比べ: GM2 Bank0 Acoustic Grand Piano（組み込み、常時実行）。
@@ -67,10 +67,10 @@ fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
 }
 
-/// `.38x6`パッチをAdapterで変換し、原音（Ym38x6Engine）とmcop変換後（McopEngine）を
+/// `.38x6`パッチをAdapterで変換し、原音（Ym38x6Engine）とOP505変換後（Op505Engine）を
 /// 同じフレーズで並べて出力する。変換警告はラベル付きでstdoutへ表示する。
 fn compare_and_write(out_dir: &Path, label: &str, src: Ym38x6Patch) {
-    let (mcop_patch, warnings) = convert_patch(&src);
+    let (op505_patch, warnings) = convert_patch(&src);
     if warnings.is_empty() {
         println!("[{label}] 変換警告なし");
     } else {
@@ -81,10 +81,10 @@ fn compare_and_write(out_dir: &Path, label: &str, src: Ym38x6Patch) {
     }
 
     write_wav(&out_dir.join(format!("orig_{label}.wav")), &render_ym38x6(src, NOTE_FREQ));
-    write_wav(&out_dir.join(format!("mcop_{label}.wav")), &render_mcop(mcop_patch, NOTE_FREQ));
+    write_wav(&out_dir.join(format!("op505_{label}.wav")), &render_op505(op505_patch, NOTE_FREQ));
 
-    let json = serde_json::to_string_pretty(&mcop_patch).expect("serialize .mcop");
-    std::fs::write(out_dir.join(format!("{label}.mcop")), json).expect(".mcop書き込み失敗");
+    let json = serde_json::to_string_pretty(&op505_patch).expect("serialize .op505");
+    std::fs::write(out_dir.join(format!("{label}.op505")), json).expect(".op505書き込み失敗");
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +111,8 @@ fn instant_sustain_eg() -> TimeEgParams {
     }
 }
 
-fn plain_operator(tl: u8, mul: u8, dt1: u8) -> McopOperatorParams {
-    McopOperatorParams {
+fn plain_operator(tl: u8, mul: u8, dt1: u8) -> Op505OperatorParams {
+    Op505OperatorParams {
         tl,
         eg: instant_sustain_eg(),
         mul,
@@ -130,8 +130,8 @@ fn plain_operator(tl: u8, mul: u8, dt1: u8) -> McopOperatorParams {
 
 /// m1: e3（TimeEgプローブ）と全く同じ形の音量2値スイッチをGain FGに設定した、
 /// アルゴリズム4（(O1→O2)+(O3→O4)の2系統FMペア）のパッチ。
-fn m1_patch() -> McopPatch {
-    let mut patch = McopPatch::default();
+fn m1_patch() -> Op505Patch {
+    let mut patch = Op505Patch::default();
     patch.operators = [
         plain_operator(190, 2, 128),
         plain_operator(255, 1, 128),
@@ -159,8 +159,8 @@ fn m1_patch() -> McopPatch {
 /// m2: アルゴリズム0（O1→O2→O3→O4、キャリアはO4）。キャリアを直接変調するO3(index 2)の
 /// オペレーターEGを多段ループ化し、変調指数（＝明るさ）が折れ線状に往復する様子を聴く
 /// （レート方式のEGでは「速いアタック＋任意形状のループ」が原理的に書けなかった）。
-fn m2_patch() -> McopPatch {
-    let mut patch = McopPatch::default();
+fn m2_patch() -> Op505Patch {
+    let mut patch = Op505Patch::default();
     let silent = plain_operator(0, 1, 128);
     let mut modulator = plain_operator(220, 1, 128);
     modulator.eg = TimeEgParams {
@@ -184,11 +184,11 @@ fn m2_patch() -> McopPatch {
 
 /// m3: アルゴリズム7（単一キャリアop0のみ有効）。Pitch FGにTimeEgプローブd1と同じ形の
 /// 階段状プラトーを設定し、アルペジオ的なピッチステップを聴く。
-fn m3_patch() -> McopPatch {
-    let mut patch = McopPatch::default();
+fn m3_patch() -> Op505Patch {
+    let mut patch = Op505Patch::default();
     patch.operators = [plain_operator(255, 1, 128), plain_operator(0, 1, 128), plain_operator(0, 1, 128), plain_operator(0, 1, 128)];
     patch.channel.algorithm = 7;
-    patch.channel.pitch_fg = McopBipolarFg {
+    patch.channel.pitch_fg = Op505BipolarFg {
         eg: TimeEgParams {
             stages: stages(&[
                 (15, 90, 0),  // 第1段への上昇(速い)
@@ -215,8 +215,8 @@ fn m3_patch() -> McopPatch {
 // レンダリング + WAV書き出し
 // ---------------------------------------------------------------------------
 
-fn render_mcop(patch: McopPatch, freq: f32) -> Vec<f32> {
-    let mut engine = McopEngine::new(SAMPLE_RATE);
+fn render_op505(patch: Op505Patch, freq: f32) -> Vec<f32> {
+    let mut engine = Op505Engine::new(SAMPLE_RATE);
     engine.set_patch(patch);
     engine.note_on(0, freq, 100);
     let hold_samples = (HOLD_SECS * SAMPLE_RATE) as usize;
