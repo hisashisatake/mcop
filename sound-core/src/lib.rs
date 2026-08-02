@@ -24,6 +24,9 @@ pub use vco::{AudioProcessor, Vco};
 pub mod eg;
 pub use eg::{cc76_to_rate_scale, BipolarFg, Eg, EgParams, GainFg};
 
+pub mod time_eg;
+pub use time_eg::{time_to_seconds, TimeEg, TimeEgParams, TimeStage, MAX_STAGES};
+
 pub mod vcf;
 pub use vcf::{cutoff_to_hz, effective_cutoff, FilterType, Svf, Vcf, VoiceFilter};
 
