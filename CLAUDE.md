@@ -72,16 +72,24 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 
 ## クレート構成
 
+リポジトリ直下は次の構成（2026-08-02、A案＝製品グルーピングで整理）。
+`ym38x6/`配下は38x6製品一式をまとめたディレクトリで、クレート名（`ym38x6-core`等）自体は変更していない
+（Cargoのワークスペースメンバーパスとパッケージ名は独立しており、`cargo check -p ym38x6-core`等は
+ディレクトリ位置に関わらずそのまま使える）。`sound-core`と`gesture-app`は製品非依存/将来複数製品共有の
+想定があるため`ym38x6/`の外、リポジトリ直下に置く。
+
 ```
-ym38x6/
+（リポジトリルート）
   Cargo.toml           ← ワークスペース
   spec.md              ← 設計仕様書
-  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界（基盤ライブラリ）
+  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界（基盤ライブラリ、製品非依存）
     Vcoトレイト        ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engineが実装
     AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
-  ym38x6-core/         ← 38x6 FMエンジン実装（sound-coreに依存、Vco実装の一つ。波形メモリ音色も生成）
-  ym38x6-ui/            ← エディタ共有描画ロジック（egui+sound-coreに依存。VST/gesture-app両対応）
-  ym38x6-vst/          ← 38x6 VST3/CLAPプラグイン（nice-plug）
+  ym38x6/              ← 38x6製品一式
+    core/              ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-coreに依存、Vco実装の一つ。波形メモリ音色も生成）
+    ui/                ← エディタ共有描画ロジック（クレート名ym38x6-ui。egui+sound-coreに依存。VST/gesture-app両対応）
+    vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
+    tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
@@ -95,7 +103,7 @@ ym38x6/
 
 ---
 
-## 音色試聴スキル（tools/patchlab）
+## 音色試聴スキル（ym38x6/tools/patchlab）
 
 `.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
 `~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
@@ -111,18 +119,18 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 | `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
 | `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
 
-## エンジン性能検証スキル（tools/smf2wav）
+## エンジン性能検証スキル（ym38x6/tools/smf2wav）
 
 `.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
 `~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
 
 | スキル | 使い方 | 概要 |
 |---|---|---|
-| `/perf-bench` | `/perf-bench bank.38x6 song.mid` | tools/smf2wavで実曲を交互A/B計測し、出力WAVのビット一致も検証しながらレンダリング性能を最適化する |
+| `/perf-bench` | `/perf-bench bank.38x6 song.mid` | ym38x6/tools/smf2wavで実曲を交互A/B計測し、出力WAVのビット一致も検証しながらレンダリング性能を最適化する |
 
 ### グローバル専用スキル（プロジェクトコード非依存）
 
-以下はこのプロジェクトでよく使うが、プロジェクトのソースコード（tools/等）を呼び出さない汎用Claude技法のため、
+以下はこのプロジェクトでよく使うが、プロジェクトのソースコード（ym38x6/tools/等）を呼び出さない汎用Claude技法のため、
 `~/.claude/skills/<name>/SKILL.md` にのみ定義を置き、リポジトリにはコミットしない
 （コミット要否の判断基準は`.claude/skills/`のスキル作成時に参照）。
 
@@ -137,11 +145,11 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 
 ## コマンド
 
-### 音色設計ツール（tools/patchlab）
+### 音色設計ツール（ym38x6/tools/patchlab）
 
 ```powershell
 # .venv 内の Python を呼び出す共通コマンド（uv で管理）
-cd tools/patchlab
+cd ym38x6/tools/patchlab
 uv run python python/<script>.py
 
 # 例: オルガン族テンプレートを生成

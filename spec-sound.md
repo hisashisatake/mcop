@@ -29,7 +29,7 @@
 ```
 
 エンジンは38x6そのものなので専用の音源実装は不要。`ym38x6-core`の`waveform_memory_patch(waveform, adsr)`
-（[preset.rs](ym38x6-core/src/preset.rs)）がこの音色のパッチを生成する。
+（[preset.rs](ym38x6/core/src/preset.rs)）がこの音色のパッチを生成する。
 
 ### 音色の構成
 
@@ -43,7 +43,7 @@ WMS-1の単一指数ADSRとはOPM準拠カーブを通る分だけ触感がわ�
 
 ### ビルトイン波形（スロット0〜31）
 
-38x6のビルトイン波形は **4基本波 × 8変換の32種**（[waveform.rs](ym38x6-core/src/waveform.rs)）。
+38x6のビルトイン波形は **4基本波 × 8変換の32種**（[waveform.rs](ym38x6/core/src/waveform.rs)）。
 **0〜7のサイン系のみOPZ由来**（ymfm OPZ実装準拠）で、**8〜31の3基本波はOPN/OPM/OPZには無い独自拡張**。
 
 - 0〜7: サイン系（OPZ由来）
@@ -134,8 +134,8 @@ Program 0〜7 に配置する（8以降は同じ並びを繰り返す = `program
   NOISE_BASE_CLOCK / (16 × max(NP,1))`。`NOISE_BASE_CLOCK = 2MHz`（YM2203/YM2608の内部SSG
   標準クロック相当）を固定基準とする（エンジンはチップ固有の ssg_clock を知らないため）。
 - ピッチレス（note周波数/FM変調入力に依存しない）。ADSR・TL・AM・ベロシティの音量制御は通常どおり効く。
-- 実装: [waveform.rs](ym38x6-core/src/waveform.rs)（`is_noise_waveform`/`noise_color`/`noise_clock_rate`）、
-  [operator.rs](ym38x6-core/src/operator.rs)（`next_noise_sample`、`tick`内分岐）。
+- 実装: [waveform.rs](ym38x6/core/src/waveform.rs)（`is_noise_waveform`/`noise_color`/`noise_clock_rate`）、
+  [operator.rs](ym38x6/core/src/operator.rs)（`next_noise_sample`、`tick`内分岐）。
 
 #### トーン+ノイズ混合（実機SSGの同時出力）
 
@@ -273,7 +273,7 @@ half-squared / 2x-half / 2x-squared-half / 2x-abs-half / 2x-pos-squared-half）�
 #### 24〜31: 三角系（独自拡張）
 基本波 triangle（サイン位相に揃えた 0→+1→0→-1→0、p=0.25で+1ピーク）に、サイン系と同じ8変換を適用。
 
-実装: [waveform.rs](ym38x6-core/src/waveform.rs)。
+実装: [waveform.rs](ym38x6/core/src/waveform.rs)。
 
 ### ユーザー定義波形（番号32〜255）
 
@@ -744,7 +744,7 @@ Algorithm / Feedback / 質感LFO Destination / 質感LFO Rate / 質感LFO Depth 
 
 （質感LFOは8個＝Destination/Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。Destinationは
 Algorithm同様、離散enumだがNRPN(0,0)とDAWパラメーターの両方で公開する（シャドウ差分検知方式、
-ym38x6-vst/src/lib.rs参照）。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設して48個、その後Destinationの二重公開に合わせて49個になった。）
+ym38x6/vst/src/lib.rs参照）。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設して48個、その後Destinationの二重公開に合わせて49個になった。）
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -882,7 +882,7 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
 |---|---|
 | Bank 0 | GM2プログラムマップ準拠（0〜127）。patchlabでの知覚記述子探索＋手動テンプレート設計で族ごとに作成 |
 | Bank 1以降 | ユーザー定義プリセット |
-| WAVEFORM_MEMORY_BANK+1以降 | OPQ/PSR-70の変換音色（tools/psr2x6で生成） |
+| WAVEFORM_MEMORY_BANK+1以降 | OPQ/PSR-70の変換音色（ym38x6/tools/psr2x6で生成） |
 
 **音色作成方針（フェーズ6・patchlabで実施）：**
 - 当初はGM2リファレンス音からのML逆算合成（A-by-S）でBank 0を自動生成する計画だったが、
@@ -891,7 +891,7 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   叩き台に、人手で族ごとにテンプレート設計（piano/brass/organ_template等）する方式に転換
 - FMが苦手なカテゴリ（アコースティックピアノ・弦楽器・合唱等）は最近似の音色設計で代替
 - 実際のGM2→音色マッピング表はフェーズ6で別途作成
-- Bank 0の作成にはOPQ/PSR-70実機プリセットを直接流用しない。実機音色の変換はtools/psr2x6で別バンク（WAVEFORM_MEMORY_BANK+1以降）へ行う
+- Bank 0の作成にはOPQ/PSR-70実機プリセットを直接流用しない。実機音色の変換はym38x6/tools/psr2x6で別バンク（WAVEFORM_MEMORY_BANK+1以降）へ行う
 
 **実装状況（フェーズ8・パラメーターUI・音色運用）：**
 - CC0+CC32によるバンク選択とProgram Changeの受信を実装済み。
@@ -913,7 +913,7 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
 - VST3でMIDIファイル等からProgram Changeを行うため、CC102（GM2未定義領域の先頭）を
   Program Change代替として受信する（値0〜127=プログラム番号、CC0/CC32バンクと組み合わせて
   `patch_for_program`で解決）。CLAPでは本来のMIDI Program Changeが届くため代替は不要だが、
-  両対応のため変換ツール（tools/vgm2x6等）はProgram ChangeとCC102を併送する。
+  両対応のため変換ツール（ym38x6/tools/vgm2x6等）はProgram ChangeとCC102を併送する。
   旧実装はVOPMex互換のCC92を使っていたが、CC92はGM2のEffects 2 Depth（トレモロ）と
   衝突するため廃止した（MIDI CCセクション参照）。
 - VST3でもプリセットを切り替えられるよう、nice-plugパラメーター「Program」
@@ -1135,7 +1135,7 @@ CSM的フォルマント合成は **Algorithm 7（全並列）が事実上の唯
 
 ## OPQから38x6へのコンバーター設計
 
-PSR-70のサウンドROM（`Software/ROM2`、JKN0/PSR70-reverse）に格納されたOPQ音色データ（実使用は約32音色、テーブル上の定義は約80）を架空音源プリセット形式（`.38x6`）へ変換する。実装は`tools/psr2x6`。
+PSR-70のサウンドROM（`Software/ROM2`、JKN0/PSR70-reverse）に格納されたOPQ音色データ（実使用は約32音色、テーブル上の定義は約80）を架空音源プリセット形式（`.38x6`）へ変換する。実装は`ym38x6/tools/psr2x6`。
 変換先は`WAVEFORM_MEMORY_BANK + 1`以降のバンク（Programは0〜127、128件ごとに連番バンクへ分割）。
 （OPQボイスは0x60以降がOPM互換のレジスタ配置。デチューンは6bit。正確なビット配置は`Guides/OPQ_ProgGuide.pdf`を出典とする。
 なお「`def_seqs.h`」「450エントリ」はシーケンス／自動伴奏データを指し、音色データではない。）

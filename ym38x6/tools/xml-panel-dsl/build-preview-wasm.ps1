@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 
 $rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
 $wasmBindgen = "$env:USERPROFILE\.cargo\bin\wasm-bindgen.exe"
-$crateDir    = Join-Path $PSScriptRoot "..\..\ym38x6-ui\preview-wasm"
+$crateDir    = Join-Path $PSScriptRoot "..\..\ui\preview-wasm"
 $indexHtml   = Join-Path $PSScriptRoot "index.html"
 $wasmFile    = Join-Path $crateDir "target\wasm32-unknown-unknown\release\preview_wasm.wasm"
 $tmpOutDir   = Join-Path $crateDir "target\wasm-bindgen-out"

@@ -1,8 +1,8 @@
 ---
 paths:
-  - "ym38x6-core/**"
-  - "ym38x6-vst/**"
-  - "ym38x6-ui/**"
+  - "ym38x6/core/**"
+  - "ym38x6/vst/**"
+  - "ym38x6/ui/**"
   - "gesture-app/src-tauri/**"
 ---
 

@@ -15,7 +15,7 @@
 
 引数を解析して以下を実行する。
 
-1. `tools/patchlab` ディレクトリで `uv run python` を使って
+1. `ym38x6/tools/patchlab` ディレクトリで `uv run python` を使って
    `python\audition.py` を実行する。
    - 引数が数字のみ → `--prog <N>`
    - 引数が `.38x6` ファイルパス → `--bank <path>`

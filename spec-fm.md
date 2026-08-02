@@ -1,8 +1,8 @@
 # FM音源変換ツール群 横断知見
 
 [spec-sound.md](spec-sound.md)が38x6エンジン自体の仕様であるのに対し、本ドキュメントは
-**レガシーFM音源チップの音色を38x6へ取り込むコンバーター群**（`tools/opz2x6`・`tools/opm2x6`・
-`tools/psr2x6`・`tools/mucom2x6`・`tools/vgm2x6`、および検証用の`tools/opzref`）が積み上げてきた、
+**レガシーFM音源チップの音色を38x6へ取り込むコンバーター群**（`ym38x6/tools/opz2x6`・`ym38x6/tools/opm2x6`・
+`ym38x6/tools/psr2x6`・`ym38x6/tools/mucom2x6`・`ym38x6/tools/vgm2x6`、および検証用の`ym38x6/tools/opzref`）が積み上げてきた、
 各チップ固有の解析知見・変換設計判断・その根拠を集約する。個別ツールのCLI使い方はCLAUDE.mdおよび
 各`private/`配下のメモを参照。ここでは**なぜその変換式・その値になったか**を記録する。
 
@@ -240,7 +240,7 @@ nornandブログ「導出方法を考えてみた」（https://nornand.hatenablo
 38x6の`velocity_sensitivity`は実機のKVSとは設計思想が異なる。実機はTLレジスタへの直接的な
 減衰（キャリア・モジュレーター問わず効く）だが、38x6は**モジュレーターの明るさ専用**
 （`effective_tl = base_tl + (velocity/127) * sensitivity`という単純な線形加算、
-`ym38x6-core/src/mapping.rs`）。キャリアの音量はベロシティに関わらず常に
+`ym38x6/core/src/mapping.rs`）。キャリアの音量はベロシティに関わらず常に
 `velocity_to_volume_gain`で一本化する設計（「velocity=音量」という38x6独自のポリシー）。
 
 `opz2x6`はこれに合わせ、キャリアは`velocity_sensitivity=0`固定、モジュレーターのみKVSを
