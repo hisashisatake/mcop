@@ -87,9 +87,10 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
   sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界（基盤ライブラリ、製品非依存）
     Vcoトレイト        ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engine/Op505Engineが実装
     AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
+    texture_lfo        ← TextureLfo構造体・texture_lfo_to_shape変換（VCO実装に依存しないモジュレーション層の部品）
   fm-common/           ← FM合成チップ間で共有する、EG非依存の汎用部品（ym38x6-core/op505-core双方が依存）
     algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・チップ内LFO・波形生成
-    texture_lfo        ← TextureLfo構造体・FmLfoDestination（LFO適用先）・texture_lfo_to_shape変換
+    texture_lfo        ← FmLfoDestination（FM合成チップ固有のLFO適用先解釈のみ。TextureLfo本体はsound-coreを再エクスポート）
   ym38x6/              ← 38x6製品一式（レート方式5段EG）
     core/              ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/fm-commonに依存、Vco実装の一つ。波形メモリ音色も生成）
     ui/                ← エディタ共有描画ロジック（クレート名ym38x6-ui。egui+sound-coreに依存。VST/gesture-app両対応）
