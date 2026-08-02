@@ -50,6 +50,25 @@ pub fn time_to_seconds(time: u8) -> f32 {
     time_seconds_table()[time as usize]
 }
 
+/// `time_to_seconds`の逆写像。秒数からtime値(0〜255)を逆算する
+/// （`mcop-core`のAdapter、レート方式EGパラメーターからの変換で使用）。
+/// 0秒以下は`time=0`（瞬時）、30秒以上は`time=255`にクランプする。
+pub fn seconds_to_time(seconds: f32) -> u8 {
+    const T_MIN: f32 = 0.001;
+    const T_MAX: f32 = 30.0;
+    if seconds <= 0.0 {
+        return 0;
+    }
+    if seconds <= T_MIN {
+        return 1;
+    }
+    if seconds >= T_MAX {
+        return 255;
+    }
+    let t = 1.0 + 254.0 * (seconds / T_MIN).ln() / (T_MAX / T_MIN).ln();
+    t.round().clamp(1.0, 255.0) as u8
+}
+
 // ---------------------------------------------------------------------------
 // パラメーター
 // ---------------------------------------------------------------------------
@@ -316,6 +335,27 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "actual={actual} expected={expected} tolerance={tolerance}"
         );
+    }
+
+    #[test]
+    fn seconds_to_time_round_trips_within_one_step() {
+        // time=0(瞬時)は特殊値、他は256要素テーブルの丸め誤差1ステップ以内で往復することを確認
+        assert_eq!(seconds_to_time(time_to_seconds(0)), 0);
+        for t in 1u8..=255 {
+            let seconds = time_to_seconds(t);
+            let back = seconds_to_time(seconds);
+            let diff = (back as i32 - t as i32).abs();
+            assert!(diff <= 1, "time={t} seconds={seconds} back={back} diff={diff}");
+        }
+    }
+
+    #[test]
+    fn seconds_to_time_clamps_out_of_range() {
+        assert_eq!(seconds_to_time(0.0), 0);
+        assert_eq!(seconds_to_time(-1.0), 0);
+        assert_eq!(seconds_to_time(0.0005), 1);
+        assert_eq!(seconds_to_time(30.0), 255);
+        assert_eq!(seconds_to_time(1000.0), 255);
     }
 
     #[test]

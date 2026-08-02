@@ -2474,6 +2474,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcop-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sound-core",
+ "ym38x6-core",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

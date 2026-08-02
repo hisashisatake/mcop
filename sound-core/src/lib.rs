@@ -5,7 +5,8 @@
 pub mod lfo;
 pub use lfo::{LfoWaveform, LfoFadeMode, PerformanceLfoShape, PerformanceLfo, LfoDestination,
     PerformanceLfoTarget, apply_lfo_modulation, pitch_depth_cents, volume_depth, cutoff_depth,
-    lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param, lfo_waveform_from_index};
+    delay_to_seconds, lfo_fade_mode_from_index, lfo_offset_from_param, lfo_offset_to_param,
+    lfo_waveform_from_index};
 
 // ---------------------------------------------------------------------------
 // Master effects (Reverb / Chorus)
@@ -25,7 +26,7 @@ pub mod eg;
 pub use eg::{cc76_to_rate_scale, BipolarFg, Eg, EgParams, GainFg};
 
 pub mod time_eg;
-pub use time_eg::{time_to_seconds, TimeEg, TimeEgParams, TimeStage, MAX_STAGES};
+pub use time_eg::{seconds_to_time, time_to_seconds, TimeEg, TimeEgParams, TimeStage, MAX_STAGES};
 
 pub mod vcf;
 pub use vcf::{cutoff_to_hz, effective_cutoff, FilterType, Svf, Vcf, VoiceFilter};
