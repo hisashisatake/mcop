@@ -1,15 +1,15 @@
 [package]
-name = "smf2wav"
+name = "mucom2x6"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "smf2wav"
+name = "mucom2x6"
 path = "src/lib.rs"
 
 [[bin]]
-name = "smf2wav"
+name = "mucom2x6"
 path = "src/main.rs"
 
 [dependencies]
-ym38x6-core = { path = "../../ym38x6-core" }
+ym38x6-core = { path = "../../core" }

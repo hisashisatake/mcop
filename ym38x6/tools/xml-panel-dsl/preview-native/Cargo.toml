@@ -15,6 +15,6 @@ path = "src/main.rs"
 [dependencies]
 eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.34"
-ym38x6-ui = { path = "../../../ym38x6-ui", features = ["preview"] }
-panel-codegen = { path = "../../../ym38x6-ui/panel-codegen" }
+ym38x6-ui = { path = "../../../ui", features = ["preview"] }
+panel-codegen = { path = "../../../ui/panel-codegen" }
 rfd = "0.15"

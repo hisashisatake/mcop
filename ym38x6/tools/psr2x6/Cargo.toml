@@ -14,4 +14,4 @@ name = "psr2x6"
 path = "src/main.rs"
 
 [dependencies]
-ym38x6-core = { path = "../../ym38x6-core" }
+ym38x6-core = { path = "../../core" }

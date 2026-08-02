@@ -197,7 +197,7 @@ F-Numberの更新:             フレームごと（≒16ms以内）
 
 `editor-wasm`はwasm32専用クレートのためrustup版cargo・独自の`target/`ディレクトリ
 （`gesture-app/editor-wasm/target/`、ワークスペース本体の`target/`とは別）でビルドされる。
-`ym38x6-ui/build.rs`は`cargo:rerun-if-changed=src/panel.xml`で変更検知しているが、この
+`ym38x6/ui/build.rs`は`cargo:rerun-if-changed=src/panel.xml`で変更検知しているが、この
 wasm32専用targetディレクトリ側だけ`panel.xml`編集を検知し損ね、古い生成コード
 （`$OUT_DIR/panel_generated.rs`）を使い続ける事故が発生した（ネイティブ側の`cargo build -p ym38x6-ui`
 では正しく最新化されることを確認済みで、wasm32側特有の問題）。原因の完全特定はできていないが、

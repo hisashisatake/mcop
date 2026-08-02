@@ -23,7 +23,7 @@ FMパラメーター比較スキル。1つのパラメーターを複数値に�
    - 第2引数: パラメーター名（piano_template.py の PIANO_FAMILY キー名）
    - 第3引数: カンマ区切りの値リスト
 
-2. `tools/patchlab` ディレクトリで以下を実行:
+2. `ym38x6/tools/patchlab` ディレクトリで以下を実行:
    ```powershell
    cd "c:\Users\satake\source\repos\ym38x6\tools\patchlab"
    uv run python python\fm_compare.py --prog <prog> --param <param> --values <values>

@@ -13,10 +13,13 @@ Inspired by Ryu Umemoto's YM-2609, which explored a similar "what if" premise us
 ## Architecture
 
 ```
-ym38x6/
+(repo root)
   sound-core/         # Core primitives — WaveTable, AdsrParams, PerformanceLfo, MasterEffects
-  ym38x6-core/        # 38x6 FM engine implementation (depends on sound-core)
-  ym38x6-vst/         # 38x6 VST3/CLAP plugin (nice-plug)
+  ym38x6/             # The 38x6 product (directory grouping only; crate names unchanged)
+    core/             # 38x6 FM engine implementation (crate: ym38x6-core, depends on sound-core)
+    ui/               # Shared editor UI (crate: ym38x6-ui)
+    vst/              # 38x6 VST3/CLAP plugin (crate: ym38x6-vst, nice-plug)
+    tools/            # Legacy chip converters, patch design & perf tools
   gesture-app/        # Composition app (Tauri v2, Windows desktop)
     src/              # Frontend: calibration + gesture UI (HTML/JS)
     src-tauri/        # Backend: cpal WASAPI output, Tauri commands

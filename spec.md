@@ -45,7 +45,7 @@ ym38x6/                  ← ワークスペースルート
     src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
                              波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
 
-  ym38x6-core/           ← 38x6 FMエンジン実装（sound-coreに依存）
+  ym38x6/core/           ← 38x6 FMエンジン実装（sound-coreに依存）
     Cargo.toml
     src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + チップ内LFO + チャンネル管理）
     src/operator.rs        ← Operator（オシレーター + EG + パラメーター）
@@ -55,7 +55,7 @@ ym38x6/                  ← ワークスペースルート
     src/tone_lfo.rs        ← チップ内LFO（旧称「音色LFO」。ファイル名はステップ6で改称予定）
     src/filter.rs          ← SVF（Cutoff FGはsound-core::Egを流用、ステップ6で本ファイルは縮小予定）
 
-  ym38x6-vst/            ← 38x6 VST3/CLAPプラグイン（nice-plug）
+  ym38x6/vst/            ← 38x6 VST3/CLAPプラグイン（nice-plug）
 
   gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象）
     package.json
@@ -130,8 +130,8 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
   （note_on/note_off/render/pitch_bend系/channel_volume系の7メソッド）は変更していない。
   `Vcf`/`Vca`は`AudioProcessor`（全ボイス合算後のマスター段バッファ一括加工）とは別の粒度
   （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
-  旧フィルターEGの4段ADSR（`ym38x6-core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
-  cutoff EGへ統合済み（`ym38x6-core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
+  旧フィルターEGの4段ADSR（`ym38x6/core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
+  cutoff EGへ統合済み（`ym38x6/core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
 - **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（ステップ5）とVCF/VCAファンクション
   ジェネレーター統合（ステップ5.5、FG=Pitch/Cutoff/Gain＋質感LFOへの再編）の設計・spec改訂が完了、
   velocity→音量「量」は完了（`OperatorParams.velocity_gain`、詳細はspec-roadmap.mdフェーズ7参照）。

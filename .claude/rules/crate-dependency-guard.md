@@ -1,7 +1,7 @@
 ---
 paths:
   - "sound-core/**"
-  - "ym38x6-core/**"
+  - "ym38x6/core/**"
 ---
 
 # sound-core / ym38x6-core 依存ガード

@@ -10,5 +10,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 cpal = "0.15"
-ym38x6-core = { path = "../../ym38x6-core" }
+ym38x6-core = { path = "../../ym38x6/core" }
 serde = { version = "1", features = ["derive"] }

@@ -21,7 +21,7 @@
 
 1. 引数を解析して `--prog` / `--bank` / `--type` を決定する
 
-2. `tools/patchlab` ディレクトリで以下を実行:
+2. `ym38x6/tools/patchlab` ディレクトリで以下を実行:
    ```powershell
    cd "c:\Users\satake\source\repos\ym38x6\tools\patchlab"
    # prog 番号指定

@@ -46,7 +46,7 @@
   → OPQ由来の音楽的表現を一般化して活用
 
 フェーズ5: 実機音色資産の取り込みと音作り基盤（進行中）
-  → 変換ツール群（tools/）: opz2x6 / vgm2x6 / psr2x6 / mucom2x6 / opm2x6
+  → 変換ツール群（ym38x6/tools/）: opz2x6 / vgm2x6 / psr2x6 / mucom2x6 / opm2x6
     実機・既存資産（OPZ/OPM/OPN/OPQ/PSR-70/MUCOM88）を .38x6 バンクへ変換
     （WAVEFORM_MEMORY_BANK+1以降。Bank 0には流用しない）
   → 試聴・検証ツール: smf2wav（SMF→WAV）/ wavetest（波形試聴）/
@@ -65,7 +65,7 @@
   → 38x6エンジンのPythonバインディング（PyO3 + maturin）経由でテンプレートを試聴・反復
   → GM2プログラムマップ準拠のBank 0音色セットを族ごとに手動設計
     （Bank 0には実機プリセットを直接流用せず、フェーズ5の変換音色は参考程度に用いる）
-  → 同一リポジトリ内の tools/patchlab/ に収録
+  → 同一リポジトリ内の ym38x6/tools/patchlab/ に収録
   → 進捗: Piano(0-7)/Organ(16-23)/Brass(56-63)の3族が完了（piano_template.py/organ_template.py/
     brass_template.py）。残り13族が未着手: Chromatic Percussion(8-15)/Guitar(24-31)/Bass(32-39)/
     Strings(40-47)/Ensemble(48-55)/Reed(64-71)/Pipe(72-79)/Synth Lead(80-87)/Synth Pad(88-95)/
@@ -81,7 +81,7 @@
   → ステップ1「VCO抽象境界の確立」完了（Vco/AudioProcessorトレイトをsound-coreに実装）
   → ステップ2「EG形式の確定とVcf/Vca定義」完了: 5段OPM形式（AR/D1R/D1L/D2R/RR）を採用。
     状態機械`Eg`・トレイト`Vcf`/`Vca`をsound-coreに実装（具象実装`VoiceFilter`/`VoiceAmp`）。
-    旧フィルターEG（4段ADSR、ym38x6-core/src/filter.rs）は撤去しVcfへ統合済み。
+    旧フィルターEG（4段ADSR、ym38x6/core/src/filter.rs）は撤去しVcfへ統合済み。
     Pitch EG（EnvelopeによるピッチModulation）は今回のスコープ外で未着手のまま残る
   → ステップ3「LFO拡張（波形8種/Fade/Offset）」完了: `LfoWaveform`にSaw/Trapezoid/Random/Chaosを追加し
     8種に、`LfoFadeMode`(ON-IN/ON-OUT/OFF-IN/OFF-OUT)・`PerformanceLfoShape`(waveform/fade_mode/
@@ -124,7 +124,7 @@
         `texture_lfo`（5波形専用8項目、完全パッチ所有）へ再編。`ChannelParams`に手動`Deserialize`
         （`ChannelParamsWire`シャドー構造体経由）を実装し、旧`.38x6`ファイルを新スキーマへ自動移行する
         後方互換レイヤーを追加（回帰テストで検証）。`Ym38x6Engine::set_performance_lfo`ランタイムAPIは
-        質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`tools/wavetest`は新スキーマへ
+        質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`ym38x6/tools/wavetest`は新スキーマへ
         機械的に追従済み（新パラメーターのUI/NRPN露出はステップ7/8）
     → `cargo test --workspace`で全クレート0 failedを確認
   → ステップ7「VST配線」完了（`sound-core`/`ym38x6-core`/`ym38x6-vst`/`ym38x6-ui`、2026-07-16）:
@@ -173,7 +173,7 @@
         でVSTと同じ経路により発音中チャンネルへ個別反映）、Volume時は従来通り質感LFOへ書き込む
     → `cargo test --workspace`0 failed・VST3/CLAPバンドルビルド・gesture-app実機起動（スクリーン
       ショットでPITCH FG/CUTOFF FG/GAIN FGパネル表示とV/C/Bキー操作の無クラッシュを確認）で検証済み
-  → ステップ9「smf2wav・変換ツール」完了（`tools/smf2wav`、2026-07-16）: smf2wav を VST と同等の
+  → ステップ9「smf2wav・変換ツール」完了（`ym38x6/tools/smf2wav`、2026-07-16）: smf2wav を VST と同等の
     CC/NRPN 解釈器にし、マルチティンバーでパッチ外の揺れを再現する。
     (1) `smf.rs` に Channel Pressure(0xD0)/Poly Key Pressure(0xA0) の抽出を追加（AT Destination用、
         従来は読み飛ばしていた）。
@@ -188,11 +188,11 @@
         master単位）、チャンク単位で適用してオートメーションをサンプル正確に反映。既存の `--reverb-*`
         CLI（fx.rs後段リバーブ、既定OFF）は独立温存。
     (4) `RpnSelection`/`AtDestination`/`apply_at_modulation`/`cc_to_u8`/`cc_to_u7`/`channel_gain` は
-        VST(`ym38x6-vst`はcdylibで参照不可)から `tools/smf2wav/src/midi.rs` へ最小複製（コメントで明記、
+        VST(`ym38x6-vst`はcdylibで参照不可)から `ym38x6/tools/smf2wav/src/midi.rs` へ最小複製（コメントで明記、
         VST側変更時は追従が必要）。
     → CC/NRPNの無いSMFは出力バイト同一（後方互換）。`cargo test --workspace` 0 failed（ライブ伝播・
       混在CC/NRPNのE2Eスモークで発音中CC1の反映と無クラッシュを検証）＋実バンク/実SMFでのバイナリ実行を確認済み。
-  → ステップ10「手動ワウ・表情ルーティング（CC2/CC4）」完了（`ym38x6-vst`/`tools/smf2wav`、2026-07-16）:
+  → ステップ10「手動ワウ・表情ルーティング（CC2/CC4）」完了（`ym38x6-vst`/`ym38x6/tools/smf2wav`、2026-07-16）:
     既存のAT（Channel/Poly Key Pressure）destination加算モデル（`AtDestination`→
     `ExpressionDestination`へ改称、6行先: LFO PMD/AMD・Filter Cutoff/Resonance・TL全OP/キャリア）を
     CC2（ブレス）・CC4（フット）へ一般化（`apply_at_modulation`→`apply_expression_modulation`、
@@ -201,7 +201,7 @@
     （＝**手動ワウ**、LFOのオートワウと独立に積み重なる）。CC1はGM2慣例のPitch FG固定を維持。
     NRPN(0,34)=CC2 Destination／(0,35)=CC4 Destination（AT Destinationと同じNRPN専用シャドウ、
     DAWパラメーター非公開）。VST/smf2wav両方に配線済み、`cargo test --workspace`で0 failed。
-  → CC64サステインペダル（ホールドフラグ方式）完了: `ym38x6-vst`/`tools/smf2wav`両方に
+  → CC64サステインペダル（ホールドフラグ方式）完了: `ym38x6-vst`/`ym38x6/tools/smf2wav`両方に
     MIDIチャンネルごとの`pedal_down: [bool; 16]`/`pending_release: [u128; 16]`で実装。
     smf2wav側（commit e828515）に弾き直し時の保留ビットクリア漏れ（stale pending_release）が
     見つかったため同時修正。`cargo test -p smf2wav`にホールド挙動・弾き直し回帰の2テスト追加。
@@ -221,7 +221,7 @@
   → パラメーターUI・音色保存・プリセットライブラリ（.38x6 の書き出しUI）
   → 実装形態（VST製 or Tauri製）は未決定
   → Bank Select / Program Change（受信は実装済み、UI・運用が残課題）
-  → MUL表示のOPZ比率化は完了（2026-07-20、`15e3df1`）: `ym38x6-ui/panel.rs`にMUL×FINE実効比率
+  → MUL表示のOPZ比率化は完了（2026-07-20、`15e3df1`）: `ym38x6/ui/panel.rs`にMUL×FINE実効比率
     （DT1除く）の読み取り表示をOPヘッダ行併記で追加、gesture-appで目視確認済み
 
 フェーズ9: スケール判定・アボイド挙動の検証

@@ -16,6 +16,6 @@ name = "patchlab"
 crate-type = ["cdylib"]
 
 [dependencies]
-ym38x6-core = { path = "../../ym38x6-core" }
+ym38x6-core = { path = "../../core" }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
 serde_json = "1"

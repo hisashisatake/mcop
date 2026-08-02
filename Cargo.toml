@@ -1,39 +1,39 @@
 [workspace]
 members = [
     "sound-core",
-    "ym38x6-core",
-    "ym38x6-ui",
-    "ym38x6-ui/panel-layout",
-    "ym38x6-ui/panel-codegen",
-    "ym38x6-vst",
+    "ym38x6/core",
+    "ym38x6/ui",
+    "ym38x6/ui/panel-layout",
+    "ym38x6/ui/panel-codegen",
+    "ym38x6/vst",
     "gesture-app/src-tauri",
-    "tools/psr2x6",
-    "tools/mucom2x6",
-    "tools/opm2x6",
-    "tools/opz2x6",
-    "tools/opzref",
-    "tools/smf2wav",
-    "tools/wavetest",
-    "tools/vgm2x6",
+    "ym38x6/tools/psr2x6",
+    "ym38x6/tools/mucom2x6",
+    "ym38x6/tools/opm2x6",
+    "ym38x6/tools/opz2x6",
+    "ym38x6/tools/opzref",
+    "ym38x6/tools/smf2wav",
+    "ym38x6/tools/wavetest",
+    "ym38x6/tools/vgm2x6",
 ]
-# tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
+# ym38x6/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
 # 除外して独立クレートとして扱う（ビルドはmaturin専任、ym38x6-coreはpath依存で参照）。
-# gesture-app/editor-wasm・ym38x6-ui/preview-wasm はwasm32-unknown-unknown専用クレート
+# gesture-app/editor-wasm・ym38x6/ui/preview-wasm はwasm32-unknown-unknown専用クレート
 # （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
 # cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
 # 個別に行う（editor-wasmはym38x6-uiを、preview-wasmはym38x6-ui(preview feature)/panel-codegenを
 # path依存で参照。旧tools/xml-panel-dsl/codegen-wasmはpreview-wasmへ統合され削除済み）。
-# tools/xml-panel-dsl/preview-native はeframe nativeのxml-panel-dslプレビュー用GUIツール
+# ym38x6/tools/xml-panel-dsl/preview-native はeframe nativeのxml-panel-dslプレビュー用GUIツール
 # （分離・ドッキング可能なプレビュー等、preview-wasm＝ブラウザ版では実現できない機能向け）。
 # winit/glow等の重い依存を`cargo check --workspace`に持ち込まないため除外し、
 # scoop版の既定cargoで個別にビルドする（preview-wasmと同じym38x6-ui(preview feature)/panel-codegen
 # をpath依存で参照するが、wasm32は不要）。
 exclude = [
-    "tools/patchlab",
+    "ym38x6/tools/patchlab",
     "gesture-app/editor-wasm",
-    "ym38x6-ui/preview-wasm",
-    "tools/xml-panel-dsl/preview-native",
+    "ym38x6/ui/preview-wasm",
+    "ym38x6/tools/xml-panel-dsl/preview-native",
 ]
 resolver = "2"
 

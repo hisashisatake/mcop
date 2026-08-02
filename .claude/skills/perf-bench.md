@@ -1,6 +1,6 @@
 # perf-bench
 
-38x6エンジンのレンダリング性能を、実際の曲データ（tools/smf2wav）で安全に計測・検証するスキル。
+38x6エンジンのレンダリング性能を、実際の曲データ（ym38x6/tools/smf2wav）で安全に計測・検証するスキル。
 「速くなったか」だけでなく「音が変わっていないか（出力WAVのビット一致）」を必ずセットで確認する。
 
 ## 使い方
@@ -11,7 +11,7 @@
 
 例:
 ```
-/perf-bench "tools/opz2x6/private/out/Yamaha Factory Bank A.38x6" "C:\Users\satake\Documents\REAPER Media\Media\LastWave_single_track.mid"
+/perf-bench "ym38x6/tools/opz2x6/private/out/Yamaha Factory Bank A.38x6" "C:\Users\satake\Documents\REAPER Media\Media\LastWave_single_track.mid"
 ```
 
 - `--pairs`: 交互A/B計測のペア数（既定5）
@@ -68,13 +68,13 @@ if true { return dry; } // TEMP-PROFILING: VCF/VCAコストの切り分け（後
    「差が出ない」こと自体が正しい結論であり、それ以上の計測は不要。
 2. **上限に実際到達させたい場合はストレス用SMFを自作する**。既存曲で偶然しきい値を超える場面を
    探すより、狙って超えさせる入力を作った方が速く・ノイズも小さい。
-   - `tools/smf2wav`のボイスIDは `MIDIチャンネル*128 + ノート番号` なので、**同一チャンネル×
+   - `ym38x6/tools/smf2wav`のボイスIDは `MIDIチャンネル*128 + ノート番号` なので、**同一チャンネル×
      同一ノート番号の再発音は新規ボイスではなく`retrigger`（既存ボイスの再利用）になり、
      ボイス数が頭打ちになる**。同時発音数を稼ぐには複数MIDIチャンネル×広い音域に分散させ、
      ノート番号が被らないようにする。
    - SMFはバイト列として単純な形式（Format0、可変長delta-time）なので、`uv run python`で
      使い捨てスクリプトを直接書いて生成するのが早い（このマシンはbash経由の`python3`が
-     動かないため、`uv run python <script>.py`を使う。`tools/patchlab`と同じ流儀）。
+     動かないため、`uv run python <script>.py`を使う。`ym38x6/tools/patchlab`と同じ流儀）。
    - スクリプトはスクラッチパッドに置き、リポジトリにはコミットしない（使い捨ての診断資材）。
 3. しきい値をまたぐ3点以上（例: 現状値・候補値・その先の値）を交互A/B計測し、実測ピークが
    狙った上限に到達していることをログで確認してから結論を出す。
@@ -84,4 +84,4 @@ if true { return dry; } // TEMP-PROFILING: VCF/VCAコストの切り分け（後
 - **`HashMap`のイテレーション順は非決定論**: プロセスごとのランダムシードにより、同一入力でも実行のたびに浮動小数点加算順が変わり出力WAVがビット一致しないことがある。決定論的な順序が必要な場所（ボイス合算等）は`BTreeMap`を使う。
 - **u8パラメーター→f32変換の`powf()`/`tan()`は`OnceLock`の256要素テーブルでLUT化する**のがこのプロジェクトの既定パターン（`mapping.rs`の`tl_to_gain`が最初の実装例）。1ノート中（または1オーディオブロック中）不変の値を毎サンプル超越関数で計算している箇所を見つけたら、同じパターンを適用する。
 - 音色によって負荷が大きく変わる。リリースの長い音色はボイススチール上限までリリース裾ボイスが積み上がり支配的コストになる。単一の短い音色だけでなく、実際に重いと報告された曲・バンクの組み合わせで計測すること。
-- `tools/smf2wav`には`--max-voices <N>`（同時発音数上限の上書き）が常設されている。上限依存の挙動を診断・A/B計測するときはこれを使う（`--fb-two-sample`等と同じ実験用フラグの流儀）。
+- `ym38x6/tools/smf2wav`には`--max-voices <N>`（同時発音数上限の上書き）が常設されている。上限依存の挙動を診断・A/B計測するときはこれを使う（`--fb-two-sample`等と同じ実験用フラグの流儀）。
