@@ -1,10 +1,12 @@
 //! mcop-core: ym38x6のEG（レート方式5段）をN点Time/Level方式（`sound_core::TimeEg`）に
 //! 全面移行した新チップのコアクレート。
 //!
-//! `ym38x6-core`へpath依存し、EG非依存の安定部分（アルゴリズム結線・波形・LFO・パラメーター
-//! マッピングテーブル）を再利用する（fork-on-write方針。将来mcop独自に進化させたくなったら
-//! 該当モジュールだけコピーして依存を切る）。EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は
-//! 全面的にTimeEg化するため、`operator.rs`とChannel/Engine部のみ複製・改変する。
+//! EG非依存の安定部分（アルゴリズム結線・波形・チップ内LFO・パラメーターマッピングテーブル・
+//! 質感LFO）は`fm-common`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
+//! （fork-on-write方針。将来mcop独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
+//! `ym38x6-core`への依存は`adapter.rs`（既存`.38x6`からの変換）のみに限定する。
+//! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
+//! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
 pub mod adapter;
 pub mod operator;
@@ -12,6 +14,14 @@ pub use operator::McopOperatorParams;
 
 use std::collections::BTreeMap;
 
+use fm_common::algorithm::ALGORITHMS;
+use fm_common::chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
+use fm_common::mapping::{
+    carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
+    FM_MODULATION_INDEX_SCALE,
+};
+use fm_common::waveform::{self, gen_builtin_waveform};
+use fm_common::{texture_lfo_to_shape, FmLfoDestination, TextureLfo};
 use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{
@@ -19,14 +29,6 @@ use sound_core::{
     volume_depth, cutoff_depth, FilterType, LfoDestination, PerformanceLfo, PerformanceLfoTarget,
     Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
 };
-use ym38x6_core::algorithm::ALGORITHMS;
-use ym38x6_core::chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
-use ym38x6_core::mapping::{
-    carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
-    FM_MODULATION_INDEX_SCALE,
-};
-use ym38x6_core::waveform::{self, gen_builtin_waveform};
-use ym38x6_core::{Ym38x6LfoDestination, TextureLfo};
 
 // ---------------------------------------------------------------------------
 // パッチ（チャンネル + オペレーター4個分のパラメーター一式）
@@ -117,25 +119,6 @@ impl Default for McopChannelParams {
 pub struct McopPatch {
     pub operators: [McopOperatorParams; 4],
     pub channel: McopChannelParams,
-}
-
-/// 質感LFOの波形/Fade/Offset設定を、`sound_core::PerformanceLfo`が受け取る
-/// `PerformanceLfoShape`へ変換する（ym38x6-coreの同名private関数の複製。
-/// `TextureLfo`型自体はEG非依存のため再利用するが、この変換関数はpubでないため複製が必要）。
-fn texture_lfo_to_shape(texture_lfo: TextureLfo) -> sound_core::PerformanceLfoShape {
-    let waveform = match texture_lfo.waveform {
-        1 => sound_core::LfoWaveform::Trapezoid,
-        2 => sound_core::LfoWaveform::SampleHold,
-        3 => sound_core::LfoWaveform::Random,
-        4 => sound_core::LfoWaveform::Chaos,
-        _ => sound_core::LfoWaveform::Square,
-    };
-    sound_core::PerformanceLfoShape {
-        waveform,
-        fade_mode: sound_core::lfo_fade_mode_from_index(texture_lfo.fade_mode),
-        fade_time: texture_lfo.fade_time,
-        offset: sound_core::lfo_offset_from_param(texture_lfo.offset),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,22 +283,22 @@ impl Channel {
         self.volume_mod_delta = 0.0;
         self.tl_carrier_mod_delta = 0.0;
         self.cutoff_mod_delta = 0.0;
-        match Ym38x6LfoDestination::from_u8(texture_lfo.destination) {
-            Ym38x6LfoDestination::Pitch => {
+        match FmLfoDestination::from_u8(texture_lfo.destination) {
+            FmLfoDestination::Pitch => {
                 let cents = pitch_depth_cents(texture_lfo.depth, 0, 0);
                 apply_lfo_modulation(texture_lfo_value, LfoDestination::Pitch, cents, self);
             }
-            Ym38x6LfoDestination::Volume => {
+            FmLfoDestination::Volume => {
                 let depth = volume_depth(texture_lfo.depth, 0);
                 apply_lfo_modulation(texture_lfo_value, LfoDestination::Volume, depth, self);
             }
-            Ym38x6LfoDestination::TlCarrier => {
+            FmLfoDestination::TlCarrier => {
                 self.tl_carrier_mod_delta = texture_lfo_value * volume_depth(texture_lfo.depth, 0);
             }
-            Ym38x6LfoDestination::Cutoff => {
+            FmLfoDestination::Cutoff => {
                 self.cutoff_mod_delta = texture_lfo_value * cutoff_depth(texture_lfo.depth, 0);
             }
-            Ym38x6LfoDestination::Unplugged => {}
+            FmLfoDestination::Unplugged => {}
         }
 
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。

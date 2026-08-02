@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "sound-core",
+    "fm-common",
     "ym38x6/core",
     "mcop/core",
     "ym38x6/ui",
