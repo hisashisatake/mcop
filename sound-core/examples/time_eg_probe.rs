@@ -12,6 +12,10 @@
 //!   区間が完全に静止するプラトーではなかった。`segment_start == segment_end`
 //!   （目標レベルが直前と同値）の段を挟むと`TimeEg`は追加実装なしで本物の静止区間を作れる
 //!   ため、d1でElektron的な「上昇→静止→上昇→静止」ステップシーケンサーを試す。
+//!   d5（高低2値を静止を挟んで往復するスイッチ）が最も刺さるという結論だった。
+//! E群: d5を起点にした発展形。e1は2値→3値化（高→中→低を巡回）、
+//!   e2はd5の静止時間を非対称化（高で長く・低で短く）、
+//!   e3はd5と同じ形をカットオフでなく振幅（音量）に適用し、トレモロ/ゲート的な質感を試す。
 //!
 //! 実行: cargo run -p sound-core --example time_eg_probe -- <出力ディレクトリ>
 
@@ -279,6 +283,68 @@ fn main() {
         1.0,
     );
 
+    // --- E群：d5の発展形 ---
+
+    // e1: d5の2値スイッチを3値化（高→中→低を静止を挟んで巡回）。
+    let e1 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 230, 0), // 高い位置へ
+                (40, 230, 0), // 静止(高)
+                (15, 140, 0), // 中間位置へ
+                (40, 140, 0), // 静止(中)
+                (15, 40, 0),  // 低い位置へ
+                (40, 40, 0),  // 静止(低)
+                (100, 0, 0),  // リリース
+            ]),
+            stage_count: 7,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 5,
+            release_start: 6,
+        },
+        1.0,
+    );
+
+    // e2: d5と同じ高低2値だが、静止時間を非対称化（高で長く~187ms・低で短く~40ms）。
+    let e2 = render_time_eg_cutoff(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 230, 0), // 高い位置へ
+                (70, 230, 0), // 静止(高、長め)
+                (15, 40, 0),  // 低い位置へ
+                (15, 40, 0),  // 静止(低、短め)
+                (100, 0, 0),  // リリース
+            ]),
+            stage_count: 5,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 3,
+            release_start: 4,
+        },
+        1.0,
+    );
+
+    // e3: d5と全く同じ形・同じ値を、カットオフでなく振幅（音量）に適用。
+    // トレモロというより「パタパタ」した明滅がボリューム側でも刺さるかを試す。
+    let e3 = render_time_eg_amplitude(
+        TimeEgParams {
+            stages: stages(&[
+                (15, 230, 0), // 高い位置へ
+                (40, 230, 0), // 静止(高)
+                (15, 40, 0),  // 低い位置へ
+                (40, 40, 0),  // 静止(低)
+                (100, 0, 0),  // リリース
+            ]),
+            stage_count: 5,
+            loop_enabled: 1,
+            loop_start: 0,
+            loop_end: 3,
+            release_start: 4,
+        },
+        1.0,
+    );
+
     write_wav(&out_dir.join("a1_current_fast.wav"), &a1);
     write_wav(&out_dir.join("a2_current_slow.wav"), &a2);
     write_wav(&out_dir.join("a3_time_split.wav"), &a3);
@@ -292,8 +358,11 @@ fn main() {
     write_wav(&out_dir.join("d3_plateau_long.wav"), &d3);
     write_wav(&out_dir.join("d4_plateau_4steps.wav"), &d4);
     write_wav(&out_dir.join("d5_plateau_switch.wav"), &d5);
+    write_wav(&out_dir.join("e1_plateau_triple.wav"), &e1);
+    write_wav(&out_dir.join("e2_plateau_asymmetric_hold.wav"), &e2);
+    write_wav(&out_dir.join("e3_switch_amplitude.wav"), &e3);
 
-    println!("wrote 13 probe WAVs to {}", out_dir.display());
+    println!("wrote 16 probe WAVs to {}", out_dir.display());
 }
 
 /// `entries`（time, level, curve）を先頭から`TimeStage`配列へ詰める。残りは既定値(0,0,0)。
