@@ -93,7 +93,7 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     ui/                ← エディタ共有描画ロジック（クレート名ym38x6-ui。egui+sound-coreに依存。VST/gesture-app両対応）
     vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
     tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
-  mcop/                ← mcop製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
+  mcop/                ← mcop製品一式（チップ名はOP505。N点Time/Level方式EG、ym38x6の後継チップ）
     core/              ← mcop FMエンジン実装（クレート名mcop-core。sound-core/fm-commonに依存、Vco実装の一つ。
                           ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定）
   gesture-app/         ← 作曲支援Tauriアプリ
