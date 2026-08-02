@@ -16,19 +16,20 @@ fn generates_without_error() {
 }
 
 /// OPパネルのレイアウト木が、旧`spike.rs`の`draw_op_taffy`(削除済み)で検証済みだった構造
-/// （eg-preview(84x66) + LOOP/CURVEの`<stack>`(checkbox実測70x20を2個縦積み) +
-/// 17ウィジェットの`row_grow`均等割り付け、うちwaveform+AMも`<stack>`(130x66+70x20)）と一致することを確認する。
+/// （eg-preview(130x105、EGプレビューグラフ実装で84x66から拡大済み) + LOOP/CURVEの`<stack>`
+/// (checkbox実測70x38+70x25を縦積み) + 17ウィジェットの`row_grow`均等割り付け(62x71)、
+/// うちwaveform+AMも`<stack>`(130x71+70x25)）と一致することを確認する。
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
     let rust = panel_codegen::generate_rust(&xml).unwrap();
-    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(84.0, 66.0), \
-stack(outer_gap, vec![leaf(70.0, 20.0), leaf(70.0, 20.0)]), \
-row_grow(Justify::Between, 0.0, vec![leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), \
-leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), \
-leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0), \
-stack(0.0, vec![leaf(130.0, 66.0), leaf(70.0, 20.0)]), \
-leaf(62.0, 66.0), leaf(62.0, 66.0), leaf(62.0, 66.0)])]);";
+    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(130.0, 105.0), \
+stack(outer_gap, vec![leaf(70.0, 38.0), leaf(70.0, 25.0)]), \
+row_grow(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
+leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
+leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
+stack(0.0, vec![leaf(130.0, 71.0), leaf(70.0, 25.0)]), \
+leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)])]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
     // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される。`<let>`廃止に伴い
