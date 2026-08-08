@@ -48,6 +48,10 @@
     #program-panel input[type="number"]:disabled {
       opacity: 0.4;
     }
+    #program-panel select {
+      background: #222; color: #eee; border: 1px solid #444;
+      font-family: monospace; font-size: 12px; padding: 2px 4px;
+    }
     #program-panel label {
       display: flex; align-items: center; gap: 4px; cursor: pointer;
     }
@@ -71,6 +75,15 @@
   <canvas id="canvas"></canvas>
 
   <div id="program-panel">
+    <div class="program-row">
+      Engine <select id="engine-select">
+        <option value="0" selected>38x6</option>
+        <option value="1">OP505</option>
+      </select>
+      <!-- OP505選択時のみ表示。「Bank/Program変換」= 下のBank/Programの.38x6をAdapter変換して鳴らす。
+           デモ音色はTimeEg固有の形（静止付きループ等）を持つ組み込みパッチ。 -->
+      <select id="op505-demo" style="display: none;"></select>
+    </div>
     <div class="program-row">
       <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
       <span id="program-label"></span>

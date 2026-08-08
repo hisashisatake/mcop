@@ -16,8 +16,9 @@
 use std::path::Path;
 
 use op505_core::adapter::convert_patch;
-use op505_core::{Op505BipolarFg, Op505Engine, Op505OperatorParams, Op505Patch};
-use sound_core::{TimeEgParams, TimeStage, Vco, MAX_STAGES};
+use op505_core::demo::demo_patch;
+use op505_core::{Op505Engine, Op505Patch};
+use sound_core::Vco;
 use ym38x6_core::{gm2_bank0_patch, PresetFile, Ym38x6Engine, Ym38x6Patch};
 
 const SAMPLE_RATE: f32 = 44100.0;
@@ -31,9 +32,10 @@ fn main() {
     let out_dir = Path::new(&out_dir);
     let extra_patch_paths: Vec<String> = args.collect();
 
-    write_wav(&out_dir.join("m1_gain_switch.wav"), &render_op505(m1_patch(), NOTE_FREQ));
-    write_wav(&out_dir.join("m2_op_eg_multistage.wav"), &render_op505(m2_patch(), NOTE_FREQ));
-    write_wav(&out_dir.join("m3_pitch_fg_steps.wav"), &render_op505(m3_patch(), 220.0));
+    // m1/m2/m3の定義は`op505_core::demo`へ昇格済み（0=Gain Switch / 1=Modulator Multi-stage / 2=Pitch Steps）。
+    write_wav(&out_dir.join("m1_gain_switch.wav"), &render_op505(demo_patch(0).unwrap(), NOTE_FREQ));
+    write_wav(&out_dir.join("m2_op_eg_multistage.wav"), &render_op505(demo_patch(1).unwrap(), NOTE_FREQ));
+    write_wav(&out_dir.join("m3_pitch_fg_steps.wav"), &render_op505(demo_patch(2).unwrap(), 220.0));
     println!("wrote m1/m2/m3 probe WAVs to {}", out_dir.display());
 
     // Adapter聴き比べ: GM2 Bank0 Acoustic Grand Piano（組み込み、常時実行）。
@@ -85,130 +87,6 @@ fn compare_and_write(out_dir: &Path, label: &str, src: Ym38x6Patch) {
 
     let json = serde_json::to_string_pretty(&op505_patch).expect("serialize .op505");
     std::fs::write(out_dir.join(format!("{label}.op505")), json).expect(".op505書き込み失敗");
-}
-
-// ---------------------------------------------------------------------------
-// m1/m2/m3 パッチ定義
-// ---------------------------------------------------------------------------
-
-fn stages(entries: &[(u8, u8, u8)]) -> [TimeStage; MAX_STAGES] {
-    let mut stages = [TimeStage::default(); MAX_STAGES];
-    for (i, &(time, level, curve)) in entries.iter().enumerate() {
-        stages[i] = TimeStage { time, level, curve };
-    }
-    stages
-}
-
-/// 瞬時に満レベルへ到達しそのまま無限サスティンするEG（通常のオペレーターEG用の既定形）。
-fn instant_sustain_eg() -> TimeEgParams {
-    TimeEgParams {
-        stages: stages(&[(0, 255, 0)]),
-        stage_count: 1,
-        loop_enabled: 0,
-        loop_start: 0,
-        loop_end: 0,
-        release_start: 0,
-    }
-}
-
-fn plain_operator(tl: u8, mul: u8, dt1: u8) -> Op505OperatorParams {
-    Op505OperatorParams {
-        tl,
-        eg: instant_sustain_eg(),
-        mul,
-        dt1,
-        ksr: 0,
-        am_enable: false,
-        velocity_sensitivity: 0,
-        waveform: 0,
-        op_fine_tune: 128,
-        eg_shift: 0,
-        level_scale: 0,
-        velocity_gain: 255,
-    }
-}
-
-/// m1: e3（TimeEgプローブ）と全く同じ形の音量2値スイッチをGain FGに設定した、
-/// アルゴリズム4（(O1→O2)+(O3→O4)の2系統FMペア）のパッチ。
-fn m1_patch() -> Op505Patch {
-    let mut patch = Op505Patch::default();
-    patch.operators = [
-        plain_operator(190, 2, 128),
-        plain_operator(255, 1, 128),
-        plain_operator(190, 2, 140), // 2系統目はわずかにデチューンして厚みを出す
-        plain_operator(255, 1, 140),
-    ];
-    patch.channel.algorithm = 4;
-    patch.channel.gain_fg = TimeEgParams {
-        stages: stages(&[
-            (15, 230, 0), // 高い位置へ
-            (40, 230, 0), // 静止(高)
-            (15, 40, 0),  // 低い位置へ
-            (40, 40, 0),  // 静止(低)
-            (100, 0, 0),  // リリース
-        ]),
-        stage_count: 5,
-        loop_enabled: 1,
-        loop_start: 0,
-        loop_end: 3,
-        release_start: 4,
-    };
-    patch
-}
-
-/// m2: アルゴリズム0（O1→O2→O3→O4、キャリアはO4）。キャリアを直接変調するO3(index 2)の
-/// オペレーターEGを多段ループ化し、変調指数（＝明るさ）が折れ線状に往復する様子を聴く
-/// （レート方式のEGでは「速いアタック＋任意形状のループ」が原理的に書けなかった）。
-fn m2_patch() -> Op505Patch {
-    let mut patch = Op505Patch::default();
-    let silent = plain_operator(0, 1, 128);
-    let mut modulator = plain_operator(220, 1, 128);
-    modulator.eg = TimeEgParams {
-        stages: stages(&[
-            (20, 220, 0), // 明るい位置へ
-            (50, 220, 0), // 静止(明)
-            (20, 80, 0),  // 暗い位置へ
-            (50, 80, 0),  // 静止(暗)
-        ]),
-        stage_count: 4,
-        loop_enabled: 1,
-        loop_start: 0,
-        loop_end: 3,
-        release_start: 3,
-    };
-    let carrier = plain_operator(255, 1, 128);
-    patch.operators = [silent, silent, modulator, carrier];
-    patch.channel.algorithm = 0;
-    patch
-}
-
-/// m3: アルゴリズム7（単一キャリアop0のみ有効）。Pitch FGにTimeEgプローブd1と同じ形の
-/// 階段状プラトーを設定し、アルペジオ的なピッチステップを聴く。
-fn m3_patch() -> Op505Patch {
-    let mut patch = Op505Patch::default();
-    patch.operators = [plain_operator(255, 1, 128), plain_operator(0, 1, 128), plain_operator(0, 1, 128), plain_operator(0, 1, 128)];
-    patch.channel.algorithm = 7;
-    patch.channel.pitch_fg = Op505BipolarFg {
-        eg: TimeEgParams {
-            stages: stages(&[
-                (15, 90, 0),  // 第1段への上昇(速い)
-                (45, 90, 0),  // 静止(プラトー)
-                (15, 170, 0), // 第2段への上昇
-                (45, 170, 0), // 静止(プラトー)
-                (15, 255, 0), // 第3段への上昇
-                (45, 255, 0), // 静止(プラトー)
-                (25, 20, 0),  // 速いリセット
-                (110, 0, 0),  // リリース
-            ]),
-            stage_count: 8,
-            loop_enabled: 1,
-            loop_start: 0,
-            loop_end: 6,
-            release_start: 7,
-        },
-        depth: 200, // バイポーラ、中心128超で+方向（最大約+675セント）
-    };
-    patch
 }
 
 // ---------------------------------------------------------------------------

@@ -82,6 +82,31 @@ async function applyPerformanceLfoToActiveChannels() {
   const bankEl   = document.getElementById('program-bank');
   const numEl    = document.getElementById('program-num');
   const labelEl  = document.getElementById('program-label');
+  const engineEl = document.getElementById('engine-select');
+  const demoEl   = document.getElementById('op505-demo');
+
+  // エンジン切替（0=38x6 / 1=OP505）。note_on/note_offのIPCは共通で、
+  // どちらのエンジンが鳴るかはバックエンドのactive側が決める（engines.rs参照）。
+  let activeEngine   = 0;
+  // OP505のデモ選択（-1=Bank/Programの.38x6をAdapter変換、0以上=demo_patchのインデックス）。
+  let op505DemoIndex = -1;
+
+  // デモ選択肢を起動時に構築する（先頭は「Bank/Program変換」固定）。
+  (async () => {
+    const conv = document.createElement('option');
+    conv.value = '-1';
+    conv.textContent = 'Bank/Program変換';
+    demoEl.appendChild(conv);
+    const names = await invoke('op505_demo_names');
+    if (Array.isArray(names)) {
+      names.forEach((name, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `Demo: ${name}`;
+        demoEl.appendChild(opt);
+      });
+    }
+  })();
 
   // 各モードで最後に使っていたBank/Program（モード切替時の復元先）
   let savedFmBank    = parseInt(bankEl.value, 10) || 0;
@@ -119,11 +144,38 @@ async function applyPerformanceLfoToActiveChannels() {
       ? WAVEFORM_MEMORY_BANK
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
     const program = Math.max(0, Math.min(127, parseInt(numEl.value, 10) || 0));
-    labelEl.textContent = programName(bank, program);
-    await invoke('ym38x6_set_program', { bank, program });
+
+    if (activeEngine === 1) {
+      if (op505DemoIndex >= 0) {
+        // OP505組み込みデモ（TimeEg固有の形。Adapter変換では絶対に現れない）。
+        labelEl.textContent = `OP505 ${demoEl.selectedOptions[0]?.textContent ?? ''}`;
+        await invoke('op505_set_demo', { index: op505DemoIndex });
+      } else {
+        // 既存の.38x6プリセットをAdapterでOP505形式へ変換して鳴らす。
+        // 同じBank/Programをエンジン切替でA/B比較できる（Adapterの実地検証）。
+        labelEl.textContent = `OP505 ← ${programName(bank, program)}`;
+        const dto = await invoke('op505_set_program', { bank, program });
+        if (dto?.warnings?.length) {
+          console.warn(`[op505 adapter] 変換警告 ${dto.warnings.length} 件:`, dto.warnings);
+        }
+      }
+    } else {
+      labelEl.textContent = programName(bank, program);
+      await invoke('ym38x6_set_program', { bank, program });
+    }
     lastChordKey = null; // 同じコードでも即座に音色変更させる
   }
 
+  engineEl.addEventListener('change', async () => {
+    activeEngine = parseInt(engineEl.value, 10) || 0;
+    await invoke('set_active_engine', { engineId: activeEngine });
+    demoEl.style.display = activeEngine === 1 ? '' : 'none';
+    await applyProgram();
+  });
+  demoEl.addEventListener('change', () => {
+    op505DemoIndex = parseInt(demoEl.value, 10);
+    applyProgram();
+  });
   wmToggle.addEventListener('change', () => { syncBankField(); applyProgram(); });
   bankEl.addEventListener('input', applyProgram);
   numEl.addEventListener('input', applyProgram);

@@ -11,4 +11,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 cpal = "0.15"
 ym38x6-core = { path = "../../ym38x6/core" }
+op505-core = { path = "../../op505/core" }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# op505_patch_json_keys_are_stableテスト（Op505Patch直シリアライズのワイヤーフォーマット検査）専用。
+serde_json = "1"
