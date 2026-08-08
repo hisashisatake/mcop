@@ -2,6 +2,7 @@
 members = [
     "sound-core",
     "fm-common",
+    "ui-common",
     "ym38x6/core",
     "op505/core",
     "ym38x6/ui",

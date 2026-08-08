@@ -1,0 +1,9 @@
+[package]
+name = "ui-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = "0.34"
+sound-core = { path = "../sound-core" }
+panel-layout = { path = "../ym38x6/ui/panel-layout" }
