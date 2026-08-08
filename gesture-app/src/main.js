@@ -77,6 +77,11 @@ async function applyPerformanceLfoToActiveChannels() {
 // Bank/Programを復元する（FM⇔波形メモリのどちら向きの切替でも双方向に復元される）。
 // 「波形メモリ」チェックON時はBank欄をWAVEFORM_MEMORY_BANKに固定して編集不可にする。
 // ─────────────────────────────────────────────
+// エンジン切替（0=38x6 / 1=OP505）。note_on/note_offのIPCは共通で、どちらのエンジンが鳴るかは
+// バックエンドのactive側が決める（engines.rs参照）。モジュールスコープに置くのは、
+// 音色エディタ起動時（toggleEditor()、IIFE外）にも現在値を参照して同期する必要があるため。
+let activeEngine = 0;
+
 (() => {
   const wmToggle = document.getElementById('waveform-memory-toggle');
   const bankEl   = document.getElementById('program-bank');
@@ -85,9 +90,6 @@ async function applyPerformanceLfoToActiveChannels() {
   const engineEl = document.getElementById('engine-select');
   const demoEl   = document.getElementById('op505-demo');
 
-  // エンジン切替（0=38x6 / 1=OP505）。note_on/note_offのIPCは共通で、
-  // どちらのエンジンが鳴るかはバックエンドのactive側が決める（engines.rs参照）。
-  let activeEngine   = 0;
   // OP505のデモ選択（-1=Bank/Programの.38x6をAdapter変換、0以上=demo_patchのインデックス）。
   let op505DemoIndex = -1;
 
@@ -171,6 +173,8 @@ async function applyPerformanceLfoToActiveChannels() {
     await invoke('set_active_engine', { engineId: activeEngine });
     demoEl.style.display = activeEngine === 1 ? '' : 'none';
     await applyProgram();
+    // 音色エディタ(editor-wasm)側にも切替を伝える（未起動ならE キー初回起動時にsyncEditorEngine()が反映する）。
+    notifyEditorEngine(activeEngine);
   });
   demoEl.addEventListener('change', () => {
     op505DemoIndex = parseInt(demoEl.value, 10);
@@ -401,8 +405,14 @@ window.addEventListener('keydown', async (e) => {
 // ─────────────────────────────────────────────
 const editorOverlay = document.getElementById('editor-overlay');
 let editorHandle  = null;
-let editorModule  = null; // import()したモジュール参照。notify_shift呼び出しに使う
+let editorModule  = null; // import()したモジュール参照。notify_shift/notify_engine呼び出しに使う
 let editorVisible = false;
+
+// エンジン切替(#engine-select)をeditor-wasm側へ伝える。未起動時は何もしない
+// （起動時（toggleEditorの初回表示時）にactiveEngineの現在値で改めて同期する）。
+function notifyEditorEngine(engineId) {
+  if (editorModule) editorModule.notify_engine(engineId);
+}
 
 async function toggleEditor() {
   editorVisible = !editorVisible;
@@ -418,6 +428,8 @@ async function toggleEditor() {
     });
     editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
+    // wasmモジュールは起動のたびリセットされる（既定38x6）ため、現在のエンジン選択を反映する。
+    notifyEditorEngine(activeEngine);
   } else if (!editorVisible && editorHandle) {
     // エディタを閉じてメイン画面に戻る瞬間に、Bank/Program欄をエディタ側の最新値へ同期する
     // （リアルタイム同期はしない。既存のapplyProgram()リスナーへ委譲することで、

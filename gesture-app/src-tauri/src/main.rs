@@ -241,6 +241,14 @@ fn op505_set_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>, patch: Op505Pa
     engine.lock().unwrap().op505.set_patch_live(patch);
 }
 
+/// OP505エンジンの現在のカレントパッチを読み取る（読み取り専用、エンジンへは反映しない）。
+/// 音色エディタ起動時、main.js側のデモ選択/Bank・Program変換で既に設定済みのパッチを
+/// エディタのローカル状態へ同期するために使う（`get_bank_program`の38x6版に相当）。
+#[tauri::command]
+fn op505_get_current_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>) -> Op505Patch {
+    engine.lock().unwrap().op505.current_patch()
+}
+
 /// OP505音色コマンドの返却DTO。`warnings`はAdapter変換の警告
 /// （「変換失敗」ではなく「ここが近似になった」という診断情報。フロントで表示する）。
 #[derive(serde::Serialize)]
@@ -522,6 +530,7 @@ fn main() {
             set_active_engine,
             get_active_engine,
             op505_set_patch,
+            op505_get_current_patch,
             op505_set_program,
             op505_demo_names,
             op505_set_demo,

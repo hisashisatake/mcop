@@ -417,6 +417,26 @@ struct MasterEffectsArgs {
     chorus_send_to_reverb: u8,
 }
 
+/// `op505_set_patch`コマンドの引数。`Op505Patch`は専用DTOを介さず直接シリアライズする
+/// （op505-coreの型が既にserde対応で、`.38x6`のような後方互換の負債も無いため。
+/// plan「2. パッチのフロントへの受け渡し」参照）。
+#[derive(Serialize)]
+struct SetOp505PatchArgs {
+    patch: op505_core::Op505Patch,
+}
+
+/// 現在のOP505パッチを`op505_set_patch`へ送信する。`app.rs`からdirtyフラグが立ったフレームでのみ呼ばれる。
+pub fn send_op505_patch(patch: &op505_core::Op505Patch) {
+    invoke("op505_set_patch", &SetOp505PatchArgs { patch: *patch });
+}
+
+/// `op505_get_current_patch`コマンドを呼び、バックエンドの現在のOP505カレントパッチを読む
+/// （エディタ起動時、main.js側のデモ選択/Bank・Program変換で既に設定済みの内容を
+/// エディタのローカル状態へ同期するために使う。引数なしのため専用argsは不要）。
+pub async fn load_op505_current_patch() -> Option<op505_core::Op505Patch> {
+    invoke_query("op505_get_current_patch", &serde_json::json!({})).await
+}
+
 /// 現在の`EditorState`を`ym38x6_set_patch`/`set_master_effects`へ送信する。
 /// `app.rs`からdirtyフラグが立ったフレームでのみ呼ばれる。
 pub fn send_patch(state: &EditorState) {
