@@ -7,48 +7,32 @@
 //! 中身」であってDSLの得意分野ではない。DSLにTimeEgを描く語彙も無く、形が決まっていない
 //! ウィジェットのために拡張するのは順序が逆と判断した）。
 //!
-//! ゲート前版（判断ゲート=TimeEgエディタのUI方式確定より前）のスコープ:
-//! 各EG（OP×4のオペレーターEG＋PITCH/CUTOFF/GAIN FG）は、既存と同じスカラーノブに加えて
-//! 読み取り専用の`time_eg_preview`と、構造値（stage_count/loop_enabled/loop_start/loop_end/
-//! release_start）のみ編集可能にする。個々の段（time/level/curve×8）はまだ編集できない
-//! （TimeEgエディタ本体はゲート後に実装する）。
+//! 各EG（OP×4のオペレーターEG＋PITCH/CUTOFF/GAIN FG）は`ui_common::time_eg_editor`
+//! （折れ線ドラッグ編集/ノブ編集をタブで切り替えるハイブリッドエディタ、Step 8）へ委譲する。
 
-use egui::{Ui, Vec2};
-use sound_core::TimeEgParams;
+use egui::Ui;
 use ui_common::algorithm_diagram::{algorithm_diagram, carriers};
 use ui_common::eg_preview::EgAmplitudeMapping;
 use ui_common::knob::knob;
-use ui_common::time_eg_preview::time_eg_preview;
+use ui_common::time_eg_editor::time_eg_editor;
 use ui_common::{bool_checkbox, enum_selector, waveform_selector, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES};
 
 // editor-wasm(op505_state.rs)がハンドル実装で使うため、ym38x6-uiと同じくトレイトを再エクスポートする。
-pub use ui_common::{BoolParamHandle, IntParamHandle};
-
-/// TimeEg 1本ぶんのパネル要素。`params`は現在値のスナップショット（読み取り専用、プレビュー描画用。
-/// 呼び出し側が毎フレーム再構築するため、`stage_count`等の編集結果は次フレームで反映される）。
-/// 個々の段（`params.stages[i]`）を編集するハンドルはまだ無い（Step 8で追加）。
-pub struct Op505TimeEgPanelParams<'a> {
-    pub params: TimeEgParams,
-    pub stage_count: Box<dyn IntParamHandle + 'a>,
-    pub loop_enabled: Box<dyn BoolParamHandle + 'a>,
-    pub loop_start: Box<dyn IntParamHandle + 'a>,
-    pub loop_end: Box<dyn IntParamHandle + 'a>,
-    pub release_start: Box<dyn IntParamHandle + 'a>,
-}
+pub use ui_common::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 
 /// Pitch FG（新規）／Cutoff FG（旧Filter EG）に共通の「TimeEg＋バイポーラDepth」一式。
 pub struct Op505BipolarFgPanelParams<'a> {
-    pub eg: Op505TimeEgPanelParams<'a>,
+    pub eg: Box<dyn TimeEgHandle + 'a>,
     /// バイポーラDepth（0〜255、中心128＝変調なし）。
     pub depth: Box<dyn IntParamHandle + 'a>,
 }
 
 /// オペレーター単位パラメーター一式。ym38x6-uiの`OperatorPanelParams`からAR/D1R/D2R/D1L/RR/
-/// Floor/Loop/Curve（8フィールド）を除き、`eg: Op505TimeEgPanelParams`へ統合したもの
+/// Floor/Loop/Curve（8フィールド）を除き、`eg: Box<dyn TimeEgHandle>`へ統合したもの
 /// （その他11フィールドはym38x6-uiと同名・同型。実コードで突き合わせ済み）。
 pub struct Op505OperatorPanelParams<'a> {
     pub tl: Box<dyn IntParamHandle + 'a>,
-    pub eg: Op505TimeEgPanelParams<'a>,
+    pub eg: Box<dyn TimeEgHandle + 'a>,
     pub mul: Box<dyn IntParamHandle + 'a>,
     pub dt1: Box<dyn IntParamHandle + 'a>,
     pub ksr: Box<dyn IntParamHandle + 'a>,
@@ -92,49 +76,16 @@ pub struct Op505PanelParams<'a> {
     // PITCH FG / CUTOFF FG / GAIN FG
     pub pitch_fg: Op505BipolarFgPanelParams<'a>,
     pub cutoff_fg: Op505BipolarFgPanelParams<'a>,
-    pub gain_fg: Op505TimeEgPanelParams<'a>,
+    pub gain_fg: Box<dyn TimeEgHandle + 'a>,
     // OPERATORS
     pub operators: [Op505OperatorPanelParams<'a>; 4],
-}
-
-const TIME_EG_SIZE: Vec2 = Vec2::new(200.0, 100.0);
-
-/// TimeEg1本ぶんの構造値（4本のspin_control）＋読み取り専用プレビューを描く。
-/// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
-fn time_eg_block(ui: &mut Ui, eg: &Op505TimeEgPanelParams, mapping: EgAmplitudeMapping, tl: u8, label: &str) {
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(label).size(9.0));
-        time_eg_preview(ui, TIME_EG_SIZE, mapping, tl, eg.params);
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("STAGES").size(8.0));
-                ui_common::spin_control(ui, &*eg.stage_count, egui::TextStyle::Small);
-            });
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("LOOP").size(8.0));
-                bool_checkbox(ui, &*eg.loop_enabled, "");
-            });
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("L.START").size(8.0));
-                ui_common::spin_control(ui, &*eg.loop_start, egui::TextStyle::Small);
-            });
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("L.END").size(8.0));
-                ui_common::spin_control(ui, &*eg.loop_end, egui::TextStyle::Small);
-            });
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("REL").size(8.0));
-                ui_common::spin_control(ui, &*eg.release_start, egui::TextStyle::Small);
-            });
-        });
-    });
 }
 
 fn operator_panel(ui: &mut Ui, op: &Op505OperatorPanelParams, index: usize, carrier: bool) {
     ui.group(|ui| {
         ui.label(egui::RichText::new(format!("OP {}", index + 1)).strong());
         ui.horizontal(|ui| {
-            time_eg_block(ui, &op.eg, EgAmplitudeMapping::DbLinear, op.tl.value().clamp(0, 255) as u8, "EG");
+            time_eg_editor(ui, &*op.eg, EgAmplitudeMapping::DbLinear, op.tl.value().clamp(0, 255) as u8);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     knob(ui, &*op.tl, "TL");
@@ -161,10 +112,10 @@ fn operator_panel(ui: &mut Ui, op: &Op505OperatorPanelParams, index: usize, carr
     });
 }
 
-fn bipolar_fg_panel(ui: &mut Ui, fg: &Op505BipolarFgPanelParams, label: &str) {
+fn bipolar_fg_panel(ui: &mut Ui, fg: &Op505BipolarFgPanelParams) {
     ui.group(|ui| {
         ui.horizontal(|ui| {
-            time_eg_block(ui, &fg.eg, EgAmplitudeMapping::AmplitudeLinear, 255, label);
+            time_eg_editor(ui, &*fg.eg, EgAmplitudeMapping::AmplitudeLinear, 255);
             knob(ui, &*fg.depth, "DEPTH");
         });
     });
@@ -221,11 +172,11 @@ pub fn draw_op505_panel(ui: &mut Ui, params: &Op505PanelParams) {
             });
         });
 
-        bipolar_fg_panel(ui, &params.pitch_fg, "PITCH FG");
-        bipolar_fg_panel(ui, &params.cutoff_fg, "CUTOFF FG");
+        bipolar_fg_panel(ui, &params.pitch_fg);
+        bipolar_fg_panel(ui, &params.cutoff_fg);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                time_eg_block(ui, &params.gain_fg, EgAmplitudeMapping::AmplitudeLinear, 255, "GAIN FG");
+                time_eg_editor(ui, &*params.gain_fg, EgAmplitudeMapping::AmplitudeLinear, 255);
             });
         });
 

@@ -42,8 +42,10 @@ const DOT_RADIUS: f32 = 2.5;
 const COLOR_DOT: egui::Color32 = egui::Color32::from_gray(200);
 
 /// `time_to_seconds`が写す秒数レンジ（`sound_core::time_eg`のT_MIN/T_MAXと一致させること）。
-const TIME_MIN_SECONDS: f32 = 0.001;
-const TIME_MAX_SECONDS: f32 = 30.0;
+/// `pub(crate)`昇格は`time_eg_editor`（Step 8、同一crate内）が`width_to_time`の逆写像で
+/// `log_width`と同じレンジを使う必要があるため。
+pub(crate) const TIME_MIN_SECONDS: f32 = 0.001;
+pub(crate) const TIME_MAX_SECONDS: f32 = 30.0;
 
 fn clamp_stage_count(stage_count: u8) -> usize {
     (stage_count as usize).clamp(1, MAX_STAGES)
@@ -84,9 +86,29 @@ pub struct TimeEgGeometry {
     pub release_point: usize,
 }
 
-/// `TimeEgParams`から`TimeEgGeometry`を計算する。`inner`はウィジェットの描画可能領域（パディング
-/// 適用後の矩形）、`mapping`/`tl`は`eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
-pub fn time_eg_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) -> TimeEgGeometry {
+/// エディタ用レイアウト（`time_eg_editor_layout`）で速い段に与える最小横幅重み（0.0〜1.0）。
+/// Step 7の実機確認で判明した「対数重み付けにより速い段がグラフ左端に団子状に密集し
+/// ドラッグのヒットテストが困難になる」問題への対策（`time_eg_editor_layout`参照）。
+/// `time=0`の段は瞬時を表す特殊値のため、この床の対象外（幅0のまま、`layout_impl`のif分岐参照）。
+const EDITOR_MIN_STAGE_WEIGHT: f32 = 0.15;
+
+/// `layout_impl`の挙動を切り替えるオプション。`time_eg_layout`（読み取り専用プレビュー）と
+/// `time_eg_editor_layout`（編集用、Step 8）は同じ幾何計算ロジックを共有しつつ、
+/// 横幅の潰れ方とループの描画周数だけが異なる。
+struct LayoutOptions {
+    /// 各段（time!=0）の最小横幅重み。プレビューは0.0（純粋な対数幅）、エディタは
+    /// `EDITOR_MIN_STAGE_WEIGHT`（速い段でもヒットテスト可能な最小幅を保証）。
+    min_weight: f32,
+    /// trueならループ区間を2周描く（「ここが繰り返す」visual、`time_eg_layout`の既存動作）。
+    /// falseなら1周のみ描く（エディタ用。描画段数が半減し団子問題がさらに緩和され、
+    /// 「2周目の頂点はどの段を指すか」という編集対象の曖昧さも生じない）。
+    loop_two_cycles: bool,
+}
+
+/// `TimeEgParams`から`TimeEgGeometry`を計算する共通実装。`inner`はウィジェットの描画可能領域
+/// （パディング適用後の矩形）、`mapping`/`tl`は`eg_preview`と同じ意味（TLを持たないFGパネルは
+/// tl=255で呼ぶ）。`time_eg_layout`/`time_eg_editor_layout`はこの薄いラッパー。
+fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8, opts: LayoutOptions) -> TimeEgGeometry {
     let n = clamp_stage_count(params.stage_count);
     let loop_start = (params.loop_start as usize).min(n - 1);
     // loop_start > loop_endは設定不整合(UI編集中の一時状態等)。幾何計算がおかしくならないよう
@@ -95,12 +117,15 @@ pub fn time_eg_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMa
     let loop_end = (params.loop_end as usize).min(n - 1).max(loop_start);
     let release_start = (params.release_start as usize).min(n - 1);
 
-    // 保持区間で辿る段indexの列: 0..=loop_end（1周目）。loop_enabledなら
+    // 保持区間で辿る段indexの列: 0..=loop_end（1周目）。loop_enabledかつ2周描画モードなら
     // loop_start..=loop_endをもう1周（実機は無限に繰り返すが、プレビューは「ここが繰り返す」と
-    // 分かるよう2周で打ち切る。eg_preview.rsのLoop=1描画と同じ方針）。
+    // 分かるよう2周で打ち切る。eg_preview.rsのLoop=1描画と同じ方針）。エディタ用の1周描画モードは
+    // 描画段数を減らしヒットテストしやすくするための選択（設計上の意味は変わらない）。
     let mut held_sequence: Vec<usize> = (0..=loop_end).collect();
-    let second_cycle_start = held_sequence.len();
-    if params.loop_enabled != 0 {
+    // 1周目の段数(=loop_end+1)。2周描画モードでは「2周目の先頭」を指すオフセットとして、
+    // 1周描画モードでは（延長されないため）held_sequence自体の最終長として使う。
+    let first_cycle_len = held_sequence.len();
+    if params.loop_enabled != 0 && opts.loop_two_cycles {
         held_sequence.extend(loop_start..=loop_end);
     }
 
@@ -124,26 +149,48 @@ pub fn time_eg_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMa
 
     for &stage_idx in held_sequence.iter().chain(release_sequence.iter()) {
         let stage = params.stages[stage_idx];
-        let weight = log_width(time_to_seconds(stage.time));
+        // time=0は「瞬時」を表す特殊値（レート方式のrate=0=フリーズとは意味が真逆）なので、
+        // min_weightの床には引っかからず常に幅0（垂直）のままにする。
+        let weight = if stage.time == 0 { 0.0 } else { log_width(time_to_seconds(stage.time)).max(opts.min_weight) };
         x = (x + weight * scale).min(right_edge);
         let target_db = stage_target_db(mapping, tl_db, stage.level);
         points.push(Pos2::new(x, db_to_y(target_db)));
         stage_of_point.push(stage_idx);
     }
 
-    // `second_cycle_start`はheld_sequence内のindex（2周目の先頭=loop_start）。points側は
-    // points[0]がlevel=0の開始点ぶんオフセットしているため、points indexへは+1して変換する
-    // （points[j+1] == held_sequence[j]の対応関係。release_pointは`held_sequence.len()`が
-    // そのままpoints indexとして正しい——points[k] == held_sequence[k-1]なので
-    // points[held_sequence.len()] == held_sequence[held_sequence.len()-1] = held_sequence最後の要素）。
-    let loop_span = (params.loop_enabled != 0).then_some((second_cycle_start + 1, held_sequence.len()));
+    // points[0]がlevel=0の開始点ぶんオフセットしているため、held_sequence側のindexへ+1して
+    // points indexへ変換する（points[j+1] == held_sequence[j]の対応関係）。
+    // 2周描画: `first_cycle_len`が2周目の先頭（held_sequence内index）。
+    // 1周描画: 延長されないため`first_cycle_len == held_sequence.len()`となり、
+    //          1周目そのもの（loop_start..=loop_end）を指す。
+    let loop_span = (params.loop_enabled != 0).then_some(if opts.loop_two_cycles {
+        (first_cycle_len + 1, held_sequence.len())
+    } else {
+        (loop_start + 1, first_cycle_len)
+    });
     let release_point = held_sequence.len();
 
     TimeEgGeometry { points, stage_of_point, loop_span, release_point }
 }
 
+/// `TimeEgParams`から`TimeEgGeometry`を計算する（読み取り専用プレビュー用）。`inner`はウィジェットの
+/// 描画可能領域（パディング適用後の矩形）、`mapping`/`tl`は`eg_preview`と同じ意味（TLを持たない
+/// FGパネルはtl=255で呼ぶ）。
+pub fn time_eg_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) -> TimeEgGeometry {
+    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: 0.0, loop_two_cycles: true })
+}
+
+/// `time_eg_layout`のエディタ用バリアント（Step 8のGRAPHモードが使う）。速い段でも
+/// `EDITOR_MIN_STAGE_WEIGHT`ぶんの最小幅を確保し、ループは1周のみ描く
+/// （`LayoutOptions`のドキュメント参照。頂点のドラッグ・右クリック編集を実用的にするための調整で、
+/// `time_eg_layout`自体の見た目・8件の既存テストには影響しない）。
+pub fn time_eg_editor_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) -> TimeEgGeometry {
+    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: EDITOR_MIN_STAGE_WEIGHT, loop_two_cycles: false })
+}
+
 /// `TimeEgGeometry`をeguiで描画する（保持区間=緑、リリース区間=赤。曲線整形は各段の`curve`に従う）。
-fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geometry: &TimeEgGeometry, ui_scale: f32) {
+/// `time_eg_editor`（同一クレート内、Step 8）もGRAPHモードの描画で共有するため`pub(crate)`。
+pub(crate) fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geometry: &TimeEgGeometry, ui_scale: f32) {
     for i in 1..geometry.points.len() {
         let from = geometry.points[i - 1];
         let to = geometry.points[i];
@@ -295,5 +342,45 @@ mod tests {
         let g = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         let flat_count = g.points.windows(2).take(g.release_point).filter(|w| (w[1].y - w[0].y).abs() < 1e-3).count();
         assert!(flat_count >= 2, "静止区間が2つ以上見えるはず: flat_count={flat_count}");
+    }
+
+    #[test]
+    fn editor_layout_draws_single_cycle() {
+        // Step 8のGRAPHモード用: 2周描画(time_eg_layout)より頂点数が少なく(1周分)、
+        // loop_start..=loop_end間のセグメント数は同じ(3)であるはず。
+        let preview = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let editor = time_eg_editor_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        assert!(editor.points.len() < preview.points.len(), "1周描画は2周描画より頂点数が少ないはず");
+        let (lo, hi) = editor.loop_span.expect("loop_enabled=1のはず");
+        assert_eq!(hi - lo, 3, "1周描画でもloop_start..=loop_end間のセグメント数は変わらないはず");
+    }
+
+    #[test]
+    fn editor_layout_enforces_min_stage_width() {
+        // gain_switch_paramsのstage0はtime=15(速い段)。1周描画時の描画段数は
+        // held(0..=loop_end=3で4段)+release(1段)=5、scale=width/5。
+        let g = time_eg_editor_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let increment = g.points[1].x - g.points[0].x;
+        let scale = rect().width() / 5.0;
+        assert!(
+            increment >= EDITOR_MIN_STAGE_WEIGHT * scale - 1e-3,
+            "速い段でもEDITOR_MIN_STAGE_WEIGHT分の最小幅を確保するはず: increment={increment}"
+        );
+    }
+
+    #[test]
+    fn editor_layout_keeps_time_zero_vertical() {
+        // min_weightの床はtime=0(瞬時の特殊値)には適用されない。エディタ用レイアウトでも
+        // 幅0(垂直)のままであるべき(time_zero_stage_has_zero_widthのエディタ版)。
+        let params = TimeEgParams {
+            stages: stages(&[(0, 255, 0)]),
+            stage_count: 1,
+            loop_enabled: 0,
+            loop_start: 0,
+            loop_end: 0,
+            release_start: 0,
+        };
+        let g = time_eg_editor_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        assert_eq!(g.points[0].x, g.points[1].x, "エディタ用レイアウトでもtime=0は幅0(垂直)のはず");
     }
 }

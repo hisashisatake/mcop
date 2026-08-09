@@ -3,20 +3,18 @@
 //! `Rc<RefCell<>>`で保持する（設計判断はplan参照: 専用DTOを作らずOp505Patchを直接シリアライズ
 //! する方針と対を成す。196値ぶんのミラー構造体を手書きしない）。
 //!
-//! TimeEg（`sound_core::TimeEgParams`）はOp505Patch内の4箇所（4つのOP EG＋Pitch/Cutoff/Gain FG）に
+//! TimeEg（`sound_core::TimeEgParams`）はOp505Patch内の7箇所（4つのOP EG＋Pitch/Cutoff/Gain FG）に
 //! ネストしているため、`Op505IntField`（フラットなi32/bool 1個への単純ハンドル）とは別に、
-//! 「TimeEgParams全体を読み書きするgetter/setter関数ポインタ＋その中の1フィールドを指すenum」を
-//! 組み合わせた`Op505TimeEgIntField`/`Op505TimeEgLoopField`を用意し、4箇所どこでも同じ実装で
-//! 構造値（stage_count/loop_enabled/loop_start/loop_end/release_start）のハンドルを作れるようにする。
+//! `Op505TimeEgHandle`（`ui_common::TimeEgHandle`実装、TimeEgParams全体を読み書きするgetter/setter
+//! 関数ポインタを保持）を用意し、7箇所どこでも同じ実装でハンドルを作れるようにする
+//! （個々の段×フィールドのハンドルは`ui_common::time_eg_editor`が内部で都度導出するため、
+//! ここでは持たない）。
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use op505_core::Op505Patch;
-use op505_ui::{
-    BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams,
-    Op505TimeEgPanelParams,
-};
+use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 use sound_core::TimeEgParams;
 
 /// `Op505Patch`内の1つのi32相当(u8)フィールドへの単純ハンドル。`handle.rs::IntField`のOP505版。
@@ -76,127 +74,43 @@ impl BoolParamHandle for Op505BoolField {
     fn end_edit(&self) {}
 }
 
-/// `Op505TimeEgIntField`が指すTimeEgParams内のどのフィールドか。
-#[derive(Clone, Copy)]
-enum TimeEgIntKind {
-    StageCount,
-    LoopStart,
-    LoopEnd,
-    ReleaseStart,
-}
-
-/// TimeEgParams全体のgetter/setter(`get_eg`/`set_eg`、Op505Patch内の4箇所どこでも同じ形)を介して
-/// その中の1つの構造値フィールドを読み書きするハンドル。個々の段(stages[i])はまだ編集できない
-/// （TimeEgエディタ本体はStep 8）。
-pub struct Op505TimeEgIntField {
+/// TimeEgParams全体（Op505Patch内の7箇所どこか）への`ui_common::TimeEgHandle`実装。
+/// `get_eg`/`set_eg`は非キャプチャ関数ポインタ（Op505Patch内の該当箇所を指す）。
+/// `name`はegui memoryのId salt兼パネル見出しに使われる（`time_eg_editor`参照）ため、
+/// "OP1 EG"/"PITCH FG"等、7本で一意な値を渡すこと。
+pub struct Op505TimeEgHandle {
     state: Rc<RefCell<Op505Patch>>,
     dirty: Rc<Cell<bool>>,
     get_eg: fn(&Op505Patch) -> TimeEgParams,
     set_eg: fn(&mut Op505Patch, TimeEgParams),
-    kind: TimeEgIntKind,
-    min: i32,
-    max: i32,
-    default: i32,
     name: &'static str,
 }
 
-impl IntParamHandle for Op505TimeEgIntField {
-    fn value(&self) -> i32 {
-        let eg = (self.get_eg)(&self.state.borrow());
-        match self.kind {
-            TimeEgIntKind::StageCount => eg.stage_count as i32,
-            TimeEgIntKind::LoopStart => eg.loop_start as i32,
-            TimeEgIntKind::LoopEnd => eg.loop_end as i32,
-            TimeEgIntKind::ReleaseStart => eg.release_start as i32,
-        }
+impl TimeEgHandle for Op505TimeEgHandle {
+    fn params(&self) -> TimeEgParams {
+        (self.get_eg)(&self.state.borrow())
     }
-    fn min(&self) -> i32 {
-        self.min
-    }
-    fn max(&self) -> i32 {
-        self.max
-    }
-    fn default(&self) -> i32 {
-        self.default
+    fn set_params(&self, params: TimeEgParams) {
+        (self.set_eg)(&mut self.state.borrow_mut(), params);
+        self.dirty.set(true);
     }
     fn name(&self) -> String {
         self.name.to_string()
     }
     fn begin_edit(&self) {}
-    fn set(&self, value: i32) {
-        let clamped = value.clamp(self.min, self.max) as u8;
-        let mut patch = self.state.borrow_mut();
-        let mut eg = (self.get_eg)(&patch);
-        match self.kind {
-            TimeEgIntKind::StageCount => eg.stage_count = clamped,
-            TimeEgIntKind::LoopStart => eg.loop_start = clamped,
-            TimeEgIntKind::LoopEnd => eg.loop_end = clamped,
-            TimeEgIntKind::ReleaseStart => eg.release_start = clamped,
-        }
-        (self.set_eg)(&mut patch, eg);
-        drop(patch);
-        self.dirty.set(true);
-    }
     fn end_edit(&self) {}
 }
 
-/// `loop_enabled`(u8だがON/OFFの2値)専用のboolハンドル。
-pub struct Op505TimeEgLoopField {
-    state: Rc<RefCell<Op505Patch>>,
-    dirty: Rc<Cell<bool>>,
-    get_eg: fn(&Op505Patch) -> TimeEgParams,
-    set_eg: fn(&mut Op505Patch, TimeEgParams),
-}
-
-impl BoolParamHandle for Op505TimeEgLoopField {
-    fn value(&self) -> bool {
-        (self.get_eg)(&self.state.borrow()).loop_enabled != 0
-    }
-    fn begin_edit(&self) {}
-    fn set(&self, value: bool) {
-        let mut patch = self.state.borrow_mut();
-        let mut eg = (self.get_eg)(&patch);
-        eg.loop_enabled = value as u8;
-        (self.set_eg)(&mut patch, eg);
-        drop(patch);
-        self.dirty.set(true);
-    }
-    fn end_edit(&self) {}
-}
-
-/// TimeEgParams1本ぶんの`Op505TimeEgPanelParams`を組み立てる。`get_eg`/`set_eg`はOp505Patch内の
+/// TimeEgParams1本ぶんの`Op505TimeEgHandle`を組み立てる。`get_eg`/`set_eg`はOp505Patch内の
 /// 該当箇所（`operators[I].eg`/`channel.pitch_fg.eg`等）を指す関数ポインタ。
-fn time_eg_panel_params(
+fn time_eg_handle(
     state: &Rc<RefCell<Op505Patch>>,
     dirty: &Rc<Cell<bool>>,
     get_eg: fn(&Op505Patch) -> TimeEgParams,
     set_eg: fn(&mut Op505Patch, TimeEgParams),
-) -> Op505TimeEgPanelParams<'static> {
-    let params = get_eg(&state.borrow());
-    macro_rules! int_kind {
-        ($kind:expr, $name:literal, $min:expr, $max:expr, $default:expr) => {
-            Box::new(Op505TimeEgIntField {
-                state: state.clone(),
-                dirty: dirty.clone(),
-                get_eg,
-                set_eg,
-                kind: $kind,
-                min: $min,
-                max: $max,
-                default: $default,
-                name: $name,
-            }) as Box<dyn IntParamHandle>
-        };
-    }
-    Op505TimeEgPanelParams {
-        params,
-        stage_count: int_kind!(TimeEgIntKind::StageCount, "Stages", 1, 8, 1),
-        loop_enabled: Box::new(Op505TimeEgLoopField { state: state.clone(), dirty: dirty.clone(), get_eg, set_eg })
-            as Box<dyn BoolParamHandle>,
-        loop_start: int_kind!(TimeEgIntKind::LoopStart, "Loop Start", 0, 7, 0),
-        loop_end: int_kind!(TimeEgIntKind::LoopEnd, "Loop End", 0, 7, 0),
-        release_start: int_kind!(TimeEgIntKind::ReleaseStart, "Release Start", 0, 7, 0),
-    }
+    name: &'static str,
+) -> Box<dyn TimeEgHandle> {
+    Box::new(Op505TimeEgHandle { state: state.clone(), dirty: dirty.clone(), get_eg, set_eg, name })
 }
 
 /// バイポーラFG（Pitch/Cutoff）1本ぶんの`Op505BipolarFgPanelParams`を組み立てる。
@@ -209,10 +123,11 @@ fn bipolar_fg_panel_params(
     set_depth: fn(&mut Op505Patch, i32),
     get_eg: fn(&Op505Patch) -> TimeEgParams,
     set_eg: fn(&mut Op505Patch, TimeEgParams),
+    eg_name: &'static str,
     depth_name: &'static str,
 ) -> Op505BipolarFgPanelParams<'static> {
     Op505BipolarFgPanelParams {
-        eg: time_eg_panel_params(state, dirty, get_eg, set_eg),
+        eg: time_eg_handle(state, dirty, get_eg, set_eg, eg_name),
         depth: Box::new(Op505IntField {
             state: state.clone(),
             dirty: dirty.clone(),
@@ -244,13 +159,21 @@ fn operator_panel_params<const I: usize>(
             }) as Box<dyn IntParamHandle>
         };
     }
+    let eg_name: &'static str = match I {
+        0 => "OP1 EG",
+        1 => "OP2 EG",
+        2 => "OP3 EG",
+        3 => "OP4 EG",
+        _ => "OP EG",
+    };
     Op505OperatorPanelParams {
         tl: op!(tl, "TL", 0, 255, 200),
-        eg: time_eg_panel_params(
+        eg: time_eg_handle(
             state,
             dirty,
             |p: &Op505Patch| p.operators[I].eg,
             |p: &mut Op505Patch, v: TimeEgParams| p.operators[I].eg = v,
+            eg_name,
         ),
         mul: op!(mul, "MUL", 0, 15, 1),
         dt1: op!(dt1, "DT1", 0, 255, 128),
@@ -368,6 +291,7 @@ impl Op505State {
                 |p: &mut Op505Patch, v: i32| p.channel.pitch_fg.depth = v as u8,
                 |p: &Op505Patch| p.channel.pitch_fg.eg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.pitch_fg.eg = v,
+                "PITCH FG",
                 "Pitch FG Depth",
             ),
             cutoff_fg: bipolar_fg_panel_params(
@@ -377,13 +301,15 @@ impl Op505State {
                 |p: &mut Op505Patch, v: i32| p.channel.cutoff_fg.depth = v as u8,
                 |p: &Op505Patch| p.channel.cutoff_fg.eg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.cutoff_fg.eg = v,
+                "CUTOFF FG",
                 "Cutoff FG Depth",
             ),
-            gain_fg: time_eg_panel_params(
+            gain_fg: time_eg_handle(
                 state,
                 dirty,
                 |p: &Op505Patch| p.channel.gain_fg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.gain_fg = v,
+                "GAIN FG",
             ),
             operators: [
                 operator_panel_params::<0>(state, dirty),
