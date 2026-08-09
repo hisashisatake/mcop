@@ -84,6 +84,10 @@ pub struct TimeEgGeometry {
     pub loop_span: Option<(usize, usize)>,
     /// リリースが始まる`points`上のindex（＝保持区間の最後の頂点）。
     pub release_point: usize,
+    /// 1段(重み1.0)あたりのピクセル数（`width / drawn_count`）。Step 8のGRAPHモードが
+    /// ドラッグ位置から`time`を逆算する（`width_to_time`）際、このレイアウト計算時と
+    /// 同じ`scale`を使う必要があるため公開する。
+    pub scale: f32,
 }
 
 /// エディタ用レイアウト（`time_eg_editor_layout`）で速い段に与える最小横幅重み（0.0〜1.0）。
@@ -170,7 +174,7 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     });
     let release_point = held_sequence.len();
 
-    TimeEgGeometry { points, stage_of_point, loop_span, release_point }
+    TimeEgGeometry { points, stage_of_point, loop_span, release_point, scale }
 }
 
 /// `TimeEgParams`から`TimeEgGeometry`を計算する（読み取り専用プレビュー用）。`inner`はウィジェットの

@@ -11,14 +11,14 @@
 // 既存の`knob`/`spin_control`/`bool_checkbox`（`IntParamHandle`/`BoolParamHandle`前提）へ渡す。
 // ---------------------------------------------------------------------------
 
-use egui::{Rect, Ui, Vec2};
+use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
 use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
-use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_PANEL, DB_FLOOR};
+use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, DB_FLOOR};
 use crate::knob::{bool_checkbox, knob, spin_control};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, time_eg_preview, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
+use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, time_eg_preview, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
 /// KNOBSモードの小プレビューサイズ（`time_eg_preview`既定と同じ）。
 const KNOBS_PREVIEW_SIZE: Vec2 = Vec2::new(200.0, 100.0);
@@ -35,12 +35,87 @@ const FLOOR_SNAP_PX: f32 = 3.0;
 /// 例:t=15で約0.055）、割合しきい値だと本物の短い時間まで巻き込んで0へ潰してしまうため
 /// （実機テストで発覚。「グラフ左端の数pxだけ」の掴みやすさを保証する目的に絞る）。
 const ZERO_SNAP_PX: f32 = 2.0;
+/// 頂点・ループマーカーのドラッグ／右クリックのヒットテスト半径（px）。
+const HIT_RADIUS_PX: f32 = 8.0;
+/// ループ区間マーカー（三角形）を描く、グラフ下端からのオフセット（px）。
+const LOOP_MARKER_OFFSET: f32 = 6.0;
+/// ループ区間マーカー（三角形）の半径（px）。
+const LOOP_MARKER_RADIUS: f32 = 4.0;
 
 /// GRAPH/KNOBSタブの選択状態。パッチデータではないためegui memoryに保持する（`time_eg_editor`参照）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Graph,
     Knobs,
+}
+
+/// GRAPHモードでドラッグ中の対象。フレーム跨ぎでegui memoryに保持する
+/// （`draw_graph_mode`のdrag_id参照）。`Vertex.point`は`TimeEgGeometry::points`のindex
+/// （`stage_of_point[point]`で対応する段が分かる）。`LoopStart`/`LoopEnd`はループ区間マーカー
+/// （現在保持区間として描画されている頂点、すなわち`0..=loop_end`の範囲にのみスナップできる。
+/// `loop_end`を現在より後ろへ伸ばしたい場合はまだ描画されていない段にスナップ先が無いため、
+/// L.ENDのspin_control（`stage_spin_row`）を使う——GRAPH/KNOBS両モードに共通のこの行を
+/// 残している理由の一つ）。
+#[derive(Clone, Copy)]
+enum DragTarget {
+    Vertex { point: usize },
+    LoopStart,
+    LoopEnd,
+}
+
+/// 右クリックメニューの対象。`secondary_clicked()`の瞬間に段indexへ解決して保持する
+/// （メニュー表示中にポインタが動いてもターゲットがずれないように、`geometry`ではなく
+/// 解決済みの段indexそのものを保存する）。
+#[derive(Clone, Copy)]
+enum CtxTarget {
+    /// 頂点上の右クリック: 対象段自体（削除・カーブ切替の対象）。
+    Vertex(usize),
+    /// セグメント上の右クリック: この段の直後に新しい段を挿入する（挿入位置の基準段）。
+    Segment(usize),
+}
+
+/// `geometry.points[1..]`から`pointer`に最も近い頂点を探す（`HIT_RADIUS_PX`以内のみ）。
+/// `points[0]`（note-on開始点、どの段にも対応しない）は対象外。
+fn hit_test_vertex(geometry: &TimeEgGeometry, pointer: Pos2) -> Option<usize> {
+    geometry
+        .points
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(i, p)| (i, p.distance(pointer)))
+        .filter(|&(_, d)| d <= HIT_RADIUS_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// `pointer.x`を含む線分(`points[i-1]`〜`points[i]`)を探し、その始点の段indexを返す
+/// （右クリックメニューの「この後ろに段を挿入」基準段。`points[0]`は便宜上`points[1]`と
+/// 同じ段を指すため、最初の線分でも自然に段0を返す）。
+fn hit_test_segment(geometry: &TimeEgGeometry, x: f32) -> Option<usize> {
+    for i in 1..geometry.points.len() {
+        let (a, b) = (geometry.points[i - 1].x, geometry.points[i].x);
+        let (lo, hi) = (a.min(b), a.max(b));
+        if x >= lo - HIT_RADIUS_PX && x <= hi + HIT_RADIUS_PX {
+            return Some(geometry.stage_of_point[i - 1]);
+        }
+    }
+    None
+}
+
+/// 保持区間（`points[1..=release_point]`、現在描画されている`0..=loop_end`の段）のうち、
+/// `x`に最も近い頂点が指す段indexを返す（ループマーカーのドラッグ先スナップ用）。
+fn nearest_held_stage(geometry: &TimeEgGeometry, x: f32) -> usize {
+    (1..=geometry.release_point)
+        .min_by(|&a, &b| (geometry.points[a].x - x).abs().total_cmp(&(geometry.points[b].x - x).abs()))
+        .map(|i| geometry.stage_of_point[i])
+        .unwrap_or(0)
+}
+
+/// ループ区間マーカー（小さい三角形）を1つ描く。
+fn draw_loop_marker(painter: &egui::Painter, center: Pos2) {
+    let r = LOOP_MARKER_RADIUS;
+    let points = vec![Pos2::new(center.x, center.y - r), Pos2::new(center.x - r, center.y + r), Pos2::new(center.x + r, center.y + r)];
+    painter.add(Shape::convex_polygon(points, COLOR_HELD, Stroke::NONE));
 }
 
 /// `TimeEgParams`内の1スカラーフィールドを指す種別（`TimeEgFieldHandle`が読み書きする対象）。
@@ -350,10 +425,16 @@ fn draw_knobs_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeM
     });
 }
 
-/// GRAPHモード: 折れ線を大きめに描画する（Step Bでは読み取り専用。ドラッグ編集はStep Dで追加）。
+/// GRAPHモード: 折れ線を大きめに描画し、頂点のドラッグ（time/level編集）・ループ区間マーカーの
+/// ドラッグ（loop_start/loop_end編集）・右クリックメニュー（段の挿入/削除・カーブ切替）で編集する。
 fn draw_graph_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+    let base_id = ui.id().with(("time_eg_editor", handle.name()));
+    let drag_id = base_id.with("drag");
+    let ctx_id = base_id.with("ctx");
+    let mut drag: Option<DragTarget> = ui.memory(|m| m.data.get_temp::<Option<DragTarget>>(drag_id)).flatten();
+
     let params = handle.params();
-    let (rect, _response) = ui.allocate_exact_size(GRAPH_SIZE, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(GRAPH_SIZE, egui::Sense::click_and_drag());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -363,6 +444,137 @@ fn draw_graph_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeM
     painter.rect_filled(inner, 2.0, COLOR_PANEL);
     let geometry = time_eg_editor_layout(&params, inner, mapping, tl);
     draw_geometry(painter, &params, &geometry, 1.0);
+
+    let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;
+    let loop_markers = (params.loop_enabled != 0)
+        .then_some(geometry.loop_span)
+        .flatten()
+        .map(|(lo, hi)| (Pos2::new(geometry.points[lo].x, marker_y), Pos2::new(geometry.points[hi].x, marker_y)));
+    if let Some((start_pos, end_pos)) = loop_markers {
+        painter.add(Shape::line(vec![start_pos, end_pos], Stroke::new(1.5, COLOR_HELD)));
+        draw_loop_marker(painter, start_pos);
+        draw_loop_marker(painter, end_pos);
+    }
+
+    if response.drag_started() {
+        if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+            if let Some((start_pos, end_pos)) = loop_markers {
+                if pointer.distance(start_pos) <= HIT_RADIUS_PX {
+                    drag = Some(DragTarget::LoopStart);
+                } else if pointer.distance(end_pos) <= HIT_RADIUS_PX {
+                    drag = Some(DragTarget::LoopEnd);
+                }
+            }
+            if drag.is_none() {
+                if let Some(point) = hit_test_vertex(&geometry, pointer) {
+                    drag = Some(DragTarget::Vertex { point });
+                }
+            }
+            if drag.is_some() {
+                handle.begin_edit();
+            }
+        }
+    }
+
+    match drag {
+        Some(DragTarget::Vertex { point }) => {
+            if response.dragged() {
+                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                    let stage = geometry.stage_of_point[point];
+                    let prev_x = geometry.points[point - 1].x;
+                    let new_time = width_to_time(pointer.x - prev_x, geometry.scale);
+                    let new_level = y_to_level(mapping, tl, inner, pointer.y);
+                    let mut p = params;
+                    p.stages[stage].time = new_time;
+                    p.stages[stage].level = new_level;
+                    handle.set_params(p);
+                    painter.text(
+                        inner.right_top(),
+                        egui::Align2::RIGHT_TOP,
+                        format!("T {}  L {new_level}", format_time_seconds(new_time)),
+                        egui::FontId::monospace(9.0),
+                        egui::Color32::from_gray(220),
+                    );
+                }
+            }
+        }
+        Some(DragTarget::LoopStart) => {
+            if response.dragged() {
+                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                    let stage = nearest_held_stage(&geometry, pointer.x);
+                    let mut p = params;
+                    p.loop_start = (stage as u8).min(p.loop_end);
+                    handle.set_params(p);
+                }
+            }
+        }
+        Some(DragTarget::LoopEnd) => {
+            if response.dragged() {
+                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                    let stage = nearest_held_stage(&geometry, pointer.x);
+                    let mut p = params;
+                    p.loop_end = (stage as u8).max(p.loop_start);
+                    handle.set_params(p);
+                }
+            }
+        }
+        None => {}
+    }
+    if drag.is_some() && response.drag_stopped() {
+        handle.end_edit();
+        drag = None;
+    }
+    ui.memory_mut(|m| m.data.insert_temp(drag_id, drag));
+
+    if response.secondary_clicked() {
+        if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+            let target = hit_test_vertex(&geometry, pointer)
+                .map(|point| CtxTarget::Vertex(geometry.stage_of_point[point]))
+                .or_else(|| hit_test_segment(&geometry, pointer.x).map(CtxTarget::Segment));
+            if let Some(target) = target {
+                ui.memory_mut(|m| m.data.insert_temp(ctx_id, target));
+            }
+        }
+    }
+    response.context_menu(|ui| {
+        let Some(target) = ui.memory(|m| m.data.get_temp::<CtxTarget>(ctx_id)) else {
+            ui.label("(対象なし)");
+            return;
+        };
+        let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
+        let curve_stage = match target {
+            CtxTarget::Vertex(stage) => Some(stage),
+            CtxTarget::Segment(stage) => Some(stage),
+        };
+        if let Some(stage) = curve_stage {
+            let curve_handle = TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(stage));
+            let mut curve_on = curve_handle.value();
+            if ui.checkbox(&mut curve_on, "カーブ: レイズドコサイン").changed() {
+                curve_handle.begin_edit();
+                curve_handle.set(curve_on);
+                curve_handle.end_edit();
+                ui.close();
+            }
+        }
+        match target {
+            CtxTarget::Vertex(stage) => {
+                if n > 1 && ui.button("この段を削除").clicked() {
+                    handle.begin_edit();
+                    handle.set_params(remove_stage(&params, stage));
+                    handle.end_edit();
+                    ui.close();
+                }
+            }
+            CtxTarget::Segment(stage) => {
+                if n < MAX_STAGES && ui.button("この後ろに段を挿入").clicked() {
+                    handle.begin_edit();
+                    handle.set_params(insert_stage_after(&params, stage));
+                    handle.end_edit();
+                    ui.close();
+                }
+            }
+        }
+    });
 }
 
 /// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/KNOBSタブ＋STAGES等のspin行）。
