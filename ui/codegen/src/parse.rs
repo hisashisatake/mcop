@@ -109,6 +109,13 @@ fn parse_style(el: Node) -> Result<Style, String> {
                     style.tag_margin.insert("algorithm-diagram".to_string(), parse_margin(v)?);
                 }
             }
+            "time-eg-editor" => {
+                style.time_eg_editor_size.w = attr_f32_or(c, "width", style.time_eg_editor_size.w)?;
+                style.time_eg_editor_size.h = attr_f32_or(c, "height", style.time_eg_editor_size.h)?;
+                if let Some(v) = c.attribute("margin") {
+                    style.tag_margin.insert("time-eg-editor".to_string(), parse_margin(v)?);
+                }
+            }
             tag @ ("knob" | "checkbox" | "waveform" | "enum" | "raw") => {
                 if let Some(v) = c.attribute("margin") {
                     style.tag_margin.insert(tag.to_string(), parse_margin(v)?);
@@ -271,6 +278,19 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let w = attr_f32_or(el, "width", style.algorithm_diagram_size.w)?;
             let h = attr_f32_or(el, "height", style.algorithm_diagram_size.h)?;
             (Widget::AlgorithmDiagram { handle }, "ALG".to_string(), "algorithm-diagram".to_string(), Size { w, h })
+        }
+        "time-eg-editor" => {
+            let handle = resolve_path(&req_attr(el, "handle")?, ctx);
+            let mapping = el.attribute("mapping").unwrap_or("DbLinear").to_string();
+            let tl = eg_field(el, ctx, "tl")?;
+            let w = attr_f32_or(el, "width", style.time_eg_editor_size.w)?;
+            let h = attr_f32_or(el, "height", style.time_eg_editor_size.h)?;
+            (
+                Widget::TimeEgEditor { handle, mapping, tl },
+                "EG".to_string(),
+                "time-eg-editor".to_string(),
+                Size { w, h },
+            )
         }
         "raw" => {
             let w: f32 = req_attr(el, "width")?
@@ -484,7 +504,10 @@ pub fn parse_layout(xml_text: &str) -> Result<Layout, String> {
     if groups.is_empty() {
         return Err("<layout>には1個以上の<panels>が必要です".to_string());
     }
-    Ok(Layout { groups, style })
+    let fn_name = root.attribute("fn").unwrap_or("draw_param_panel").to_string();
+    let params_type = root.attribute("params-type").unwrap_or("PanelParams").to_string();
+    let scroll_id = root.attribute("scroll-id").map(|s| s.to_string());
+    Ok(Layout { groups, style, fn_name, params_type, scroll_id })
 }
 
 #[cfg(test)]
