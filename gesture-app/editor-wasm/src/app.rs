@@ -1,11 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use op505_ui::draw_op505_panel;
 use ym38x6_ui::{draw_param_panel, BipolarFgPanelParams, FgEgPanelParams, OperatorPanelParams, PanelParams};
 
 use crate::handle::{bool_field, int_field, op_int_field, BoolField, IntField};
 use crate::ipc;
 use crate::keyboard;
+use crate::op505_state::Op505State;
 use crate::state::EditorState;
 
 
@@ -276,6 +278,9 @@ async fn handle_save_patch_as(
 pub struct EditorApp {
     state: Rc<RefCell<EditorState>>,
     dirty: Rc<Cell<bool>>,
+    /// OP505パネル用の状態。38x6側とは独立して常時保持する（エンジン切替で作り直さない。
+    /// gesture-app/src-tauriのEngines同様、切替直前の編集内容を失わないため）。
+    op505: Op505State,
     /// ZXCV(白鍵)/ASDF(黒鍵)ミニ鍵盤の表示オクターブ＋押下状態。
     keyboard: keyboard::KeyboardState,
     /// `list_presets`で取得したプリセット一覧（取得完了まで空）。非同期タスクと共有する。
@@ -329,6 +334,7 @@ impl EditorApp {
         Self {
             state,
             dirty,
+            op505: Op505State::new(),
             keyboard: keyboard::KeyboardState::new(),
             presets,
             current_file_name,
@@ -354,6 +360,10 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
+        // main.js側でOP505のデモ/Bank変換切替が起きていれば、バックエンドの現在パッチを
+        // 再フェッチする（`Op505State::new`の初回同期は一度きりのため。project memory
+        // `project_op505_editor_state_stale_on_demo_switch`参照）。
+        self.op505.refresh_if_stale();
 
         // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
         // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。
@@ -467,15 +477,26 @@ impl eframe::App for EditorApp {
                 });
             });
 
+        // main.jsのEngineセレクトで選ばれている方のパネルだけを描く。両エンジンの状態は
+        // 常時保持している（Op505State::new参照）ため、切替をまたいでも編集内容は失われない。
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            let panel = build_panel_params(&self.state, &self.dirty);
-            draw_param_panel(ui, &panel);
+            if crate::engine_sync::active_engine() == 1 {
+                let panel = self.op505.build_panel_params();
+                draw_op505_panel(ui, &panel);
+            } else {
+                let panel = build_panel_params(&self.state, &self.dirty);
+                draw_param_panel(ui, &panel);
+            }
         });
 
         if self.dirty.get() {
             self.dirty.set(false);
             ipc::send_patch(&self.state.borrow());
             self.unsaved_changes.set(true);
+        }
+        if self.op505.dirty.get() {
+            self.op505.dirty.set(false);
+            ipc::send_op505_patch(&self.op505.patch.borrow());
         }
     }
 

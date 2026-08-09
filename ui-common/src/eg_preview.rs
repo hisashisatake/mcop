@@ -57,8 +57,8 @@ const DEFAULT_WIDTH: f32 = 84.0;
 const DEFAULT_HEIGHT: f32 = 66.0;
 const PAD: f32 = 6.0;
 
-/// 縦軸の下限（dB、無音とみなす床）。
-const DB_FLOOR: f32 = -96.0;
+/// 縦軸の下限（dB、無音とみなす床）。`time_eg_preview`（TimeEg版、同一crate内）とも共有する。
+pub(crate) const DB_FLOOR: f32 = -96.0;
 /// SR（Sustain Rate=D2Rクリープ）がSLからさらに下降する固定量（dBレンジの2/3）。
 /// 絶対位置ではなくSLからの相対量にすることで、D1Lの違いがSR/Release側にも一貫して反映される。
 const SR_DROP_DB: f32 = 96.0 * 2.0 / 3.0;
@@ -88,10 +88,10 @@ const DELAY_MAX_SECONDS: f32 = 10.0;
 /// delay=0では奪う幅が0になり、既存（Delay導入前）の描画と完全に一致する。
 const DELAY_MAX_WIDTH_FRACTION: f32 = 0.25;
 
-/// note-on側（Attack/Decay1/Hold=AR/DR/SR）の色。
-const COLOR_HELD: Color32 = Color32::from_rgb(80, 220, 90);
-/// Release（RR、note-off後）の色。
-const COLOR_RELEASE: Color32 = Color32::from_rgb(230, 80, 70);
+/// note-on側（Attack/Decay1/Hold=AR/DR/SR）の色。`time_eg_preview`の保持区間とも共有する。
+pub(crate) const COLOR_HELD: Color32 = Color32::from_rgb(80, 220, 90);
+/// Release（RR、note-off後）の色。`time_eg_preview`のリリース区間とも共有する。
+pub(crate) const COLOR_RELEASE: Color32 = Color32::from_rgb(230, 80, 70);
 const COLOR_SILENT: Color32 = Color32::from_gray(110);
 
 /// フリーズ区間（rate=0で目標に到達せず現在レベルに留まる区間）を破線で描くための長さ設定。
@@ -100,6 +100,10 @@ const COLOR_SILENT: Color32 = Color32::from_gray(110);
 /// 保持され続ける」区間だと視覚的に区別し、段差が計算ミスではなく意図した表現だと伝える。
 const DASH_LENGTH: f32 = 4.0;
 const DASH_GAP: f32 = 3.0;
+
+/// ベゼル（外枠）と液晶面（内側）の背景色。`time_eg_preview`とも共有する（見た目を統一するため）。
+pub(crate) const COLOR_BEZEL: Color32 = Color32::from_gray(35);
+pub(crate) const COLOR_PANEL: Color32 = Color32::from_gray(72);
 
 /// 折れ線の各交点（頂点）に打つ丸印の色。計算結果を目視確認しやすいよう頂点ごとに色分けする。
 const DOT_RADIUS: f32 = 2.5;
@@ -137,7 +141,8 @@ fn log_width(seconds: f32, min_seconds: f32, max_seconds: f32) -> f32 {
 }
 
 /// リニアゲイン(0.0〜1.0、D1Lノブの生値/255相当)をdBへ変換する（DB_FLOOR未満はクランプ）。
-fn level_to_db(linear_fraction: f32) -> f32 {
+/// `time_eg_preview`とも共有する。
+pub(crate) fn level_to_db(linear_fraction: f32) -> f32 {
     if linear_fraction <= 0.0 {
         DB_FLOOR
     } else {
@@ -161,7 +166,8 @@ pub enum EgAmplitudeMapping {
 }
 
 /// EGレベル(0.0〜1.0)がTLからどれだけdB減衰するかを、マッピング方式に応じて求める。
-fn level_contribution_db(mapping: EgAmplitudeMapping, level_linear: f32) -> f32 {
+/// `time_eg_preview`とも共有する。
+pub(crate) fn level_contribution_db(mapping: EgAmplitudeMapping, level_linear: f32) -> f32 {
     match mapping {
         EgAmplitudeMapping::DbLinear => DB_FLOOR * (1.0 - level_linear),
         EgAmplitudeMapping::AmplitudeLinear => level_to_db(level_linear),
@@ -172,8 +178,8 @@ fn level_contribution_db(mapping: EgAmplitudeMapping, level_linear: f32) -> f32 
 /// （実機OPM TL、0.75dB/step・127段をtl=255(0dB)〜tl=0(-95.25dB)にアンカー）をdBのまま返す
 /// （tl_to_gainはリニアゲインを返すため、このプレビューのdB軸ではその手前のdB値を直接使う）。
 /// ym38x6-uiはエンジンクレート非依存を保つ方針のため、ここに複製する
-/// （数式を変えたらym38x6-core側と揃えること）。
-fn tl_to_db(tl: u8) -> f32 {
+/// （数式を変えたらym38x6-core側と揃えること）。`time_eg_preview`とも共有する。
+pub(crate) fn tl_to_db(tl: u8) -> f32 {
     (-95.25 * (255 - tl) as f32 / 255.0).max(DB_FLOOR)
 }
 
@@ -193,7 +199,8 @@ fn eased_progress(t: f32) -> f32 {
 /// この場合`curved`は無視し直線のまま簡略表示する）。`curved`が真なら角の立つ直線ではなく
 /// レイズドコサインで丸めたランプ（Curve=1、spec-sound.md「ループ可能EG」節）を描く。
 /// `scale`は既定サイズからの等方拡大率（線幅・破線ピッチへ一律に乗じる）。
-fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool, curved: bool, scale: f32) {
+/// `time_eg_preview`とも共有する（レイズドコサイン整形が`TimeEg::shaped_output`と式レベルで一致）。
+pub(crate) fn draw_ramp(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32, dashed: bool, curved: bool, scale: f32) {
     let stroke = Stroke::new(1.5 * scale, color);
     if dashed {
         painter.extend(Shape::dashed_line(&[from, to], stroke, DASH_LENGTH * scale, DASH_GAP * scale));
@@ -235,9 +242,9 @@ pub fn eg_preview(ui: &mut Ui, size: Vec2, mapping: EgAmplitudeMapping, tl: u8, 
     let dot_radius = DOT_RADIUS * ui_scale;
 
     // 背景（ベゼル＋液晶面のニュアンス）
-    painter.rect_filled(rect, 3.0, Color32::from_gray(35));
+    painter.rect_filled(rect, 3.0, COLOR_BEZEL);
     let inner = rect.shrink(pad);
-    painter.rect_filled(inner, 2.0, Color32::from_gray(72));
+    painter.rect_filled(inner, 2.0, COLOR_PANEL);
 
     let db_to_y = |db: f32| inner.bottom() - ((db.max(DB_FLOOR) - DB_FLOOR) / -DB_FLOOR) * inner.height();
     let x0 = inner.left();

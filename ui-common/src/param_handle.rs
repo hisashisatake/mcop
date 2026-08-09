@@ -28,3 +28,19 @@ pub trait BoolParamHandle {
     fn set(&self, value: bool);
     fn end_edit(&self);
 }
+
+/// `TimeEgParams`（N点Time/Level方式EG、OP505用）1本ぶんへのハンドル。
+/// 段×フィールドごとに`IntParamHandle`を196個(28値×7本)構築する代わりに、EG単位で1個
+/// 用意すれば済む（`time_eg_editor`が内部でこのハンドルから`IntParamHandle`を都度導出する）。
+pub trait TimeEgHandle {
+    /// 現在値のスナップショット（`TimeEgParams`はCopyなので値返し）。
+    fn params(&self) -> sound_core::TimeEgParams;
+    /// 全体を書き戻す。
+    fn set_params(&self, params: sound_core::TimeEgParams);
+    /// ツールチップ・egui memoryのId salt（EGごとに一意であること。例:"OP1 EG"/"GAIN FG"）に使う名前。
+    fn name(&self) -> String;
+    /// 操作開始（ドラッグ開始時など）。
+    fn begin_edit(&self);
+    /// 操作終了。
+    fn end_edit(&self);
+}

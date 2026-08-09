@@ -1,0 +1,13 @@
+[package]
+name = "ui-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = "0.34"
+sound-core = { path = "../sound-core" }
+panel-layout = { path = "../ym38x6/ui/panel-layout" }
+
+[dev-dependencies]
+# time_eg_preview_demo等のネイティブプレビュー用（VST/wasmビルドには影響しない）。
+eframe = { version = "0.34", default-features = false, features = ["glow"] }

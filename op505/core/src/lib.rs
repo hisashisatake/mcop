@@ -9,6 +9,7 @@
 //! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
 pub mod adapter;
+pub mod demo;
 pub mod operator;
 pub use operator::Op505OperatorParams;
 

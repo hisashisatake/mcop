@@ -125,7 +125,7 @@ pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
 }
 
 /// `BoolParamHandle`をチェックボックスとして表示する（Loop/Curve/AM等の真偽パラメーター向け）。
-pub(crate) fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &str) {
+pub fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &str) {
     let mut value = handle.value();
     if ui.checkbox(&mut value, label).changed() {
         handle.begin_edit();

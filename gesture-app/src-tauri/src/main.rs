@@ -1,15 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod engines;
 mod ym38x6_dto;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use engines::{ActiveEngine, Engines};
+use op505_core::Op505Patch;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
 use ym38x6_core::{cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, presets_dir, volume_depth, AudioProcessor,
     BipolarFg, ChorusType, EgParams, MasterEffects, PresetBank, PresetEntry, PresetFile, ReverbType, TextureLfo,
-    Vco, Ym38x6Engine, Ym38x6LfoDestination};
+    Ym38x6LfoDestination};
 use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 
 /// 指定チャンネルIDへキーオンする。チャンネルIDは呼び出し側（フロントエンド）が
@@ -19,17 +22,18 @@ use ym38x6_dto::{LoadedPatchDto, PresetEntryDto, SavedFileDto, Ym38x6PatchDto};
 /// 音色は`ym38x6_set_program`/`ym38x6_set_patch`で設定した保存済みパッチ（`current_patch`）を使う。
 #[tauri::command]
 fn note_on(
-    engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
+    engine: tauri::State<'_, Arc<Mutex<Engines>>>,
     channel: usize,
     frequency: f32,
     velocity: u8,
 ) {
-    // 音色は`ym38x6_set_patch`で設定済みのカレントパッチを使う（`Vco::note_on`）。
+    // 音色は各エンジンの音色コマンドで設定済みのカレントパッチを使う。
+    // どちらのエンジンが鳴るかは`set_active_engine`で選択済みのactive側。
     engine.lock().unwrap().note_on(channel, frequency, velocity);
 }
 
 #[tauri::command]
-fn note_off(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, channel: usize) {
+fn note_off(engine: tauri::State<'_, Arc<Mutex<Engines>>>, channel: usize) {
     engine.lock().unwrap().note_off(channel);
 }
 
@@ -38,8 +42,8 @@ fn note_off(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, channel: usize) 
 /// 発音中の音にも即座に効くのと同じ扱い）。Bank/Program切り替え（`ym38x6_set_program`）は
 /// これとは別に「次のnote-onから適用」のままとする。
 #[tauri::command]
-fn ym38x6_set_patch(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, patch: Ym38x6PatchDto) {
-    engine.lock().unwrap().set_patch_live(patch.into());
+fn ym38x6_set_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>, patch: Ym38x6PatchDto) {
+    engine.lock().unwrap().ym38x6.set_patch_live(patch.into());
 }
 
 /// (bank, program)に対応するプリセットへ切り替える。ym38x6-vstのProgramパラメーターと
@@ -49,14 +53,14 @@ fn ym38x6_set_patch(engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>, patch: Y
 /// 波形スロットとして選ぶ。ディスクI/Oは行わない（`resolve_patch`参照）。
 #[tauri::command]
 fn ym38x6_set_program(
-    engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
+    engine: tauri::State<'_, Arc<Mutex<Engines>>>,
     registry: tauri::State<'_, Mutex<BankRegistry>>,
     fallback: tauri::State<'_, PresetBank>,
     bank: u16,
     program: u8,
 ) {
     let patch = resolve_patch(&registry.lock().unwrap(), &fallback, bank, program);
-    engine.lock().unwrap().set_patch(patch);
+    engine.lock().unwrap().ym38x6.set_patch(patch);
 }
 
 /// 今開いている（＝`registry`に登録済みの）bankのファイルが持つ音色一覧を返す
@@ -134,7 +138,7 @@ const PITCH_FG_VIBRATO_D1R: u8 = 199;
 /// `cc76_to_rate_scale`のドキュメント参照）で発音中の該当チャンネルへ個別に反映する。
 #[tauri::command]
 fn ym38x6_set_performance_lfo(
-    engine: tauri::State<'_, Arc<Mutex<Ym38x6Engine>>>,
+    engine: tauri::State<'_, Arc<Mutex<Engines>>>,
     channel: usize,
     rate: u8,
     delay: u8,
@@ -144,7 +148,8 @@ fn ym38x6_set_performance_lfo(
     mod_depth_range: u8,
 ) {
     let dest = Ym38x6LfoDestination::from_u8(destination);
-    let mut engine = engine.lock().unwrap();
+    let mut engines = engine.lock().unwrap();
+    let engine = &mut engines.ym38x6;
     let mut patch = engine.current_patch();
 
     if dest == Ym38x6LfoDestination::Pitch {
@@ -208,6 +213,83 @@ fn set_master_effects(
     fx.set_chorus_mod_depth(chorus_mod_depth);
     fx.set_chorus_feedback(chorus_feedback);
     fx.set_chorus_send_to_reverb(chorus_send_to_reverb);
+}
+
+// ---------------------------------------------------------------------------
+// OP505（エンジン切替 + 音色コマンド）
+// ---------------------------------------------------------------------------
+
+/// 演奏入力（note_on）を受けるエンジンを切り替える（0=38x6 / 1=OP505）。
+/// 非アクティブ側のリリース尾はrenderで鳴り続けるため、切替は無音を挟まない。
+#[tauri::command]
+fn set_active_engine(engine: tauri::State<'_, Arc<Mutex<Engines>>>, engine_id: u8) {
+    engine.lock().unwrap().active = ActiveEngine::from_u8(engine_id);
+}
+
+#[tauri::command]
+fn get_active_engine(engine: tauri::State<'_, Arc<Mutex<Engines>>>) -> u8 {
+    engine.lock().unwrap().active.to_u8()
+}
+
+/// OP505のカレントパッチを設定し、発音中のチャンネルへも即座に反映する
+/// （`ym38x6_set_patch`のOP505版。音色エディタのノブ操作向け）。
+/// `Op505Patch`は専用DTOを介さず直接シリアライズする（op505-coreの型が既にserde対応で、
+/// `.38x6`のような後方互換の負債も無いため。フィールド名の安定性は
+/// `op505_patch_json_keys_are_stable`テストで担保する）。
+#[tauri::command]
+fn op505_set_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>, patch: Op505Patch) {
+    engine.lock().unwrap().op505.set_patch_live(patch);
+}
+
+/// OP505エンジンの現在のカレントパッチを読み取る（読み取り専用、エンジンへは反映しない）。
+/// 音色エディタ起動時、main.js側のデモ選択/Bank・Program変換で既に設定済みのパッチを
+/// エディタのローカル状態へ同期するために使う（`get_bank_program`の38x6版に相当）。
+#[tauri::command]
+fn op505_get_current_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>) -> Op505Patch {
+    engine.lock().unwrap().op505.current_patch()
+}
+
+/// OP505音色コマンドの返却DTO。`warnings`はAdapter変換の警告
+/// （「変換失敗」ではなく「ここが近似になった」という診断情報。フロントで表示する）。
+#[derive(serde::Serialize)]
+struct Op505ProgramDto {
+    patch: Op505Patch,
+    warnings: Vec<String>,
+}
+
+/// (bank, program)の`.38x6`プリセットをAdapterでOP505形式へ変換してカレントパッチに設定する
+/// （`ym38x6_set_program`のOP505版。次のnote-onから適用）。既存のレジストリ→フォールバック
+/// 解決を丸ごと再利用するため、同じBank/Programをエンジン切替でA/B比較できる。
+#[tauri::command]
+fn op505_set_program(
+    engine: tauri::State<'_, Arc<Mutex<Engines>>>,
+    registry: tauri::State<'_, Mutex<BankRegistry>>,
+    fallback: tauri::State<'_, PresetBank>,
+    bank: u16,
+    program: u8,
+) -> Op505ProgramDto {
+    let src = resolve_patch(&registry.lock().unwrap(), &fallback, bank, program);
+    let (patch, warnings) = op505_core::adapter::convert_patch(&src);
+    for w in &warnings {
+        eprintln!("[op505 adapter bank={bank} prog={program}] {w}");
+    }
+    engine.lock().unwrap().op505.set_patch(patch);
+    Op505ProgramDto { patch, warnings }
+}
+
+/// OP505のデモパッチ表示名一覧（フロントのデモ選択UIの選択肢）。
+#[tauri::command]
+fn op505_demo_names() -> Vec<String> {
+    op505_core::demo::DEMO_NAMES.iter().map(|s| s.to_string()).collect()
+}
+
+/// OP505のデモパッチ（TimeEg固有の表現力を示す組み込み音色）をカレントパッチに設定する。
+/// Adapter変換した`.38x6`では絶対に現れない形（静止を挟んだループ等）はこれだけが示せる。
+#[tauri::command]
+fn op505_set_demo(engine: tauri::State<'_, Arc<Mutex<Engines>>>, index: u8) -> Option<Op505Patch> {
+    let patch = op505_core::demo::demo_patch(index)?;
+    engine.lock().unwrap().op505.set_patch(patch);
+    Some(patch)
 }
 
 /// bank番号ごとの「担当ファイル」（presets_dir全体の中で、そのbankを最後に定義したファイル）。
@@ -400,7 +482,8 @@ fn main() {
     let sample_rate = supported.sample_rate().0 as f32;
     let stream_config: cpal::StreamConfig = supported.into();
 
-    let engine = Arc::new(Mutex::new(Ym38x6Engine::new(sample_rate)));
+    // 38x6/OP505の両エンジンを常時保持する共存ラッパー（`engines.rs`参照）。
+    let engine = Arc::new(Mutex::new(Engines::new(sample_rate)));
     let engine_audio = Arc::clone(&engine);
     let effects = Arc::new(Mutex::new(MasterEffects::new(sample_rate)));
     let effects_audio = Arc::clone(&effects);
@@ -417,6 +500,7 @@ fn main() {
             move |output: &mut [f32], _| {
                 output.fill(0.0);
                 if let Ok(mut eng) = engine_audio.try_lock() {
+                    // Engines::render（両エンジン加算。非アクティブ側のリリース尾も鳴り続ける）。
                     eng.render(output, num_channels);
                 }
                 if let Ok(mut fx) = effects_audio.try_lock() {
@@ -443,6 +527,13 @@ fn main() {
             ym38x6_set_patch,
             ym38x6_set_program,
             ym38x6_set_performance_lfo,
+            set_active_engine,
+            get_active_engine,
+            op505_set_patch,
+            op505_get_current_patch,
+            op505_set_program,
+            op505_demo_names,
+            op505_set_demo,
             list_bank_entries,
             get_bank_program,
             open_patch_file,
@@ -533,5 +624,43 @@ mod tests {
     fn current_open_dir_falls_back_to_presets_dir_when_bank_unregistered() {
         let registry = BankRegistry::new();
         assert_eq!(current_open_dir(&registry, 0), presets_dir());
+    }
+
+    /// `Op505Patch`は専用DTOを介さず直接シリアライズしてIPCへ流すため、op505-core側の
+    /// フィールド名がそのままワイヤーフォーマットになる。フィールドがリネーム・削除されると
+    /// editor-wasm側とのIPCが「エラーも出さずに」壊れるので、キー構成をここで固定して検出する。
+    #[test]
+    fn op505_patch_json_keys_are_stable() {
+        let v = serde_json::to_value(Op505Patch::default()).unwrap();
+        assert!(v.get("operators").is_some() && v.get("channel").is_some());
+
+        let ch = &v["channel"];
+        for k in [
+            "algorithm", "feedback", "chip_lfo_freq", "chip_lfo_pmd", "chip_lfo_amd", "chip_lfo_delay",
+            "pms", "ams", "filter_cutoff", "filter_resonance", "filter_type", "filter_self_oscillation",
+            "pitch_fg", "cutoff_fg", "gain_fg", "texture_lfo",
+        ] {
+            assert!(ch.get(k).is_some(), "channel.{k} が消えている");
+        }
+
+        let op = &v["operators"][0];
+        for k in [
+            "tl", "eg", "mul", "dt1", "ksr", "am_enable", "velocity_sensitivity", "waveform",
+            "op_fine_tune", "eg_shift", "level_scale", "velocity_gain",
+        ] {
+            assert!(op.get(k).is_some(), "operators[0].{k} が消えている");
+        }
+
+        // TimeEgParams（オペレーターEGとFGの両方が使う）とTimeStageのキー。
+        let eg = &op["eg"];
+        for k in ["stages", "stage_count", "loop_enabled", "loop_start", "loop_end", "release_start"] {
+            assert!(eg.get(k).is_some(), "eg.{k} が消えている");
+        }
+        let stage = &eg["stages"][0];
+        for k in ["time", "level", "curve"] {
+            assert!(stage.get(k).is_some(), "stages[0].{k} が消えている");
+        }
+        // Pitch FGはTimeEgParams+depthのバイポーラ型。
+        assert!(ch["pitch_fg"].get("eg").is_some() && ch["pitch_fg"].get("depth").is_some());
     }
 }
