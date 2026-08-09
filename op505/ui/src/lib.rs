@@ -17,6 +17,11 @@ use ui_core::knob::knob;
 use ui_core::time_eg_editor::time_eg_editor;
 use ui_core::{bool_checkbox, enum_selector, waveform_selector, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES};
 
+/// `time_eg_editor`の暫定固定サイズ（Step 2）。GRAPHモードの旧固定値（ヘッダ20+グラフ120+spin35
+/// =175、幅260）を踏襲した仮値で、panel.xmlへの移行（Step 4）で`<time-eg-editor>`要素の
+/// `<style>`が正本になり置き換わる。
+const TIME_EG_EDITOR_SIZE: egui::Vec2 = egui::Vec2::new(260.0, 175.0);
+
 // editor-wasm(op505_state.rs)がハンドル実装で使うため、ym38x6-uiと同じくトレイトを再エクスポートする。
 pub use ui_core::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 
@@ -85,7 +90,7 @@ fn operator_panel(ui: &mut Ui, op: &Op505OperatorPanelParams, index: usize, carr
     ui.group(|ui| {
         ui.label(egui::RichText::new(format!("OP {}", index + 1)).strong());
         ui.horizontal(|ui| {
-            time_eg_editor(ui, &*op.eg, EgAmplitudeMapping::DbLinear, op.tl.value().clamp(0, 255) as u8);
+            time_eg_editor(ui, TIME_EG_EDITOR_SIZE, &*op.eg, EgAmplitudeMapping::DbLinear, op.tl.value().clamp(0, 255) as u8);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     knob(ui, &*op.tl, "TL");
@@ -115,7 +120,7 @@ fn operator_panel(ui: &mut Ui, op: &Op505OperatorPanelParams, index: usize, carr
 fn bipolar_fg_panel(ui: &mut Ui, fg: &Op505BipolarFgPanelParams) {
     ui.group(|ui| {
         ui.horizontal(|ui| {
-            time_eg_editor(ui, &*fg.eg, EgAmplitudeMapping::AmplitudeLinear, 255);
+            time_eg_editor(ui, TIME_EG_EDITOR_SIZE, &*fg.eg, EgAmplitudeMapping::AmplitudeLinear, 255);
             knob(ui, &*fg.depth, "DEPTH");
         });
     });
@@ -176,7 +181,7 @@ pub fn draw_op505_panel(ui: &mut Ui, params: &Op505PanelParams) {
         bipolar_fg_panel(ui, &params.cutoff_fg);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                time_eg_editor(ui, &*params.gain_fg, EgAmplitudeMapping::AmplitudeLinear, 255);
+                time_eg_editor(ui, TIME_EG_EDITOR_SIZE, &*params.gain_fg, EgAmplitudeMapping::AmplitudeLinear, 255);
             });
         });
 
