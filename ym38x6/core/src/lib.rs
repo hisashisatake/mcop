@@ -2,10 +2,10 @@ pub mod operator;
 pub mod preset;
 
 // EG非依存の汎用FM部品（アルゴリズム結線表・パラメーターマッピング・チップ内LFO・波形生成）は
-// `fm-common`へ切り出し済み（fork-on-write方針でop505-coreと共有）。既存の外部消費者
+// `sound-fm`へ切り出し済み（fork-on-write方針でop505-coreと共有）。既存の外部消費者
 // （ym38x6-vst・gesture-app・各コンバーター）は`ym38x6_core::algorithm::ALGORITHMS`等の
 // 従来パスのまま参照できるよう、モジュールごと同名で再エクスポートする。
-pub use fm_common::{algorithm, chip_lfo, mapping, waveform};
+pub use sound_fm::{algorithm, chip_lfo, mapping, waveform};
 
 use std::collections::BTreeMap;
 
@@ -87,13 +87,13 @@ pub use sound_core::{
 // パッチ（チャンネル + オペレーター4個分のパラメーター一式）
 // ---------------------------------------------------------------------------
 
-// 質感LFO（TextureLfo）とその変換関数はEG非依存のためfm-commonへ切り出し済み。
+// 質感LFO（TextureLfo）とその変換関数はEG非依存のためsound-fmへ切り出し済み。
 // 外部消費者（vst/gesture-app）は`ym38x6_core::TextureLfo`のまま参照できるよう再エクスポートする。
-pub use fm_common::{texture_lfo_to_shape, TextureLfo};
+pub use sound_fm::{texture_lfo_to_shape, TextureLfo};
 
-/// [fm_common::texture_lfo]内の順方向写像の逆方向。旧`perf_lfo_shape`からの後方互換
+/// [sound_fm::texture_lfo]内の順方向写像の逆方向。旧`perf_lfo_shape`からの後方互換
 /// マイグレーション専用（三角/サイン/のこぎりは質感LFOのパレット外のため`None`を返す）。
-/// ym38x6固有の後方互換コードのためfm-commonへは移動せず、ここに残す。
+/// ym38x6固有の後方互換コードのためsound-fmへは移動せず、ここに残す。
 fn texture_lfo_waveform_from_engine(waveform: LfoWaveform) -> Option<u8> {
     match waveform {
         LfoWaveform::Square => Some(0),
@@ -341,11 +341,11 @@ pub struct Ym38x6Patch {
 // ---------------------------------------------------------------------------
 // パフォーマンスLFOの適用先（38x6拡張Destination）
 //
-// EG非依存のためfm-commonへ`FmLfoDestination`として切り出し済み。外部消費者
+// EG非依存のためsound-fmへ`FmLfoDestination`として切り出し済み。外部消費者
 // （vst/gesture-app）は`ym38x6_core::Ym38x6LfoDestination`のまま参照できるよう別名で再エクスポートする。
 // ---------------------------------------------------------------------------
 
-pub use fm_common::FmLfoDestination as Ym38x6LfoDestination;
+pub use sound_fm::FmLfoDestination as Ym38x6LfoDestination;
 
 // ---------------------------------------------------------------------------
 // チャンネル（4オペレーター + アルゴリズム結線）

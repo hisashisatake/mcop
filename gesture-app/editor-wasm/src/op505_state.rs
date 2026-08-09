@@ -5,9 +5,9 @@
 //!
 //! TimeEg（`sound_core::TimeEgParams`）はOp505Patch内の7箇所（4つのOP EG＋Pitch/Cutoff/Gain FG）に
 //! ネストしているため、`Op505IntField`（フラットなi32/bool 1個への単純ハンドル）とは別に、
-//! `Op505TimeEgHandle`（`ui_common::TimeEgHandle`実装、TimeEgParams全体を読み書きするgetter/setter
+//! `Op505TimeEgHandle`（`ui_core::TimeEgHandle`実装、TimeEgParams全体を読み書きするgetter/setter
 //! 関数ポインタを保持）を用意し、7箇所どこでも同じ実装でハンドルを作れるようにする
-//! （個々の段×フィールドのハンドルは`ui_common::time_eg_editor`が内部で都度導出するため、
+//! （個々の段×フィールドのハンドルは`ui_core::time_eg_editor`が内部で都度導出するため、
 //! ここでは持たない）。
 
 use std::cell::{Cell, RefCell};
@@ -102,7 +102,7 @@ impl BoolParamHandle for Op505BoolField {
     fn end_edit(&self) {}
 }
 
-/// TimeEgParams全体（Op505Patch内の7箇所どこか）への`ui_common::TimeEgHandle`実装。
+/// TimeEgParams全体（Op505Patch内の7箇所どこか）への`ui_core::TimeEgHandle`実装。
 /// `get_eg`/`set_eg`は非キャプチャ関数ポインタ（Op505Patch内の該当箇所を指す）。
 /// `name`はegui memoryのId salt兼パネル見出しに使われる（`time_eg_editor`参照）ため、
 /// "OP1 EG"/"PITCH FG"等、7本で一意な値を渡すこと。

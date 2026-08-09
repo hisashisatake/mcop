@@ -19,7 +19,7 @@ thread_local! {
 
 #[derive(Default)]
 struct XmlState {
-    layout: Option<panel_codegen::Layout>,
+    layout: Option<ui_codegen::Layout>,
     error: Option<String>,
 }
 
@@ -37,7 +37,7 @@ fn request_repaint() {
 pub fn set_xml(xml: &str) {
     XML_STATE.with(|s| {
         let mut s = s.borrow_mut();
-        match panel_codegen::parse_layout(xml) {
+        match ui_codegen::parse_layout(xml) {
             Ok(layout) => {
                 s.layout = Some(layout);
                 s.error = None;
@@ -50,10 +50,10 @@ pub fn set_xml(xml: &str) {
 
 /// XMLが妥当かどうかだけを検査する（index.htmlの上部OK/NGバッジ用）。
 /// 実際の描画反映は`set_xml`、生成Rustコードの実体は`ym38x6-ui/build.rs`が使う
-/// `panel_codegen::generate_rust`（index.html側では表示しない）が担う。
+/// `ui_codegen::generate_rust`（index.html側では表示しない）が担う。
 #[wasm_bindgen]
 pub fn validate_xml(xml: &str) -> Result<(), JsError> {
-    panel_codegen::parse_layout(xml).map(|_| ()).map_err(|e| JsError::new(&e))
+    ui_codegen::parse_layout(xml).map(|_| ()).map_err(|e| JsError::new(&e))
 }
 
 struct PreviewApp {

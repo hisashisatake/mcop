@@ -697,7 +697,7 @@ Delay（既存のハードカットオーバー）とは独立して共存する
 
 ### 実装状況
 
-既存`sound-core/src/lfo.rs`（`PerformanceLfo`、8波形実装済み）から三角/サイン/のこぎりを除いた
+既存`sound/core/src/lfo.rs`（`PerformanceLfo`、8波形実装済み）から三角/サイン/のこぎりを除いた
 **5波形に絞った1基**を`ChannelParams`が所有する。適用先は`PerformanceLfoTarget`トレイト
 （Destination 0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff/4=未接続）。`set_channel_params`が他のフィールドと
 同様に毎ブロック発音中ボイスへ伝播するため、NRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに

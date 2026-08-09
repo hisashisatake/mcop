@@ -5,16 +5,16 @@ edition = "2021"
 
 [dependencies]
 egui = "0.34"
-sound-core = { path = "../../sound-core" }
-# knob/eg_preview/layout/algorithm_diagram等の汎用egui部品はui-commonへ切り出し済み
-# （op505-ui等、他チップのエディタとも共有する）。panel-layoutへの直接依存はui-common経由になったため不要。
-ui-common = { path = "../../ui-common" }
+sound-core = { path = "../../sound/core" }
+# knob/eg_preview/layout/algorithm_diagram等の汎用egui部品はui-coreへ切り出し済み
+# （op505-ui等、他チップのエディタとも共有する）。ui-layoutへの直接依存はui-core経由になったため不要。
+ui-core = { path = "../../ui/core" }
 # フェーズBのプレビュー用インタープリタ(interpret.rs)専用の任意依存。VST/gesture-appは
 # `preview`フィーチャを有効にせずビルドするため、XMLパーサー(roxmltree等)は製品バイナリに含まれない。
-panel-codegen = { path = "panel-codegen", optional = true }
+ui-codegen = { path = "../../ui/codegen", optional = true }
 
 [features]
-preview = ["dep:panel-codegen"]
+preview = ["dep:ui-codegen"]
 
 [build-dependencies]
-panel-codegen = { path = "panel-codegen" }
+ui-codegen = { path = "../../ui/codegen" }

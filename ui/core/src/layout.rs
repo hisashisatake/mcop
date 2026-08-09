@@ -9,18 +9,18 @@
 //!
 //! 生成コードは[`Node`]で木を組み、[`solve`]で葉の矩形を得て、[`place`]で各ウィジェットを置く。
 //!
-//! 純粋な計算部分（木の構築・taffy呼び出し）は`panel-layout`クレートに committed
+//! 純粋な計算部分（木の構築・taffy呼び出し）は`ui-layout`クレートに committed
 //! している（egui非依存、`build.rs`とブラウザ用wasmツールが同一コードとして共有する）。
 //! ここではeguiとの橋渡し（[`solve`]/[`place`]の型変換）のみを行う。
 
-pub use panel_layout::{leaf, row, row_grow, stack, Justify, Margin, Node};
+pub use ui_layout::{leaf, row, row_grow, stack, Justify, Margin, Node};
 
-/// [`panel_layout::solve`]を呼び、egui型（[`egui::Vec2`]/[`egui::Rect`]）で受け渡しする薄いラッパー。
+/// [`ui_layout::solve`]を呼び、egui型（[`egui::Vec2`]/[`egui::Rect`]）で受け渡しする薄いラッパー。
 /// `solve`に渡す葉のサイズは`ir::LeafInfo::outer_size()`（ウィジェット自然サイズ+マージン）なので、
 /// ここで返す矩形も外形（マージンを含む）。実際の描画は[`place`]がマージンぶん内側へ縮めてから行う。
 pub fn solve(container: egui::Vec2, root: &Node) -> Vec<egui::Rect> {
-    let container = panel_layout::Vec2::new(container.x, container.y);
-    panel_layout::solve(container, root)
+    let container = ui_layout::Vec2::new(container.x, container.y);
+    ui_layout::solve(container, root)
         .into_iter()
         .map(|r| egui::Rect::from_min_size(egui::pos2(r.x, r.y), egui::vec2(r.w, r.h)))
         .collect()

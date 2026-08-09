@@ -2,7 +2,7 @@
 //! 全面移行した新チップのコアクレート。
 //!
 //! EG非依存の安定部分（アルゴリズム結線・波形・チップ内LFO・パラメーターマッピングテーブル・
-//! 質感LFO）は`fm-common`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
+//! 質感LFO）は`sound-fm`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
 //! （fork-on-write方針。将来op505独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
 //! `ym38x6-core`への依存は`adapter.rs`（既存`.38x6`からの変換）のみに限定する。
 //! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
@@ -15,14 +15,14 @@ pub use operator::Op505OperatorParams;
 
 use std::collections::BTreeMap;
 
-use fm_common::algorithm::ALGORITHMS;
-use fm_common::chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
-use fm_common::mapping::{
+use sound_fm::algorithm::ALGORITHMS;
+use sound_fm::chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
+use sound_fm::mapping::{
     carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
     FM_MODULATION_INDEX_SCALE,
 };
-use fm_common::waveform::{self, gen_builtin_waveform};
-use fm_common::{texture_lfo_to_shape, FmLfoDestination, TextureLfo};
+use sound_fm::waveform::{self, gen_builtin_waveform};
+use sound_fm::{texture_lfo_to_shape, FmLfoDestination, TextureLfo};
 use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{

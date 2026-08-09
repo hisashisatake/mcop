@@ -72,33 +72,43 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 
 ## クレート構成
 
-リポジトリ直下は次の構成（2026-08-02、A案＝製品グルーピングで整理、同日fm-common切り出し。
-2026-08-03、新チップのチップ名確定に伴い`mcop/`→`op505/`・`mcop-core`→`op505-core`へ改名。
-リポジトリ名/GitHubリモートは引き続き`mcop`のまま）。
-`ym38x6/`・`op505/`配下はそれぞれの製品一式をまとめたディレクトリで、クレート名（`ym38x6-core`等）自体は
-変更していない（Cargoのワークスペースメンバーパスとパッケージ名は独立しており、`cargo check -p ym38x6-core`等は
-ディレクトリ位置に関わらずそのまま使える）。`sound-core`・`fm-common`・`gesture-app`は製品非依存/複数製品共有の
-想定があるため`ym38x6/`の外、リポジトリ直下に置く。
+リポジトリは**ディレクトリ＝グループ、パッケージ名は`<group>-<part>`**という規約で構成する
+（2026-08-02にA案＝製品グルーピングで整理。2026-08-03に`mcop/`→`op505/`へ改名。
+リポジトリ名/GitHubリモートは引き続き`mcop`のまま。2026-08-09に共有クレートも同じ規約へ揃え、
+`sound-core`/`fm-common`→`sound/{core,fm}`・`ui-common`/`panel-layout`/`panel-codegen`→`ui/{core,layout,codegen}`へ移動）。
+
+グループは4つ。`sound/`（音源レイヤーの共有基盤）・`ui/`（UIレイヤーの共有基盤）は製品非依存、
+`ym38x6/`・`op505/`はそれぞれの製品一式。各グループの主クレートは`core`という名前に統一する。
 
 ```
 （リポジトリルート）
   Cargo.toml           ← ワークスペース
   spec.md              ← 設計仕様書
-  sound-core/          ← WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界（基盤ライブラリ、製品非依存）
-    Vcoトレイト        ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engine/Op505Engineが実装
-    AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
-    texture_lfo        ← TextureLfo構造体・texture_lfo_to_shape変換（VCO実装に依存しないモジュレーション層の部品）
-  fm-common/           ← FM合成チップ間で共有する、EG非依存の汎用部品（ym38x6-core/op505-core双方が依存）
-    algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・チップ内LFO・波形生成
-    texture_lfo        ← FmLfoDestination（FM合成チップ固有のLFO適用先解釈のみ。TextureLfo本体はsound-coreを再エクスポート）
+  sound/               ← 音源レイヤーの共有基盤（製品非依存）
+    core/              ← クレート名sound-core。WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界
+      Vcoトレイト      ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Ym38x6Engine/Op505Engineが実装
+      AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
+      texture_lfo      ← TextureLfo構造体・texture_lfo_to_shape変換（VCO実装に依存しないモジュレーション層の部品）
+    fm/                ← クレート名sound-fm。FM合成チップ間で共有する、EG非依存の汎用部品（ym38x6-core/op505-core双方が依存）
+      algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・チップ内LFO・波形生成
+      texture_lfo      ← FmLfoDestination（FM合成チップ固有のLFO適用先解釈のみ。TextureLfo本体はsound-coreを再エクスポート）
+  ui/                  ← UIレイヤーの共有基盤（製品非依存、egui依存）
+    core/              ← クレート名ui-core。ノブ・EGプレビュー・TimeEgエディタ・アルゴリズム結線図・
+                          波形/enumセレクタ・パラメーターハンドルトレイト（ym38x6-ui/op505-ui双方が依存）
+    layout/            ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存の純粋クレート）
+    codegen/           ← クレート名ui-codegen。パネルXML DSL（panel.xml）のパーサー・IR・Rustコード生成器
+                          （egui非依存。矩形計算はui-layoutへ委譲。各uiクレートのbuild.rsが呼ぶ。
+                           詳細はym38x6/tools/xml-panel-dsl/README.md）
   ym38x6/              ← 38x6製品一式（レート方式5段EG）
-    core/              ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/fm-commonに依存、Vco実装の一つ。波形メモリ音色も生成）
-    ui/                ← エディタ共有描画ロジック（クレート名ym38x6-ui。egui+sound-coreに依存。VST/gesture-app両対応）
+    core/              ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/sound-fmに依存、Vco実装の一つ。波形メモリ音色も生成）
+    ui/                ← エディタパネル定義（クレート名ym38x6-ui。egui+sound-core+ui-coreに依存。VST/gesture-app両対応）。
+                          `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成
     vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
     tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
   op505/               ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
-    core/              ← OP505 FMエンジン実装（クレート名op505-core。sound-core/fm-commonに依存、Vco実装の一つ。
+    core/              ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、Vco実装の一つ。
                           ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定）
+    ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
@@ -106,12 +116,16 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     scripts/           ← build-editor-wasm.ps1（tauri dev/build時に自動実行）
 ```
 
-`sound-core`・`fm-common`・`ym38x6-core`・`op505-core`はnice-plugにもTauriにも依存しない純粋なRustライブラリ。
-音源エンジンの変更はこれらのクレートに閉じる。
+Cargoのワークスペースメンバーパスとパッケージ名は独立しているため、`cargo check -p sound-core`等は
+ディレクトリ位置に関わらずそのまま使える。
+
+`sound-core`・`sound-fm`・`ui-layout`・`ui-codegen`・`ym38x6-core`・`op505-core`はnice-plugにもTauriにも
+依存しない純粋なRustライブラリ。音源エンジンの変更は`sound/`と各製品の`core/`に閉じる。
 `ym38x6-core`は`algorithm`/`mapping`/`chip_lfo`/`waveform`モジュールと`TextureLfo`/`Ym38x6LfoDestination`型を
-`fm-common`から同名で再エクスポートしており、外部クレート（`ym38x6-vst`等）は`ym38x6_core::algorithm::ALGORITHMS`
-のように従来通りのパスで参照できる（`fm-common`直下への切り替えは不要）。
-`ym38x6-ui`はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない（VSTとgesture-app双方の音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用）。
+`sound-fm`から同名で再エクスポートしており、外部クレート（`ym38x6-vst`等）は`ym38x6_core::algorithm::ALGORITHMS`
+のように従来通りのパスで参照できる（`sound-fm`直下への切り替えは不要）。
+`ui-core`・`ym38x6-ui`・`op505-ui`はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない
+（VSTとgesture-app双方の音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用）。
 
 ---
 

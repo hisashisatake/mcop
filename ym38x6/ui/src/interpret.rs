@@ -1,4 +1,4 @@
-//! `panel.xml`のIR（`panel-codegen`）をランタイムで解釈し、実eguiウィジェットを描画する
+//! `panel.xml`のIR（`ui-codegen`）をランタイムで解釈し、実eguiウィジェットを描画する
 //! （フェーズB、`preview`フィーチャ配下）。`codegen.rs`（IR→Rust文字列）と対をなす
 //! 「IR→実egui呼び出し」変換で、`tools/xml-panel-dsl`のブラウザプレビュー（`preview-wasm`）から
 //! 使われる。VST/gesture-app向けの`panel.rs`（build.rsが生成する`draw_param_panel`）とは別経路
@@ -13,7 +13,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 
-use panel_codegen::{
+use ui_codegen::{
     BodyStmt, Compute, EgField, HeaderItem, Jack, Layout, LeafInfo, Margin, Panel, PanelsGroup, Predicate, Readout,
     Style, Title, TreeNode, Widget,
 };
@@ -294,7 +294,7 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
     }
 }
 
-/// `<row>`/`<stack>`の木を`panel_layout::solve`で解決し、各葉を実ウィジェットで描画する
+/// `<row>`/`<stack>`の木を`ui_layout::solve`で解決し、各葉を実ウィジェットで描画する
 /// （`codegen.rs`の`gen_tree_block`と同じ構造）。
 fn draw_tree(ui: &mut egui::Ui, store: &mut HandleStore, node: &TreeNode, idx: Option<usize>) {
     let h = node.max_height();
@@ -431,7 +431,7 @@ fn draw_panels_group(
     });
 }
 
-/// [`panel_codegen::Margin`]（f32・全パネル共通）をパース時に検証済みの`egui::Margin`（i8）へ変換する。
+/// [`ui_codegen::Margin`]（f32・全パネル共通）をパース時に検証済みの`egui::Margin`（i8）へ変換する。
 fn margin_to_egui(m: &Margin) -> egui::Margin {
     egui::Margin { left: m.left as i8, right: m.right as i8, top: m.top as i8, bottom: m.bottom as i8 }
 }

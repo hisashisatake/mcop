@@ -6,8 +6,8 @@
 // （周波数計算・ノイズ生成・KSR/TLキャッシュ）は元実装をそのまま踏襲する。
 // ---------------------------------------------------------------------------
 
-use fm_common::mapping::*;
-use fm_common::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
+use sound_fm::mapping::*;
+use sound_fm::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
 use serde::{Deserialize, Serialize};
 use sound_core::{TimeEg, TimeEgParams, WaveTable};
 
@@ -289,7 +289,7 @@ impl Operator {
 mod tests {
     use super::*;
     use sound_core::{TimeStage, MAX_STAGES};
-    use fm_common::waveform::gen_op_sine;
+    use sound_fm::waveform::gen_op_sine;
 
     fn stages_with(entries: &[(u8, u8, u8)]) -> [TimeStage; MAX_STAGES] {
         let mut stages = [TimeStage::default(); MAX_STAGES];
@@ -550,7 +550,7 @@ mod tests {
         };
         let mut op = Operator::new(params);
         op.note_on(0.0, 127); // frequency=0 → phaseが進まずsample_at(0)固定
-        let db_range = fm_common::mapping::eg_shift_to_db_range(0);
+        let db_range = sound_fm::mapping::eg_shift_to_db_range(0);
         let k = db_range / 20.0;
         let mut max_rel_diff = 0.0f32;
         for i in 0..20000 {

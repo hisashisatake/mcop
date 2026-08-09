@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 egui = "0.34"
 eframe = { version = "0.34", default-features = false, features = ["glow"] }
 ym38x6-ui = { path = "..", features = ["preview"] }
-panel-codegen = { path = "../panel-codegen" }
+ui-codegen = { path = "../../../ui/codegen" }
 # wasm-bindgen-cli（ビルド時に別途インストールするツール）とクレートのバージョンは完全一致が
 # 必須なため厳密ピン。上げる場合は `cargo install wasm-bindgen-cli --version <同じ値> --force` も必要
 # （gesture-app/editor-wasm・旧codegen-wasmと同じ運用、同じバージョンを共有する）。

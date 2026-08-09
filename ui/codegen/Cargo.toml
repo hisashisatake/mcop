@@ -1,9 +1,9 @@
 [package]
-name = "panel-codegen"
+name = "ui-codegen"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 roxmltree = "0.20"
-panel-layout = { path = "../panel-layout" }
+ui-layout = { path = "../layout" }
 serde_json = "1"
