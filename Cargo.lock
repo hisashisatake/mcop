@@ -3497,6 +3497,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "sound-core",
+ "ui-codegen",
  "ui-core",
 ]
 

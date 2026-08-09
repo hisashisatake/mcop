@@ -7,3 +7,6 @@ edition = "2021"
 egui = "0.34"
 sound-core = { path = "../../sound/core" }
 ui-core = { path = "../../ui/core" }
+
+[build-dependencies]
+ui-codegen = { path = "../../ui/codegen" }

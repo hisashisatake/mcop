@@ -1,0 +1,141 @@
+<layout fn="draw_op505_panel" params-type="Op505PanelParams" scroll-id="op505_panel">
+
+  <style>
+    <!-- 横並び<panels>グループ内、パネル間の隙間。 -->
+    <panels gap="8"/>
+    <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。 -->
+    <panel inner-margin="6" outer-margin="3"/>
+    <!-- 全ウィジェット共通の既定マージン。 -->
+    <widget margin="5 0 0 0"/>
+    <algorithm-diagram width="130" height="100"/>
+    <!-- TimeEg固定枠（Step 2）。GRAPH/KNOBSタブ切替・段数1〜8変更でこのサイズ自体は変わらない。 -->
+    <time-eg-editor width="260" height="175"/>
+  </style>
+
+  <panels match-height="true">
+    <panel span="4" title="CHANNEL">
+      <header>
+        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="between" gap="spacing">
+        <algorithm-diagram handle="algorithm"/>
+        <row grow="true" justify="between">
+          <knob label="ALG" handle="algorithm" margin="0 60"/>
+          <knob label="FB" handle="feedback" margin="0 30"/>
+        </row>
+      </row>
+    </panel>
+    <panel span="8" title="CHIP LFO">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
+        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
+        <knob label="CH.AMD" handle="chip_lfo_amd"/>
+        <knob label="CH.DLY" handle="chip_lfo_delay"/>
+        <knob label="PMS" handle="pms"/>
+        <knob label="AMS" handle="ams"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel span="7" title="TEXTURE LFO">
+      <header>
+        <jack kind="source"/>
+        <title/>
+      </header>
+      <row justify="between">
+        <stack>
+          <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2" margin="0 0 -10 0"/>
+          <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3" margin="-10 0 -20 0"/>
+        </stack>
+        <knob label="TX.RATE" handle="texture_lfo_rate"/>
+        <knob label="TX.DEP" handle="texture_lfo_depth"/>
+        <knob label="TX.DLY" handle="texture_lfo_delay"/>
+        <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
+        <knob label="TX.OFS" handle="texture_lfo_offset"/>
+      </row>
+    </panel>
+    <panel span="5" title="FILTER">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <knob label="CUTOFF" handle="cutoff"/>
+        <knob label="RESO" handle="resonance"/>
+        <knob label="TYPE" handle="filter_type"/>
+        <checkbox label="SELF-OSC" handle="filter_self_oscillation"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel title="PITCH FG">
+      <header>
+        <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="AmplitudeLinear" tl-value="255"/>
+        <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel title="CUTOFF FG">
+      <header>
+        <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="AmplitudeLinear" tl-value="255"/>
+        <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel title="GAIN FG">
+      <header>
+        <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel repeat="operators" as="op" index="i">
+      <header>
+        <title>OP {index+1}</title>
+        <readout compute="mul-fine-ratio" args="mul,op_fine_tune" format="×{value:.2}"
+          tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
+        <row grow="true" justify="between">
+          <knob label="TL" handle="tl"/>
+          <knob label="MUL" handle="mul"/>
+          <knob label="DT1" handle="dt1"/>
+          <knob label="KSR" handle="ksr"/>
+          <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
+          <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
+          <knob label="FINE" handle="op_fine_tune"/>
+          <knob label="EGSFT" handle="eg_shift"/>
+          <knob label="LEVEL SCALE" handle="level_scale"/>
+          <stack>
+            <waveform handle="waveform" index="i"/>
+            <checkbox label="AM" handle="ame"/>
+          </stack>
+        </row>
+      </row>
+    </panel>
+  </panels>
+
+</layout>
