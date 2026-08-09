@@ -1,8 +1,8 @@
 [package]
-name = "fm-common"
+name = "sound-fm"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sound-core = { path = "../sound-core" }
+sound-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }

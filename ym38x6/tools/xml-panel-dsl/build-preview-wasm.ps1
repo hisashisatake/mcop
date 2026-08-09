@@ -11,7 +11,7 @@
 # Note: this script is kept ASCII-only for the same reason as build-editor-wasm.ps1 (a spawned
 # legacy powershell.exe, not pwsh, may misread BOM-less UTF-8 source using the system codepage).
 # All file I/O below uses explicit UTF-8 encoding so the embedded JSDoc comments (which do contain
-# Japanese, copied verbatim from panel-codegen's Rust doc comments) survive intact regardless.
+# Japanese, copied verbatim from ui-codegen's Rust doc comments) survive intact regardless.
 
 $ErrorActionPreference = "Stop"
 

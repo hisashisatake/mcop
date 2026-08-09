@@ -7,18 +7,18 @@
 //! 中身」であってDSLの得意分野ではない。DSLにTimeEgを描く語彙も無く、形が決まっていない
 //! ウィジェットのために拡張するのは順序が逆と判断した）。
 //!
-//! 各EG（OP×4のオペレーターEG＋PITCH/CUTOFF/GAIN FG）は`ui_common::time_eg_editor`
+//! 各EG（OP×4のオペレーターEG＋PITCH/CUTOFF/GAIN FG）は`ui_core::time_eg_editor`
 //! （折れ線ドラッグ編集/ノブ編集をタブで切り替えるハイブリッドエディタ、Step 8）へ委譲する。
 
 use egui::Ui;
-use ui_common::algorithm_diagram::{algorithm_diagram, carriers};
-use ui_common::eg_preview::EgAmplitudeMapping;
-use ui_common::knob::knob;
-use ui_common::time_eg_editor::time_eg_editor;
-use ui_common::{bool_checkbox, enum_selector, waveform_selector, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES};
+use ui_core::algorithm_diagram::{algorithm_diagram, carriers};
+use ui_core::eg_preview::EgAmplitudeMapping;
+use ui_core::knob::knob;
+use ui_core::time_eg_editor::time_eg_editor;
+use ui_core::{bool_checkbox, enum_selector, waveform_selector, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES};
 
 // editor-wasm(op505_state.rs)がハンドル実装で使うため、ym38x6-uiと同じくトレイトを再エクスポートする。
-pub use ui_common::{BoolParamHandle, IntParamHandle, TimeEgHandle};
+pub use ui_core::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 
 /// Pitch FG（新規）／Cutoff FG（旧Filter EG）に共通の「TimeEg＋バイポーラDepth」一式。
 pub struct Op505BipolarFgPanelParams<'a> {

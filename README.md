@@ -12,20 +12,31 @@ Inspired by Ryu Umemoto's YM-2609, which explored a similar "what if" premise us
 
 ## Architecture
 
+Directories are groups; crate names follow `<group>-<part>`. Each group's main crate is named `core`.
+
 ```
 (repo root)
-  sound-core/         # Core primitives — WaveTable, AdsrParams, PerformanceLfo, MasterEffects
-  ym38x6/             # The 38x6 product (directory grouping only; crate names unchanged)
-    core/             # 38x6 FM engine implementation (crate: ym38x6-core, depends on sound-core)
-    ui/               # Shared editor UI (crate: ym38x6-ui)
+  sound/              # Shared audio-layer foundation (product-agnostic)
+    core/             # crate: sound-core — WaveTable, AdsrParams, PerformanceLfo, MasterEffects, Vco trait
+    fm/               # crate: sound-fm — EG-agnostic parts shared across FM chips (algorithm, mapping, chip LFO)
+  ui/                 # Shared UI-layer foundation (product-agnostic, egui)
+    core/             # crate: ui-core — knobs, EG preview, TimeEg editor, algorithm diagram, param handles
+    layout/           # crate: ui-layout — taffy-based panel layout solver (no egui dependency)
+    codegen/          # crate: ui-codegen — panel XML DSL parser / IR / Rust code generator
+  ym38x6/             # The 38x6 product (rate-based 5-stage EG)
+    core/             # 38x6 FM engine implementation (crate: ym38x6-core, depends on sound-core/sound-fm)
+    ui/               # Editor panel definition (crate: ym38x6-ui; src/panel.xml is the source of truth)
     vst/              # 38x6 VST3/CLAP plugin (crate: ym38x6-vst, nice-plug)
     tools/            # Legacy chip converters, patch design & perf tools
+  op505/              # The OP505 product (N-point Time/Level EG, successor chip)
+    core/             # OP505 FM engine implementation (crate: op505-core)
+    ui/               # Editor panel definition (crate: op505-ui)
   gesture-app/        # Composition app (Tauri v2, Windows desktop)
     src/              # Frontend: calibration + gesture UI (HTML/JS)
     src-tauri/        # Backend: cpal WASAPI output, Tauri commands
 ```
 
-`sound-core` and `ym38x6-core` have zero dependencies on nice-plug, Tauri, or cpal. The audio engine is fully isolated.
+`sound-core`, `sound-fm`, `ym38x6-core`, and `op505-core` have zero dependencies on nice-plug, Tauri, or cpal. The audio engine is fully isolated.
 
 ## Sound Engine
 

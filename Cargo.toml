@@ -1,14 +1,14 @@
 [workspace]
 members = [
-    "sound-core",
-    "fm-common",
-    "ui-common",
+    "sound/core",
+    "sound/fm",
+    "ui/core",
+    "ui/layout",
+    "ui/codegen",
     "ym38x6/core",
     "op505/core",
     "op505/ui",
     "ym38x6/ui",
-    "ym38x6/ui/panel-layout",
-    "ym38x6/ui/panel-codegen",
     "ym38x6/vst",
     "gesture-app/src-tauri",
     "ym38x6/tools/psr2x6",
@@ -26,13 +26,15 @@ members = [
 # gesture-app/editor-wasm・ym38x6/ui/preview-wasm はwasm32-unknown-unknown専用クレート
 # （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
 # cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
-# 個別に行う（editor-wasmはym38x6-uiを、preview-wasmはym38x6-ui(preview feature)/panel-codegenを
+# 個別に行う（editor-wasmはym38x6-uiを、preview-wasmはym38x6-ui(preview feature)/ui-codegenを
 # path依存で参照。旧tools/xml-panel-dsl/codegen-wasmはpreview-wasmへ統合され削除済み）。
 # ym38x6/tools/xml-panel-dsl/preview-native はeframe nativeのxml-panel-dslプレビュー用GUIツール
 # （分離・ドッキング可能なプレビュー等、preview-wasm＝ブラウザ版では実現できない機能向け）。
 # winit/glow等の重い依存を`cargo check --workspace`に持ち込まないため除外し、
-# scoop版の既定cargoで個別にビルドする（preview-wasmと同じym38x6-ui(preview feature)/panel-codegen
+# scoop版の既定cargoで個別にビルドする（preview-wasmと同じym38x6-ui(preview feature)/ui-codegen
 # をpath依存で参照するが、wasm32は不要）。
+# sound/{core,fm}・ui/{common,layout,codegen} は製品非依存の共有クレート群
+# （ディレクトリ=グループ、パッケージ名は<group>-<part>。ym38x6/op505配下と同じ規約）。
 exclude = [
     "ym38x6/tools/patchlab",
     "gesture-app/editor-wasm",

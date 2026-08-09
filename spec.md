@@ -40,12 +40,18 @@ ym38x6/                  ← ワークスペースルート
   spec.md
   CLAUDE.md
 
-  sound-core/            ← 基盤ライブラリ（WaveTable・AdsrParams・Eg（FG=Pitch/Cutoff/Gain共通部品）・PerformanceLfo〈質感LFO、改称予定〉・MasterEffects）
+  sound/core/            ← クレート名sound-core。基盤ライブラリ（WaveTable・AdsrParams・Eg（FG=Pitch/Cutoff/Gain共通部品）・PerformanceLfo〈質感LFO、改称予定〉・MasterEffects）
     Cargo.toml
     src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
                              波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
 
-  ym38x6/core/           ← 38x6 FMエンジン実装（sound-coreに依存）
+  sound/fm/              ← クレート名sound-fm。FM合成チップ間で共有するEG非依存の汎用部品
+
+  ui/core/               ← クレート名ui-core。エディタ共有egui部品（ノブ・EGプレビュー・TimeEgエディタ等）
+  ui/layout/             ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存）
+  ui/codegen/            ← クレート名ui-codegen。パネルXML DSLのパーサー・IR・Rustコード生成器
+
+  ym38x6/core/           ← 38x6 FMエンジン実装（sound-core/sound-fmに依存）
     Cargo.toml
     src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + チップ内LFO + チャンネル管理）
     src/operator.rs        ← Operator（オシレーター + EG + パラメーター）
@@ -120,8 +126,8 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
   （`note_on系` と `ym38x6_note_on系`）で、フロントが `engine_type` で分岐していた。
   ＝当時もVCOポリモーフィズムは無く、WMS-1廃止で具象1本へ収束した。
 - **現状（フェーズ7ステップ2で実現済み）**: EG形式は5段OPM形式（AR/D1R/D1L/D2R/RR、38x6本体のFM EGと
-  同じ形式）で確定した。状態機械そのものは`sound-core`の`Eg`（`sound-core/src/eg.rs`）に実装し、
-  ボイス単位のモジュレーション用トレイト`Vcf`/`Vca`（`sound-core/src/vcf.rs`/`sound-core/src/vca.rs`）
+  同じ形式）で確定した。状態機械そのものは`sound-core`の`Eg`（`sound/core/src/eg.rs`）に実装し、
+  ボイス単位のモジュレーション用トレイト`Vcf`/`Vca`（`sound/core/src/vcf.rs`/`sound/core/src/vca.rs`）
   として`sound-core`に実装した。`Vcf`はSVF本体 + Cutoffを変調するキーオン連動EGを一体で保持する
   （具象実装`VoiceFilter`）。`Vca`はボイス単位の振幅EGオーバーレイで、既定パラメーター
   （ar=255,d1r=0,d1l=255,d2r=0,rr=255）ではアタック・リリースとも数サンプルで完了しほぼ常時ゲイン1.0となり、
@@ -131,7 +137,7 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
   `Vcf`/`Vca`は`AudioProcessor`（全ボイス合算後のマスター段バッファ一括加工）とは別の粒度
   （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
   旧フィルターEGの4段ADSR（`ym38x6/core/src/filter.rs`の`FilterEnvelope`）は撤去し、`Vcf`の
-  cutoff EGへ統合済み（`ym38x6/core/src/filter.rs`自体も削除し、SVF本体も`sound-core/src/vcf.rs`へ移設した）。
+  cutoff EGへ統合済み（`ym38x6/core/src/filter.rs`自体も削除し、SVF本体も`sound/core/src/vcf.rs`へ移設した）。
 - **フェーズ7の残り（モジュレーション層本体）**: チャンネルLFO三層再編（ステップ5）とVCF/VCAファンクション
   ジェネレーター統合（ステップ5.5、FG=Pitch/Cutoff/Gain＋質感LFOへの再編）の設計・spec改訂が完了、
   velocity→音量「量」は完了（`OperatorParams.velocity_gain`、詳細はspec-roadmap.mdフェーズ7参照）。

@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 egui = "0.34"
-sound-core = { path = "../../sound-core" }
-ui-common = { path = "../../ui-common" }
+sound-core = { path = "../../sound/core" }
+ui-core = { path = "../../ui/core" }

@@ -1,16 +1,16 @@
 //! `ym38x6-ui/src/panel.xml`（実際の正本）を`generate_rust`に通し、構造が壊れていないことを
 //! 検証する。ここで確認する木構造（OPパネルの`eg-preview`+17ウィジェット均等割り付け等）は、
 //! かつての垂直スライス検証（旧`spike.rs`の`draw_op_taffy`、現行描画と同一と確認済みの
-//! 手書きtaffy版リファレンス。役目をpanel-codegen/interpret.rsが代替したため削除済み）と1:1で対応する。
+//! 手書きtaffy版リファレンス。役目をui-codegen/interpret.rsが代替したため削除済み）と1:1で対応する。
 
 fn panel_xml() -> String {
-    std::fs::read_to_string("../src/panel.xml").expect("panel.xml が見つかりません")
+    std::fs::read_to_string("../../ym38x6/ui/src/panel.xml").expect("panel.xml が見つかりません")
 }
 
 #[test]
 fn generates_without_error() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).expect("generate_rust が失敗しました");
+    let rust = ui_codegen::generate_rust(&xml).expect("generate_rust が失敗しました");
     assert!(rust.starts_with("pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {"));
     assert!(rust.trim_end().ends_with('}'));
 }
@@ -22,7 +22,7 @@ fn generates_without_error() {
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
     let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(130.0, 105.0), \
 stack(outer_gap, vec![leaf(70.0, 38.0), leaf(70.0, 25.0)]), \
 row_grow(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
@@ -51,7 +51,7 @@ leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)])]);";
 #[test]
 fn op_header_title_and_readout() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("ui.label(egui::RichText::new(format!(\"OP {}\", i + 1)).strong());"));
     assert!(rust.contains(
         "ui.label(egui::RichText::new(format!(\"×{:.2}\", mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8))).size(10.0).weak()).on_hover_text(\"MUL×FINEの実効周波数比（DT1は含まない）\");"
@@ -64,7 +64,7 @@ fn op_header_title_and_readout() {
 #[test]
 fn channel_and_chip_lfo_titles_present() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("ui.label(egui::RichText::new(\"CHANNEL\").strong());"));
     assert!(rust.contains("ui.label(egui::RichText::new(\"CHIP LFO\").strong());"));
 }
@@ -76,7 +76,7 @@ fn channel_and_chip_lfo_titles_present() {
 #[test]
 fn header_title_from_attr_resolves() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
     let lines: Vec<&str> = rust.lines().map(str::trim).collect();
     let idx = lines
         .iter()
@@ -96,7 +96,7 @@ fn header_title_from_attr_resolves() {
 #[test]
 fn all_panels_present() {
     let xml = panel_xml();
-    let rust = panel_codegen::generate_rust(&xml).unwrap();
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("for (i, op) in params.operators.iter().enumerate()"));
     assert!(rust.contains("\"TEXTURE LFO\""));
     assert!(rust.contains("\"PITCH FG\""));
@@ -111,7 +111,7 @@ fn all_panels_present() {
 #[test]
 fn is_deterministic() {
     let xml = panel_xml();
-    let a = panel_codegen::generate_rust(&xml).unwrap();
-    let b = panel_codegen::generate_rust(&xml).unwrap();
+    let a = ui_codegen::generate_rust(&xml).unwrap();
+    let b = ui_codegen::generate_rust(&xml).unwrap();
     assert_eq!(a, b);
 }

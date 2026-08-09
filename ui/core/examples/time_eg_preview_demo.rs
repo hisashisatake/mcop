@@ -1,15 +1,15 @@
 //! `time_eg_preview`の見た目を素早く確認するためのeframeネイティブデモ。
 //!
-//! op505-coreの試聴デモ（`op505_core::demo`）と同じ形をここでも複製する（ui-commonは
+//! op505-coreの試聴デモ（`op505_core::demo`）と同じ形をここでも複製する（ui-coreは
 //! チップ非依存を保つ方針のため、op505-coreへは依存せずTimeEgParamsを直接書く）。
 //! 平坦区間・ループ区間・多段リリースが折れ線としてどう見えるかを目視確認する。
 //!
-//! 実行: cargo run -p ui-common --example time_eg_preview_demo
+//! 実行: cargo run -p ui-core --example time_eg_preview_demo
 
 use eframe::egui;
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
-use ui_common::eg_preview::EgAmplitudeMapping;
-use ui_common::time_eg_preview::time_eg_preview;
+use ui_core::eg_preview::EgAmplitudeMapping;
+use ui_core::time_eg_preview::time_eg_preview;
 
 /// eguiの既定フォントにはCJKグリフが含まれず日本語ラベルが豆腐(□)化するため、
 /// Windows標準の日本語フォント(游ゴシック)をフォールバックとして追加する

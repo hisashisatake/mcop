@@ -3,12 +3,12 @@
 //! `BoolParamHandle`で適合させて利用する想定。
 //!
 //! knob/eg_preview/layout/param_handle/patchbay/selector/waveform/algorithm_diagramは
-//! チップ非依存の汎用部品として`ui-common`クレートへ切り出し済み（op505-ui等、他チップの
-//! エディタとも共有する）。ここでは crate root の名前をui-commonの同名モジュールへ
+//! チップ非依存の汎用部品として`ui-core`クレートへ切り出し済み（op505-ui等、他チップの
+//! エディタとも共有する）。ここでは crate root の名前をui-coreの同名モジュールへ
 //! エイリアスすることで、`panel.xml`から生成される`panel_generated.rs`（`crate::knob::knob`
 //! 等の**裸の名前解決**と、`crate::algorithm_diagram::carriers`等の**明示パス**の両方）と
 //! `interpret.rs`を無改造のまま成立させている（生成コード・ゴールデンテストへの影響ゼロ）。
-pub(crate) use ui_common::{algorithm_diagram, eg_preview, knob, layout, param_handle, patchbay, selector, waveform};
+pub(crate) use ui_core::{algorithm_diagram, eg_preview, knob, layout, param_handle, patchbay, selector, waveform};
 
 #[cfg(feature = "preview")]
 pub mod interpret; // フェーズB: panel.xmlのIRをランタイム解釈して実egui描画するプレビュー用インタープリタ。

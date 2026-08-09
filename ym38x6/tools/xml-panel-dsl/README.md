@@ -16,14 +16,14 @@ panel-editor自体は削除済み。詳しい経緯は `docs/session_history.txt
 ## アーキテクチャ（2026-07-22改訂: フェーズB・実egui描画プレビュー化）
 
 XMLパース・Rustコード生成・`<row>`/`<stack>`のレイアウト計算（taffy）は、egui非依存の
-純粋Rustクレート **`ym38x6-ui/panel-codegen`**（`ym38x6-ui/panel-layout`に依存）に一本化されている。
+純粋Rustクレート **`ui-codegen`**（`ui/codegen`、`ui-layout`に依存）に一本化されている。
 プレビュー描画自体は`ym38x6-ui`の`preview`フィーチャ配下の**インタープリタ**
-（`ym38x6-ui/src/interpret.rs`）が担う。IRの`Widget`記述子をmatchし、`panel-codegen`と同じ
+（`ym38x6-ui/src/interpret.rs`）が担う。IRの`Widget`記述子をmatchし、`ui-codegen`と同じ
 構造化記述子から実際の`knob`/`bool_checkbox`/`eg_preview`/`algorithm_diagram`等の関数を
 直接呼び出す（「コード生成→ブラウザでコンパイル」は不可能だが「IR→インタープリタ」は可能、
 という発想）。これを3ターゲットで共有する：
 
-- **ネイティブ（VST/gesture-app）**: `ym38x6-ui/build.rs`が`panel-codegen`をbuild-dependencyとして呼び、
+- **ネイティブ（VST/gesture-app）**: `ym38x6-ui/build.rs`が`ui-codegen`をbuild-dependencyとして呼び、
   `ym38x6-ui/src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
   `panel.rs`はこれを`include!`するだけで、手動でのコード貼り替えは不要
   （XMLを編集して`cargo build`し直すだけで反映される）。`preview`フィーチャは無効のままビルドされ、
@@ -39,7 +39,7 @@ XMLパース・Rustコード生成・`<row>`/`<stack>`のレイアウト計算�
   ノブ・EGグラフ・アルゴ結線図・enumドロップダウン・パッチベイケーブルの実描画を確認済み。
 
 ```powershell
-# panel.xmlやpanel-codegen/interpret.rsのロジックを変更したら再実行する
+# panel.xmlやui-codegen/interpret.rsのロジックを変更したら再実行する
 pwsh -File tools\xml-panel-dsl\build-preview-wasm.ps1
 ```
 
@@ -65,7 +65,7 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 日本語のエラー本文は`index.html`側のDOM（`#errBox`）が表示するので、キャンバス側は短い英語で足りる。
 
 **Rust出力タブは廃止済み（2026-07-26）**。`preview-wasm`は代わりにXMLの妥当性検査のみを行う
-`validate_xml`を公開し、上部OK/NGバッジの表示に使う。`panel_codegen::generate_rust`自体
+`validate_xml`を公開し、上部OK/NGバッジの表示に使う。`ui_codegen::generate_rust`自体
 （実際に`ym38x6-ui/build.rs`が使う本番のコード生成関数）は削除しておらず、生成結果を
 目視したい場合は下記`preview-native`の「Rust出力を表示」チェックボックスを使う
 （プレビューと生成コード表示を1ウィンドウに同居させる意味が薄いため、HTML版はプレビュー専用に寄せた）。
@@ -259,7 +259,7 @@ cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen
 |---|---|
 | `is_carrier` | そのOPがキャリアかどうか（`carriers(algorithm).contains(&<loop変数>)`） |
 
-新しい`compute`/`enabled-if`述語を増やす場合は、`panel-codegen`の`ir::Compute` enumへ
+新しい`compute`/`enabled-if`述語を増やす場合は、`ui-codegen`の`ir::Compute` enumへ
 variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（網羅性チェックで両者の同期が守られる）。
 
 ### レイアウト語彙（`<row>`/`<stack>`内、taffyの`Style`に1:1対応）
@@ -299,13 +299,13 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 
 ## 既知の割り切り・未実装
 
-- `<stack grow="true">`は`panel-layout`に`stack_grow`が無いため未対応（パースエラーにする）。
+- `<stack grow="true">`は`ui-layout`に`stack_grow`が無いため未対応（パースエラーにする）。
 - インタープリタの`<raw>`はプレースホルダ（グレーの箱＋"raw"ラベル）描画のみ。生Rustは
   解釈できないため（`panel.xml`本体では`<raw>`は未使用、文法としてのみ温存）。
 - `repeat="operators"`の要素数（4）は`interpret.rs`の`repeat_count()`に小さな対応表として
   ハードコードしてある。新しい`repeat`名を増やす場合はそこへ追記する。
 - `enabled-if`/`<readout compute=...>`が参照する派生計算（`is_carrier`/`mul-fine-ratio`）は
-  `panel-codegen::Compute` enumの閉じた語彙。新しい計算を追加する場合は`ir.rs`にvariant追加、
+  `ui-codegen::Compute` enumの閉じた語彙。新しい計算を追加する場合は`ir.rs`にvariant追加、
   `codegen.rs`（Rust文字列生成）と`interpret.rs`（実関数呼び出し）の両方にmatch節を足す
   （網羅性チェックが両者の同期を守る）。
 - 生成（`ym38x6-ui/build.rs`）は`cargo check`時に自動反映される。`panel.rs`の構造体定義・

@@ -147,7 +147,7 @@ struct App {
     xml: String,
     file_name: String,
     store: HandleStore,
-    layout: Option<panel_codegen::Layout>,
+    layout: Option<ui_codegen::Layout>,
     error: Option<String>,
     rust_out: String,
     show_rust: bool,
@@ -182,14 +182,14 @@ impl App {
             self.rust_out.clear();
             return;
         }
-        match panel_codegen::parse_layout(&self.xml) {
+        match ui_codegen::parse_layout(&self.xml) {
             Ok(layout) => {
                 self.layout = Some(layout);
                 self.error = None;
             }
             Err(e) => self.error = Some(e),
         }
-        self.rust_out = panel_codegen::generate_rust(&self.xml).unwrap_or_default();
+        self.rust_out = ui_codegen::generate_rust(&self.xml).unwrap_or_default();
     }
 
     /// Tab/Shift+Tabキーによるインデント編集を、XMLエディタにフォーカスがある間だけ横取りする。

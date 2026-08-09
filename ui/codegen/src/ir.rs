@@ -7,7 +7,7 @@
 //! 生Rust注入（`<raw>`）は最終手段として文法上は残すが、`panel.xml`本体では使用しない
 //! （`<title>`/`<readout>`/`enabled-if`の閉じた語彙で代替する）。
 
-pub use panel_layout::Margin;
+pub use ui_layout::Margin;
 
 /// 固定サイズ（ウィジェットの自然サイズ）。
 #[derive(Clone, Copy, Debug)]
@@ -195,35 +195,35 @@ impl TreeNode {
         }
     }
 
-    /// 実行時と同じ`panel_layout::Node`へ変換する（プレビューの本物taffy解決に使う）。
+    /// 実行時と同じ`ui_layout::Node`へ変換する（プレビューの本物taffy解決に使う）。
     /// `justify`が未知の値の場合はStartへフォールバックする（コード生成側は検証せず
     /// そのまま`Justify::{capitalize}`を出力しRustコンパイルエラーに委ねるが、
     /// プレビュー側はブラウザ内でパニックさせないためのフォールバック）。
-    pub fn to_layout_node(&self) -> panel_layout::Node {
+    pub fn to_layout_node(&self) -> ui_layout::Node {
         match self {
             TreeNode::Leaf(l) => {
                 let outer = l.outer_size();
-                panel_layout::leaf(outer.w, outer.h)
+                ui_layout::leaf(outer.w, outer.h)
             }
             TreeNode::Row { justify, gap, grow, children } => {
-                let kids: Vec<panel_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
+                let kids: Vec<ui_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
                 let j = justify_from_str(justify);
                 if *grow {
-                    panel_layout::row_grow(j, gap.numeric(), kids)
+                    ui_layout::row_grow(j, gap.numeric(), kids)
                 } else {
-                    panel_layout::row(j, gap.numeric(), kids)
+                    ui_layout::row(j, gap.numeric(), kids)
                 }
             }
             TreeNode::Stack { gap, children, .. } => {
-                let kids: Vec<panel_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
-                panel_layout::stack(gap.numeric(), kids)
+                let kids: Vec<ui_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
+                ui_layout::stack(gap.numeric(), kids)
             }
         }
     }
 }
 
-fn justify_from_str(s: &str) -> panel_layout::Justify {
-    use panel_layout::Justify;
+fn justify_from_str(s: &str) -> ui_layout::Justify {
+    use ui_layout::Justify;
     match s {
         "start" => Justify::Start,
         "between" => Justify::Between,
