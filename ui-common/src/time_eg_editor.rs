@@ -275,19 +275,17 @@ impl BoolParamHandle for TimeEgBoolFieldHandle<'_> {
 /// time値(0〜255)を人が読める秒数表示へ変換する（"0ms"/"1.8ms"/"412ms"/"2.41s"）。
 /// `time=0`は瞬時を表す特殊値なので秒数計算を経由せず"0ms"を返す。
 fn format_time_seconds(time: u8) -> String {
+    // 単位は1文字("m"=ミリ秒/"s"=秒)に短縮する。KNOBSモードのspin_control欄が24px幅しかなく
+    // "56ms"のような2文字単位だと末尾が切れて読めなくなるため（実機確認で発覚）。
+    // 正確な値はknob()のホバーツールチップ(name+display)で確認できる。
     if time == 0 {
-        return "0ms".to_string();
+        return "0m".to_string();
     }
     let seconds = time_to_seconds(time);
     if seconds < 1.0 {
-        let ms = seconds * 1000.0;
-        if ms < 10.0 {
-            format!("{ms:.1}ms")
-        } else {
-            format!("{ms:.0}ms")
-        }
+        format!("{:.0}m", seconds * 1000.0)
     } else {
-        format!("{seconds:.2}s")
+        format!("{seconds:.1}s")
     }
 }
 
@@ -626,8 +624,8 @@ mod tests {
 
     #[test]
     fn format_time_seconds_covers_ms_and_seconds() {
-        assert_eq!(format_time_seconds(0), "0ms");
-        assert!(format_time_seconds(1).ends_with("ms"), "time=1(最速)はミリ秒表示のはず");
+        assert_eq!(format_time_seconds(0), "0m");
+        assert!(format_time_seconds(1).ends_with('m'), "time=1(最速)はミリ秒表示のはず");
         assert!(format_time_seconds(255).ends_with('s'), "time=255(30秒)は秒表示のはず");
     }
 
