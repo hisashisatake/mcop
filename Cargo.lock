@@ -5481,6 +5481,7 @@ dependencies = [
  "eframe",
  "egui",
  "sound-core",
+ "ui-codegen",
  "ui-layout",
 ]
 

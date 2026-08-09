@@ -5,6 +5,8 @@
 
 pub mod algorithm_diagram;
 pub mod eg_preview;
+#[cfg(feature = "preview")]
+pub mod interpret; // フェーズB: panel.xmlのIRをランタイム解釈して実egui描画するプレビュー用インタープリタ。
 pub mod knob;
 pub mod layout;
 pub mod mapping;

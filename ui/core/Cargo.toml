@@ -7,6 +7,12 @@ edition = "2021"
 egui = "0.34"
 sound-core = { path = "../../sound/core" }
 ui-layout = { path = "../layout" }
+# フェーズBのプレビュー用インタープリタ(interpret.rs)専用の任意依存。VST/gesture-appは
+# `preview`フィーチャを有効にせずビルドするため、XMLパーサー(roxmltree等)は製品バイナリに含まれない。
+ui-codegen = { path = "../codegen", optional = true }
+
+[features]
+preview = ["dep:ui-codegen"]
 
 [dev-dependencies]
 # time_eg_preview_demo等のネイティブプレビュー用（VST/wasmビルドには影響しない）。

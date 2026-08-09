@@ -1,8 +1,10 @@
-# xml-panel-dsl — ym38x6-ui パネルレイアウトXML DSL
+# xml-panel-dsl — パネルレイアウトXML DSL（ym38x6-ui/op505-ui共通、2026-08-09改訂）
 
-`ym38x6-ui/src/panel.rs`（VST/gesture-app 共有の音色エディタ・ノブパネル）のレイアウトを
-XMLで宣言的に記述し、実egui描画プレビューと `draw_param_panel()` 本体のRustコードを
-同じXMLパース結果から生成する、自己完結の HTML ツール。
+`ym38x6-ui`/`op505-ui`の`panel.rs`（VST/gesture-app 共有の音色エディタ・ノブパネル）のレイアウトを
+XMLで宣言的に記述し、実egui描画プレビューと `draw_param_panel()`/`draw_op505_panel()` 本体の
+Rustコードを同じXMLパース結果から生成する、自己完結の HTML ツール。プレビュー描画の
+インタープリタ（`interpret.rs`）はチップ非依存の`ui-core`へ移設済みのため、
+`ym38x6-ui/src/panel.xml`・`op505-ui/src/panel.xml`のどちらも同じツールで開ける。
 
 依存・ビルド不要。ブラウザで `index.html` を開くだけで動く（外部リソース参照なし）。
 
@@ -17,18 +19,19 @@ panel-editor自体は削除済み。詳しい経緯は `docs/session_history.txt
 
 XMLパース・Rustコード生成・`<row>`/`<stack>`のレイアウト計算（taffy）は、egui非依存の
 純粋Rustクレート **`ui-codegen`**（`ui/codegen`、`ui-layout`に依存）に一本化されている。
-プレビュー描画自体は`ym38x6-ui`の`preview`フィーチャ配下の**インタープリタ**
-（`ym38x6-ui/src/interpret.rs`）が担う。IRの`Widget`記述子をmatchし、`ui-codegen`と同じ
-構造化記述子から実際の`knob`/`bool_checkbox`/`eg_preview`/`algorithm_diagram`等の関数を
-直接呼び出す（「コード生成→ブラウザでコンパイル」は不可能だが「IR→インタープリタ」は可能、
-という発想）。これを3ターゲットで共有する：
+プレビュー描画自体は`ui-core`の`preview`フィーチャ配下の**インタープリタ**
+（`ui/core/src/interpret.rs`、旧`ym38x6-ui/src/interpret.rs`から移設・チップ非依存化済み）が担う。
+IRの`Widget`記述子をmatchし、`ui-codegen`と同じ構造化記述子から実際の`knob`/`bool_checkbox`/
+`eg_preview`/`algorithm_diagram`/`time_eg_editor`等の関数を直接呼び出す
+（「コード生成→ブラウザでコンパイル」は不可能だが「IR→インタープリタ」は可能、という発想）。
+これを3ターゲットで共有する：
 
-- **ネイティブ（VST/gesture-app）**: `ym38x6-ui/build.rs`が`ui-codegen`をbuild-dependencyとして呼び、
-  `ym38x6-ui/src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
+- **ネイティブ（VST/gesture-app）**: `ym38x6-ui`/`op505-ui`それぞれの`build.rs`が`ui-codegen`を
+  build-dependencyとして呼び、各`src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
   `panel.rs`はこれを`include!`するだけで、手動でのコード貼り替えは不要
   （XMLを編集して`cargo build`し直すだけで反映される）。`preview`フィーチャは無効のままビルドされ、
   XMLパーサー（roxmltree等）やインタープリタは製品バイナリに含まれない。
-- **ブラウザ（このツール）**: `ym38x6-ui/preview-wasm`が`ym38x6-ui`（`features=["preview"]`）を
+- **ブラウザ（このツール）**: `ym38x6-ui/preview-wasm`が`ui-core`（`features=["preview"]`）を
   wasm-bindgen＋eframeでラップし、`build-preview-wasm.ps1`が`wasm32-unknown-unknown`向けにビルド。
   生成された`--target no-modules`のJSグルーコードと、base64エンコードした
   wasmバイナリ本体を、`index.html`内の`<!-- BEGIN/END GENERATED -->`マーカー間に
@@ -50,9 +53,10 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 **初期状態は空（2026-07-26）**。以前は`panel.xml`のコピーを初期サンプルとして`index.html`に
 埋め込んでいたが、正本を編集するたびに黙って陳腐化するため撤去した（実際に2026-07-26時点で
 「正本と同一内容」というコメントを付けたまま数世代分ずれていた）。起動後は
-**「ファイルを開く」か、エディタへのドラッグ&ドロップ**で`ym38x6-ui/src/panel.xml`を読み込む。
+**「ファイルを開く」か、エディタへのドラッグ&ドロップ**で`ym38x6/ui/src/panel.xml`・
+`op505/ui/src/panel.xml`のどちらかを読み込む。
 
-`file://`で開いたページから`ym38x6-ui/src/panel.xml`を**自動で読み込むことはできない**。
+`file://`で開いたページから`panel.xml`を**自動で読み込むことはできない**。
 `fetch()`は`file:`スキームを一切サポートせず、`XMLHttpRequest`もブラウザ起動時に
 `--allow-file-access-from-files`を付けない限りブロックされるためで、wasmバイナリをbase64で
 埋め込んでいるのと同じ制約（このツールがサーバー不要である代償）。自動読み込みを実現するには
@@ -77,7 +81,7 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 移すとWebGLコンテキストが失われる。wasmの`web-sys::window()`もメインウィンドウ固定のため
 ポップアップに2つ目のeframeを起こすのも不可）。
 この機能を含むフル機能版として、`tools/xml-panel-dsl/preview-native`にeframe **ネイティブ**アプリを
-新設した。プレビュー描画自体は`ym38x6-ui::interpret::draw_panel_from_ir`（`preview-wasm`と共有）を
+新設した。プレビュー描画自体は`ui_core::interpret::draw_panel_from_ir`（`preview-wasm`と共有）を
 そのまま呼ぶだけで、`panel.xml`の生成経路（build.rs/interpret.rs）には一切変更を加えていない。
 
 ```powershell
@@ -85,8 +89,10 @@ cd tools\xml-panel-dsl\preview-native
 cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen不要）
 ```
 
-**起動時に`ym38x6-ui/src/panel.xml`正本を自動で読み込み、rfdの保存ダイアログで同じパスへ
-上書きできる**（`CARGO_MANIFEST_DIR`基準の相対パスなのでCWDに依存しない）。ブラウザ版は
+**起動時に`ym38x6/ui/src/panel.xml`正本を自動で読み込み、rfdの保存ダイアログで同じパスへ
+上書きできる**（`CARGO_MANIFEST_DIR`基準の相対パスなのでCWDに依存しない。既定は
+ym38x6側だが、「ファイルを開く」で`op505/ui/src/panel.xml`へ切り替えて編集・保存も可能）。
+ブラウザ版は
 サンドボックスの制約でこれができない（読み込みは手動、保存はダウンロードフォルダ行き）ため、
 `build.rs`が`rerun-if-changed=src/panel.xml`で拾う「編集→`cargo build`→VST/gesture-appへ反映」
 というループを1ステップで閉じられるのはこちらだけ。**正本を実際に編集する作業はpreview-native、
@@ -308,6 +314,7 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
   `ui-codegen::Compute` enumの閉じた語彙。新しい計算を追加する場合は`ir.rs`にvariant追加、
   `codegen.rs`（Rust文字列生成）と`interpret.rs`（実関数呼び出し）の両方にmatch節を足す
   （網羅性チェックが両者の同期を守る）。
-- 生成（`ym38x6-ui/build.rs`）は`cargo check`時に自動反映される。`panel.rs`の構造体定義・
-  ヘルパー関数はこのツールの生成対象外なので、既存の`panel.rs`上部はそのまま残し
-  `draw_param_panel`本体だけが`include!`で差し替わる。
+- 生成（各クレートの`build.rs`、`ym38x6-ui/build.rs`/`op505-ui/build.rs`）は`cargo check`時に
+  自動反映される。`panel.rs`の構造体定義・ヘルパー関数はこのツールの生成対象外なので、
+  既存の`panel.rs`上部はそのまま残し`draw_param_panel`/`draw_op505_panel`本体だけが
+  `include!`で差し替わる。
