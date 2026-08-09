@@ -360,6 +360,10 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
+        // main.js側でOP505のデモ/Bank変換切替が起きていれば、バックエンドの現在パッチを
+        // 再フェッチする（`Op505State::new`の初回同期は一度きりのため。project memory
+        // `project_op505_editor_state_stale_on_demo_switch`参照）。
+        self.op505.refresh_if_stale();
 
         // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
         // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。

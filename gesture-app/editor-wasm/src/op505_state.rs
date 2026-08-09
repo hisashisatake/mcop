@@ -16,6 +16,34 @@ use std::rc::Rc;
 use op505_core::Op505Patch;
 use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 use sound_core::TimeEgParams;
+use wasm_bindgen::prelude::*;
+
+thread_local! {
+    /// main.js側でOP505のデモ/Bank変換切替が起きた際に立てるフラグ。`Op505State`はエディタ起動時に
+    /// 一度しか現在パッチを同期しない（`Op505State::new`参照）ため、開いたままのエディタが
+    /// 古いパッチを表示し続けないよう、このフラグを見て次のフレームで再フェッチする
+    /// （`invalidate_op505_patch`/`Op505State::refresh_if_stale`。`engine_sync.rs`と同じ
+    /// 「JSから`#[wasm_bindgen]`関数を直接呼ぶ」パターン）。
+    static PATCH_STALE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// `main.js`のOP505デモ/Bank切替ハンドラ（`applyProgram`）から呼ばれる。
+/// 次の`Op505State::refresh_if_stale`呼び出しでバックエンドの現在パッチを再フェッチさせる。
+#[wasm_bindgen]
+pub fn invalidate_op505_patch() {
+    PATCH_STALE.with(|c| c.set(true));
+}
+
+/// バックエンドの現在のOP505パッチを非同期で読み込み、`patch`へ書き戻す
+/// （`Op505State::new`の初回ロードと`refresh_if_stale`の再ロードで共有する処理）。
+fn spawn_reload(patch: Rc<RefCell<Op505Patch>>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(current) = crate::ipc::load_op505_current_patch().await {
+            *patch.borrow_mut() = current;
+            crate::shift_keys::request_repaint();
+        }
+    });
+}
 
 /// `Op505Patch`内の1つのi32相当(u8)フィールドへの単純ハンドル。`handle.rs::IntField`のOP505版。
 pub struct Op505IntField {
@@ -217,14 +245,16 @@ impl Op505State {
     pub fn new() -> Self {
         let patch = Rc::new(RefCell::new(Op505Patch::default()));
         let dirty = Rc::new(Cell::new(false));
-        let patch_for_load = patch.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Some(current) = crate::ipc::load_op505_current_patch().await {
-                *patch_for_load.borrow_mut() = current;
-                crate::shift_keys::request_repaint();
-            }
-        });
+        spawn_reload(patch.clone());
         Self { patch, dirty }
+    }
+
+    /// `invalidate_op505_patch`でフラグが立っていれば、バックエンドの現在パッチを再フェッチする。
+    /// `app.rs`が毎フレーム冒頭で呼ぶ（フラグが立っていなければ何もしない、通常フレームのコストはゼロに近い）。
+    pub fn refresh_if_stale(&self) {
+        if PATCH_STALE.with(|c| c.replace(false)) {
+            spawn_reload(self.patch.clone());
+        }
     }
 
     pub fn build_panel_params(&self) -> Op505PanelParams<'static> {
