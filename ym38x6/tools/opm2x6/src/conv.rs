@@ -22,7 +22,8 @@ fn tl_to_x6(tl: u8) -> u8 {
 
 /// D1L/SL（OPM 4-bit、0-15）→ 38x6 D1L（0=ほぼ無音、255=フルレベル）。
 /// reg=0..14: -3dB/step、reg=15: -93dBへジャンプ（実機準拠）。
-fn sl_to_x6(reg: u8) -> u8 {
+/// opm2op505（OPM→OP505直接変換）からも共有で使う。
+pub fn sl_to_x6(reg: u8) -> u8 {
     let db: f32 = if reg >= 15 { -93.0 } else { -(3.0 * reg as f32) };
     (255.0 * (1.0 + db / 93.0)).round() as u8
 }
@@ -45,7 +46,8 @@ fn dt2_to_op_fine_tune(dt2: u8) -> u8 {
 
 /// OPM 5-bit レート（AR/D1R/D2R、0-31）+ KS（0-3）→ 38x6 rate（0-255）。
 /// OPN/OPMで共通のEGレート式: eg_rate_eff = 2×rate + KSR補正（A4基準）。
-fn opm_rate_to_x6(rate: u8, ks: u8) -> u8 {
+/// opm2op505（OPM→OP505直接変換）からも共有で使う。
+pub fn opm_rate_to_x6(rate: u8, ks: u8) -> u8 {
     if rate == 0 { return 0; }
     // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
@@ -60,13 +62,15 @@ fn opm_rate_to_x6(rate: u8, ks: u8) -> u8 {
 const ATTACK_ONSET_BIAS: u16 = 30;
 
 /// OPM AR（5-bit）+ KS → 38x6 ar（オンセット補正付き）。
-fn opm_ar_to_x6(ar: u8, ks: u8) -> u8 {
+/// opm2op505（OPM→OP505直接変換）からも共有で使う。
+pub fn opm_ar_to_x6(ar: u8, ks: u8) -> u8 {
     if ar == 0 { return 0; }
     (opm_rate_to_x6(ar, ks) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
 }
 
 /// OPM RR（4-bit、0-15）+ KS → 38x6 rr。
-fn opm_rr_to_x6(rr: u8, ks: u8) -> u8 {
+/// opm2op505（OPM→OP505直接変換）からも共有で使う。
+pub fn opm_rr_to_x6(rr: u8, ks: u8) -> u8 {
     // A4のkeycode=19の導出はopz2x6::conv::KEY_CODE_A4のコメント参照（(block<<2)|(note>>2)、block=4,note=12）。
     const KEY_CODE_A4: u16 = 19;
     let ksr_shift = 3u16.saturating_sub(ks.min(3) as u16);
@@ -123,6 +127,19 @@ fn slot_muted(slot: u8) -> [bool; 4] {
         (slot & (1 << 5)) == 0, // M2
         (slot & (1 << 6)) == 0, // C2
     ]
+}
+
+/// SLOT配列 [M1,C1,M2,C2] を`op_order`に従って `operators[0..3]` の物理OP順へ並べ替える。
+/// [voice_to_patch] 内の並べ替えロジックと同一（Direct: [M1,C1,M2,C2] / Register: [M1,M2,C1,C2]）。
+/// opm2op505（OPM→OP505直接変換）が、EGだけを直接変換で置き換えるために physical op を
+/// 個別参照する用途で使う。
+pub fn ordered_op_regs(voice: &OpmVoice, op_order: OperatorOrder) -> [&OpmOpReg; 4] {
+    let phys: [&OpmOpReg; 4] = [&voice.m1, &voice.c1, &voice.m2, &voice.c2];
+    let idx: [usize; 4] = match op_order {
+        OperatorOrder::Direct => [0, 1, 2, 3],
+        OperatorOrder::Register => [0, 2, 1, 3],
+    };
+    std::array::from_fn(|i| phys[idx[i]])
 }
 
 /// OPMオペレーターレジスタ → OperatorParams。

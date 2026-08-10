@@ -1,0 +1,19 @@
+[package]
+name = "opm2op505"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "opm2op505"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opm2op505"
+path = "src/main.rs"
+
+[dependencies]
+opm2x6 = { path = "../../../ym38x6/tools/opm2x6" }
+op505-core = { path = "../../core" }
+ym38x6-core = { path = "../../../ym38x6/core" }
+sound-core = { path = "../../../sound/core" }
+smf2wav = { path = "../../../ym38x6/tools/smf2wav" }

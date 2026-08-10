@@ -9,6 +9,10 @@ publish = false
 # 出力JSONがエンジンの読込スキーマと一致することを保証する。
 # 入力(def_seqs.h等)・出力(.38x6)は本クレートには同梱しない（パスは引数指定）。
 
+[lib]
+name = "psr2x6"
+path = "src/lib.rs"
+
 [[bin]]
 name = "psr2x6"
 path = "src/main.rs"

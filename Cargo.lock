@@ -2792,6 +2792,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mucom2op505"
+version = "0.1.0"
+dependencies = [
+ "mucom2x6",
+ "op505-core",
+ "smf2wav",
+ "sound-core",
+ "ym38x6-core",
+]
+
+[[package]]
 name = "mucom2x6"
 version = "0.1.0"
 dependencies = [
@@ -3513,6 +3524,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "opm2op505"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "opm2x6",
+ "smf2wav",
+ "sound-core",
+ "ym38x6-core",
+]
+
+[[package]]
 name = "opm2x6"
 version = "0.1.0"
 dependencies = [
@@ -3886,6 +3908,17 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "psr2op505"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "psr2x6",
+ "smf2wav",
+ "sound-core",
+ "ym38x6-core",
+]
 
 [[package]]
 name = "psr2x6"

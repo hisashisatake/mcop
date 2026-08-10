@@ -20,12 +20,10 @@
 //! ROM2内の音色テーブル（`0x0660`から68音色×64バイト）の抽出は [`rom2`]、
 //! OPQ→38x6の変換は [`conv`]（spec-sound.mdの規約準拠）。
 
-mod conv;
-mod rom2;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use psr2x6::{conv, rom2};
 use conv::{bank_of, preset_count, voices_to_preset_files_opts, NamedVoice, PsrConvOptions};
 
 /// 出力対象の音色範囲。

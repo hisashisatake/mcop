@@ -178,7 +178,8 @@ pub fn sl_opq_to_x6(sl: u8) -> u8 {
 
 /// 38x6 アルゴリズム別のキャリア（出力に直接合算される）オペレーターindex。
 /// `ym38x6-core/src/algorithm.rs` の `ALGORITHMS[].carriers` の複製（opz2x6 と同一）。
-const CARRIERS: [&[usize]; 8] = [
+/// psr2op505（PSR-70→OP505直接変換）からも共有で使う。
+pub const CARRIERS: [&[usize]; 8] = [
     &[3],          // 0
     &[3],          // 1
     &[3],          // 2
@@ -226,7 +227,8 @@ impl Default for PsrConvOptions {
 }
 
 /// キャリアのサステイン延長を 38x6 `OperatorParams` に適用する（opz2x6 conv.rs と同一係数）。
-fn apply_carrier_sustain(p: &mut OperatorParams, sustain: f32) {
+/// psr2op505（PSR-70→OP505直接変換）からも共有で使う。
+pub fn apply_carrier_sustain(p: &mut OperatorParams, sustain: f32) {
     let k = sustain.clamp(0.0, 1.0);
     if k <= 0.0 {
         return;
