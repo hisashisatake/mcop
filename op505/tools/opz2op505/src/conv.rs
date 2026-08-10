@@ -3,8 +3,9 @@
 //! opz2x6（TX81Z→.38x6変換）のEGヘルパー（実機レート→38x6レート写像）と、
 //! op505-core adapter.rs の`convert_eg_shape`（38x6レート→TimeEgParams変換）を
 //! 1ツール内で合成することで、中間の`.38x6`ファイルを経由せず直接TimeEgParamsを得る。
-//! 既定モード（`AttackMode::Bias`）では、旧2段変換（opz2x6→adapter::convert_operator_eg）と
-//! ビット単位で一致する（`tests::direct_eg_bias_matches_two_stage_adapter_path`参照）。
+//! `AttackMode::Bias`は旧2段変換（opz2x6→adapter::convert_operator_eg）とビット単位で一致する
+//! （`tests::direct_eg_bias_matches_two_stage_adapter_path`参照、回帰テストの基準として利用）。
+//! 実際の既定は聴感A/Bの結果`AttackMode::None`（詳細は[AttackMode]参照）。
 
 use op505_core::adapter::convert_eg_shape;
 use op505_core::{Op505ChannelParams, Op505OperatorParams, Op505Patch, Op505PresetEntry};
@@ -14,13 +15,14 @@ use sound_core::TimeEgParams;
 
 /// アタック立ち上がりの表現方法。OP505のEG振幅もdBリニア（`operator.rs::compute_env_amp`）
 /// なので、38x6と同じ「線形levelランプ=一定dB/s上昇=立ち上がりが遅く聞こえる」問題が
-/// そのまま発生する。`Bias`（既定）はopz2x6と同じ`ATTACK_ONSET_BIAS`補正を適用し
-/// 旧2段変換とビット一致させる。`None`/`Curve`は聴感A/B用（`--attack`オプション）。
+/// そのまま発生する。`Bias`はopz2x6と同じ`ATTACK_ONSET_BIAS`補正を適用し旧2段変換とビット一致させる
+/// （回帰テストの基準）。既定は`None`（`--attack`未指定時。2026-08-10、`bias`との聴感差が小さいとの
+/// ユーザー判断で採用）。`Curve`は別の質感オプションとしてA/B用に残す。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttackMode {
-    /// opz2x6と同じATTACK_ONSET_BIAS補正を適用（既定、旧2段変換とビット一致）。
+    /// opz2x6と同じATTACK_ONSET_BIAS補正を適用（旧2段変換とビット一致、回帰テストの基準・比較用）。
     Bias,
-    /// バイアスなし（診断・A/B用）。
+    /// バイアスなし（既定）。
     None,
     /// バイアスなし + stage0のみcurve=1（レイズドコサイン、A/B用）。
     /// dBドメインでは開始点微分0のため`None`より立ち上がりが遅くなる（BIASの代替にはならない）。

@@ -24,9 +24,10 @@
 //! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
 //! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機忠実）。
 //! - `--cutoff <0-255>` ローパスフィルターのカットオフ（味付け、既定=全開255）。
-//! - `--attack <bias|none|curve>` アタック立ち上がりの表現方法（既定 `bias`）。
-//!   `bias`=opz2x6と同じATTACK_ONSET_BIAS補正（旧2段変換とビット一致）、`none`=補正なし、
-//!   `curve`=補正なし+stage0のみレイズドコサイン。聴感A/B用（詳細は`opz2op505::conv::AttackMode`）。
+//! - `--attack <bias|none|curve>` アタック立ち上がりの表現方法（既定 `none`。聴感A/Bの結果、
+//!   `bias`との差が小さいと判断され2026-08-10にユーザー判断で採用）。
+//!   `none`=補正なし、`bias`=opz2x6と同じATTACK_ONSET_BIAS補正（旧2段変換とビット一致、比較用）、
+//!   `curve`=補正なし+stage0のみレイズドコサイン。詳細は`opz2op505::conv::AttackMode`。
 
 use opz2op505::conv::{self, AttackMode};
 use opz2x6::conv::ConvOptions;
@@ -116,7 +117,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut carrier_sustain: f32 = 0.0;
     let mut filter_cutoff: Option<u8> = None;
     let mut pitch_normalize = true;
-    let mut attack_mode = AttackMode::Bias;
+    let mut attack_mode = AttackMode::None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
