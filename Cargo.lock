@@ -2797,7 +2797,7 @@ version = "0.1.0"
 dependencies = [
  "mucom2x6",
  "op505-core",
- "smf2wav",
+ "op505-tools",
  "sound-core",
  "ym38x6-core",
 ]
@@ -3503,6 +3503,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "op505-tools"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "op505-ui"
 version = "0.1.0"
 dependencies = [
@@ -3528,8 +3536,8 @@ name = "opm2op505"
 version = "0.1.0"
 dependencies = [
  "op505-core",
+ "op505-tools",
  "opm2x6",
- "smf2wav",
  "sound-core",
  "ym38x6-core",
 ]
@@ -3552,8 +3560,8 @@ name = "opz2op505"
 version = "0.1.0"
 dependencies = [
  "op505-core",
+ "op505-tools",
  "opz2x6",
- "smf2wav",
  "sound-core",
  "ym38x6-core",
 ]
@@ -3914,8 +3922,8 @@ name = "psr2op505"
 version = "0.1.0"
 dependencies = [
  "op505-core",
+ "op505-tools",
  "psr2x6",
- "smf2wav",
  "sound-core",
  "ym38x6-core",
 ]

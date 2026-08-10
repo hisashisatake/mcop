@@ -1,0 +1,19 @@
+[package]
+name = "op505-tools"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# op505/tools/* 専用の共有クレート（sound-core/sound-fmのような製品非依存クレートとは性格が異なる）。
+# 置くのは「チップに依存しない小道具」のみ（WAV書き出し・ゴールデンテスト照合ヘルパー等）。
+# 実機レート写像・パーサ・演奏ロジックはチップ固有なので置かない
+# （ここに集約すると「op505ツール群が共有中継器を持つ」という、デフォークで断とうとした
+# 構造を再生産してしまう。詳細はspec-fm.md「デフォーク」節）。
+
+[lib]
+name = "op505_tools"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

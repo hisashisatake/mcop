@@ -242,7 +242,7 @@ fn render_wavs(
             format!("{idx:03}_{safe}.wav")
         };
         let path = wav_dir.join(&filename);
-        smf2wav::write_wav_mono16(&path, &buf, SR as u32)
+        op505_tools::wav::write_wav_mono16(&path, &buf, SR as u32)
             .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", path.display()))?;
     }
     println!("WAV 書き出し: {} に {} 音色", wav_dir.display(), voices.len());
