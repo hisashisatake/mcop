@@ -1,6 +1,6 @@
 //! psr2op505 — PSR-70（OPQ/YM3806）ROM2音色データを OP505 の `.op505` プリセットバンクへ
-//! **直接**変換する（中間の`.38x6`ファイルを経由しない。psr2x6 + op505-core adapter.rs の
-//! EG変換ロジックを1ツール内で合成する。詳細は`psr2op505::conv`のdocコメント参照）。
+//! **直接**変換する（中間の`.38x6`ファイルを経由しない。パーサ・実機レート写像は自クレート内に
+//! 複製済み（fork-on-write）。詳細は`psr2op505::conv`/`psr2op505::map`のdocコメント参照）。
 //!
 //! 使い方:
 //! ```text
@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use psr2op505::conv::{self, AttackMode};
-use psr2x6::conv::{NamedVoice, PsrConvOptions};
-use psr2x6::rom2;
+use psr2op505::map::{NamedVoice, PsrConvOptions};
+use psr2op505::parse as rom2;
 
 /// 出力対象の音色範囲（psr2x6と同一区分）。
 #[derive(Clone, Copy, Debug, Default)]
