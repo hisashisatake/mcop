@@ -12,8 +12,6 @@ name = "opz2op505"
 path = "src/main.rs"
 
 [dependencies]
-opz2x6 = { path = "../../../ym38x6/tools/opz2x6" }
 op505-core = { path = "../../core" }
-ym38x6-core = { path = "../../../ym38x6/core" }
 sound-core = { path = "../../../sound/core" }
 op505-tools = { path = "../common" }

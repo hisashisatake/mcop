@@ -1,6 +1,6 @@
 //! opz2op505 — TX81Z sysex (.syx) を OP505 の `.op505` プリセットへ**直接**変換する
-//! （中間の`.38x6`ファイルを経由しない。opz2x6 + op505-core adapter.rs のEG変換ロジックを
-//! 1ツール内で合成する。詳細は`opz2op505::conv`のdocコメント参照）。
+//! （中間の`.38x6`ファイルを経由しない。パーサ・実機レート写像は自クレート内に複製済み
+//! （fork-on-write）。詳細は`opz2op505::conv`/`opz2op505::map`のdocコメント参照）。
 //!
 //! 使い方:
 //! ```text
@@ -19,19 +19,19 @@
 //! - `--note <音階>` で音階（C/D/E/F/G/A/B、既定 C）を指定する。
 //! - `--voice <N>` を指定すると WAV 出力をその音色番号（0始まり）1件のみに絞る。
 //! - `--wav-prefix <str>` で WAV ファイル名の先頭に付ける文字列を指定する。
-//! - `--mod-cap <N>` でモジュレーター TL に天井をかける（既定は天井なし、opz2x6と同じ）。
+//! - `--mod-cap <N>` でモジュレーター TL に天井をかける（既定は天井なし）。
 //! - `--fb <N>` でチャンネルフィードバック（0-255）を全音色一律で上書きする。
 //! - `--ksr <N>` で全オペレーターの KSR（0-255）を上書きする。
 //! - `--sustain <0.0-1.0>` キャリアのサステイン延長（味付け、既定 0.0=実機忠実）。
 //! - `--cutoff <0-255>` ローパスフィルターのカットオフ（味付け、既定=全開255）。
 //! - `--attack <bias|none|curve>` アタック立ち上がりの表現方法（既定 `none`。聴感A/Bの結果、
 //!   `bias`との差が小さいと判断され2026-08-10にユーザー判断で採用）。
-//!   `none`=補正なし、`bias`=opz2x6と同じATTACK_ONSET_BIAS補正（旧2段変換とビット一致、比較用）、
+//!   `none`=補正なし、`bias`=ATTACK_ONSET_BIAS補正（ゴールデンテストの基準、比較用）、
 //!   `curve`=補正なし+stage0のみレイズドコサイン。詳細は`opz2op505::conv::AttackMode`。
 
 use opz2op505::conv::{self, AttackMode};
-use opz2x6::conv::ConvOptions;
-use opz2x6::parse;
+use opz2op505::map::ConvOptions;
+use opz2op505::parse;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

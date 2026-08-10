@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use op505_core::{Op505ChannelParams, Op505PresetEntry, Op505PresetFile};
 use op505_tools::golden::{assert_golden, Fingerprint};
 use opz2op505::conv::{self, AttackMode};
-use opz2x6::conv::ConvOptions;
-use opz2x6::parse::{OpzOpData, OpzVoice};
+use opz2op505::map::ConvOptions;
+use opz2op505::parse::{OpzOpData, OpzVoice};
 
 const GOLDEN_VERSION: u32 = 1;
 
