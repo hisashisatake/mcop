@@ -53,8 +53,9 @@ impl Default for Style {
             eg_preview_size: Size { w: 84.0, h: 66.0 },
             // ym38x6-ui/src/algorithm_diagram.rsのDEFAULT_WIDTH/DEFAULT_HEIGHTと一致させること。
             algorithm_diagram_size: Size { w: 150.0, h: 100.0 },
-            // op505-ui/src/lib.rsのTIME_EG_EDITOR_SIZE（Step 2の暫定固定値）と一致させること。
-            time_eg_editor_size: Size { w: 260.0, h: 175.0 },
+            // op505/ui/src/panel.xmlの<style><time-eg-editor>実測値と一致させること
+            // （KNOBSモードの1段カラムがはみ出さない高さ、Step6実機確認で175→245へ追い込み済み）。
+            time_eg_editor_size: Size { w: 260.0, h: 245.0 },
         }
     }
 }

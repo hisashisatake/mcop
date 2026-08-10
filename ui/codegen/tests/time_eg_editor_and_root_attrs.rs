@@ -60,7 +60,7 @@ fn time_eg_editor_generates_expected_call() {
     );
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(
-        rust.contains("time_eg_editor(ui, egui::vec2(260.0, 175.0), &*params.eg, EgAmplitudeMapping::DbLinear, params.tl.value() as u8);"),
+        rust.contains("time_eg_editor(ui, egui::vec2(260.0, 245.0), &*params.eg, EgAmplitudeMapping::DbLinear, params.tl.value() as u8);"),
         "生成コードにtime_eg_editor呼び出しが見つかりません:\n{rust}"
     );
 }
