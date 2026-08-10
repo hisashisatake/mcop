@@ -107,8 +107,13 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
   op505/               ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
     core/              ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、Vco実装の一つ。
-                          ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定）
+                          ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定。
+                          .op505バンク形式はpreset.rsのOp505PresetFile/Entry（.38x6のPresetFile/Entry相当）
     ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）
+    tools/             ← レガシーFM音源→OP505直接変換ツール群（実機レート→TimeEg直接変換、.38x6を経由しない）
+      opz2op505/       ← TX81Z(OPZ/YM2414) syx → .op505直接変換（クレート名opz2op505。opz2x6のEGヘルパーと
+                          op505-core adapter.rsのconvert_eg_shapeを合成再利用。--attack bias/none/curveで
+                          アタック立ち上がり表現をA/B可能、既定biasは旧2段変換とビット一致）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
