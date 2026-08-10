@@ -1,8 +1,9 @@
 //! `panel.xml`のIR（`ui-codegen`）をランタイムで解釈し、実eguiウィジェットを描画する
 //! （フェーズB、`preview`フィーチャ配下）。`codegen.rs`（IR→Rust文字列）と対をなす
 //! 「IR→実egui呼び出し」変換で、`tools/xml-panel-dsl`のブラウザプレビュー（`preview-wasm`）から
-//! 使われる。VST/gesture-app向けの`panel.rs`（build.rsが生成する`draw_param_panel`）とは別経路
-//! であり、生成コードには一切影響しない。
+//! 使われる。VST/gesture-app向けの`panel.rs`（build.rsが生成する`draw_param_panel`等）とは別経路
+//! であり、生成コードには一切影響しない。チップ非依存（`ym38x6-ui`/`op505-ui`双方のpanel.xmlを
+//! 同じインタープリタで開ける、Step 5で`ym38x6-ui`から移設）。
 //!
 //! `PanelParams`/`OperatorPanelParams`等の実パラメーター構造体は使わず、XMLの`handle`属性の
 //! 文字列（例:`"op.tl"`・`"params.pitch_fg.eg.ar"`）をそのままキーにした[`HandleStore`]の
@@ -18,15 +19,17 @@ use ui_codegen::{
     Style, Title, TreeNode, Widget,
 };
 use sound_core::eg::EgParams;
+use sound_core::TimeEgParams;
 
 use crate::algorithm_diagram::{algorithm_diagram, carriers};
 use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
 use crate::knob::{bool_checkbox, knob};
 use crate::layout;
-use crate::panel::mul_fine_ratio;
-use crate::param_handle::{BoolParamHandle, IntParamHandle};
+use crate::mapping::mul_fine_ratio;
+use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
 use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES};
+use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 
 /// `<panel repeat="...">`の要素数解決（現状"operators"=4のみ。今後増える場合はここへ追加する）。
@@ -84,6 +87,37 @@ impl BoolParamHandle for MockBool {
     fn end_edit(&self) {}
 }
 
+/// プレビュー専用のモックTimeEgハンドル（`<time-eg-editor>`、Step 5で追加）。
+/// `TimeEgParams`はCopyなのでCellでフレーム跨ぎの値を保持できる（`MockInt`/`MockBool`と同じ設計）。
+struct MockTimeEg {
+    value: Cell<TimeEgParams>,
+    name: String,
+}
+
+impl TimeEgHandle for MockTimeEg {
+    fn params(&self) -> TimeEgParams {
+        self.value.get()
+    }
+    fn set_params(&self, params: TimeEgParams) {
+        self.value.set(params);
+    }
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+    fn begin_edit(&self) {}
+    fn end_edit(&self) {}
+}
+
+/// `MockTimeEg`の初期値。`TimeEgParams::default()`（全段time=0/level=0）は折れ線が潰れて
+/// レイアウト確認の役に立たないため、2段のシンプルなアタック→リリース形状を種にする。
+fn default_time_eg_params() -> TimeEgParams {
+    use sound_core::{TimeStage, MAX_STAGES};
+    let mut stages = [TimeStage::default(); MAX_STAGES];
+    stages[0] = TimeStage { time: 60, level: 200, curve: 0 };
+    stages[1] = TimeStage { time: 120, level: 0, curve: 0 };
+    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, loop_end: 0, release_start: 1 }
+}
+
 /// 解決済みハンドルパス文字列（例:`"op.tl"`、リピートパネル内は[`scoped`]で
 /// `"{index}#op.tl"`へ変換したもの）→モックハンドルの対応。呼び出し側（`preview-wasm`のApp）が
 /// フレームをまたいで使い回すことで、ドラッグ操作の値が次フレームにも保持される。
@@ -91,6 +125,7 @@ impl BoolParamHandle for MockBool {
 pub struct HandleStore {
     ints: HashMap<String, MockInt>,
     bools: HashMap<String, MockBool>,
+    time_egs: HashMap<String, MockTimeEg>,
 }
 
 impl HandleStore {
@@ -110,6 +145,13 @@ impl HandleStore {
 
     fn bool_(&mut self, key: &str) -> &MockBool {
         &*self.bools.entry(key.to_string()).or_insert_with(|| MockBool { value: Cell::new(false) })
+    }
+
+    fn time_eg(&mut self, key: &str) -> &MockTimeEg {
+        &*self
+            .time_egs
+            .entry(key.to_string())
+            .or_insert_with(|| MockTimeEg { value: Cell::new(default_time_eg_params()), name: key.to_string() })
     }
 }
 
@@ -289,6 +331,14 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let key = scoped(handle, idx);
             let v = store.int(&key).value() as u8;
             algorithm_diagram(ui, egui::vec2(leaf.size.w, leaf.size.h), v);
+        }
+        Widget::TimeEgEditor { handle, mapping, tl } => {
+            let key = scoped(handle, idx);
+            let mapping_v =
+                if mapping == "AmplitudeLinear" { EgAmplitudeMapping::AmplitudeLinear } else { EgAmplitudeMapping::DbLinear };
+            let tl_v = eg_field_value(store, tl, idx);
+            let handle_mock = store.time_eg(&key);
+            time_eg_editor(ui, egui::vec2(leaf.size.w, leaf.size.h), handle_mock, mapping_v, tl_v);
         }
         Widget::Raw(_) => draw_raw_placeholder(ui, egui::vec2(leaf.size.w, leaf.size.h)),
     }

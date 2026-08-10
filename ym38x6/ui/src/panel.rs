@@ -9,29 +9,11 @@ use crate::selector::{
 use crate::waveform::waveform_selector;
 use sound_core::eg::EgParams;
 
-/// MUL値(0〜15)→周波数比。`ym38x6_core::mapping::mul_to_ratio`と同じ表（0=0.5倍、1〜15=等倍）だが、
-/// `ym38x6-ui`はnice-plug/Tauri非依存の`sound-core`のみに依存する方針のため、
-/// OPヘッダの実効比率表示専用にこの極小テーブルをインライン複製する（内部エンジンは無改変）。
-pub(crate) fn mul_to_ratio(mul: u8) -> f32 {
-    const TABLE: [f32; 16] = [
-        0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-    ];
-    TABLE[(mul as usize).min(15)]
-}
-
-/// op_fine_tune値(0〜255、中心128)→セント。`ym38x6_core::mapping::op_fine_tune_to_cents`と同じ式
-/// （中心128で±0、両端±1200セント）。上記`mul_to_ratio`と同じ理由でインライン複製する。
-pub(crate) fn op_fine_tune_to_cents(v: u8) -> f32 {
-    const OP_FINE_TUNE_RANGE_CENTS: f32 = 1200.0;
-    (v as f32 - 128.0) / 128.0 * OP_FINE_TUNE_RANGE_CENTS
-}
-
-/// MUL＋FINE（op_fine_tune）による実効周波数比（DT1は除く）。OPヘッダの読み取り表示専用。
-/// `pub(crate)`なのはフェーズBのプレビュー用インタープリタ（`interpret.rs`、`<readout
-/// compute="mul-fine-ratio">`の実行時評価）も同じ関数を呼ぶため（codegen/interpretが同じ実装を共有）。
-pub(crate) fn mul_fine_ratio(mul: u8, op_fine_tune: u8) -> f32 {
-    mul_to_ratio(mul) * 2f32.powf(op_fine_tune_to_cents(op_fine_tune) / 1200.0)
-}
+/// OPヘッダの実効周波数比（MUL×FINE）表示専用。`ui-core`へ移設済み（`op505-ui`とも共有）。
+/// `pub(crate)`で再エクスポートするのは、生成コード（`panel_generated.rs`、裸の名前
+/// `mul_fine_ratio(...)`で呼ぶ）とフェーズBのプレビュー用インタープリタ（`interpret.rs`の
+/// `crate::panel::mul_fine_ratio`参照）の両方がこのパスを必要とするため。
+pub(crate) use ui_core::mapping::mul_fine_ratio;
 
 /// オペレーター単位パラメーター一式（VST/gesture-app共通のハンドル束）。
 pub struct OperatorPanelParams<'a> {

@@ -36,6 +36,8 @@ pub struct Style {
     pub eg_preview_size: Size,
     /// `<algorithm-diagram>`の既定サイズ（インスタンス側`width`/`height`属性で個別上書き可能）。
     pub algorithm_diagram_size: Size,
+    /// `<time-eg-editor>`の既定サイズ（インスタンス側`width`/`height`属性で個別上書き可能）。
+    pub time_eg_editor_size: Size,
 }
 
 impl Default for Style {
@@ -51,6 +53,9 @@ impl Default for Style {
             eg_preview_size: Size { w: 84.0, h: 66.0 },
             // ym38x6-ui/src/algorithm_diagram.rsのDEFAULT_WIDTH/DEFAULT_HEIGHTと一致させること。
             algorithm_diagram_size: Size { w: 150.0, h: 100.0 },
+            // op505/ui/src/panel.xmlの<style><time-eg-editor>実測値と一致させること
+            // （KNOBSモードの1段カラムがはみ出さない高さ、Step6実機確認で175→245へ追い込み済み）。
+            time_eg_editor_size: Size { w: 260.0, h: 245.0 },
         }
     }
 }
@@ -104,6 +109,9 @@ pub enum Widget {
         delay: EgField,
     },
     AlgorithmDiagram { handle: String },
+    /// TimeEg（可変1〜8段・ループ・多段リリース）のハイブリッドエディタ（`ui_core::time_eg_editor`）。
+    /// `handle`は`TimeEgHandle`実装（`Box<dyn TimeEgHandle>`フィールド）を指す。
+    TimeEgEditor { handle: String, mapping: String, tl: EgField },
     /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),
 }
@@ -281,8 +289,17 @@ pub struct PanelsGroup {
     pub panels: Vec<Panel>,
 }
 
+/// `<layout>`ルート属性。省略時は現行どおり`draw_param_panel`/`PanelParams`/id_saltなしになる
+/// （`ym38x6-ui`はこの既定値のまま、`op505-ui`は`fn="draw_op505_panel" params-type="Op505PanelParams"
+/// scroll-id="op505_panel"`で上書きする）。
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub groups: Vec<PanelsGroup>,
     pub style: Style,
+    /// 生成する描画関数名（`<layout fn="...">`、省略時`"draw_param_panel"`）。
+    pub fn_name: String,
+    /// `params: &{params_type}`の型名（`<layout params-type="...">`、省略時`"PanelParams"`）。
+    pub params_type: String,
+    /// `egui::ScrollArea::vertical()`の`.id_salt(...)`（`<layout scroll-id="...">`、省略時なし）。
+    pub scroll_id: Option<String>,
 }

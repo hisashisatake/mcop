@@ -1,14 +1,15 @@
 //! `tools/xml-panel-dsl/index.html`から呼ばれる、panel.xmlの実egui描画プレビュー（フェーズB）。
-//! `ym38x6-ui`の`preview`フィーチャ（`interpret.rs`）をeframeのWebRunnerでcanvasに描画し、
+//! `ui-core`の`preview`フィーチャ（`interpret.rs`）をeframeのWebRunnerでcanvasに描画し、
 //! ユーザーがXMLを編集するたびに`set_xml`で再パース・再描画する（wasm32-unknown-unknown専用
 //! クレート、ワークスペースから除外。ビルドはrustup配下のcargoで個別に行う。
-//! gesture-app/editor-wasmと同型）。
+//! gesture-app/editor-wasmと同型）。チップ非依存化済み（Step 5）のため、
+//! `ym38x6-ui`/`op505-ui`どちらのpanel.xmlも同じバイナリで開ける。
 
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use ym38x6_ui::interpret::{draw_panel_from_ir, HandleStore};
+use ui_core::interpret::{draw_panel_from_ir, HandleStore};
 
 thread_local! {
     static XML_STATE: RefCell<XmlState> = RefCell::new(XmlState::default());
@@ -49,7 +50,7 @@ pub fn set_xml(xml: &str) {
 }
 
 /// XMLが妥当かどうかだけを検査する（index.htmlの上部OK/NGバッジ用）。
-/// 実際の描画反映は`set_xml`、生成Rustコードの実体は`ym38x6-ui/build.rs`が使う
+/// 実際の描画反映は`set_xml`、生成Rustコードの実体は各uiクレートの`build.rs`が使う
 /// `ui_codegen::generate_rust`（index.html側では表示しない）が担う。
 #[wasm_bindgen]
 pub fn validate_xml(xml: &str) -> Result<(), JsError> {

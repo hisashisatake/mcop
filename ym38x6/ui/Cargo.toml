@@ -9,12 +9,6 @@ sound-core = { path = "../../sound/core" }
 # knob/eg_preview/layout/algorithm_diagram等の汎用egui部品はui-coreへ切り出し済み
 # （op505-ui等、他チップのエディタとも共有する）。ui-layoutへの直接依存はui-core経由になったため不要。
 ui-core = { path = "../../ui/core" }
-# フェーズBのプレビュー用インタープリタ(interpret.rs)専用の任意依存。VST/gesture-appは
-# `preview`フィーチャを有効にせずビルドするため、XMLパーサー(roxmltree等)は製品バイナリに含まれない。
-ui-codegen = { path = "../../ui/codegen", optional = true }
-
-[features]
-preview = ["dep:ui-codegen"]
 
 [build-dependencies]
 ui-codegen = { path = "../../ui/codegen" }

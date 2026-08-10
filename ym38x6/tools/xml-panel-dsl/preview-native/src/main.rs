@@ -2,22 +2,23 @@
 //!
 //! ブラウザ版（`preview-wasm`、WebGLキャンバス）ではプレビューの分離・ドッキングが実現できない
 //! （キャンバスを別ウィンドウへ移すとWebGLコンテキストが失われる）ため、その機能を含むフル版として
-//! eframe nativeで新規提供する。プレビュー描画自体は`ym38x6-ui::interpret::draw_panel_from_ir`
-//! （`preview-wasm`と共有）をそのまま呼ぶだけで、`panel.xml`の生成経路（build.rs/interpret.rs）には
-//! 一切手を入れない。
+//! eframe nativeで新規提供する。プレビュー描画自体は`ui_core::interpret::draw_panel_from_ir`
+//! （`preview-wasm`と共有、チップ非依存化済み）をそのまま呼ぶだけで、`panel.xml`の生成経路
+//! （build.rs/interpret.rs）には一切手を入れない。
 
 use std::path::Path;
 
 use egui::text::{CCursor, CCursorRange};
 use egui::widgets::text_edit::TextEditState;
-use ym38x6_ui::interpret::{draw_panel_from_ir, HandleStore};
+use ui_core::interpret::{draw_panel_from_ir, HandleStore};
 
 /// エディタでTabキーが押されたときのインデント幅（4スペース）。
 const IND: &str = "    ";
 
-/// `panel.xml`正本の既定パス（`CARGO_MANIFEST_DIR`基準、CWDに依存しない）。
+/// `panel.xml`正本の既定パス（`CARGO_MANIFEST_DIR`基準、CWDに依存しない）。既定はym38x6側
+/// （「ファイルを開く」で`op505/ui/src/panel.xml`へ切り替えられる）。
 fn default_xml_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../ym38x6-ui/src/panel.xml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../ui/src/panel.xml")
 }
 
 /// 起動時は`panel.xml`正本をそのまま読む（このツールの主用途が正本の往復編集のため）。

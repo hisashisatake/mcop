@@ -20,11 +20,16 @@ use crate::knob::{bool_checkbox, knob, spin_control};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, time_eg_preview, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
-/// KNOBSモードの小プレビューサイズ（`time_eg_preview`既定と同じ）。
-const KNOBS_PREVIEW_SIZE: Vec2 = Vec2::new(200.0, 100.0);
-/// GRAPHモードの折れ線エリアサイズ。KNOBSモードの小プレビューより大きく取り、
-/// `EDITOR_MIN_STAGE_WEIGHT`（`time_eg_preview.rs`）と合わせてヒットテストしやすくする。
-const GRAPH_SIZE: Vec2 = Vec2::new(260.0, 120.0);
+/// ヘッダ行（EG名+GRAPH/KNOBSタブ）の見込み高さ（px）。`time_eg_editor`の固定枠`size`から
+/// 差し引いてコンテンツ領域（GRAPH/KNOBS）の高さを導出するための概算値。実際の描画高と
+/// px単位で厳密には一致しない（フォントメトリクス依存）が、GRAPH/KNOBS切替・段数変更で
+/// 枠の外形自体は変わらないため実用上問題ない（Step 2の固定枠化）。
+const HEADER_HEIGHT: f32 = 20.0;
+/// STAGES/LOOP/L.START/L.END/RELのspin行（`stage_spin_row`）の見込み高さ（px）。
+/// `HEADER_HEIGHT`と同じ扱い。
+const SPIN_ROW_HEIGHT: f32 = 35.0;
+/// KNOBSモードの小プレビューの幅（px）。高さはコンテンツ領域いっぱいに伸ばす（`draw_knobs_mode`）。
+const KNOBS_PREVIEW_WIDTH: f32 = 130.0;
 const GRAPH_PAD: f32 = 6.0;
 
 /// ドラッグでlevelを0へスナップする、グラフ下端からの距離（px）。TL<255時、`DB_FLOOR`付近の
@@ -406,33 +411,47 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle) {
     });
 }
 
-/// KNOBSモード: 小プレビュー＋段ぶんのTIME/LEVEL/CURVE列。
-fn draw_knobs_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+/// KNOBSモード: 左に小プレビュー、右に段ぶんのTIME/LEVEL/CURVE列を水平ScrollAreaで収める。
+/// `size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を差し引いた残り）。
+/// 段数1〜8でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
+fn draw_knobs_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
     let params = handle.params();
-    time_eg_preview(ui, KNOBS_PREVIEW_SIZE, mapping, tl, params);
+    let preview_size = Vec2::new(KNOBS_PREVIEW_WIDTH, size.y);
     let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
     ui.horizontal(|ui| {
-        for i in 0..n {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(format!("S{}", i + 1)).size(8.0));
-                knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i)), "TIME");
-                knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i)), "LEVEL");
-                bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CURVE");
+        time_eg_preview(ui, preview_size, mapping, tl, params);
+        egui::ScrollArea::horizontal()
+            .id_salt(("time_eg_editor", handle.name(), "knobs_scroll"))
+            .max_height(size.y)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_height(size.y);
+                ui.horizontal(|ui| {
+                    for i in 0..n {
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(format!("S{}", i + 1)).size(8.0));
+                            knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i)), "TIME");
+                            knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i)), "LEVEL");
+                            bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CURVE");
+                        });
+                    }
+                });
             });
-        }
     });
 }
 
-/// GRAPHモード: 折れ線を大きめに描画し、頂点のドラッグ（time/level編集）・ループ区間マーカーの
-/// ドラッグ（loop_start/loop_end編集）・右クリックメニュー（段の挿入/削除・カーブ切替）で編集する。
-fn draw_graph_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+/// GRAPHモード: 折れ線をコンテンツ領域いっぱいに描画し、頂点のドラッグ（time/level編集）・
+/// ループ区間マーカーのドラッグ（loop_start/loop_end編集）・右クリックメニュー（段の挿入/削除・
+/// カーブ切替）で編集する。`size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を
+/// 差し引いた残り）。面積が増えるぶん頂点・ループマーカーのヒットテストが楽になる。
+fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
     let base_id = ui.id().with(("time_eg_editor", handle.name()));
     let drag_id = base_id.with("drag");
     let ctx_id = base_id.with("ctx");
     let mut drag: Option<DragTarget> = ui.memory(|m| m.data.get_temp::<Option<DragTarget>>(drag_id)).flatten();
 
     let params = handle.params();
-    let (rect, response) = ui.allocate_exact_size(GRAPH_SIZE, egui::Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -576,23 +595,28 @@ fn draw_graph_mode(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeM
 }
 
 /// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/KNOBSタブ＋STAGES等のspin行）。
+/// `size`は外形の固定枠（Step 2）。GRAPH↔KNOBS切替・段数(1〜8)変更で`size`自体は変わらず、
+/// KNOBSモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
 /// `handle.name()`はegui memoryのId salt兼見出しラベルに使うため、呼び出し側で
 /// EGごとに一意な名前（"OP1 EG"/"PITCH FG"等）を渡すこと。
-pub fn time_eg_editor(ui: &mut Ui, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
     let mode_id = ui.id().with(("time_eg_editor", handle.name(), "mode"));
     let mut mode = ui.memory(|m| m.data.get_temp::<Mode>(mode_id)).unwrap_or(Mode::Graph);
 
-    ui.vertical(|ui| {
+    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(handle.name()).size(9.0));
             ui.selectable_value(&mut mode, Mode::Graph, "GRAPH");
             ui.selectable_value(&mut mode, Mode::Knobs, "KNOBS");
         });
+
+        let content_size = Vec2::new(size.x, (size.y - HEADER_HEIGHT - SPIN_ROW_HEIGHT).max(0.0));
         match mode {
-            Mode::Graph => draw_graph_mode(ui, handle, mapping, tl),
-            Mode::Knobs => draw_knobs_mode(ui, handle, mapping, tl),
+            Mode::Graph => draw_graph_mode(ui, content_size, handle, mapping, tl),
+            Mode::Knobs => draw_knobs_mode(ui, content_size, handle, mapping, tl),
         }
+
         stage_spin_row(ui, handle);
     });
 

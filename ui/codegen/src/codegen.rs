@@ -105,6 +105,12 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
         Widget::AlgorithmDiagram { handle } => {
             format!("algorithm_diagram(ui, egui::vec2({}, {}), {handle}.value() as u8);", fmt_num(size.w), fmt_num(size.h))
         }
+        Widget::TimeEgEditor { handle, mapping, tl } => format!(
+            "time_eg_editor(ui, egui::vec2({}, {}), &*{handle}, EgAmplitudeMapping::{mapping}, {});",
+            fmt_num(size.w),
+            fmt_num(size.h),
+            eg_field_expr(tl),
+        ),
         Widget::Raw(code) => code.clone(),
     }
 }
@@ -204,6 +210,24 @@ fn panel_has_source_jack(body: &[BodyStmt]) -> bool {
         BodyStmt::Jack(j) => matches!(j, Jack::Source),
         _ => false,
     })
+}
+
+/// `body`に`<jack>`（source/dest問わず）が1個以上含まれるか判定する。
+/// `layout_has_any_jack`が全体を走査し、`generate_rust`が`tx_jacks`/patchbay呼び出しの
+/// 出力要否（Step 3(c)）を決めるために使う。
+fn body_has_any_jack(body: &[BodyStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        BodyStmt::Header { items } => items.iter().any(|item| matches!(item, HeaderItem::Jack(_))),
+        BodyStmt::Jack(_) => true,
+        _ => false,
+    })
+}
+
+/// XML全体（全`<panels>`グループの全`<panel>`）に`<jack>`が1個以上あるか判定する。
+/// 無ければ`tx_jacks`（`JackLayout`）自体を生成しない（op505-uiのようにTEXTURE LFOパッチベイを
+/// 持たないパネルではpatchbayモジュールへの依存もコード生成物に出さない、Step 3(c)）。
+fn layout_has_any_jack(layout: &Layout) -> bool {
+    layout.groups.iter().any(|g| g.panels.iter().any(|p| body_has_any_jack(&p.body)))
 }
 
 fn gen_header_item_stmt(item: &HeaderItem) -> String {
@@ -329,22 +353,36 @@ fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
     out.join("\n")
 }
 
-/// [`Layout`]全体から`draw_param_panel`関数（本体アイテムのみ）を生成する。
+/// [`Layout`]全体から描画関数（本体アイテムのみ）を生成する。関数名・`params`の型・
+/// `ScrollArea`の`id_salt`は`<layout fn= params-type= scroll-id=>`ルート属性で決まる
+/// （省略時は`draw_param_panel`/`PanelParams`/id_saltなし、Step 3(b)）。
+/// `<jack>`が1個も無いXML（op505-uiのFG/OPパネル等）では`tx_jacks`宣言とpatchbay呼び出し
+/// 自体を出力しない（Step 3(c)）。
 pub fn generate_rust(layout: &Layout) -> String {
     let style = &layout.style;
     let parts: Vec<String> = layout.groups.iter().map(|g| gen_panels_group(g, style)).collect();
     let body = indent(&parts.join("\n\n"), 8);
+    let scroll_area = match &layout.scroll_id {
+        Some(id) => format!("egui::ScrollArea::vertical().id_salt(\"{id}\").show(ui, |ui| {{"),
+        None => "egui::ScrollArea::vertical().show(ui, |ui| {".to_string(),
+    };
+    let has_jack = layout_has_any_jack(layout);
+    let tx_jacks_decl = if has_jack { "let mut tx_jacks = crate::patchbay::JackLayout::new();\n    " } else { "" };
+    let finish_patchbay = if has_jack {
+        "\n\n        crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);"
+    } else {
+        ""
+    };
     format!(
-        "pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {{\n    \
-         let mut tx_jacks = crate::patchbay::JackLayout::new();\n    \
-         egui::ScrollArea::vertical().show(ui, |ui| {{\n        \
+        "pub fn {}(ui: &mut egui::Ui, params: &{}) {{\n    \
+         {tx_jacks_decl}{scroll_area}\n        \
          let full_width = ui.available_width();\n        \
          let base_spacing = ui.spacing().item_spacing;\n        \
          let frame_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke.width;\n        \
          ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);\n\n\
-         {body}\n\n        \
-         crate::patchbay::finish_texture_lfo_patchbay(ui, &*params.texture_lfo_destination, tx_jacks);\n    \
+         {body}{finish_patchbay}\n    \
          }});\n\
-         }}\n"
+         }}\n",
+        layout.fn_name, layout.params_type,
     )
 }
