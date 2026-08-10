@@ -49,7 +49,9 @@ fn time_for_seconds(seconds: f32, warnings: &mut Vec<String>, label: &str, what:
 /// EGの5段形状(ar/d1r/d1l/d2r/rr + floor/loop/curve)をTimeEgParamsへ変換する共通ロジック。
 /// オペレーターEGとPitch/Cutoff/Gain FGのeg部分（`EgParams`の`delay`以外の7フィールド）が
 /// 同じ形なので、この1関数で両方をまかなう。
-fn convert_eg_shape(
+/// `opz2op505`等の直接変換ツールも、実機レートを38x6レート相当へ写像した後この関数に
+/// 通すことで、段割り当て・特殊ケース・30秒クランプ警告を共有する。
+pub fn convert_eg_shape(
     ar: u8,
     d1r: u8,
     d1l: u8,

@@ -3526,6 +3526,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "opz2op505"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "opz2x6",
+ "smf2wav",
+ "sound-core",
+ "ym38x6-core",
+]
+
+[[package]]
 name = "opz2x6"
 version = "0.1.0"
 dependencies = [
