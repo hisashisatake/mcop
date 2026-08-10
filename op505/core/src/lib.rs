@@ -11,7 +11,9 @@
 pub mod adapter;
 pub mod demo;
 pub mod operator;
+pub mod preset;
 pub use operator::Op505OperatorParams;
+pub use preset::{Op505PresetEntry, Op505PresetFile};
 
 use std::collections::BTreeMap;
 
