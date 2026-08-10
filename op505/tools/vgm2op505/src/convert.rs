@@ -1,0 +1,89 @@
+//! OP505直接変換のPatchConverter/WavEngine実装。CLI（main.rs）とゴールデンテスト
+//! （tests/golden.rs）の両方から参照する。
+
+use op505_core::{Op505Engine, Op505Patch};
+use vgm2x6::patch::PatchConverter;
+use vgm2x6::play::WavEngine;
+use ym38x6_core::Ym38x6Patch;
+
+/// アタック立ち上がりの表現方法（opm2op505/mucom2op505の同形の別型を1本のCLI enumから写像する）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackMode {
+    Bias,
+    None,
+    Curve,
+}
+
+impl AttackMode {
+    pub fn to_opm(self) -> opm2op505::conv::AttackMode {
+        match self {
+            AttackMode::Bias => opm2op505::conv::AttackMode::Bias,
+            AttackMode::None => opm2op505::conv::AttackMode::None,
+            AttackMode::Curve => opm2op505::conv::AttackMode::Curve,
+        }
+    }
+    pub fn to_mucom(self) -> mucom2op505::conv::AttackMode {
+        match self {
+            AttackMode::Bias => mucom2op505::conv::AttackMode::Bias,
+            AttackMode::None => mucom2op505::conv::AttackMode::None,
+            AttackMode::Curve => mucom2op505::conv::AttackMode::Curve,
+        }
+    }
+}
+
+pub fn parse_attack_mode(v: &str) -> Result<AttackMode, String> {
+    match v.to_ascii_lowercase().as_str() {
+        "bias" => Ok(AttackMode::Bias),
+        "none" => Ok(AttackMode::None),
+        "curve" => Ok(AttackMode::Curve),
+        _ => Err(format!("--attack の値が不正(bias/none/curve): {v}")),
+    }
+}
+
+/// OPM/OPNボイスをOP505パッチへ直接変換する。SSG固定パッチ（x6ネイティブ人工パッチ）のみ
+/// `op505_core::adapter::convert_patch`（.38x6→.op505の既存2段変換）を経由する。
+pub struct Op505Converter {
+    pub attack: AttackMode,
+}
+
+impl PatchConverter for Op505Converter {
+    type Patch = Op505Patch;
+
+    fn from_opm(&mut self, v: &opm2x6::parse::OpmVoice) -> (Op505Patch, Vec<String>) {
+        opm2op505::conv::voice_to_op505_patch(v, opm2x6::parse::OperatorOrder::Direct, self.attack.to_opm())
+    }
+    fn from_opn(&mut self, v: &mucom2x6::conv::OpnVoice) -> (Op505Patch, Vec<String>) {
+        mucom2op505::conv::voice_to_op505_patch(v, self.attack.to_mucom())
+    }
+    fn from_x6(&mut self, p: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
+        op505_core::adapter::convert_patch(p)
+    }
+}
+
+/// OP505直接レンダリング用の`Op505Engine`ラッパー（orphan rule対策のnewtype）。
+pub struct Engine505(pub Op505Engine);
+
+impl WavEngine for Engine505 {
+    type Patch = Op505Patch;
+    fn new(sr: f32) -> Self {
+        Engine505(Op505Engine::new(sr))
+    }
+    fn set_patch(&mut self, patch: Op505Patch) {
+        self.0.set_patch(patch);
+    }
+    fn note_on(&mut self, ch: usize, freq: f32, vel: u8) {
+        sound_core::Vco::note_on(&mut self.0, ch, freq, vel);
+    }
+    fn note_off(&mut self, ch: usize) {
+        sound_core::Vco::note_off(&mut self.0, ch);
+    }
+    fn set_pitch_bend(&mut self, ch: usize, cents: f32) {
+        sound_core::Vco::set_pitch_bend(&mut self.0, ch, cents);
+    }
+    fn set_channel_volume(&mut self, ch: usize, gain: f32) {
+        sound_core::Vco::set_channel_volume(&mut self.0, ch, gain);
+    }
+    fn render(&mut self, buf: &mut [f32]) {
+        sound_core::Vco::render(&mut self.0, buf, 1);
+    }
+}

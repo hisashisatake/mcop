@@ -3,6 +3,10 @@ name = "vgm2op505"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "vgm2op505"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vgm2op505"
 path = "src/main.rs"
@@ -16,3 +20,8 @@ mucom2x6 = { path = "../../../ym38x6/tools/mucom2x6" }
 op505-core = { path = "../../core" }
 ym38x6-core = { path = "../../../ym38x6/core" }
 sound-core = { path = "../../../sound/core" }
+op505-tools = { path = "../common" }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
