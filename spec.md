@@ -8,6 +8,9 @@
 - ソフトウェア実装（Rust）なので制約なし
 - 作曲支援アプリのエンジンとしての役割も持つ
 - 作曲支援アプリはTauriで実装。まずWindowsデスクトップ版から開始
+- 同一ワークスペース内に後継チップ**OP505**（EG方式をレート方式からN点Time/Level方式へ全面移行した
+  派生チップ、`op505/`）も並行開発中。38x6とはFM合成の基本部分（アルゴリズム・波形・チップ内LFO等）を
+  `sound-fm`経由で共有しつつ、EG系統だけ差し替えた兄弟実装（詳細はクレート構成、進捗はspec-roadmap.md参照）
 
 ---
 
@@ -19,6 +22,10 @@
 - [spec-roadmap.md](spec-roadmap.md)：実装フェーズ一覧と現在地
 - [spec-sound.md](spec-sound.md)：38x6音源エンジンの仕様（パラメーター・MIDI実装・OPQコンバーター・波形メモリ専用音色バンク等）
 - [spec-app.md](spec-app.md)：作曲支援アプリのUI設計仕様
+- [spec-fm.md](spec-fm.md)：FM音源変換ツール群（`ym38x6/tools/`）の横断知見
+
+OP505（後継チップ）は専用のspec文書をまだ持たない。進捗はspec-roadmap.mdの該当フェーズに記録し、
+パラメーター仕様は`op505/core`のソースコード直下のドキュメントコメント（`lib.rs`/`demo.rs`等）を正本とする。
 
 ---
 
@@ -34,45 +41,48 @@
 
 ### クレート構成
 
+ディレクトリ＝グループ、パッケージ名は`<group>-<part>`という規約で構成する。各グループの主クレートは
+`core`という名前に統一する。詳細（各クレートの役割・依存関係の制約）はCLAUDE.md「クレート構成」を参照。
+
 ```
-ym38x6/                  ← ワークスペースルート
-  Cargo.toml
+（リポジトリルート）
+  Cargo.toml             ← ワークスペース
   spec.md
   CLAUDE.md
 
-  sound/core/            ← クレート名sound-core。基盤ライブラリ（WaveTable・AdsrParams・Eg（FG=Pitch/Cutoff/Gain共通部品）・PerformanceLfo〈質感LFO、改称予定〉・MasterEffects）
-    Cargo.toml
-    src/lib.rs             ← nice-plug・Tauri・cpal に無依存な純粋Rustロジック
-                             波形変換パイプライン（32サンプルi8 → 1024サンプル対数フォーマット）
+  sound/                 ← 音源レイヤーの共有基盤（製品非依存）
+    core/                ← クレート名sound-core。WaveTable・AdsrParams・Eg（FG=Pitch/Cutoff/Gain共通部品）・
+                            TimeEg（N点Time/Level方式EG、OP505用）・PerformanceLfo・MasterEffects・Vcoトレイト
+    fm/                  ← クレート名sound-fm。FM合成チップ間で共有するEG非依存の汎用部品
+                            （アルゴリズム結線・パラメーターマッピング・チップ内LFO・波形生成）
 
-  sound/fm/              ← クレート名sound-fm。FM合成チップ間で共有するEG非依存の汎用部品
+  ui/                    ← UIレイヤーの共有基盤（製品非依存、egui依存）
+    core/                ← クレート名ui-core。ノブ・EGプレビュー・TimeEgエディタ・アルゴリズム結線図等
+    layout/              ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存）
+    codegen/             ← クレート名ui-codegen。パネルXML DSL（panel.xml）のパーサー・IR・Rustコード生成器
 
-  ui/core/               ← クレート名ui-core。エディタ共有egui部品（ノブ・EGプレビュー・TimeEgエディタ等）
-  ui/layout/             ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存）
-  ui/codegen/            ← クレート名ui-codegen。パネルXML DSLのパーサー・IR・Rustコード生成器
+  ym38x6/                ← 38x6製品一式（レート方式5段EG）
+    core/                ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/sound-fmに依存、
+                            Vco実装の一つ。波形メモリ専用音色バンクも生成）
+    ui/                  ← エディタパネル定義（クレート名ym38x6-ui。src/panel.xmlが正本）
+    vst/                 ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst、nice-plug）
+    tools/               ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（patchlab等）
 
-  ym38x6/core/           ← 38x6 FMエンジン実装（sound-core/sound-fmに依存）
-    Cargo.toml
-    src/lib.rs             ← Ym38x6Engine（4opFM合成 + フィルター + チップ内LFO + チャンネル管理）
-    src/operator.rs        ← Operator（オシレーター + EG + パラメーター）
-    src/algorithm.rs       ← アルゴリズム結線テーブル（ymfm由来）
-    src/waveform.rs        ← ビルトイン32波形生成（OPZ由来サイン8 + ノコギリ/矩形/三角の独自拡張）
-    src/mapping.rs         ← パラメーターマッピング関数群
-    src/tone_lfo.rs        ← チップ内LFO（旧称「音色LFO」。ファイル名はステップ6で改称予定）
-    src/filter.rs          ← SVF（Cutoff FGはsound-core::Egを流用、ステップ6で本ファイルは縮小予定）
-
-  ym38x6/vst/            ← 38x6 VST3/CLAPプラグイン（nice-plug）
+  op505/                 ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
+    core/                ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、
+                            Vco実装の一つ。ym38x6-coreへの依存は既存.38x6パッチ変換のAdapterのみ）
+    ui/                  ← エディタパネル定義（クレート名op505-ui）
 
   gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象）
     package.json
     src/                   ← フロントエンド（HTML/JS）
       index.html
-      main.js              ← キャリブレーション・ジェスチャーUI
+      main.js              ← キャリブレーション・ジェスチャーUI・音源エンジン切替（38x6/OP505）
     src-tauri/             ← Rustバックエンド
       Cargo.toml
       build.rs
       tauri.conf.json
-      src/main.rs          ← cpalで音声出力、Tauriコマンド（note_on/note_off）
+      src/main.rs          ← cpalで音声出力、Tauriコマンド（note_on/note_off等）
       icons/               ← アプリアイコン
       capabilities/        ← Tauri v2 パーミッション設定
 
@@ -112,7 +122,8 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
 
 - **現状（フェーズ7ステップ1で実現済み）**: VCO抽象境界を`sound-core`の`Vco`トレイト（発振原理に依存しない
   演奏ライフサイクル: note_on/note_off/render/pitch_bend系/channel_volume系の7メソッド）として確立した。
-  `Ym38x6Engine`はこの1実装（`impl Vco for Ym38x6Engine`）。あわせて後段DSPの共通境界`AudioProcessor`
+  `Ym38x6Engine`（レート方式EG）と`Op505Engine`（N点Time/Level方式EG、`TimeEg`使用）が現在この2実装
+  （`impl Vco for Ym38x6Engine` / `impl Vco for Op505Engine`）。あわせて後段DSPの共通境界`AudioProcessor`
   （`process(&mut [f32], num_channels)`）も定義し、`MasterEffects`がこれを実装する。
   音色パッチ（`Ym38x6Patch`）はトレイトに含めず、38x6固有の具象API（`set_patch`/`set_channel_params`/
   `set_operator_params`等）のまま残した。`note_on`はパッチ引数を廃止し、事前に`set_patch`で設定した
