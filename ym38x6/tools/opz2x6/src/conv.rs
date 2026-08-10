@@ -132,7 +132,8 @@ fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
 /// なお過去に一度dB線形へ修正して「聴感で不自然」と撤回した経緯があるが、
 /// その聴感判断はD1L極性反転バグ（上記）がある状態で行われたもので汚染されていた。
 /// 極性修正とセットで再統一する。キャリア/モジュレーターの区別は不要になった。
-fn sl_to_x6(panel: u8) -> u8 {
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn sl_to_x6(panel: u8) -> u8 {
     let reg = 15 - panel.min(15);
     let db: f32 = if reg >= 15 { -93.0 } else { -(3.0 * reg as f32) };
     (255.0 * (1.0 + db / 93.0)).round() as u8
@@ -329,7 +330,8 @@ fn ksr_add(rs: u8) -> u16 {
 /// 判定されたため、RS=0のみ理論値でなく聴感を優先してksr=0(フラット)とする。
 /// RS=2=128(exponent≈0.5)はGrandPianoキャリアの実機比較で検証済み、
 /// RS=3=255(exponent=1.0)は理論値。
-fn ks_to_ksr(rs: u8) -> u8 {
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn ks_to_ksr(rs: u8) -> u8 {
     const TABLE: [u8; 4] = [0, 64, 128, 255];
     TABLE[rs.min(3) as usize]
 }
@@ -345,22 +347,26 @@ fn ks_to_ksr(rs: u8) -> u8 {
 /// クランプを撤去した（`ksr_rate_multiplier`側）ことで「A4焼き込み＋実行時倍率」が
 /// 実機の絶対keycode法則（eg_rate=2R+keycode>>(3-KS)）と数学的に等価になったため、
 /// キャリアの焼き込みも復活しモジュレーターと同じ扱いに戻す。
-fn opm_rate_to_x6(rate: u8, rs: u8) -> u8 {
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn opm_rate_to_x6(rate: u8, rs: u8) -> u8 {
     if rate == 0 { return 0; }
     let eg_rate = (2 * rate as u16 + ksr_add(rs)).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
 
-const ATTACK_ONSET_BIAS: u16 = 30;
+/// 38x6のARが実機よりdBリニアで立ち上がりが遅く聞こえる分の聴感補正バイアス。
+/// opz2op505からも共有で使う（`--attack bias`の既定経路）。
+pub const ATTACK_ONSET_BIAS: u16 = 30;
 
-fn ar_to_x6(ar: u8, rs: u8) -> u8 {
+pub fn ar_to_x6(ar: u8, rs: u8) -> u8 {
     if ar == 0 { return 0; }
     (opm_rate_to_x6(ar, rs) as u16 + ATTACK_ONSET_BIAS).min(255) as u8
 }
 
 /// OPM型4-bitリリースレート（RR, 0-15）→ 38x6 rr。
 /// KSR焼き込みの扱いは [opm_rate_to_x6] と同様（キャリア・モジュレーター共通）。
-fn rr_to_x6(rr: u8, rs: u8) -> u8 {
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn rr_to_x6(rr: u8, rs: u8) -> u8 {
     let eg_rate = (4 * rr as u16 + 2 + ksr_add(rs)).min(62);
     (1 + eg_rate.saturating_sub(2) * 254 / 60).min(255) as u8
 }
@@ -420,15 +426,32 @@ pub fn attls_reg(ls: u8, note: u8) -> u8 {
 // オペレーター変換
 // ---------------------------------------------------------------------------
 
+/// EGT=1（sustain-less decay）のとき D2R を強制的に高値にしてリリース挙動を作る
+/// (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰する)。
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn effective_d2r(d2r: u8, egt: u8) -> u8 {
+    if egt != 0 && d2r == 0 { 20 } else { d2r }
+}
+
+/// 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
+/// opz2op505（TX81Z→OP505直接変換）からも共有で使う。
+pub fn apply_carrier_sustain(d1l: &mut u8, d1r: &mut u8, d2r: &mut u8, carrier_sustain: f32) {
+    let k = carrier_sustain.clamp(0.0, 1.0);
+    // D1L を満レベル方向へ持ち上げる（最大で残差の 70% まで）。
+    let d1l_f = *d1l as f32;
+    *d1l = (d1l_f + (255.0 - d1l_f) * 0.7 * k).round().clamp(0.0, 255.0) as u8;
+    // 減衰レートを遅くする（値が小さいほど遅い）。D2R は鳴りの伸びに直結するため強めに。
+    *d1r = (*d1r as f32 * (1.0 - 0.60 * k)).round().clamp(0.0, 255.0) as u8;
+    *d2r = (*d2r as f32 * (1.0 - 0.85 * k)).round().clamp(0.0, 255.0) as u8;
+}
+
 fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOptions, pitch_fold: f32) -> OperatorParams {
     let mod_tl_cap = opts.mod_tl_cap;
     // 音程正規化(at pitch化): 音色一律の移調係数を比率へ掛けてから MUL/op_fine_tune を算出する
     // （[voice_pitch_fold]参照）。pitch_fold=1.0 なら従来どおり額面比率。
     let (mul, op_fine_tune) = ratio_to_mul_fine(coarse_fine_to_ratio(op.freq, op.fine) * pitch_fold);
 
-    // EGT=1 のとき D2R を強制的に高値にしてリリース挙動を作る
-    // (TX81Z は EGT=1 で D1L で止まらず一定レートで減衰 = sustain-less decay)
-    let d2r = if op.egt != 0 && op.d2r == 0 { 20 } else { op.d2r };
+    let d2r = effective_d2r(op.d2r, op.egt);
 
     // KVS写像（モジュレーターのみ、キャリアは0=velocity一本化）: KVS(0-7) → sens = kvs*24
     // （nornand attKVS導出のvelocityスイングkvs*12レジスタstep × 38x6の2倍解像度）。
@@ -494,13 +517,7 @@ fn convert_op(op: &crate::parse::OpzOpData, is_carrier: bool, alg_atten: u8, opt
 
     // 味付け: キャリアのサステイン延長（実機忠実から意図的に離す）。
     if is_carrier && opts.carrier_sustain > 0.0 {
-        let k = opts.carrier_sustain.clamp(0.0, 1.0);
-        // D1L を満レベル方向へ持ち上げる（最大で残差の 70% まで）。
-        let d1l = params.d1l as f32;
-        params.d1l = (d1l + (255.0 - d1l) * 0.7 * k).round().clamp(0.0, 255.0) as u8;
-        // 減衰レートを遅くする（値が小さいほど遅い）。D2R は鳴りの伸びに直結するため強めに。
-        params.d1r = (params.d1r as f32 * (1.0 - 0.60 * k)).round().clamp(0.0, 255.0) as u8;
-        params.d2r = (params.d2r as f32 * (1.0 - 0.85 * k)).round().clamp(0.0, 255.0) as u8;
+        apply_carrier_sustain(&mut params.d1l, &mut params.d1r, &mut params.d2r, opts.carrier_sustain);
     }
 
     params
