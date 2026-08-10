@@ -38,7 +38,7 @@ use vgm2x6::opm::{
     OpmState, PB_SENSITIVITY,
 };
 use vgm2x6::opn::{self, OpnState};
-use vgm2x6::patch::PatchBank;
+use vgm2x6::patch::{PatchBank, X6Converter};
 use vgm2x6::play::{
     self, detect_chip, freq_pitch_bend, OpnInfo, OpnWriteKind, SmfSink, SourceChip, WavSink,
 };
@@ -549,13 +549,13 @@ fn run(args: &[String]) -> Result<(), String> {
 fn render_wav(data: &[u8], data_start: usize, out: &Path, gain: f32) -> Result<(), String> {
     const SR: f32 = 44_100.0;
     let mut engine = ym38x6_core::Ym38x6Engine::new(SR);
-    let audio = play::opm_to_audio(data, data_start, &mut engine);
+    let audio = play::opm_to_audio(data, data_start, X6Converter, &mut engine);
     play::finish_wav(&mut engine, audio, SR, out, gain)
 }
 
 /// YM2151(OPM) の SMF + 音色バンクを出力する（従来パス）。演奏ループは [play::opm_to_smf] へ委譲する。
 fn run_opm_smf(data: &[u8], header: &vgm::VgmHeader, args: &Args) -> Result<(), String> {
-    let mut bank = PatchBank::new();
+    let mut bank = PatchBank::new(X6Converter);
     let mut smf = play::opm_to_smf(data, header.data_start, &mut bank);
 
     bank.write(&args.out_bank, args.bank)?;
@@ -571,7 +571,7 @@ fn run_opm_smf(data: &[u8], header: &vgm::VgmHeader, args: &Args) -> Result<(), 
 /// OPN系の出力（SMF+バンク または WAV）。演奏ループは [play::process_opn] へ委譲する。
 fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result<(), String> {
     let total_ch = info.fm_channels + if info.has_ssg { 3 } else { 0 };
-    let mut bank = PatchBank::new();
+    let mut bank = PatchBank::new(X6Converter);
 
     let fm_vel = scaled_velocity(args.fm_gain);
     let ssg_vel = scaled_velocity(args.ssg_gain);
@@ -595,7 +595,7 @@ fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result
     }
 
     if let Some(wav_path) = &args.wav {
-        let mut sink = WavSink::new(44_100.0, total_ch);
+        let mut sink = WavSink::<ym38x6_core::Ym38x6Engine>::new(44_100.0, total_ch);
         play::process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel, args.only_ch);
         return sink.finish_and_write(wav_path, args.gain);
     }

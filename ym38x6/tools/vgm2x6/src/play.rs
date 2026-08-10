@@ -8,11 +8,11 @@ use std::path::Path;
 
 use crate::opm::{compute_pitch_bend, kc_to_midi_note, pb_to_semitones, OpmState, PB_SENSITIVITY};
 use crate::opn::{self, OpnState};
-use crate::patch::PatchBank;
+use crate::patch::{PatchBank, PatchConverter};
 use crate::smf::SmfBuilder;
 use crate::ssg::{self, mix_patch, noise_patch, psg_patch, SsgState};
 use crate::vgm::{VgmCmd, VgmHeader, VgmIter};
-use ym38x6_core::{Vco, Ym38x6Patch};
+use ym38x6_core::Vco;
 
 // ===========================================================================
 // チップ判定
@@ -122,10 +122,11 @@ pub fn freq_pitch_bend(cur_midi: f32, base_midi: f32) -> (i16, bool) {
 
 /// OPN変換の出力先抽象。FM/SSGの楽音イベントを SMF（[SmfSink]）または
 /// WAV直描画（[WavSink]）へ振り分ける。`tick` はSMF用（WAVは無視）。
-pub trait OpnSink {
+/// `P` は変換後パッチ型（[PatchConverter::Patch]。vgm2x6本体は `Ym38x6Patch`）。
+pub trait OpnSink<P> {
     fn set_pitch_bend_sensitivity(&mut self, ch: usize, semitones: u8);
     /// ノートオン前に呼ぶ。SMFはPC+CC102、WAVはチャンネルのパッチを記憶。
-    fn program_change(&mut self, tick: u64, ch: usize, program: u8, patch: Ym38x6Patch);
+    fn program_change(&mut self, tick: u64, ch: usize, program: u8, patch: P);
     fn note_on(&mut self, tick: u64, ch: usize, note: u8, freq: f32, vel: u8);
     fn note_off(&mut self, tick: u64, ch: usize, note: u8);
     /// `pb`=SMF用ベンド値, `cents`=WAV用セント。
@@ -152,11 +153,12 @@ impl SmfSink {
     }
 }
 
-impl OpnSink for SmfSink {
+// SmfSinkはprogram(番号)しか使わないため、パッチ型`P`に依らず動作する。
+impl<P> OpnSink<P> for SmfSink {
     fn set_pitch_bend_sensitivity(&mut self, ch: usize, semitones: u8) {
         self.smf.set_pitch_bend_sensitivity(ch + 1, ch as u8, semitones);
     }
-    fn program_change(&mut self, tick: u64, ch: usize, program: u8, _patch: Ym38x6Patch) {
+    fn program_change(&mut self, tick: u64, ch: usize, program: u8, _patch: P) {
         if self.last_program[ch] != Some(program) {
             self.smf.add_program_change(ch + 1, tick, ch as u8, program);
             self.smf.add_cc(ch + 1, tick, ch as u8, 102, program);
@@ -182,11 +184,51 @@ impl OpnSink for SmfSink {
     fn wait(&mut self, _samples: u32) {}
 }
 
+/// WAV直描画に必要な最小エンジン操作。`set_patch`は[sound_core::Vco]に含まれない
+/// （音色パッチの構造はエンジン固有のため）ので、ツール層のこの小トレイトで補う。
+pub trait WavEngine {
+    type Patch: Copy + Default;
+    fn new(sr: f32) -> Self;
+    fn set_patch(&mut self, patch: Self::Patch);
+    fn note_on(&mut self, ch: usize, freq: f32, vel: u8);
+    fn note_off(&mut self, ch: usize);
+    fn set_pitch_bend(&mut self, ch: usize, cents: f32);
+    fn set_channel_volume(&mut self, ch: usize, gain: f32);
+    /// 1チャンネル分のPCMを`buf`へレンダリングする。
+    fn render(&mut self, buf: &mut [f32]);
+}
+
+impl WavEngine for ym38x6_core::Ym38x6Engine {
+    type Patch = ym38x6_core::Ym38x6Patch;
+    fn new(sr: f32) -> Self {
+        ym38x6_core::Ym38x6Engine::new(sr)
+    }
+    fn set_patch(&mut self, patch: Self::Patch) {
+        // 固有メソッド（Vcoトレイトには含まれない）。
+        ym38x6_core::Ym38x6Engine::set_patch(self, patch);
+    }
+    fn note_on(&mut self, ch: usize, freq: f32, vel: u8) {
+        Vco::note_on(self, ch, freq, vel);
+    }
+    fn note_off(&mut self, ch: usize) {
+        Vco::note_off(self, ch);
+    }
+    fn set_pitch_bend(&mut self, ch: usize, cents: f32) {
+        Vco::set_pitch_bend(self, ch, cents);
+    }
+    fn set_channel_volume(&mut self, ch: usize, gain: f32) {
+        Vco::set_channel_volume(self, ch, gain);
+    }
+    fn render(&mut self, buf: &mut [f32]) {
+        Vco::render(self, buf, 1);
+    }
+}
+
 /// WAV直描画用のシンク。`tick`は無視し、エンジンを直接駆動する。
-pub struct WavSink {
-    engine: ym38x6_core::Ym38x6Engine,
+pub struct WavSink<E: WavEngine> {
+    engine: E,
     audio: Vec<f32>,
-    patches: Vec<Ym38x6Patch>,
+    patches: Vec<E::Patch>,
     sr: f32,
     /// 各チャンネルの現在のピッチベンド量（セント）。note_on後に再適用するため保持する。
     /// SMFパスと同様に「整数ノート周波数 + ベンド」で発音するための土台
@@ -197,12 +239,12 @@ pub struct WavSink {
     ch_gain: Vec<f32>,
 }
 
-impl WavSink {
+impl<E: WavEngine> WavSink<E> {
     pub fn new(sr: f32, total_ch: usize) -> Self {
         Self {
-            engine: ym38x6_core::Ym38x6Engine::new(sr),
+            engine: E::new(sr),
             audio: Vec::new(),
-            patches: vec![Ym38x6Patch::default(); total_ch],
+            patches: vec![E::Patch::default(); total_ch],
             sr,
             bend_cents: vec![0.0; total_ch],
             ch_gain: vec![1.0f32; total_ch],
@@ -216,9 +258,9 @@ impl WavSink {
     }
 }
 
-impl OpnSink for WavSink {
+impl<E: WavEngine> OpnSink<E::Patch> for WavSink<E> {
     fn set_pitch_bend_sensitivity(&mut self, _ch: usize, _semitones: u8) {}
-    fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: Ym38x6Patch) {
+    fn program_change(&mut self, _tick: u64, ch: usize, _program: u8, patch: E::Patch) {
         self.patches[ch] = patch;
     }
     fn note_on(&mut self, _tick: u64, ch: usize, note: u8, _freq: f32, vel: u8) {
@@ -249,7 +291,7 @@ impl OpnSink for WavSink {
     }
     fn wait(&mut self, samples: u32) {
         let mut buf = vec![0.0f32; samples as usize];
-        self.engine.render(&mut buf, 1);
+        self.engine.render(&mut buf);
         self.audio.extend_from_slice(&buf);
     }
 }
@@ -284,15 +326,15 @@ pub fn write_wav_mono16(path: &Path, samples: &[f32], sr: u32) -> std::io::Resul
 
 /// リリースの尾を1秒分レンダリングし、gain適用＋クリップ報告してWAVを書き出す。
 /// OPM（[opm_to_audio]の直接ループ）・OPN（[WavSink]）共通のWAV仕上げ処理。
-pub fn finish_wav(
-    engine: &mut ym38x6_core::Ym38x6Engine,
+pub fn finish_wav<E: WavEngine>(
+    engine: &mut E,
     mut audio: Vec<f32>,
     sr: f32,
     out: &Path,
     gain: f32,
 ) -> Result<(), String> {
     let mut tail = vec![0.0f32; sr as usize];
-    engine.render(&mut tail, 1);
+    engine.render(&mut tail);
     audio.extend_from_slice(&tail);
 
     // ゲイン適用前のピークを測り、クリップ状況を報告する
@@ -329,7 +371,7 @@ pub fn finish_wav(
 
 /// YM2151(OPM) の VGM を走査し、SMFイベント列を構築する（音色重複排除は`bank`が担う）。
 /// ピッチベンド感度設定・キーオン/オフ・KC/KF変更ロジックを全て含む。
-pub fn opm_to_smf(data: &[u8], data_start: usize, bank: &mut PatchBank) -> SmfBuilder {
+pub fn opm_to_smf<C: PatchConverter>(data: &[u8], data_start: usize, bank: &mut PatchBank<C>) -> SmfBuilder {
     let mut opm = OpmState::new();
     let mut smf = SmfBuilder::new();
     let mut samples: u64 = 0;
@@ -475,16 +517,21 @@ pub fn opm_to_smf(data: &[u8], data_start: usize, bank: &mut PatchBank) -> SmfBu
 ///
 /// DAW/VST/SMFを経由しないため、ピッチベンド感度RPNやホストのMIDI処理に依存しない
 /// 「変換器＋エンジンが本来出すべき音」が得られる。リリースの尾（tail）は含まない
-/// （呼び出し側が[finish_wav]で1秒分追加する）。
-pub fn opm_to_audio(data: &[u8], data_start: usize, engine: &mut ym38x6_core::Ym38x6Engine) -> Vec<f32> {
+/// （呼び出し側が[finish_wav]で1秒分追加する）。`conv`は状態を持つ変換器
+/// （例: 直接変換ツールの`--attack`モード）を呼び出し側が渡せるようにするための引数。
+pub fn opm_to_audio<C, E>(data: &[u8], data_start: usize, conv: C, engine: &mut E) -> Vec<f32>
+where
+    C: PatchConverter,
+    E: WavEngine<Patch = C::Patch>,
+{
     let mut opm = OpmState::new();
-    let mut bank = PatchBank::new();
+    let mut bank = PatchBank::new(conv);
     let mut audio: Vec<f32> = Vec::new();
 
     let mut active:   [bool; 8] = [false; 8];
     let mut base_kc:  [u8;   8] = [0;     8];
     // 各チャンネルが現在鳴らしているパッチ（kc-reon時の再キーオンに再利用）。
-    let mut cur_patch: [Ym38x6Patch; 8] = [Default::default(); 8];
+    let mut cur_patch: [C::Patch; 8] = [C::Patch::default(); 8];
 
     // pb(0-16383) → セント。VSTが感度±PB_SENSITIVITY半音で行う変換と同一
     // （pb_to_semitones は PB_SENSITIVITY を使う）。RPNが正しく効いた理想状態を再現する。
@@ -495,7 +542,7 @@ pub fn opm_to_audio(data: &[u8], data_start: usize, engine: &mut ym38x6_core::Ym
         match cmd {
             VgmCmd::Wait(n) => {
                 let mut buf = vec![0.0f32; n as usize];
-                engine.render(&mut buf, 1);
+                engine.render(&mut buf);
                 audio.extend_from_slice(&buf);
             }
             VgmCmd::Ym2151Write { reg, val } => match reg {
@@ -570,12 +617,12 @@ pub fn opm_to_audio(data: &[u8], data_start: usize, engine: &mut ym38x6_core::Ym
 
 /// OPN系VGMを走査し、FM + SSG の楽音イベントを `sink` へ送る共通処理。
 /// バンク（音色重複排除）は `bank` が保持する。
-pub fn process_opn(
+pub fn process_opn<C: PatchConverter>(
     data: &[u8],
     data_start: usize,
     info: OpnInfo,
-    bank: &mut PatchBank,
-    sink: &mut dyn OpnSink,
+    bank: &mut PatchBank<C>,
+    sink: &mut dyn OpnSink<C::Patch>,
     fm_vel: u8,
     ssg_vel: u8,
     only_ch: Option<usize>,
@@ -685,8 +732,8 @@ pub fn process_opn(
                                 sink.note_off(tick, ch, prev);
                             }
                             let voice = opn.build_voice(ch);
-                            let patch = voice.to_ym38x6_patch();
-                            let idx = bank.find_or_insert_fixed(patch, "opn_voice");
+                            let idx = bank.find_or_insert_opn(&voice, "opn_voice");
+                            let patch = bank.patch_at(idx);
                             let (fnum, block) = opn.fnum_block(ch);
                             let freq = opn::fnum_block_to_freq(fnum, block, info.clock, info.fm_divisor);
                             let midi_f = opn::freq_to_midi(freq);
@@ -775,14 +822,14 @@ pub fn process_opn(
 /// トーン有効時は [psg_patch]（矩形波）、ノイズのみ有効時は [noise_patch]（高帰還FM）を使う。
 /// OOR retrigger 時もパッチを更新するため、ノイズ周期変化に追随できる。
 #[allow(clippy::too_many_arguments)]
-fn eval_ssg_channel(
+fn eval_ssg_channel<C: PatchConverter>(
     sc: usize,
     fm: usize,
     ssg: &SsgState,
     ssg_clock: u32,
-    bank: &mut PatchBank,
+    bank: &mut PatchBank<C>,
     tick: u64,
-    sink: &mut dyn OpnSink,
+    sink: &mut dyn OpnSink<C::Patch>,
     vel: u8,
     note: &mut Option<u8>,
     base: &mut f32,
@@ -819,19 +866,15 @@ fn eval_ssg_channel(
     //   トーン+ノイズ → mix_patch（OP1矩形+OP3ノイズ加算）
     //   トーンのみ    → psg_patch（矩形）
     //   ノイズのみ    → noise_patch（NPの帯域）
-    let (patch, program) = if tone_active && noise_on {
-        let p = mix_patch(noise_per);
-        let prog = (bank.find_or_insert_fixed(p, "ssg_mix") % 128) as u8;
-        (p, prog)
+    let idx = if tone_active && noise_on {
+        bank.find_or_insert_fixed(mix_patch(noise_per), "ssg_mix")
     } else if tone_active {
-        let p = psg_patch();
-        let prog = (bank.find_or_insert_fixed(p, "psg_square") % 128) as u8;
-        (p, prog)
+        bank.find_or_insert_fixed(psg_patch(), "psg_square")
     } else {
-        let p = noise_patch(noise_per);
-        let prog = (bank.find_or_insert_fixed(p, "ssg_noise") % 128) as u8;
-        (p, prog)
+        bank.find_or_insert_fixed(noise_patch(noise_per), "ssg_noise")
     };
+    let patch = bank.patch_at(idx);
+    let program = (idx % 128) as u8;
 
     if note.is_none() {
         // 新規キーオン
