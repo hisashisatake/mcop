@@ -91,8 +91,8 @@ impl SmfBuilder {
         self.tracks[track].push((tick, ev));
     }
 
-    /// SMF Format 1 をファイルに書き出す。
-    pub fn write(&mut self, path: &Path) -> std::io::Result<()> {
+    /// SMF Format 1 のバイト列を構築する（ファイルI/Oを伴わない。テスト・埋め込み用途）。
+    pub fn to_bytes(&mut self) -> Vec<u8> {
         // テンポトラックを構築
         let total_ticks = self.tracks.iter()
             .flat_map(|t| t.iter())
@@ -131,6 +131,12 @@ impl SmfBuilder {
             buf.extend_from_slice(&track_data);
         }
 
+        buf
+    }
+
+    /// SMF Format 1 をファイルに書き出す。
+    pub fn write(&mut self, path: &Path) -> std::io::Result<()> {
+        let buf = self.to_bytes();
         let mut f = std::fs::File::create(path)?;
         f.write_all(&buf)
     }

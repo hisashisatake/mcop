@@ -3,6 +3,10 @@ name = "vgm2x6"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "vgm2x6"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vgm2x6"
 path = "src/main.rs"

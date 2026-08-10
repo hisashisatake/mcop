@@ -23,6 +23,7 @@ members = [
     "op505/tools/psr2op505",
     "op505/tools/mucom2op505",
     "op505/tools/opm2op505",
+    "op505/tools/vgm2op505",
 ]
 # ym38x6/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから

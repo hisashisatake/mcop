@@ -229,10 +229,128 @@ pub fn volume_to_cc11(vol: u8) -> u8 {
     (vol.min(15) as u16 * 127 / 15) as u8
 }
 
+// ---------------------------------------------------------------------------
+// SSG合成用の固定パッチ（トーン/ノイズ/混合）
+// ---------------------------------------------------------------------------
+
+/// PSG風パッチ。波形メモリ音色の矩形波(waveform=16)を、アタック最速・減衰なし・
+/// 最大サスティン・最速リリースのADSRで鳴らす。キーオン中は一定音量の矩形波、
+/// キーオフで即停止という、PSG(SSG/SN76489系)のトーン1チャンネルに近い挙動になる。
+/// release=255(最速≒8.71ms)はエンジンの最短値。release=0だとrr_to_delta(0)=284.9秒となり
+/// SMFパス(異note=別VoiceID)では note_off後も延々と鳴り続けてしまう。
+pub fn psg_patch() -> ym38x6_core::Ym38x6Patch {
+    // 波形番号: sine=0 / saw=8 / square=16 / triangle=24（preset.rs の基本4波形に準拠）
+    ym38x6_core::waveform_memory_patch(
+        16,
+        ym38x6_core::AdsrParams { attack: 255, decay: 0, sustain: 255, release: 255 },
+    )
+}
+
+/// ノイズ専用OperatorParams（波形番号32+NP）。アタック最速・減衰なし・最大サスティン・最速リリース。
+/// エンジンが17bit LFSRをNP由来クロックレートでサンプル&ホールドしてノイズを生成する。
+fn noise_op(np: u8) -> ym38x6_core::OperatorParams {
+    ym38x6_core::OperatorParams {
+        tl: 255,
+        ar: 255,
+        d1r: 0,
+        d2r: 0,
+        d1l: 255,
+        rr: 255, // rr=0は284.9秒リリースになるためSMFパスで鳴りっぱなしになる。最速(≒8.71ms)を使う。
+        mul: 1,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 32 + np.min(31), // 32〜63 = ノイズ（color=NP）
+        op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
+        eg_shift: 0,
+        level_scale: 0,
+        velocity_gain: 255,
+    }
+}
+
+/// SSGノイズのみ用パッチ。ノイズOPを OP1 で鳴らす（Algorithm 7・OP2〜4ミュート）。
+/// ノイズはピッチレスなので note 周波数には依存せず、NPで帯域（白〜低域）が決まる。
+pub fn noise_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
+    use ym38x6_core::Ym38x6Patch;
+    let mut patch = Ym38x6Patch::default();
+    patch.channel.algorithm = 7;
+    let op1 = noise_op(np);
+    patch.operators[0] = op1;
+    let muted = ym38x6_core::OperatorParams { tl: 0, ..op1 };
+    patch.operators[1] = muted;
+    patch.operators[2] = muted;
+    patch.operators[3] = muted;
+    patch
+}
+
+/// トーン+ノイズ混合パッチ（実機SSGのトーン・ノイズ同時出力）。
+/// Algorithm 7 で OP1=矩形波（トーン、note周波数で鳴る）+ OP3=ノイズ（NPの帯域）の加算混合。
+/// 実機の「トーンANDノイズ（ゲート）」ではなく加算近似だが、両方が同時に聞こえる。
+pub fn mix_patch(np: u8) -> ym38x6_core::Ym38x6Patch {
+    use ym38x6_core::{OperatorParams, Ym38x6Patch};
+    let mut patch = Ym38x6Patch::default();
+    patch.channel.algorithm = 7;
+    // OP1: 矩形波（トーン）。psg_patch と同じ素直な矩形オシレーター。
+    let tone = OperatorParams {
+        tl: 255,
+        ar: 255,
+        d1r: 0,
+        d2r: 0,
+        d1l: 255,
+        rr: 0,
+        mul: 1,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 16, // 矩形波（square variant0）
+        op_fine_tune: 128,
+        floor: 0,
+        loop_enabled: 0,
+        curve: 0,
+        eg_shift: 0,
+        level_scale: 0,
+        velocity_gain: 255,
+    };
+    patch.operators[0] = tone;
+    patch.operators[1] = OperatorParams { tl: 0, ..tone };
+    patch.operators[2] = noise_op(np); // OP3: ノイズ
+    patch.operators[3] = OperatorParams { tl: 0, ..tone };
+    patch
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mix_patch_combines_tone_and_noise() {
+        // Algorithm 7、OP1=矩形(16)=トーン、OP3=ノイズ(32+NP)、OP2/4=ミュート。
+        let p = mix_patch(5);
+        assert_eq!(p.channel.algorithm, 7);
+        assert_eq!(p.operators[0].waveform, 16);
+        assert_eq!(p.operators[0].tl, 255);
+        assert_eq!(p.operators[1].tl, 0);
+        assert_eq!(p.operators[2].waveform, 37); // 32+5
+        assert_eq!(p.operators[2].tl, 255);
+        assert_eq!(p.operators[3].tl, 0);
+    }
+
+    #[test]
+    fn noise_patch_maps_np_directly_to_waveform() {
+        // OP1の波形番号 = 32 + NP（実機NP直対応、32〜63）。
+        let p0 = noise_patch(0);
+        let p31 = noise_patch(31);
+        assert_eq!(p0.operators[0].waveform, 32);
+        assert_eq!(p31.operators[0].waveform, 63);
+        assert_eq!(p0.channel.algorithm, 7);
+        // OP2〜4はミュート(TL=0)
+        assert_eq!(p0.operators[1].tl, 0);
+    }
 
     #[test]
     fn tone_period_combines_lo_hi() {
