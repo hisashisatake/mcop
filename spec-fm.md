@@ -409,6 +409,35 @@ OPNベース音程ズレの真因はYM2608のプリスケーラだった（修�
 `--dump-pitch`（OPM/OPN共通スキーマでfreq/midi/note/pb/alg/carrier_muls等を出力）、
 `--fb-max`（フィードバック上限の実験的上書き）、`--only-ch`（チャンネル分離）を実装済み。
 
+### 5.4 vgm2op505（.38x6非経由の直接変換）
+
+`op505/tools/vgm2op505`は、VGM/VGZを中間の`.38x6`を経由せず`.op505`（OP505のN点Time/Level
+方式EG）へ直接変換する。他の直接変換ツール（`opz2op505`等）と異なり、vgm2x6は音色変換だけで
+なく演奏ロジック本体（VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理）が主体だったため、
+新数式は書かずに**演奏ロジックの共有**で対応した:
+
+- `ym38x6/tools/vgm2x6`をlib+binの2ターゲット構成へ切り出し、チップ判定・SMF/WAV出力抽象
+  （`OpnSink`/`WavEngine`）・OPM/OPN演奏ループを`PatchConverter`トレイトでパッチ型非依存に
+  ジェネリクス化した（`vgm2x6::patch::PatchBank<C>`/`vgm2x6::play`）。vgm2op505はこの
+  libへ薄いバイナリとして相乗りし、`Op505Converter`（opm2op505/mucom2op505の
+  `voice_to_op505_patch`へ委譲）と`Engine505`（`Op505Engine`のnewtypeラッパー）を
+  差し込むだけで済む
+- **バンク重複判定キーの統一が要**: 元のvgm2x6は非OPMエントリー（OPNボイス・SSG合成パッチ）
+  の重複判定を「`.38x6`変換後のパッチ値」で行っていた（OPNボイスは`find_or_insert_fixed`
+  経由）。直接変換でもこの判定基準を`Ym38x6Patch`のまま統一しないと、x6変換で潰れる2音色が
+  変換器によって別エントリーになり、SMFのProgram Change番号がvgm2x6と食い違う。
+  `PatchBank::find_or_insert_opn`（キー=`voice.to_ym38x6_patch()`）を新設し、
+  `find_or_insert_fixed`と同一プールを共有させることで解決した
+- SSG合成パッチ（`psg_patch`/`noise_patch`/`mix_patch`、`ssg.rs`）はx6ネイティブ定義の
+  人工パッチ（実機レート由来ではない）なので、実機レート写像を新設せず
+  `op505_core::adapter::convert_patch`（既存の`.38x6`→`.op505`2段変換）をそのまま使う
+- Pitch/Cutoff/Gain FGはOP505ネイティブ既定値（他の直接変換ツールと同じ仕様）のため、
+  `--attack bias`時の回帰テストは「operators全フィールド + channelの非FGフィールド」で
+  ビット一致を確認する（FG差異は意図的、可聴上はノーオペ）
+- `--dump-pitch`（ピッチロジック共通で新情報がない）と`--fb-max`/`--fb-2sample`/
+  `--fb-1sample`（op505-coreはフィードバック実験フラグを搭載しない設計）はvgm2op505に
+  持たせず、vgm2x6専用のまま残した
+
 ---
 
 ## 6. MUCOM88 / OPN — `mucom2x6`

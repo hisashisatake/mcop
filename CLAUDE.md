@@ -105,6 +105,9 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
                           `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成
     vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
     tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
+      vgm2x6/          ← VGM/VGZ→.38x6+SMF/WAV変換（lib+binの2ターゲット構成。演奏ロジック
+                          （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理・PatchBank<C>等）を
+                          lib側（src/play.rs等）へ切り出し、op505/tools/vgm2op505が再利用する
   op505/               ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
     core/              ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、Vco実装の一つ。
                           ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定。
@@ -114,6 +117,11 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
       opz2op505/       ← TX81Z(OPZ/YM2414) syx → .op505直接変換（クレート名opz2op505。opz2x6のEGヘルパーと
                           op505-core adapter.rsのconvert_eg_shapeを合成再利用。--attack bias/none/curveで
                           アタック立ち上がり表現をA/B可能、既定biasは旧2段変換とビット一致）
+      vgm2op505/       ← VGM/VGZ → .op505+SMF/WAV直接変換（クレート名vgm2op505。演奏ロジックは
+                          ym38x6/tools/vgm2x6のlibを再利用し、音色変換のみopm2op505/mucom2op505の
+                          voice_to_op505_patchへ差し替え。SSG合成パッチはop505-core
+                          adapter::convert_patchで変換。--dump-pitch/--fb-*系はvgm2x6専用のまま
+                          非搭載（ピッチロジック共通/op505-core非搭載のため）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
