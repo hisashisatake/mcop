@@ -113,6 +113,16 @@ impl<C: PatchConverter> PatchBank<C> {
         idx
     }
 
+    /// 全エントリーを (program番号, 名前, パッチ) の列で返す（外部クレートのバンク出力用。
+    /// `.38x6`以外の出力形式は[X6Converter]専用の[write][PatchBank::write]を持たないため、
+    /// vgm2op505等はこれで自前のバンクファイルを組み立てる）。
+    pub fn entries(&self) -> impl Iterator<Item = (u8, &str, &C::Patch)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ((i % 128) as u8, e.name.as_str(), &e.patch))
+    }
+
     /// 変換警告が出たエントリーを (名前, 警告一覧) の列で返す（空エントリーは含まない）。
     pub fn warnings(&self) -> Vec<(&str, &[String])> {
         self.entries
