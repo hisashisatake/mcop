@@ -13,8 +13,7 @@ mod program_sync;
 mod shift_keys;
 mod state;
 
-pub use engine_sync::notify_engine;
-pub use op505_state::invalidate_op505_patch;
+pub use engine_sync::{notify_engine, notify_selection_changed};
 pub use program_sync::get_current_program;
 pub use shift_keys::notify_shift;
 

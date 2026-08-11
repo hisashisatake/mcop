@@ -11,28 +11,29 @@ use op505_core::Op505Engine;
 // sound-coreへ直接依存しない既存方針に合わせる）。
 use ym38x6_core::{Vco, Ym38x6Engine};
 
-/// どちらのエンジンが演奏入力（note_on）を受けるか。
+/// どちらのエンジンが演奏入力（note_on）を受けるか。既定はOP505（op505が主力、ym38x6は
+/// 将来非推奨という方針のため）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ActiveEngine {
-    #[default]
     Ym38x6,
+    #[default]
     Op505,
 }
 
 impl ActiveEngine {
-    /// フロントエンドのエンジン選択値（0=38x6 / 1=OP505、範囲外は38x6）から変換する。
+    /// フロントエンドのエンジン選択値（0=OP505 / 1=38x6、範囲外は既定のOP505）から変換する。
     pub fn from_u8(v: u8) -> Self {
         if v == 1 {
-            Self::Op505
-        } else {
             Self::Ym38x6
+        } else {
+            Self::Op505
         }
     }
 
     pub fn to_u8(self) -> u8 {
         match self {
-            Self::Ym38x6 => 0,
-            Self::Op505 => 1,
+            Self::Op505 => 0,
+            Self::Ym38x6 => 1,
         }
     }
 }
@@ -117,6 +118,34 @@ mod tests {
         assert_eq!(engines.op505.active_voice_count(), 0, "note_offが非アクティブ側にも届くべき");
     }
 
+    /// OP505側を確実に鳴らすための最小パッチ（algorithm 7・全OP独立キャリア・瞬時満レベル
+    /// サスティンEG）。`op505-core::demo`廃止後、この用途専用にここで組み立てる。
+    fn loud_op505_patch() -> op505_core::Op505Patch {
+        use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
+
+        let instant_sustain_eg = TimeEgParams {
+            stages: {
+                let mut stages = [TimeStage::default(); MAX_STAGES];
+                stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+                stages
+            },
+            stage_count: 1,
+            loop_enabled: 0,
+            loop_start: 0,
+            loop_end: 0,
+            release_start: 0,
+        };
+
+        let mut patch = op505_core::Op505Patch::default();
+        for op in patch.operators.iter_mut() {
+            op.tl = 255;
+            op.eg = instant_sustain_eg;
+            op.mul = 1;
+        }
+        patch.channel.algorithm = 7;
+        patch
+    }
+
     #[test]
     fn render_mixes_both_engines_additively() {
         // 両エンジンで同時に発音した状態のrender出力が非サイレントであること
@@ -125,7 +154,7 @@ mod tests {
         engines.active = ActiveEngine::Ym38x6;
         engines.note_on(0, 220.0, 100);
         engines.active = ActiveEngine::Op505;
-        engines.op505.set_patch(op505_core::demo::demo_patch(0).unwrap());
+        engines.op505.set_patch(loud_op505_patch());
         engines.note_on(1, 220.0, 100);
 
         let mut both = vec![0.0f32; 4096];
@@ -136,9 +165,9 @@ mod tests {
 
     #[test]
     fn active_engine_u8_roundtrip() {
-        assert_eq!(ActiveEngine::from_u8(0), ActiveEngine::Ym38x6);
-        assert_eq!(ActiveEngine::from_u8(1), ActiveEngine::Op505);
-        assert_eq!(ActiveEngine::from_u8(255), ActiveEngine::Ym38x6, "範囲外は既定の38x6");
+        assert_eq!(ActiveEngine::from_u8(0), ActiveEngine::Op505);
+        assert_eq!(ActiveEngine::from_u8(1), ActiveEngine::Ym38x6);
+        assert_eq!(ActiveEngine::from_u8(255), ActiveEngine::Op505, "範囲外は既定のOP505");
         assert_eq!(ActiveEngine::from_u8(ActiveEngine::Op505.to_u8()), ActiveEngine::Op505);
     }
 }

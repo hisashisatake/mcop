@@ -1,11 +1,5 @@
 //! op505-coreの試聴プローブ（使い捨て診断用）。
 //!
-//! - m1: TimeEgプローブ（`sound-core/examples/time_eg_probe.rs`）のe3（静止を挟んだ音量2値
-//!   スイッチ）と全く同じ形をGain FGに設定し、FM合成後の質感で成立するか確認する（本命ユースケース）。
-//! - m2: モジュレーターのオペレーターEGを多段ループ化し、レート方式では書けない
-//!   「変調指数の折れ線ループ」を聴く。
-//! - m3: Pitch FGに階段状プラトー（TimeEgプローブのd1と同じ形）を設定し、
-//!   アルペジオ的なピッチステップを聴く。
 //! - Adapter聴き比べ: 既存`.38x6`（GM2 Bank0 Acoustic Grand Piano、および引数で渡した
 //!   `.38x6`ファイル）をAdapterでOP505形式へ変換し、`Ym38x6Engine`と`Op505Engine`で
 //!   同じフレーズを鳴らして`orig_*.wav`/`op505_*.wav`として並べて出力する。変換警告はstdoutへ。
@@ -26,7 +20,6 @@
 
 use std::path::Path;
 
-use op505_core::demo::demo_patch;
 use op505_core::eg_convert::{apply_transparent_gain_release, convert_eg_shape, convert_fg_eg};
 use op505_core::{
     Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch, Op505PresetEntry,
@@ -116,12 +109,6 @@ fn main() {
 
     let out_dir = Path::new(&first);
     let extra_patch_paths: Vec<String> = args.collect();
-
-    // m1/m2/m3の定義は`op505_core::demo`へ昇格済み（0=Gain Switch / 1=Modulator Multi-stage / 2=Pitch Steps）。
-    write_wav(&out_dir.join("m1_gain_switch.wav"), &render_op505(demo_patch(0).unwrap(), NOTE_FREQ));
-    write_wav(&out_dir.join("m2_op_eg_multistage.wav"), &render_op505(demo_patch(1).unwrap(), NOTE_FREQ));
-    write_wav(&out_dir.join("m3_pitch_fg_steps.wav"), &render_op505(demo_patch(2).unwrap(), 220.0));
-    println!("wrote m1/m2/m3 probe WAVs to {}", out_dir.display());
 
     // Adapter聴き比べ: GM2 Bank0 Acoustic Grand Piano（組み込み、常時実行）。
     compare_and_write(out_dir, "gm2_piano", gm2_bank0_patch(0).expect("gm2 program 0 should exist"));

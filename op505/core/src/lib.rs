@@ -9,7 +9,6 @@
 //! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
 //! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
-pub mod demo;
 pub mod eg_convert;
 pub mod operator;
 pub mod preset;
