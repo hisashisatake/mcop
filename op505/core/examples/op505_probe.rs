@@ -10,16 +10,93 @@
 //!   `.38x6`ファイル）をAdapterでOP505形式へ変換し、`Ym38x6Engine`と`Op505Engine`で
 //!   同じフレーズを鳴らして`orig_*.wav`/`op505_*.wav`として並べて出力する。変換警告はstdoutへ。
 //! - `.op505`書き出しサンプル: Adapter変換結果をJSONとして保存する（フォーマット実物確認用）。
+//! - `--convert-bank <in.38x6> <out.op505>`: `.38x6`バンクファイルの全プリセットをAdapterで
+//!   一括変換し`.op505`として書き出す。gesture-appの`op505_set_program`はAdapterのその場変換を
+//!   廃止した（op505/デフォーク計画Phase 3）ため、既存`.38x6`をOP505で鳴らしたい場合は
+//!   このコマンドで`op505_presets_dir()`向けの`.op505`を事前生成する。
+//!
+//! Adapter本体（`legacy_convert_patch`）はこのファイルにローカル実装する。旧`op505_core::adapter`
+//! モジュールは廃止済み（op505/デフォーク計画Phase 4）で、`op505-core`の`src/`は
+//! ym38x6-coreに一切依存しない。`ym38x6-core`は本クレートの`[dev-dependencies]`
+//! （＝examplesビルド時のみ有効）のため、`legacy_convert_patch`は`op505_core::eg_convert`の
+//! pub関数（ym38x6非依存のEG形状変換）を呼ぶ薄い配線層として書く。
 //!
 //! 実行: cargo run -p op505-core --example op505_probe -- <出力ディレクトリ> [<入力.38x6>...]
+//! 実行（一括変換）: cargo run -p op505-core --example op505_probe -- --convert-bank <in.38x6> <out.op505>
 
 use std::path::Path;
 
-use op505_core::adapter::convert_patch;
 use op505_core::demo::demo_patch;
-use op505_core::{Op505Engine, Op505Patch};
+use op505_core::eg_convert::{apply_transparent_gain_release, convert_eg_shape, convert_fg_eg};
+use op505_core::{
+    Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch, Op505PresetEntry,
+    Op505PresetFile,
+};
 use sound_core::Vco;
-use ym38x6_core::{gm2_bank0_patch, PresetFile, Ym38x6Engine, Ym38x6Patch};
+use ym38x6_core::{gm2_bank0_patch, PresetEntry, PresetFile, Ym38x6Engine, Ym38x6Patch};
+
+/// `.38x6`（`Ym38x6Patch`）をop505の`Op505Patch`へ変換する（旧`op505_core::adapter::convert_patch`の
+/// ローカル再実装）。クランプ・特殊ケース変換が発生した箇所は警告としてラベル付きで返す。
+fn legacy_convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
+    let mut warnings = Vec::new();
+
+    let operators = std::array::from_fn(|i| {
+        let src_op = &src.operators[i];
+        let eg = convert_eg_shape(
+            src_op.ar,
+            src_op.d1r,
+            src_op.d1l,
+            src_op.d2r,
+            src_op.rr,
+            src_op.floor,
+            src_op.loop_enabled,
+            src_op.curve,
+            &mut warnings,
+            &format!("op{i}"),
+        );
+        Op505OperatorParams {
+            tl: src_op.tl,
+            eg,
+            mul: src_op.mul,
+            dt1: src_op.dt1,
+            ksr: src_op.ksr,
+            am_enable: src_op.am_enable,
+            velocity_sensitivity: src_op.velocity_sensitivity,
+            waveform: src_op.waveform,
+            op_fine_tune: src_op.op_fine_tune,
+            eg_shift: src_op.eg_shift,
+            level_scale: src_op.level_scale,
+            velocity_gain: src_op.velocity_gain,
+        }
+    });
+
+    let ch = &src.channel;
+    let pitch_fg_eg = convert_fg_eg(&ch.pitch_fg.eg, &mut warnings, "pitch_fg");
+    let cutoff_fg_eg = convert_fg_eg(&ch.cutoff_fg.eg, &mut warnings, "cutoff_fg");
+    let mut gain_fg_eg = convert_fg_eg(&ch.gain_fg, &mut warnings, "gain_fg");
+    apply_transparent_gain_release(&mut gain_fg_eg, ch.gain_fg.rr, ch.gain_fg.loop_enabled, &mut warnings);
+
+    let channel = Op505ChannelParams {
+        algorithm: ch.algorithm,
+        feedback: ch.feedback,
+        chip_lfo_freq: ch.chip_lfo_freq,
+        chip_lfo_pmd: ch.chip_lfo_pmd,
+        chip_lfo_amd: ch.chip_lfo_amd,
+        chip_lfo_delay: ch.chip_lfo_delay,
+        pms: ch.pms,
+        ams: ch.ams,
+        filter_cutoff: ch.filter_cutoff,
+        filter_resonance: ch.filter_resonance,
+        filter_type: ch.filter_type,
+        filter_self_oscillation: ch.filter_self_oscillation,
+        pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: ch.pitch_fg.depth },
+        cutoff_fg: Op505BipolarFg { eg: cutoff_fg_eg, depth: ch.cutoff_fg.depth },
+        gain_fg: gain_fg_eg,
+        texture_lfo: ch.texture_lfo,
+    };
+
+    (Op505Patch { operators, channel }, warnings)
+}
 
 const SAMPLE_RATE: f32 = 44100.0;
 const NOTE_FREQ: f32 = 110.0; // A2
@@ -28,8 +105,16 @@ const RELEASE_TAIL_SECS: f32 = 1.0;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let out_dir = args.next().unwrap_or_else(|| ".".to_string());
-    let out_dir = Path::new(&out_dir);
+    let first = args.next().unwrap_or_else(|| ".".to_string());
+
+    if first == "--convert-bank" {
+        let in_path = args.next().expect("--convert-bank <in.38x6> <out.op505>: 入力パス省略");
+        let out_path = args.next().expect("--convert-bank <in.38x6> <out.op505>: 出力パス省略");
+        convert_bank(&in_path, &out_path);
+        return;
+    }
+
+    let out_dir = Path::new(&first);
     let extra_patch_paths: Vec<String> = args.collect();
 
     // m1/m2/m3の定義は`op505_core::demo`へ昇格済み（0=Gain Switch / 1=Modulator Multi-stage / 2=Pitch Steps）。
@@ -65,6 +150,43 @@ fn main() {
     }
 }
 
+/// `--convert-bank`本体。`.38x6`バンクファイルの全プリセットをAdapterで一括変換し、
+/// 同じ`bank`・同じvariant(Presets/Programs)・同じ`program`/`name`を保った`.op505`として書き出す
+/// （`op505_presets_dir()`へ配置すればgesture-appの`op505_set_program`から引ける）。
+fn convert_bank(in_path: &str, out_path: &str) {
+    let json = std::fs::read_to_string(in_path).unwrap_or_else(|e| panic!("読み込み失敗: {in_path}: {e}"));
+    let file = PresetFile::from_json(&json).unwrap_or_else(|e| panic!("パース失敗（PresetFile形式でない）: {in_path}: {e}"));
+
+    let convert_entries = |entries: Vec<PresetEntry>| -> Vec<Op505PresetEntry> {
+        entries
+            .into_iter()
+            .map(|entry| {
+                let (patch, warnings) = legacy_convert_patch(&entry.patch);
+                if !warnings.is_empty() {
+                    println!("[program {} \"{}\"] 変換警告 {} 件:", entry.program, entry.name, warnings.len());
+                    for w in &warnings {
+                        println!("  - {w}");
+                    }
+                }
+                Op505PresetEntry { program: entry.program, name: entry.name, patch }
+            })
+            .collect()
+    };
+
+    let out_file = match file {
+        PresetFile::Presets { bank, presets } => {
+            Op505PresetFile::Presets { bank, presets: convert_entries(presets) }
+        }
+        PresetFile::Programs { bank, programs } => {
+            Op505PresetFile::Programs { bank, programs: convert_entries(programs) }
+        }
+    };
+
+    let out_json = out_file.to_json().expect("serialize .op505");
+    std::fs::write(out_path, out_json).unwrap_or_else(|e| panic!("書き込み失敗: {out_path}: {e}"));
+    println!("wrote {out_path}");
+}
+
 fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
 }
@@ -72,7 +194,7 @@ fn sanitize(name: &str) -> String {
 /// `.38x6`パッチをAdapterで変換し、原音（Ym38x6Engine）とOP505変換後（Op505Engine）を
 /// 同じフレーズで並べて出力する。変換警告はラベル付きでstdoutへ表示する。
 fn compare_and_write(out_dir: &Path, label: &str, src: Ym38x6Patch) {
-    let (op505_patch, warnings) = convert_patch(&src);
+    let (op505_patch, warnings) = legacy_convert_patch(&src);
     if warnings.is_empty() {
         println!("[{label}] 変換警告なし");
     } else {

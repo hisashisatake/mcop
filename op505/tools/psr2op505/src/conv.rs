@@ -1,21 +1,21 @@
 //! PSR-70（OPQ/YM3806）ボイスレジスタ → OP505パッチへの直接変換ロジック。
 //!
-//! psr2x6（PSR-70→.38x6変換）のEGヘルパー（実機レート→38x6レート写像）と、
-//! op505-core adapter.rs の`convert_eg_shape`（38x6レート→TimeEgParams変換）を
+//! 実機レート写像・非EGフィールド構築（[crate::map]、psr2x6からの複製）と、
+//! op505-core `eg_convert::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
 //! 1ツール内で合成することで、中間の`.38x6`ファイルを経由せず直接TimeEgParamsを得る。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::adapter::convert_eg_shape;
-use op505_core::{Op505ChannelParams, Op505OperatorParams, Op505Patch, Op505PresetEntry, Op505PresetFile};
-use psr2x6::conv::{self, NamedVoice, OpqOperator, OpqVoice, PsrConvOptions};
+use op505_core::eg_convert::convert_eg_shape;
+use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry, Op505PresetFile};
 use sound_core::TimeEgParams;
-use ym38x6_core::OperatorParams;
+
+use crate::map::{self, NamedVoice, OpqOperator, OpqVoice, PsrConvOptions};
 
 /// アタック立ち上がりの表現方法。詳細はopz2op505::conv::AttackMode参照
 /// （同じ問題・同じ選択肢。既定は`None`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttackMode {
-    /// psr2x6と同じATTACK_ONSET_BIAS補正を適用（旧2段変換とビット一致、回帰テストの基準・比較用）。
+    /// アタック立ち上がりの聴感補正バイアスを適用（ゴールデンテストの基準・比較用）。
     Bias,
     /// バイアスなし（既定）。
     None,
@@ -24,8 +24,8 @@ pub enum AttackMode {
 }
 
 /// PSR-70の1オペレーターEG(ar/d1r/d2r/rr/d1l/ksr)をTimeEgParamsへ直接変換する。
-/// 実機レート→38x6レート写像はpsr2x6の関数（[conv::opq_ar_to_x6]等）を合成再利用し、
-/// 段割り当てはop505-coreの[convert_eg_shape]を合成再利用する（独自数式は書かない）。
+/// 実機レート写像は[map]の関数を合成再利用し、段割り当てはop505-coreの
+/// [convert_eg_shape]を合成再利用する（独自数式は書かない）。
 pub fn direct_eg(
     op: &OpqOperator,
     is_carrier: bool,
@@ -34,44 +34,36 @@ pub fn direct_eg(
     warnings: &mut Vec<String>,
     label: &str,
 ) -> TimeEgParams {
-    let x6_ar = match attack_mode {
-        AttackMode::Bias => conv::opq_ar_to_x6(op.ar, op.ksr),
-        AttackMode::None | AttackMode::Curve => conv::opq_rate_to_x6(op.ar, op.ksr),
+    let eg_ar = match attack_mode {
+        AttackMode::Bias => map::ar_to_eg_rate(op.ar, op.ksr),
+        AttackMode::None | AttackMode::Curve => map::rate_to_eg_rate(op.ar, op.ksr),
     };
-    let mut x6_d1r = conv::opq_rate_to_x6(op.d1r, op.ksr);
-    let mut x6_d2r = conv::opq_rate_to_x6(op.d2r, op.ksr);
-    let mut x6_d1l = conv::sl_opq_to_x6(op.d1l);
-    let x6_rr = conv::opq_rr_to_x6(op.rr, op.ksr);
+    let mut eg_d1r = map::rate_to_eg_rate(op.d1r, op.ksr);
+    let mut eg_d2r = map::rate_to_eg_rate(op.d2r, op.ksr);
+    let mut eg_d1l = map::sl_to_eg_level(op.d1l);
+    let eg_rr = map::rr_to_eg_rate(op.rr, op.ksr);
 
     if is_carrier && carrier_sustain > 0.0 {
-        // psr2x6::conv::apply_carrier_sustainはOperatorParams全体を受け取るため、
-        // EG関連3フィールドだけを積んだ一時値で合成再利用する（独自数式を書かない）。
-        let mut tmp = OperatorParams { d1l: x6_d1l, d1r: x6_d1r, d2r: x6_d2r, ..OperatorParams::default() };
-        conv::apply_carrier_sustain(&mut tmp, carrier_sustain);
-        x6_d1l = tmp.d1l;
-        x6_d1r = tmp.d1r;
-        x6_d2r = tmp.d2r;
+        map::apply_carrier_sustain(&mut eg_d1l, &mut eg_d1r, &mut eg_d2r, carrier_sustain);
     }
 
-    let mut eg = convert_eg_shape(x6_ar, x6_d1r, x6_d1l, x6_d2r, x6_rr, 0, 0, 0, warnings, label);
+    let mut eg = convert_eg_shape(eg_ar, eg_d1r, eg_d1l, eg_d2r, eg_rr, 0, 0, 0, warnings, label);
     if attack_mode == AttackMode::Curve {
         eg.stages[0].curve = 1;
     }
     eg
 }
 
-/// OpqVoice → Op505Patch（オプション指定）。非EGパラメータは
-/// `psr2x6::conv::to_ym38x6_patch_opts`で一度.38x6化してフィールドコピーし
-/// （EG以外は完全一致のフィールド構成のため）、EGだけ[direct_eg]で置き換える。
+/// OpqVoice → Op505Patch（オプション指定）。非EGフィールドは[map::convert_op]/
+/// [map::convert_channel]で直接構築し、EGだけ[direct_eg]で埋める。
 /// PSR-70にはFG（Pitch/Cutoff/Gain）が存在しないため、FG3本はOP505ネイティブの既定値を使う。
 pub fn voice_to_op505_patch(
     voice: &OpqVoice,
     opts: PsrConvOptions,
     attack_mode: AttackMode,
 ) -> (Op505Patch, Vec<String>) {
-    let x6 = (*voice).to_ym38x6_patch_opts(opts);
     let alg = voice.algorithm.min(7) as usize;
-    let carriers = conv::CARRIERS[alg];
+    let carriers = map::CARRIERS[alg];
 
     let mut warnings = Vec::new();
     let operators = std::array::from_fn(|i| {
@@ -79,37 +71,16 @@ pub fn voice_to_op505_patch(
         let is_carrier = carriers.contains(&i);
         let label = format!("op{}", i + 1);
         let eg = direct_eg(op, is_carrier, opts.carrier_sustain, attack_mode, &mut warnings, &label);
-        let x6_op = &x6.operators[i];
-        Op505OperatorParams {
-            tl: x6_op.tl,
-            eg,
-            mul: x6_op.mul,
-            dt1: x6_op.dt1,
-            ksr: x6_op.ksr,
-            am_enable: x6_op.am_enable,
-            velocity_sensitivity: x6_op.velocity_sensitivity,
-            waveform: x6_op.waveform,
-            op_fine_tune: x6_op.op_fine_tune,
-            eg_shift: x6_op.eg_shift,
-            level_scale: x6_op.level_scale,
-            velocity_gain: x6_op.velocity_gain,
-        }
+        let mut params = map::convert_op(op, is_carrier, opts.mod_tl_cap);
+        params.eg = eg;
+        params
     });
 
+    let ch = map::convert_channel(voice, alg as u8, opts);
     let channel = Op505ChannelParams {
-        algorithm: x6.channel.algorithm,
-        feedback: x6.channel.feedback,
-        chip_lfo_freq: x6.channel.chip_lfo_freq,
-        chip_lfo_pmd: x6.channel.chip_lfo_pmd,
-        chip_lfo_amd: x6.channel.chip_lfo_amd,
-        chip_lfo_delay: x6.channel.chip_lfo_delay,
-        pms: x6.channel.pms,
-        ams: x6.channel.ams,
-        filter_cutoff: x6.channel.filter_cutoff,
-        filter_resonance: x6.channel.filter_resonance,
-        filter_type: x6.channel.filter_type,
-        filter_self_oscillation: x6.channel.filter_self_oscillation,
-        texture_lfo: x6.channel.texture_lfo,
+        algorithm: ch.algorithm,
+        feedback: ch.feedback,
+        filter_cutoff: ch.filter_cutoff,
         ..Op505ChannelParams::default()
     };
 
@@ -162,40 +133,6 @@ mod tests {
         OpqOperator { ar, d1r, d2r, rr, d1l, ksr, mul: 1, detune: 32, tl: 0, am_enable: false }
     }
 
-    fn to_x6_operator_params(op: &OpqOperator) -> OperatorParams {
-        OperatorParams {
-            ar: conv::opq_ar_to_x6(op.ar, op.ksr),
-            d1r: conv::opq_rate_to_x6(op.d1r, op.ksr),
-            d2r: conv::opq_rate_to_x6(op.d2r, op.ksr),
-            d1l: conv::sl_opq_to_x6(op.d1l),
-            rr: conv::opq_rr_to_x6(op.rr, op.ksr),
-            ..OperatorParams::default()
-        }
-    }
-
-    /// 核となる回帰テスト: `AttackMode::Bias`（旧2段変換相当）の直接変換は、
-    /// 「psr2x6のx6レート写像 → op505-core adapter::convert_operator_eg」という
-    /// 旧2段変換とTimeEgParams完全一致する（独自数式を持たないことの検証）。
-    #[test]
-    fn direct_eg_bias_matches_two_stage_adapter_path() {
-        let cases = [
-            make_op(20, 15, 10, 8, 10, 0),
-            make_op(31, 31, 31, 15, 15, 3),
-            make_op(1, 5, 3, 3, 5, 1),
-            make_op(0, 10, 10, 8, 8, 0), // ar=0 フリーズ
-            make_op(20, 0, 10, 8, 8, 0), // d1r=0
-        ];
-        for op in cases {
-            let mut direct_warnings = Vec::new();
-            let direct = direct_eg(&op, false, 0.0, AttackMode::Bias, &mut direct_warnings, "op");
-
-            let x6_op = to_x6_operator_params(&op);
-            let two_stage = op505_core::adapter::convert_operator_eg(&x6_op);
-
-            assert_eq!(direct, two_stage, "mismatch for {op:?}");
-        }
-    }
-
     #[test]
     fn attack_none_has_no_bias_and_curve_only_shifts_stage0_curve() {
         let op = make_op(20, 15, 10, 8, 10, 0);
@@ -231,21 +168,6 @@ mod tests {
             };
         }
         voice
-    }
-
-    #[test]
-    fn voice_to_op505_patch_copies_non_eg_fields_from_x6() {
-        let voice = make_voice(4, [20, 20, 20, 20]);
-        let (patch, warnings) = voice_to_op505_patch(&voice, PsrConvOptions::default(), AttackMode::Bias);
-        let x6 = voice.to_ym38x6_patch_opts(PsrConvOptions::default());
-
-        assert!(warnings.is_empty());
-        for i in 0..4 {
-            assert_eq!(patch.operators[i].tl, x6.operators[i].tl, "op{i} tl mismatch");
-            assert_eq!(patch.operators[i].mul, x6.operators[i].mul, "op{i} mul mismatch");
-        }
-        assert_eq!(patch.channel.algorithm, x6.channel.algorithm);
-        assert_eq!(patch.channel.feedback, x6.channel.feedback);
     }
 
     #[test]

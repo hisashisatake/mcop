@@ -149,19 +149,21 @@ let activeEngine = 0;
 
     if (activeEngine === 1) {
       if (op505DemoIndex >= 0) {
-        // OP505組み込みデモ（TimeEg固有の形。Adapter変換では絶対に現れない）。
+        // OP505組み込みデモ（TimeEg固有の形。.op505プリセットには無い形）。
         labelEl.textContent = `OP505 ${demoEl.selectedOptions[0]?.textContent ?? ''}`;
         await invoke('op505_set_demo', { index: op505DemoIndex });
+        invalidateEditorOp505Patch();
       } else {
-        // 既存の.38x6プリセットをAdapterでOP505形式へ変換して鳴らす。
-        // 同じBank/Programをエンジン切替でA/B比較できる（Adapterの実地検証）。
-        labelEl.textContent = `OP505 ← ${programName(bank, program)}`;
-        const dto = await invoke('op505_set_program', { bank, program });
-        if (dto?.warnings?.length) {
-          console.warn(`[op505 adapter] 変換警告 ${dto.warnings.length} 件:`, dto.warnings);
+        // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
+        // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
+        const patch = await invoke('op505_set_program', { bank, program });
+        if (patch) {
+          labelEl.textContent = `OP505: ${programName(bank, program)}`;
+          invalidateEditorOp505Patch();
+        } else {
+          labelEl.textContent = `OP505: ${programName(bank, program)}（.op505未登録）`;
         }
       }
-      invalidateEditorOp505Patch();
     } else {
       labelEl.textContent = programName(bank, program);
       await invoke('ym38x6_set_program', { bank, program });

@@ -1,6 +1,7 @@
 //! mucom2op505 — MUCOM88 バイナリ音色バンク（`voice.dat`）を OP505 の `.op505` プリセット
-//! バンクへ**直接**変換する（中間の`.38x6`ファイルを経由しない。mucom2x6 + op505-core
-//! adapter.rs のEG変換ロジックを1ツール内で合成する。詳細は`mucom2op505::conv`のdocコメント参照）。
+//! バンクへ**直接**変換する（中間の`.38x6`ファイルを経由しない。パーサ・実機レート写像は
+//! 自クレート内に複製済み（fork-on-write）。詳細は`mucom2op505::conv`/`mucom2op505::map`の
+//! docコメント参照）。
 //!
 //! 使い方:
 //! ```text
@@ -28,8 +29,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use mucom2op505::conv::{self, AttackMode};
-use mucom2x6::conv::NamedVoice;
-use mucom2x6::mucom88;
+use mucom2op505::map::NamedVoice;
+use mucom2op505::parse as mucom88;
 
 struct WavConfig {
     on_secs: f32,
@@ -256,7 +257,7 @@ fn render_wavs(
             format!("slot{:03}_{safe}.wav", nv.slot)
         };
         let path = wav_dir.join(filename);
-        smf2wav::write_wav_mono16(&path, &samples, SR as u32)
+        op505_tools::wav::write_wav_mono16(&path, &samples, SR as u32)
             .map_err(|e| format!("WAV 書き込みに失敗: {}: {e}", path.display()))?;
     }
     println!("WAV 書き出し: {} に {} 音色", wav_dir.display(), targets.len());

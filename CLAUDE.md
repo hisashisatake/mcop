@@ -107,21 +107,30 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
       vgm2x6/          ← VGM/VGZ→.38x6+SMF/WAV変換（lib+binの2ターゲット構成。演奏ロジック
                           （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理・PatchBank<C>等）を
-                          lib側（src/play.rs等）へ切り出し、op505/tools/vgm2op505が再利用する
+                          lib側（src/play.rs等）に持つ。op505/tools/vgm2op505はop505デフォーク
+                          （2026-08-11）でこのlibから独立複製したため、現在は再利用していない
+                          （fork-on-write。詳細はspec-fm.md §デフォーク）
   op505/               ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
     core/              ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、Vco実装の一つ。
-                          ym38x6-coreへの依存はadapter.rs（既存.38x6パッチ変換）のみに限定。
+                          `src/`はym38x6-coreに一切依存しない（op505デフォーク完了、2026-08-11）。
+                          EG変換ロジック（convert_eg_shape等、ym38x6非依存）はeg_convert.rsに実装。
+                          ym38x6-coreへの依存は`[dev-dependencies]`のみ（examples/op505_probe.rsが
+                          既存.38x6からの変換に使う。旧adapter.rsは廃止済み）。
                           .op505バンク形式はpreset.rsのOp505PresetFile/Entry（.38x6のPresetFile/Entry相当）
     ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）
-    tools/             ← レガシーFM音源→OP505直接変換ツール群（実機レート→TimeEg直接変換、.38x6を経由しない）
-      opz2op505/       ← TX81Z(OPZ/YM2414) syx → .op505直接変換（クレート名opz2op505。opz2x6のEGヘルパーと
-                          op505-core adapter.rsのconvert_eg_shapeを合成再利用。--attack bias/none/curveで
-                          アタック立ち上がり表現をA/B可能、既定biasは旧2段変換とビット一致）
-      vgm2op505/       ← VGM/VGZ → .op505+SMF/WAV直接変換（クレート名vgm2op505。演奏ロジックは
-                          ym38x6/tools/vgm2x6のlibを再利用し、音色変換のみopm2op505/mucom2op505の
-                          voice_to_op505_patchへ差し替え。SSG合成パッチはop505-core
-                          adapter::convert_patchで変換。--dump-pitch/--fb-*系はvgm2x6専用のまま
-                          非搭載（ピッチロジック共通/op505-core非搭載のため）
+    tools/             ← レガシーFM音源→OP505直接変換ツール群（実機レート→TimeEg直接変換、.38x6を経由しない。
+                          op505デフォークによりym38x6-core/xxx2x6/vgm2x6への依存もゼロ）
+      common/          ← クレート名op505-tools。op505ツール群専用の共有ユーティリティ
+                          （WAV書き出し・ファイル名サニタイズ・音名変換・ゴールデンテストヘルパー）。
+                          ym38x6側のsmf2wav等には依存しない複製先（fork-on-write）。詳細はCargo.tomlのコメント
+      opz2op505/       ← TX81Z(OPZ/YM2414) syx → .op505直接変換（クレート名opz2op505。実機パーサ・
+                          レート写像・EG変換ロジックをop505-core::eg_convert経由で自己完結。--attack bias/none/curveで
+                          アタック立ち上がり表現をA/B可能、既定は`none`）
+      vgm2op505/       ← VGM/VGZ → .op505+SMF/WAV直接変換（クレート名vgm2op505。演奏ロジック
+                          （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理等）はym38x6/tools/vgm2x6から
+                          独立複製（by-value dedupキー方式）、音色変換はopm2op505/mucom2op505の
+                          voice_to_op505_patchを再利用。SSG合成パッチもOp505Patchをネイティブ構築。
+                          --dump-pitch/--fb-*系はvgm2x6専用のまま非搭載（ピッチロジック共通/op505-core非搭載のため）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
@@ -209,6 +218,14 @@ cargo check -p sound-core -p ym38x6-core --message-format=short
 # テスト
 cargo test -p sound-core
 cargo test -p ym38x6-core
+```
+
+### ゴールデンテストの更新（op505/tools/*）
+
+opz2op505/psr2op505/mucom2op505/opm2op505/vgm2op505は`op505-tools::golden`（フィンガープリント+可読JSONの二層構成）で回帰を検出する。実装を意図的に変えてゴールデンを更新する場合：
+
+```powershell
+$env:UPDATE_GOLDEN=1; cargo test -p opz2op505; Remove-Item Env:\UPDATE_GOLDEN
 ```
 
 ### アプリ起動（フェーズ1以降、Tauri設定後）

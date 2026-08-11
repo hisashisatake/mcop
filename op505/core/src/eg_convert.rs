@@ -1,17 +1,19 @@
 // ---------------------------------------------------------------------------
-// Adapter: 既存.38x6（レート方式5段EG、`ym38x6_core::Ym38x6Patch`）を
-// op505のN点Time/Level方式（`Op505Patch`）へ変換する。
+// EG変換: レート方式5段EG（`sound_core::EgParams`が表す ar/d1r/d1l/d2r/rr + floor/loop/curve）
+// をop505のN点Time/Level方式（`sound_core::TimeEgParams`）へ変換する。
 //
+// このモジュールはym38x6-coreに一切依存しない（op505/デフォーク計画Phase 4）。
 // キーオン部（AR/D1R/D2R区間）はレートテーブルの秒数×レベル差から各セグメントの
 // 所要時間を逆算する厳密変換。リリースはキーオフ時の開始レベルが実行時にしか
 // 決まらないため厳密変換不可能で、フルスパン（1.0→0.0の所要秒数）を公称値として使う
 // （memory `project_4point_tl_eg_decision.md`参照）。
+//
+// `opz2op505`/`psr2op505`/`mucom2op505`/`opm2op505`が実機レートを本モジュールの
+// レートスケールへ写像した後`convert_eg_shape`に通すことで、段割り当て・特殊ケース・
+// 30秒クランプ警告を共有する（旧`.38x6`経由の2段変換と同じ変換ロジックを直接呼ぶ形）。
 // ---------------------------------------------------------------------------
 
 use sound_core::{seconds_to_time, EgParams, TimeEgParams, TimeStage, MAX_STAGES};
-use ym38x6_core::{OperatorParams, Ym38x6Patch};
-
-use crate::{Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch};
 
 fn seconds_for_ar(rate: u8) -> Option<f32> {
     if rate == 0 {
@@ -49,8 +51,8 @@ fn time_for_seconds(seconds: f32, warnings: &mut Vec<String>, label: &str, what:
 /// EGの5段形状(ar/d1r/d1l/d2r/rr + floor/loop/curve)をTimeEgParamsへ変換する共通ロジック。
 /// オペレーターEGとPitch/Cutoff/Gain FGのeg部分（`EgParams`の`delay`以外の7フィールド）が
 /// 同じ形なので、この1関数で両方をまかなう。
-/// `opz2op505`等の直接変換ツールも、実機レートを38x6レート相当へ写像した後この関数に
-/// 通すことで、段割り当て・特殊ケース・30秒クランプ警告を共有する。
+/// `opz2op505`等の直接変換ツールも、実機レートをこのモジュールのレートスケール相当へ
+/// 写像した後この関数に通すことで、段割り当て・特殊ケース・30秒クランプ警告を共有する。
 pub fn convert_eg_shape(
     ar: u8,
     d1r: u8,
@@ -150,7 +152,7 @@ pub fn convert_eg_shape(
 
 /// 段の先頭にlevel=0のプラトー段を1つ挿入し、loop_start/loop_end/release_startを+1シフトする
 /// （`EgParams::delay`＝キーオンからAR開始までの遅延をTimeEgで表現する。8段上限に収まる前提）。
-fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings: &mut Vec<String>, label: &str) {
+pub(crate) fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings: &mut Vec<String>, label: &str) {
     let delay_time = time_for_seconds(sound_core::delay_to_seconds(delay), warnings, label, "delay");
     let count = params.stage_count as usize;
     if count >= MAX_STAGES {
@@ -167,115 +169,30 @@ fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings: &mut Vec<
     params.release_start += 1;
 }
 
-/// オペレーターEG（`OperatorParams`のar/d1r/d1l/d2r/rr/floor/loop/curve）をTimeEgParamsへ変換する。
-/// 警告が必要な場合は`convert_patch`経由で確認すること（この関数は静かにクランプする）。
-pub fn convert_operator_eg(op: &OperatorParams) -> TimeEgParams {
-    let mut warnings = Vec::new();
-    convert_eg_shape(op.ar, op.d1r, op.d1l, op.d2r, op.rr, op.floor, op.loop_enabled, op.curve, &mut warnings, "op")
-}
-
-/// Pitch/Cutoff/Gain FGの`EgParams`（delay込み）をTimeEgParamsへ変換する。
-/// Gain FGのrr=0特例（透過既定を維持する据え置き変換）は`convert_patch`側で追加適用する
+/// Pitch/Cutoff/Gain FGの`EgParams`（delay込み）をTimeEgParamsへ変換する。`label`は
+/// 警告メッセージの先頭に付く識別子（例: `"pitch_fg"`）。Gain FGのrr=0特例（透過既定を
+/// 維持する据え置き変換）は`apply_transparent_gain_release`を追加で適用すること
 /// （この関数はFG種別を区別しない汎用変換のみ行う）。
-pub fn convert_fg_eg(eg: &EgParams) -> TimeEgParams {
-    let mut warnings = Vec::new();
-    let mut result = convert_eg_shape(
-        eg.ar, eg.d1r, eg.d1l, eg.d2r, eg.rr, eg.floor, eg.loop_enabled, eg.curve, &mut warnings, "fg",
-    );
+pub fn convert_fg_eg(eg: &EgParams, warnings: &mut Vec<String>, label: &str) -> TimeEgParams {
+    let mut result =
+        convert_eg_shape(eg.ar, eg.d1r, eg.d1l, eg.d2r, eg.rr, eg.floor, eg.loop_enabled, eg.curve, warnings, label);
     if eg.delay > 0 {
-        prepend_delay_stage(&mut result, eg.delay, &mut warnings, "fg");
+        prepend_delay_stage(&mut result, eg.delay, warnings, label);
     }
     result
 }
 
-/// `.38x6`（`Ym38x6Patch`）をop505の`Op505Patch`へ変換する。クランプ・特殊ケース変換が
-/// 発生した箇所は警告としてラベル付きで返す（例: `"op2: decay2(d2r) 45.3秒は..."`）。
-pub fn convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
-    let mut warnings = Vec::new();
-
-    let operators = std::array::from_fn(|i| {
-        let src_op = &src.operators[i];
-        let eg = convert_eg_shape(
-            src_op.ar,
-            src_op.d1r,
-            src_op.d1l,
-            src_op.d2r,
-            src_op.rr,
-            src_op.floor,
-            src_op.loop_enabled,
-            src_op.curve,
-            &mut warnings,
-            &format!("op{i}"),
-        );
-        Op505OperatorParams {
-            tl: src_op.tl,
-            eg,
-            mul: src_op.mul,
-            dt1: src_op.dt1,
-            ksr: src_op.ksr,
-            am_enable: src_op.am_enable,
-            velocity_sensitivity: src_op.velocity_sensitivity,
-            waveform: src_op.waveform,
-            op_fine_tune: src_op.op_fine_tune,
-            eg_shift: src_op.eg_shift,
-            level_scale: src_op.level_scale,
-            velocity_gain: src_op.velocity_gain,
-        }
-    });
-
-    let ch = &src.channel;
-
-    let mut pitch_fg_eg = convert_eg_shape(
-        ch.pitch_fg.eg.ar,
-        ch.pitch_fg.eg.d1r,
-        ch.pitch_fg.eg.d1l,
-        ch.pitch_fg.eg.d2r,
-        ch.pitch_fg.eg.rr,
-        ch.pitch_fg.eg.floor,
-        ch.pitch_fg.eg.loop_enabled,
-        ch.pitch_fg.eg.curve,
-        &mut warnings,
-        "pitch_fg",
-    );
-    if ch.pitch_fg.eg.delay > 0 {
-        prepend_delay_stage(&mut pitch_fg_eg, ch.pitch_fg.eg.delay, &mut warnings, "pitch_fg");
-    }
-
-    let mut cutoff_fg_eg = convert_eg_shape(
-        ch.cutoff_fg.eg.ar,
-        ch.cutoff_fg.eg.d1r,
-        ch.cutoff_fg.eg.d1l,
-        ch.cutoff_fg.eg.d2r,
-        ch.cutoff_fg.eg.rr,
-        ch.cutoff_fg.eg.floor,
-        ch.cutoff_fg.eg.loop_enabled,
-        ch.cutoff_fg.eg.curve,
-        &mut warnings,
-        "cutoff_fg",
-    );
-    if ch.cutoff_fg.eg.delay > 0 {
-        prepend_delay_stage(&mut cutoff_fg_eg, ch.cutoff_fg.eg.delay, &mut warnings, "cutoff_fg");
-    }
-
-    let mut gain_fg_eg = convert_eg_shape(
-        ch.gain_fg.ar,
-        ch.gain_fg.d1r,
-        ch.gain_fg.d1l,
-        ch.gain_fg.d2r,
-        ch.gain_fg.rr,
-        ch.gain_fg.floor,
-        ch.gain_fg.loop_enabled,
-        ch.gain_fg.curve,
-        &mut warnings,
-        "gain_fg",
-    );
-    if ch.gain_fg.delay > 0 {
-        prepend_delay_stage(&mut gain_fg_eg, ch.gain_fg.delay, &mut warnings, "gain_fg");
-    }
-    // Gain FGのrr=0（透過既定、ゲートを閉じない）特例：リリース段を「現在の静止レベルのまま
-    // 瞬時据え置き」に書き換える。フルスパン秒数で0へ向かわせると、離鍵後にゲインが本当に
-    // 閉じてしまいキャリア本来のリリース尾を打ち消す（default_gain_fgの設計意図に反する）。
-    if ch.gain_fg.rr == 0 && ch.gain_fg.loop_enabled == 0 {
+/// Gain FGのrr=0（透過既定、ゲートを閉じない）特例を適用する。リリース段を「現在の静止
+/// レベルのまま瞬時据え置き」に書き換える。フルスパン秒数で0へ向かわせると、離鍵後に
+/// ゲインが本当に閉じてしまいキャリア本来のリリース尾を打ち消す（default_gain_fgの設計
+/// 意図に反する）。`src_rr`/`src_loop_enabled`は変換元`EgParams`のrr/loop_enabled値。
+pub fn apply_transparent_gain_release(
+    gain_fg_eg: &mut TimeEgParams,
+    src_rr: u8,
+    src_loop_enabled: u8,
+    warnings: &mut Vec<String>,
+) {
+    if src_rr == 0 && src_loop_enabled == 0 {
         let release_idx = gain_fg_eg.release_start as usize;
         let settle_level = gain_fg_eg.stages[gain_fg_eg.loop_end as usize].level;
         gain_fg_eg.stages[release_idx] = TimeStage { time: 0, level: settle_level, curve: 0 };
@@ -283,27 +200,6 @@ pub fn convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
             "gain_fg: rr=0（透過既定）を維持するためリリース段をlevel={settle_level}で据え置きに変換した"
         ));
     }
-
-    let channel = Op505ChannelParams {
-        algorithm: ch.algorithm,
-        feedback: ch.feedback,
-        chip_lfo_freq: ch.chip_lfo_freq,
-        chip_lfo_pmd: ch.chip_lfo_pmd,
-        chip_lfo_amd: ch.chip_lfo_amd,
-        chip_lfo_delay: ch.chip_lfo_delay,
-        pms: ch.pms,
-        ams: ch.ams,
-        filter_cutoff: ch.filter_cutoff,
-        filter_resonance: ch.filter_resonance,
-        filter_type: ch.filter_type,
-        filter_self_oscillation: ch.filter_self_oscillation,
-        pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: ch.pitch_fg.depth },
-        cutoff_fg: Op505BipolarFg { eg: cutoff_fg_eg, depth: ch.cutoff_fg.depth },
-        gain_fg: gain_fg_eg,
-        texture_lfo: ch.texture_lfo,
-    };
-
-    (Op505Patch { operators, channel }, warnings)
 }
 
 // ---------------------------------------------------------------------------
@@ -419,35 +315,27 @@ mod tests {
     }
 
     #[test]
-    fn convert_patch_gain_fg_rr_zero_stays_transparent_after_release() {
-        let src = Ym38x6Patch::default(); // channel.gain_fgは既定でrr=0（透過既定）
-        let (patch, warnings) = convert_patch(&src);
+    fn apply_transparent_gain_release_keeps_level_after_note_off() {
+        let mut warnings = Vec::new();
+        let mut params = convert_eg_shape(255, 0, 255, 0, 0, 0, 0, 0, &mut warnings, "test");
+        apply_transparent_gain_release(&mut params, 0, 0, &mut warnings);
         assert!(warnings.iter().any(|w| w.contains("gain_fg") && w.contains("透過")));
 
         let sr = 44100.0;
         let mut eg = TimeEg::new();
         eg.note_on();
         for _ in 0..1000 {
-            eg.tick(sr, patch.channel.gain_fg, 1.0);
+            eg.tick(sr, params, 1.0);
         }
-        let before = eg.tick(sr, patch.channel.gain_fg, 1.0);
+        let before = eg.tick(sr, params, 1.0);
         eg.note_off();
         let mut after = before;
         for _ in 0..44100 {
-            after = eg.tick(sr, patch.channel.gain_fg, 1.0);
+            after = eg.tick(sr, params, 1.0);
         }
         assert!(
             (before - after).abs() < 1e-6,
             "gain_fg rr=0 should stay transparent (not close the gate) after note_off: before={before} after={after}"
         );
-    }
-
-    #[test]
-    fn convert_patch_default_round_trips_through_serde() {
-        let src = Ym38x6Patch::default();
-        let (patch, _warnings) = convert_patch(&src);
-        let json = serde_json::to_string(&patch).expect("serialize");
-        let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(patch, restored);
     }
 }

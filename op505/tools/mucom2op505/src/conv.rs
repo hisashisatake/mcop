@@ -1,22 +1,23 @@
 //! MUCOM88（OPN/YM2608）ボイスレジスタ → OP505パッチへの直接変換ロジック。
 //!
-//! mucom2x6（MUCOM88→.38x6変換）のEGヘルパー（実機レート→38x6レート写像）と、
-//! op505-core adapter.rs の`convert_eg_shape`（38x6レート→TimeEgParams変換）を
+//! 実機レート写像・非EGフィールド構築（[crate::map]、mucom2x6からの複製）と、
+//! op505-core `eg_convert::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
 //! 1ツール内で合成することで、中間の`.38x6`ファイルを経由せず直接TimeEgParamsを得る。
 //! mucom2x6にはキャリアサステイン等の味付けオプションが存在しないため、
 //! opz2op505/psr2op505と異なりis_carrier/carrier_sustainは扱わない。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::adapter::convert_eg_shape;
-use op505_core::{Op505ChannelParams, Op505OperatorParams, Op505Patch, Op505PresetEntry, Op505PresetFile};
-use mucom2x6::conv::{self, NamedVoice, OpnOperator, OpnVoice};
+use op505_core::eg_convert::convert_eg_shape;
+use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry, Op505PresetFile};
 use sound_core::TimeEgParams;
+
+use crate::map::{self, NamedVoice, OpnOperator, OpnVoice};
 
 /// アタック立ち上がりの表現方法。詳細はopz2op505::conv::AttackMode参照
 /// （同じ問題・同じ選択肢。既定は`None`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttackMode {
-    /// mucom2x6と同じATTACK_ONSET_BIAS補正を適用（旧2段変換とビット一致、回帰テストの基準・比較用）。
+    /// アタック立ち上がりの聴感補正バイアスを適用（ゴールデンテストの基準・比較用）。
     Bias,
     /// バイアスなし（既定）。
     None,
@@ -25,72 +26,48 @@ pub enum AttackMode {
 }
 
 /// MUCOM88の1オペレーターEG(ar/d1r/d2r/rr/d1l/ks)をTimeEgParamsへ直接変換する。
-/// 実機レート→38x6レート写像はmucom2x6の関数（[conv::opn_ar_to_x6]等）を合成再利用し、
-/// 段割り当てはop505-coreの[convert_eg_shape]を合成再利用する（独自数式は書かない）。
+/// 実機レート写像は[map]の関数を合成再利用し、段割り当てはop505-coreの
+/// [convert_eg_shape]を合成再利用する（独自数式は書かない）。
 pub fn direct_eg(
     op: &OpnOperator,
     attack_mode: AttackMode,
     warnings: &mut Vec<String>,
     label: &str,
 ) -> TimeEgParams {
-    let x6_ar = match attack_mode {
-        AttackMode::Bias => conv::opn_ar_to_x6(op.ar, op.ks),
-        AttackMode::None | AttackMode::Curve => conv::opn_rate_to_x6(op.ar, op.ks),
+    let eg_ar = match attack_mode {
+        AttackMode::Bias => map::ar_to_eg_rate(op.ar, op.ks),
+        AttackMode::None | AttackMode::Curve => map::rate_to_eg_rate(op.ar, op.ks),
     };
-    let x6_d1r = conv::opn_rate_to_x6(op.d1r, op.ks);
-    let x6_d2r = conv::opn_rate_to_x6(op.d2r, op.ks);
-    let x6_d1l = conv::sl_opn_to_x6(op.d1l);
-    let x6_rr = conv::opn_rr_to_x6(op.rr, op.ks);
+    let eg_d1r = map::rate_to_eg_rate(op.d1r, op.ks);
+    let eg_d2r = map::rate_to_eg_rate(op.d2r, op.ks);
+    let eg_d1l = map::sl_to_eg_level(op.d1l);
+    let eg_rr = map::rr_to_eg_rate(op.rr, op.ks);
 
-    let mut eg = convert_eg_shape(x6_ar, x6_d1r, x6_d1l, x6_d2r, x6_rr, 0, 0, 0, warnings, label);
+    let mut eg = convert_eg_shape(eg_ar, eg_d1r, eg_d1l, eg_d2r, eg_rr, 0, 0, 0, warnings, label);
     if attack_mode == AttackMode::Curve {
         eg.stages[0].curve = 1;
     }
     eg
 }
 
-/// OpnVoice → Op505Patch。非EGパラメータは`mucom2x6::conv::to_ym38x6_patch`で一度.38x6化して
-/// フィールドコピーし（EG以外は完全一致のフィールド構成のため）、EGだけ[direct_eg]で置き換える。
-/// MUCOM88にはFG（Pitch/Cutoff/Gain）が存在しないため、FG3本はOP505ネイティブの既定値を使う。
+/// OpnVoice → Op505Patch。非EGフィールドは[map::convert_op]/[map::convert_channel]で
+/// 直接構築し、EGだけ[direct_eg]で埋める。MUCOM88にはFG（Pitch/Cutoff/Gain）が
+/// 存在しないため、FG3本はOP505ネイティブの既定値を使う。
 pub fn voice_to_op505_patch(voice: &OpnVoice, attack_mode: AttackMode) -> (Op505Patch, Vec<String>) {
-    let x6 = (*voice).to_ym38x6_patch();
-
     let mut warnings = Vec::new();
     let operators = std::array::from_fn(|i| {
         let op = &voice.operators[i];
         let label = format!("op{}", i + 1);
         let eg = direct_eg(op, attack_mode, &mut warnings, &label);
-        let x6_op = &x6.operators[i];
-        Op505OperatorParams {
-            tl: x6_op.tl,
-            eg,
-            mul: x6_op.mul,
-            dt1: x6_op.dt1,
-            ksr: x6_op.ksr,
-            am_enable: x6_op.am_enable,
-            velocity_sensitivity: x6_op.velocity_sensitivity,
-            waveform: x6_op.waveform,
-            op_fine_tune: x6_op.op_fine_tune,
-            eg_shift: x6_op.eg_shift,
-            level_scale: x6_op.level_scale,
-            velocity_gain: x6_op.velocity_gain,
-        }
+        let mut params = map::convert_op(op);
+        params.eg = eg;
+        params
     });
 
+    let ch = map::convert_channel(voice);
     let channel = Op505ChannelParams {
-        algorithm: x6.channel.algorithm,
-        feedback: x6.channel.feedback,
-        chip_lfo_freq: x6.channel.chip_lfo_freq,
-        chip_lfo_pmd: x6.channel.chip_lfo_pmd,
-        chip_lfo_amd: x6.channel.chip_lfo_amd,
-        chip_lfo_delay: x6.channel.chip_lfo_delay,
-        pms: x6.channel.pms,
-        ams: x6.channel.ams,
-        filter_cutoff: x6.channel.filter_cutoff,
-        filter_resonance: x6.channel.filter_resonance,
-        filter_type: x6.channel.filter_type,
-        filter_self_oscillation: x6.channel.filter_self_oscillation,
-        texture_lfo: x6.channel.texture_lfo,
+        algorithm: ch.algorithm,
+        feedback: ch.feedback,
         ..Op505ChannelParams::default()
     };
 
@@ -134,44 +111,9 @@ pub fn voices_to_op505_preset_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ym38x6_core::OperatorParams;
 
     fn make_op(ar: u8, d1r: u8, d2r: u8, rr: u8, d1l: u8, ks: u8) -> OpnOperator {
         OpnOperator { ar, d1r, d2r, rr, d1l, ks, mul: 1, dt1: 0, tl: 0, am_enable: false }
-    }
-
-    fn to_x6_operator_params(op: &OpnOperator) -> OperatorParams {
-        OperatorParams {
-            ar: conv::opn_ar_to_x6(op.ar, op.ks),
-            d1r: conv::opn_rate_to_x6(op.d1r, op.ks),
-            d2r: conv::opn_rate_to_x6(op.d2r, op.ks),
-            d1l: conv::sl_opn_to_x6(op.d1l),
-            rr: conv::opn_rr_to_x6(op.rr, op.ks),
-            ..OperatorParams::default()
-        }
-    }
-
-    /// 核となる回帰テスト: `AttackMode::Bias`（旧2段変換相当）の直接変換は、
-    /// 「mucom2x6のx6レート写像 → op505-core adapter::convert_operator_eg」という
-    /// 旧2段変換とTimeEgParams完全一致する（独自数式を持たないことの検証）。
-    #[test]
-    fn direct_eg_bias_matches_two_stage_adapter_path() {
-        let cases = [
-            make_op(20, 15, 10, 8, 10, 0),
-            make_op(31, 31, 31, 15, 15, 3),
-            make_op(1, 5, 3, 3, 5, 1),
-            make_op(0, 10, 10, 8, 8, 0), // ar=0 フリーズ
-            make_op(20, 0, 10, 8, 8, 0), // d1r=0
-        ];
-        for op in cases {
-            let mut direct_warnings = Vec::new();
-            let direct = direct_eg(&op, AttackMode::Bias, &mut direct_warnings, "op");
-
-            let x6_op = to_x6_operator_params(&op);
-            let two_stage = op505_core::adapter::convert_operator_eg(&x6_op);
-
-            assert_eq!(direct, two_stage, "mismatch for {op:?}");
-        }
     }
 
     #[test]
@@ -209,21 +151,6 @@ mod tests {
             };
         }
         voice
-    }
-
-    #[test]
-    fn voice_to_op505_patch_copies_non_eg_fields_from_x6() {
-        let voice = make_voice(4, [20, 20, 20, 20]);
-        let (patch, warnings) = voice_to_op505_patch(&voice, AttackMode::Bias);
-        let x6 = voice.to_ym38x6_patch();
-
-        assert!(warnings.is_empty());
-        for i in 0..4 {
-            assert_eq!(patch.operators[i].tl, x6.operators[i].tl, "op{i} tl mismatch");
-            assert_eq!(patch.operators[i].mul, x6.operators[i].mul, "op{i} mul mismatch");
-        }
-        assert_eq!(patch.channel.algorithm, x6.channel.algorithm);
-        assert_eq!(patch.channel.feedback, x6.channel.feedback);
     }
 
     #[test]

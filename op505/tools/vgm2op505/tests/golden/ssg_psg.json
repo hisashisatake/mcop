@@ -1,0 +1,432 @@
+{
+  "patch": {
+    "operators": [
+      {
+        "tl": 255,
+        "eg": {
+          "stages": [
+            {
+              "time": 1,
+              "level": 255,
+              "curve": 0
+            },
+            {
+              "time": 54,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "mul": 1,
+        "dt1": 128,
+        "ksr": 0,
+        "am_enable": false,
+        "velocity_sensitivity": 0,
+        "waveform": 16,
+        "op_fine_tune": 128,
+        "eg_shift": 0,
+        "level_scale": 0,
+        "velocity_gain": 255
+      },
+      {
+        "tl": 0,
+        "eg": {
+          "stages": [
+            {
+              "time": 1,
+              "level": 255,
+              "curve": 0
+            },
+            {
+              "time": 54,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "mul": 1,
+        "dt1": 128,
+        "ksr": 0,
+        "am_enable": false,
+        "velocity_sensitivity": 0,
+        "waveform": 16,
+        "op_fine_tune": 128,
+        "eg_shift": 0,
+        "level_scale": 0,
+        "velocity_gain": 255
+      },
+      {
+        "tl": 0,
+        "eg": {
+          "stages": [
+            {
+              "time": 1,
+              "level": 255,
+              "curve": 0
+            },
+            {
+              "time": 54,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "mul": 1,
+        "dt1": 128,
+        "ksr": 0,
+        "am_enable": false,
+        "velocity_sensitivity": 0,
+        "waveform": 16,
+        "op_fine_tune": 128,
+        "eg_shift": 0,
+        "level_scale": 0,
+        "velocity_gain": 255
+      },
+      {
+        "tl": 0,
+        "eg": {
+          "stages": [
+            {
+              "time": 1,
+              "level": 255,
+              "curve": 0
+            },
+            {
+              "time": 54,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "mul": 1,
+        "dt1": 128,
+        "ksr": 0,
+        "am_enable": false,
+        "velocity_sensitivity": 0,
+        "waveform": 16,
+        "op_fine_tune": 128,
+        "eg_shift": 0,
+        "level_scale": 0,
+        "velocity_gain": 255
+      }
+    ],
+    "channel": {
+      "algorithm": 7,
+      "feedback": 0,
+      "chip_lfo_freq": 0,
+      "chip_lfo_pmd": 0,
+      "chip_lfo_amd": 0,
+      "chip_lfo_delay": 0,
+      "pms": 0,
+      "ams": 0,
+      "filter_cutoff": 255,
+      "filter_resonance": 0,
+      "filter_type": 0,
+      "filter_self_oscillation": true,
+      "pitch_fg": {
+        "eg": {
+          "stages": [
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 54,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "depth": 128
+      },
+      "cutoff_fg": {
+        "eg": {
+          "stages": [
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 255,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "loop_end": 0,
+          "release_start": 1
+        },
+        "depth": 128
+      },
+      "gain_fg": {
+        "stages": [
+          {
+            "time": 1,
+            "level": 255,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 255,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          }
+        ],
+        "stage_count": 2,
+        "loop_enabled": 0,
+        "loop_start": 0,
+        "loop_end": 0,
+        "release_start": 1
+      },
+      "texture_lfo": {
+        "waveform": 0,
+        "destination": 0,
+        "rate": 0,
+        "depth": 0,
+        "delay": 0,
+        "fade_mode": 0,
+        "fade_time": 0,
+        "offset": 128
+      }
+    }
+  },
+  "warnings": []
+}
