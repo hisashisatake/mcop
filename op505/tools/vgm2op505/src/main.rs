@@ -21,9 +21,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use op505_core::{Op505Engine, Op505Patch, Op505PresetEntry, Op505PresetFile};
+use op505_core::{Op505Engine, Op505PresetEntry, Op505PresetFile};
 use vgm2op505::convert::{parse_attack_mode, AttackMode, Op505Converter};
-use vgm2op505::patch::{PatchBank, PatchConverter};
+use vgm2op505::patch::PatchBank;
 use vgm2op505::play::{self, OpnInfo, SmfSink, SourceChip, WavSink};
 use vgm2op505::vgm;
 
@@ -160,10 +160,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 // バンク出力・警告レポート
 // ===========================================================================
 
-fn write_bank<C>(bank: &PatchBank<C>, path: &Path, bank_no: u16) -> Result<(), String>
-where
-    C: PatchConverter<Patch = Op505Patch>,
-{
+fn write_bank(bank: &PatchBank, path: &Path, bank_no: u16) -> Result<(), String> {
     if bank.len() == 0 {
         eprintln!("警告: 音色が抽出されませんでした");
         return Ok(());
@@ -181,7 +178,7 @@ where
     std::fs::write(path, json).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn report_warnings<C: PatchConverter>(bank: &PatchBank<C>) {
+fn report_warnings(bank: &PatchBank) {
     let warnings = bank.warnings();
     if warnings.is_empty() {
         return;
@@ -268,7 +265,7 @@ fn run_opn(data: &[u8], data_start: usize, info: OpnInfo, args: &Args) -> Result
     }
 
     if let Some(wav_path) = &args.wav {
-        let mut sink = WavSink::<Op505Engine>::new(44_100.0, total_ch);
+        let mut sink = WavSink::new(44_100.0, total_ch);
         play::process_opn(data, data_start, info, &mut bank, &mut sink, fm_vel, ssg_vel, args.only_ch);
         return sink.finish_and_write(wav_path, args.gain);
     }

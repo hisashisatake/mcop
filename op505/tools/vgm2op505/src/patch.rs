@@ -3,6 +3,12 @@
 //! 由来: ym38x6/tools/vgm2x6/src/patch.rs（コミット535604f時点の複製、2026-08-11）。
 //! ym38x6依存排除（デフォーク）に伴う複製。以後は独立に進化させる（fork-on-write）。
 //!
+//! **C2-2でジェネリクスを畳み込み済み**: vgm2x6は`.38x6`出力（`X6Converter`）とOP505直接
+//! 出力（`Op505Converter`）を同じ`PatchBank<C: PatchConverter>`で使い分けていたが、
+//! vgm2op505は`Op505Converter`しか使わないため、`PatchConverter`トレイトを撤廃し
+//! `PatchBank`を`Op505Patch`/`Op505Converter`に対して具体化した（C2-1時点は複製の正しさを
+//! レビューしやすくするためジェネリクスを保持していた）。
+//!
 //! 旧実装との最大の違いは重複判定キー。旧実装は`x6_key: Option<Ym38x6Patch>`
 //! （OPNボイス・SSG固定パッチの両方を`.38x6`へ変換した結果を構造体等値比較する共有プール）
 //! を使っていたが、ym38x6型に触れられなくなったため[`DedupKey`]（案B）へ置き換えた。
@@ -18,22 +24,10 @@
 //! 値の作り分けで担保していた不衝突性を、型で保証する形に置き換えた）。
 
 use mucom2op505::map::{self, OpnVoice};
+use op505_core::Op505Patch;
 use opm2op505::parse::{OpmOpReg, OpmVoice};
 
-/// ソースボイス → ターゲットパッチの変換器。vgm2op505は[crate::convert::Op505Converter]を使う。
-/// 戻り値の `Vec<String>` は変換警告。
-pub trait PatchConverter {
-    type Patch: Copy + Default + PartialEq;
-    fn from_opm(&mut self, v: &OpmVoice) -> (Self::Patch, Vec<String>);
-    fn from_opn(&mut self, v: &OpnVoice) -> (Self::Patch, Vec<String>);
-    /// SSG合成パッチ（[crate::ssg]、既にOP505ネイティブ表現）を`Self::Patch`へ受け渡す。
-    /// 唯一の実装（[crate::convert::Op505Converter]）では`Self::Patch`が
-    /// `op505_core::Op505Patch`そのものなので恒等写像になる（旧`vgm2x6::patch::PatchConverter`の
-    /// `from_x6`のように異なる表現からの変換は発生しない）。`PatchBank::find_or_insert_fixed`が
-    /// `C: PatchConverter`にジェネリックなまま`Op505Patch`を受け渡すために必要
-    /// （C2-2でジェネリクスを畳み込む際にこのメソッドごと削除できる）。
-    fn from_fixed(&mut self, p: op505_core::Op505Patch) -> (Self::Patch, Vec<String>);
-}
+use crate::convert::Op505Converter;
 
 // ---------------------------------------------------------------------------
 // 重複判定キー（案B: ym38x6型に触れないバイト等価キー）
@@ -110,23 +104,23 @@ enum DedupKey {
 // ---------------------------------------------------------------------------
 
 /// バンク内の1エントリー。
-struct Entry<P> {
+struct Entry {
     /// OPM由来なら重複判定用にソースボイスを保持する（[timbre_eq] で比較）。
     opm_voice: Option<OpmVoice>,
     /// OPM以外（OPN・SSG固定パッチ）の重複判定キー。
     key: Option<DedupKey>,
     name: String,
-    patch: P,
+    patch: Op505Patch,
     warnings: Vec<String>,
 }
 
-pub struct PatchBank<C: PatchConverter> {
-    conv: C,
-    entries: Vec<Entry<C::Patch>>,
+pub struct PatchBank {
+    conv: Op505Converter,
+    entries: Vec<Entry>,
 }
 
-impl<C: PatchConverter> PatchBank<C> {
-    pub fn new(conv: C) -> Self {
+impl PatchBank {
+    pub fn new(conv: Op505Converter) -> Self {
         Self { conv, entries: Vec::new() }
     }
 
@@ -135,7 +129,7 @@ impl<C: PatchConverter> PatchBank<C> {
     }
 
     /// 指定インデックスの変換後パッチを返す（WAVレンダリング用）。
-    pub fn patch_at(&self, idx: usize) -> C::Patch {
+    pub fn patch_at(&self, idx: usize) -> Op505Patch {
         self.entries[idx].patch
     }
 
@@ -167,43 +161,33 @@ impl<C: PatchConverter> PatchBank<C> {
     /// 同一プールを共有）。
     pub fn find_or_insert_opn(&mut self, voice: &OpnVoice, name: &str) -> usize {
         let key = DedupKey::Opn(OpnDedupKey::from_voice(voice));
-        self.find_or_insert_keyed(key, name, |c| c.from_opn(voice))
-    }
-
-    /// SSG人工パッチ（[crate::ssg]が返すOP505ネイティブ表現）を登録/再利用してインデックスを
-    /// 返す。`C::Patch`への受け渡しは[`PatchConverter::from_fixed`]（唯一の実装では恒等写像）
-    /// を経由する。
-    pub fn find_or_insert_fixed(&mut self, patch: op505_core::Op505Patch, id: SsgPatchId, name: &str) -> usize {
-        let key = DedupKey::Fixed(id);
-        self.find_or_insert_keyed(key, name, |c| c.from_fixed(patch))
-    }
-
-    /// [find_or_insert_opn]・[find_or_insert_fixed] 共通の「keyで重複探索→無ければ変換して追加」処理。
-    fn find_or_insert_keyed(
-        &mut self,
-        key: DedupKey,
-        name: &str,
-        convert: impl FnOnce(&mut C) -> (C::Patch, Vec<String>),
-    ) -> usize {
         for (i, e) in self.entries.iter().enumerate() {
             if e.key == Some(key) {
                 return i;
             }
         }
         let idx = self.entries.len();
-        let (patch, warnings) = convert(&mut self.conv);
-        self.entries.push(Entry {
-            opm_voice: None,
-            key: Some(key),
-            name: name.to_string(),
-            patch,
-            warnings,
-        });
+        let (patch, warnings) = self.conv.from_opn(voice);
+        self.entries.push(Entry { opm_voice: None, key: Some(key), name: name.to_string(), patch, warnings });
+        idx
+    }
+
+    /// SSG人工パッチ（[crate::ssg]が返すOP505ネイティブ表現をそのまま登録する）を
+    /// 登録/再利用してインデックスを返す。
+    pub fn find_or_insert_fixed(&mut self, patch: Op505Patch, id: SsgPatchId, name: &str) -> usize {
+        let key = DedupKey::Fixed(id);
+        for (i, e) in self.entries.iter().enumerate() {
+            if e.key == Some(key) {
+                return i;
+            }
+        }
+        let idx = self.entries.len();
+        self.entries.push(Entry { opm_voice: None, key: Some(key), name: name.to_string(), patch, warnings: Vec::new() });
         idx
     }
 
     /// 全エントリーを (program番号, 名前, パッチ) の列で返す（バンク出力用）。
-    pub fn entries(&self) -> impl Iterator<Item = (u8, &str, &C::Patch)> {
+    pub fn entries(&self) -> impl Iterator<Item = (u8, &str, &Op505Patch)> {
         self.entries
             .iter()
             .enumerate()
