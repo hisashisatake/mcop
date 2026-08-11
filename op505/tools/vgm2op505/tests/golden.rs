@@ -1,22 +1,22 @@
-//! vgm2op505のゴールデンテスト（デフォーク前の現行実装で採取）。
-//! 設計意図はop505/tools/opz2op505/tests/golden.rsのdocコメント参照（同じパターンを踏襲）。
+//! vgm2op505のゴールデンテスト（Phase 0でデフォーク前の実装から採取、Phase 2で
+//! ネイティブ実装（ym38x6依存ゼロ）へ差し替え後もハッシュが一致することを確認する）。
 //!
-//! vgm2x6の演奏ロジック（`play::opm_to_smf`/`play::process_opn`/`PatchBank`）を通した
-//! SMFバイト列・バンク内容・SSG人工パッチ・重複判定キーの4種を凍結する。
-//! SMFにはプログラム番号が乗るため、Phase 2でPatchBankの重複判定キーを
-//! `Ym38x6Patch`からソース値ベース（`SourceKey`）へ差し替えたとき、バンク番号ズレが
-//! あれば`opm_stream_*`/`opn_stream_*`のハッシュ不一致として即座に検出できる。
+//! vgm2op505自前の演奏ロジック（`play::opm_to_smf`/`play::process_opn`/`PatchBank`）を通した
+//! SMFバイト列・バンク内容・SSG人工パッチ・重複判定キーの4種を凍結する。SMFにはプログラム
+//! 番号が乗るため、PatchBankの重複判定キーを`Ym38x6Patch`からソース値ベース（`DedupKey`）へ
+//! 差し替えたことによるバンク番号ズレがあれば`opm_stream_*`/`opn_stream_*`のハッシュ不一致
+//! として即座に検出できる。
 //!
 //! ゴールデン更新: `$env:UPDATE_GOLDEN=1; cargo test -p vgm2op505; Remove-Item Env:\UPDATE_GOLDEN`
 
 use std::path::{Path, PathBuf};
 
-use mucom2x6::conv::{OpnOperator, OpnVoice};
+use mucom2op505::map::{OpnOperator, OpnVoice};
 use op505_core::{Op505PresetEntry, Op505PresetFile};
 use op505_tools::golden::{assert_golden, Fingerprint};
 use vgm2op505::convert::{AttackMode, Op505Converter};
-use vgm2x6::patch::PatchBank;
-use vgm2x6::play::{self, OpnInfo, SmfSink};
+use vgm2op505::patch::{PatchBank, SsgPatchId};
+use vgm2op505::play::{self, OpnInfo, SmfSink};
 
 const GOLDEN_VERSION: u32 = 1;
 
@@ -103,7 +103,7 @@ fn opn2203_info() -> OpnInfo {
         write_kind: play::OpnWriteKind::Ym2203,
         clock: 4_000_000,
         fm_channels: 3,
-        fm_divisor: vgm2x6::opn::FM_DIVISOR_3CH,
+        fm_divisor: vgm2op505::opn::FM_DIVISOR_3CH,
         ssg_clock_div: 2,
         has_ssg: true,
     }
@@ -173,13 +173,15 @@ fn opn_stream_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// SSG人工パッチ（psg/noise/mix）の変換結果 = Phase 2ネイティブ化の移行ブリッジ。
+// SSG人工パッチ（psg/noise/mix）— [`vgm2op505::ssg`]のOP505ネイティブ実装を直接凍結する。
 // ---------------------------------------------------------------------------
 
-/// Adapter変換結果とその警告文言をまとめてJSON化する。ネイティブ化後（Phase 2）は
-/// この警告自体が消える（SSG人工パッチについての無意味な警告なので、意図的な差分。
-/// spec-fm.md「デフォーク」節の「意図的な差分表」参照）が、ネイティブ実装が焼き込むべき
-/// `Op505Patch`の値そのもの（`patch`フィールド）は移行のブリッジとして必須。
+/// SSGパッチの変換結果をまとめてJSON化する。`warnings`は常に空（旧2段変換
+/// （`op505_core::adapter::convert_patch`経由）が出していた「pitch_fg: ar=0…」等の警告は、
+/// SSG人工パッチにとって元々無意味だった＝ネイティブ化で消えるのが意図的な差分。
+/// `patch`フィールドの値そのものは旧2段変換の結果と1ビットも変えていない
+/// （このゴールデンファイル自体がPhase 0でその2段変換から採取したもの。
+/// spec-fm.md「デフォーク」節の「意図的な差分表」参照）。
 #[derive(serde::Serialize)]
 struct SsgBridge {
     patch: op505_core::Op505Patch,
@@ -188,32 +190,34 @@ struct SsgBridge {
 
 #[test]
 fn ssg_psg_golden() {
-    let (patch, warnings) = op505_core::adapter::convert_patch(&vgm2x6::ssg::psg_patch());
-    let json = serde_json::to_string_pretty(&SsgBridge { patch, warnings }).expect("serialize");
+    let json = serde_json::to_string_pretty(&SsgBridge { patch: vgm2op505::ssg::psg_patch(), warnings: Vec::new() })
+        .expect("serialize");
     assert_golden(&golden_path("ssg_psg.json"), &json);
 }
 
 #[test]
 fn ssg_noise_np00_golden() {
-    let (patch, warnings) = op505_core::adapter::convert_patch(&vgm2x6::ssg::noise_patch(0));
-    let json = serde_json::to_string_pretty(&SsgBridge { patch, warnings }).expect("serialize");
+    let json =
+        serde_json::to_string_pretty(&SsgBridge { patch: vgm2op505::ssg::noise_patch(0), warnings: Vec::new() })
+            .expect("serialize");
     assert_golden(&golden_path("ssg_noise_np00.json"), &json);
 }
 
 #[test]
 fn ssg_mix_np00_golden() {
-    let (patch, warnings) = op505_core::adapter::convert_patch(&vgm2x6::ssg::mix_patch(0));
-    let json = serde_json::to_string_pretty(&SsgBridge { patch, warnings }).expect("serialize");
+    let json =
+        serde_json::to_string_pretty(&SsgBridge { patch: vgm2op505::ssg::mix_patch(0), warnings: Vec::new() })
+            .expect("serialize");
     assert_golden(&golden_path("ssg_mix_np00.json"), &json);
 }
 
-/// [`vgm2x6::ssg::noise_patch`]/[`vgm2x6::ssg::mix_patch`]はnpが`waveform`1フィールドにしか
+/// [`vgm2op505::ssg::noise_patch`]/[`vgm2op505::ssg::mix_patch`]はnpが`waveform`1フィールドにしか
 /// 効かない（F7）。np別ゴールデンを62本持つ代わりに、この不変性をテストで保証する。
 #[test]
 fn ssg_np_only_affects_waveform() {
     for np in 0u8..=31 {
-        let base = vgm2x6::ssg::noise_patch(0);
-        let varied = vgm2x6::ssg::noise_patch(np);
+        let base = vgm2op505::ssg::noise_patch(0);
+        let varied = vgm2op505::ssg::noise_patch(np);
         for i in 0..4 {
             let mut b = base.operators[i];
             let mut v = varied.operators[i];
@@ -223,8 +227,8 @@ fn ssg_np_only_affects_waveform() {
         }
         assert_eq!(varied.operators[0].waveform, 32 + np.min(31));
 
-        let base_mix = vgm2x6::ssg::mix_patch(0);
-        let varied_mix = vgm2x6::ssg::mix_patch(np);
+        let base_mix = vgm2op505::ssg::mix_patch(0);
+        let varied_mix = vgm2op505::ssg::mix_patch(np);
         for i in 0..4 {
             let mut b = base_mix.operators[i];
             let mut v = varied_mix.operators[i];
@@ -237,7 +241,7 @@ fn ssg_np_only_affects_waveform() {
 }
 
 // ---------------------------------------------------------------------------
-// PatchBankの重複判定キー（現行実装=Ym38x6Patchキー）の挙動を凍結する。
+// PatchBankの重複判定キー（[`vgm2op505::patch::DedupKey`]、案B）の挙動を凍結する。
 // ---------------------------------------------------------------------------
 
 fn make_opn_voice(algorithm: u8, feedback: u8, dt1: u8) -> OpnVoice {
@@ -245,20 +249,17 @@ fn make_opn_voice(algorithm: u8, feedback: u8, dt1: u8) -> OpnVoice {
     OpnVoice { operators: [op, op, op, op], algorithm, feedback }
 }
 
-/// C0-3判定ゲートで確認した具体的な衝突（`mucom2x6::conv::opn_dt1_to_x6`のTABLE、
-/// dt1=0/4がどちらも128=無デチューンへ収束する冗長エンコード）。現行のx6_keyでは
-/// この2ボイスは**同一エントリー**へ収束する。Phase 2で重複判定キーをソース値
-/// （`SourceKey::Opn(OpnVoice)`、生の`dt1`フィールドで比較）へ置き換える場合は
-/// この収束を維持できない（バンク番号がズレる）ため、案A（生ソース値キー）を
-/// 却下し案B（x6マッピングと同じ結果になるバイト列キーをym38x6型なしで再現）を
-/// 採用する根拠になったテスト。将来Phase 2でこのテストが指す挙動をそのまま
-/// 複製するのが正しい移行（[`Fingerprint`]の`dedup_grid.fnv`で網羅的に固定する）。
+/// C0-3判定ゲートで確認した具体的な衝突（`mucom2op505::map::dt1_reg_to_detune`のTABLE、
+/// dt1=0/4がどちらも128=無デチューンへ収束する冗長エンコード）。旧`x6_key`ではこの2ボイスは
+/// **同一エントリー**へ収束していた。`DedupKey::Opn`（[`vgm2op505::patch::OpnDedupKey`]）は
+/// `dt1_reg_to_detune`を通した後の値で比較するため、この収束を1ビットも変えずに再現する
+/// （[`Fingerprint`]の`dedup_grid.fnv`で網羅的にも固定する）。
 #[test]
-fn dt1_zero_and_four_collide_under_x6_key() {
+fn dt1_zero_and_four_collide_under_dedup_key() {
     let mut bank = PatchBank::new(Op505Converter { attack: AttackMode::None });
     let idx0 = bank.find_or_insert_opn(&make_opn_voice(4, 3, 0), "dt1_0");
     let idx4 = bank.find_or_insert_opn(&make_opn_voice(4, 3, 4), "dt1_4");
-    assert_eq!(idx0, idx4, "dt1=0/4は現行x6_keyでは同一エントリーに収束するはず");
+    assert_eq!(idx0, idx4, "dt1=0/4はDedupKey::Opnでも同一エントリーに収束するはず");
     assert_eq!(bank.len(), 1);
 }
 
@@ -286,12 +287,20 @@ fn dedup_grid_golden() {
                 }
             }
             // SSG固定パッチを合間に挟み、OPNボイスの共有プールと衝突しないことも一緒に固定する。
-            let psg_idx = bank.find_or_insert_fixed(vgm2x6::ssg::psg_patch(), "psg");
+            let psg_idx = bank.find_or_insert_fixed(vgm2op505::ssg::psg_patch(), SsgPatchId::Psg, "psg");
             fp.push(&psg_idx);
             for np in [0u8, 5, 31] {
-                let noise_idx = bank.find_or_insert_fixed(vgm2x6::ssg::noise_patch(np), &format!("noise{np}"));
+                let noise_idx = bank.find_or_insert_fixed(
+                    vgm2op505::ssg::noise_patch(np),
+                    SsgPatchId::Noise(np),
+                    &format!("noise{np}"),
+                );
                 fp.push(&noise_idx);
-                let mix_idx = bank.find_or_insert_fixed(vgm2x6::ssg::mix_patch(np), &format!("mix{np}"));
+                let mix_idx = bank.find_or_insert_fixed(
+                    vgm2op505::ssg::mix_patch(np),
+                    SsgPatchId::Mix(np),
+                    &format!("mix{np}"),
+                );
                 fp.push(&mix_idx);
             }
         }

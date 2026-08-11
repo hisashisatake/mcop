@@ -5686,17 +5686,14 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vgm2op505"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "mucom2op505",
- "mucom2x6",
  "op505-core",
  "op505-tools",
  "opm2op505",
- "opm2x6",
  "serde",
  "serde_json",
  "sound-core",
- "vgm2x6",
- "ym38x6-core",
 ]
 
 [[package]]

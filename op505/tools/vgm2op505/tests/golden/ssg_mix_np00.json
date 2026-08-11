@@ -428,14 +428,5 @@
       }
     }
   },
-  "warnings": [
-    "op0: release(rr) 284.9秒はTimeEgの上限30秒を超えるためtime=255にクランプした",
-    "op1: release(rr) 284.9秒はTimeEgの上限30秒を超えるためtime=255にクランプした",
-    "op3: release(rr) 284.9秒はTimeEgの上限30秒を超えるためtime=255にクランプした",
-    "pitch_fg: ar=0（フリーズ＝常時無音）を単一段(level=0)に変換した",
-    "cutoff_fg: ar=0（フリーズ＝常時無音）を単一段(level=0)に変換した",
-    "cutoff_fg: release(rr) 284.9秒はTimeEgの上限30秒を超えるためtime=255にクランプした",
-    "gain_fg: release(rr) 284.9秒はTimeEgの上限30秒を超えるためtime=255にクランプした",
-    "gain_fg: rr=0（透過既定）を維持するためリリース段をlevel=255で据え置きに変換した"
-  ]
+  "warnings": []
 }
