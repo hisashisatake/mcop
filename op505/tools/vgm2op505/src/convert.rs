@@ -67,6 +67,35 @@ fn to_local_opn_voice(v: &mucom2x6::conv::OpnVoice) -> mucom2op505::map::OpnVoic
     }
 }
 
+/// [`to_local_opn_voice`]のOPM版。`vgm2x6::patch::PatchConverter::from_opm`が要求する
+/// `opm2x6::parse::OpmVoice`固定シグネチャを、opm2op505の独自（フィールド構成は同一の）
+/// `OpmVoice`型へフィールドコピーで橋渡しする。Phase 2で不要になる暫定コード。
+fn to_local_opm_voice(v: &opm2x6::parse::OpmVoice) -> opm2op505::parse::OpmVoice {
+    fn conv_op(op: &opm2x6::parse::OpmOpReg) -> opm2op505::parse::OpmOpReg {
+        opm2op505::parse::OpmOpReg {
+            ar: op.ar, d1r: op.d1r, d2r: op.d2r, rr: op.rr, d1l: op.d1l, tl: op.tl,
+            ks: op.ks, mul: op.mul, dt1: op.dt1, dt2: op.dt2, ams_en: op.ams_en,
+        }
+    }
+    opm2op505::parse::OpmVoice {
+        number: v.number,
+        name: v.name.clone(),
+        lfrq: v.lfrq,
+        amd: v.amd,
+        pmd: v.pmd,
+        lfo_wf: v.lfo_wf,
+        fl: v.fl,
+        con: v.con,
+        ams: v.ams,
+        pms: v.pms,
+        slot: v.slot,
+        m1: conv_op(&v.m1),
+        c1: conv_op(&v.c1),
+        m2: conv_op(&v.m2),
+        c2: conv_op(&v.c2),
+    }
+}
+
 /// OPM/OPNボイスをOP505パッチへ直接変換する。SSG固定パッチ（x6ネイティブ人工パッチ）のみ
 /// `op505_core::adapter::convert_patch`（.38x6→.op505の既存2段変換）を経由する。
 pub struct Op505Converter {
@@ -77,7 +106,11 @@ impl PatchConverter for Op505Converter {
     type Patch = Op505Patch;
 
     fn from_opm(&mut self, v: &opm2x6::parse::OpmVoice) -> (Op505Patch, Vec<String>) {
-        opm2op505::conv::voice_to_op505_patch(v, opm2x6::parse::OperatorOrder::Direct, self.attack.to_opm())
+        opm2op505::conv::voice_to_op505_patch(
+            &to_local_opm_voice(v),
+            opm2op505::parse::OperatorOrder::Direct,
+            self.attack.to_opm(),
+        )
     }
     fn from_opn(&mut self, v: &mucom2x6::conv::OpnVoice) -> (Op505Patch, Vec<String>) {
         mucom2op505::conv::voice_to_op505_patch(&to_local_opn_voice(v), self.attack.to_mucom())

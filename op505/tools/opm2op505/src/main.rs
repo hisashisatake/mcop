@@ -1,6 +1,6 @@
 //! opm2op505 — VOPM形式の.opm音色ファイル（YM2151/OPM）を OP505 の `.op505` プリセットへ
-//! **直接**変換する（中間の`.38x6`ファイルを経由しない。opm2x6 + op505-core adapter.rs の
-//! EG変換ロジックを1ツール内で合成する。詳細は`opm2op505::conv`のdocコメント参照）。
+//! **直接**変換する（中間の`.38x6`ファイルを経由しない。パーサ・実機レート写像は自クレート内に
+//! 複製済み（fork-on-write）。詳細は`opm2op505::conv`/`opm2op505::map`のdocコメント参照）。
 //!
 //! 使い方:
 //! ```text
@@ -17,7 +17,7 @@
 //!   聴感A/B判断を踏襲。詳細は`opm2op505::conv::AttackMode`）。
 
 use opm2op505::conv::{self, AttackMode};
-use opm2x6::parse::{self, OperatorOrder};
+use opm2op505::parse::{self, OperatorOrder};
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

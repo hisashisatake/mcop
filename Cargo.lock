@@ -3535,9 +3535,7 @@ version = "0.1.0"
 dependencies = [
  "op505-core",
  "op505-tools",
- "opm2x6",
  "sound-core",
- "ym38x6-core",
 ]
 
 [[package]]

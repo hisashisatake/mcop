@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use op505_core::{Op505ChannelParams, Op505PresetEntry, Op505PresetFile};
 use op505_tools::golden::{assert_golden, Fingerprint};
 use opm2op505::conv::{self, AttackMode};
-use opm2x6::parse::{OpmOpReg, OpmVoice, OperatorOrder};
+use opm2op505::parse::{OpmOpReg, OpmVoice, OperatorOrder};
 
 const GOLDEN_VERSION: u32 = 1;
 
