@@ -2795,11 +2795,9 @@ dependencies = [
 name = "mucom2op505"
 version = "0.1.0"
 dependencies = [
- "mucom2x6",
  "op505-core",
  "op505-tools",
  "sound-core",
- "ym38x6-core",
 ]
 
 [[package]]

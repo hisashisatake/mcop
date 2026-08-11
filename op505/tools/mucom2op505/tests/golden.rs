@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use mucom2op505::conv::{self, AttackMode};
-use mucom2x6::conv::{OpnOperator, OpnVoice};
+use mucom2op505::map::{OpnOperator, OpnVoice};
 use op505_core::{Op505ChannelParams, Op505PresetEntry, Op505PresetFile};
 use op505_tools::golden::{assert_golden, Fingerprint};
 
