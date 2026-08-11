@@ -160,6 +160,13 @@ struct Identity {
     /// `list_bank_entries`で取得した、今のbankの担当ファイルの音色一覧。`apply()`のたびに
     /// 再取得し、Save/Save As/Openによるレジストリの変化を常に反映する。
     presets: Rc<RefCell<Vec<ipc::PresetEntry>>>,
+    /// `apply()`が立てるプリセット読込直後1回ぶんの「次のsend_patch()完了ではunsaved_changesを
+    /// 立てない」抑制フラグ。`load_preset`はエンジンへの反映のため`target`のdirtyを立てるが、
+    /// それをそのまま`unsaved_changes`に波及させると、プリセットを読み込んだ瞬間から
+    /// 未保存マーク`*`が付いてしまう（ユーザーはまだ何も編集していない）ため。
+    suppress_unsaved: Rc<Cell<bool>>,
+    /// このIdentityが今どちらのエンジンの状態と結び付いているか（`fetch_bank_entries`用）。
+    target: ipc::PatchTarget,
 }
 
 impl Identity {
@@ -170,23 +177,25 @@ impl Identity {
         self.current_program.set(loaded.program);
         crate::program_sync::set_current(loaded.bank, loaded.program);
         self.unsaved_changes.set(false);
+        self.suppress_unsaved.set(true);
         crate::shift_keys::request_repaint();
 
         let presets = self.presets.clone();
         let bank = loaded.bank;
+        let target = self.target.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            *presets.borrow_mut() = ipc::fetch_bank_entries(bank).await;
+            *presets.borrow_mut() = ipc::fetch_bank_entries(&target, bank).await;
             crate::shift_keys::request_repaint();
         });
     }
 }
 
 /// 指定のbank/programをレジストリから読み込む（`ipc::load_preset`＝`get_bank_program`、
-/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・起動直後の
-/// 初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく更新されているため、
-/// 「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
-async fn handle_navigate(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, identity: Identity, bank: u16, program: u8) {
-    if let Some(loaded) = ipc::load_preset(state, dirty, bank, program).await {
+/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・エンジン切替・
+/// 起動直後の初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく
+/// 更新されているため、「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
+async fn handle_navigate(target: ipc::PatchTarget, identity: Identity, bank: u16, program: u8) {
+    if let Some(loaded) = ipc::load_preset(&target, bank, program).await {
         identity.apply(loaded);
     }
 }
@@ -198,8 +207,7 @@ async fn handle_navigate(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>,
 struct BankField {
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
-    state: Rc<RefCell<EditorState>>,
-    dirty: Rc<Cell<bool>>,
+    target: ipc::PatchTarget,
     identity: Identity,
 }
 
@@ -223,35 +231,23 @@ impl ym38x6_ui::IntParamHandle for BankField {
     fn set(&self, value: i32) {
         let bank = value.clamp(0, 16383) as u16;
         self.current_bank.set(bank);
-        wasm_bindgen_futures::spawn_local(handle_navigate(
-            self.state.clone(),
-            self.dirty.clone(),
-            self.identity.clone(),
-            bank,
-            self.current_program.get(),
-        ));
+        wasm_bindgen_futures::spawn_local(handle_navigate(self.target.clone(), self.identity.clone(), bank, self.current_program.get()));
     }
     fn end_edit(&self) {}
 }
 
-/// presets_dir内/外を区別しない任意の`.38x6`ファイルをネイティブOpenダイアログで選ぶ。
+/// presets_dir内/外を区別しない任意のファイル（`.38x6`/`.op505`）をネイティブOpenダイアログで選ぶ。
 /// `bank`はダイアログの初期ディレクトリ決定にのみ使う。
-async fn handle_open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, bank: u16, identity: Identity) {
-    if let Some(loaded) = ipc::open_patch_file(state, dirty, bank).await {
+async fn handle_open_patch_file(target: ipc::PatchTarget, bank: u16, identity: Identity) {
+    if let Some(loaded) = ipc::open_patch_file(&target, bank).await {
         identity.apply(loaded);
     }
 }
 
 /// 現在のbank/programの担当ファイルへ上書き保存する。名前入力欄で音色名を変更していれば
 /// それも一緒に保存される。
-async fn handle_save_patch_overwrite(
-    state: Rc<RefCell<EditorState>>,
-    bank: u16,
-    program: u8,
-    patch_name: String,
-    identity: Identity,
-) {
-    if let Some(saved) = ipc::save_patch_overwrite(state, bank, program, patch_name).await {
+async fn handle_save_patch_overwrite(target: ipc::PatchTarget, bank: u16, program: u8, patch_name: String, identity: Identity) {
+    if let Some(saved) = ipc::save_patch_overwrite(&target, bank, program, patch_name).await {
         identity.apply(saved);
     }
 }
@@ -259,14 +255,14 @@ async fn handle_save_patch_overwrite(
 /// ネイティブSaveダイアログで保存先を選ぶ。bank/programは今表示されている値をそのまま書き込む
 /// （自動採番はしない）。成功したら以後の上書き保存先として記録する。
 async fn handle_save_patch_as(
-    state: Rc<RefCell<EditorState>>,
+    target: ipc::PatchTarget,
     patch_name: String,
     bank: u16,
     program: u8,
     default_file_name: String,
     identity: Identity,
 ) {
-    if let Some(saved) = ipc::save_patch_as(state, patch_name, bank, program, default_file_name).await {
+    if let Some(saved) = ipc::save_patch_as(&target, patch_name, bank, program, default_file_name).await {
         identity.apply(saved);
     }
 }
@@ -297,6 +293,9 @@ pub struct EditorApp {
     current_program: Rc<Cell<u8>>,
     /// 直近の保存以降にパラメーターまたは音色名を変更したか（フレーム末尾のdirty処理に便乗して立てる）。
     unsaved_changes: Rc<Cell<bool>>,
+    /// `Identity::apply()`が立てる、次のsend_patch()完了1回ぶんの`unsaved_changes`抑制フラグ
+    /// （`Identity`のdoc参照）。
+    suppress_unsaved: Rc<Cell<bool>>,
 }
 
 impl EditorApp {
@@ -307,34 +306,42 @@ impl EditorApp {
 
         let state = Rc::new(RefCell::new(EditorState::default()));
         let dirty = Rc::new(Cell::new(false));
+        let op505 = Op505State::new();
         let current_file_name = Rc::new(RefCell::new(None));
         let current_patch_name = Rc::new(RefCell::new(String::new()));
         let current_bank = Rc::new(Cell::new(0));
         let current_program = Rc::new(Cell::new(0));
         let unsaved_changes = Rc::new(Cell::new(false));
+        let suppress_unsaved = Rc::new(Cell::new(false));
 
         // メイン画面（main.js）のBank/Program欄の現在値を初期値として読み込む。起動直後から
         // エディタとメイン画面の選択が一致した状態にする（見た目と動作を一致させるため）。
+        // `active_engine()`はwasmモジュールのthread_local既定値（0=OP505）を返す。main.js側の
+        // 実際の選択がym38x6であれば、直後の`notify_engine()`呼び出しが立てる
+        // `SELECTION_STALE`経由で次フレームに正しいエンジンへ即座に読み直される
+        // （`engine_sync.rs`参照）ため、ここでの一時的な不一致は問題にならない。
+        let target = if crate::engine_sync::active_engine() == 0 {
+            ipc::PatchTarget::Op505 { patch: op505.patch.clone(), dirty: op505.dirty.clone() }
+        } else {
+            ipc::PatchTarget::Ym38x6 { state: state.clone(), dirty: dirty.clone() }
+        };
+        let identity = Identity {
+            current_file_name: current_file_name.clone(),
+            current_patch_name: current_patch_name.clone(),
+            current_bank: current_bank.clone(),
+            current_program: current_program.clone(),
+            unsaved_changes: unsaved_changes.clone(),
+            presets: presets.clone(),
+            suppress_unsaved: suppress_unsaved.clone(),
+            target: target.clone(),
+        };
         let (initial_bank, initial_program) = ipc::read_program_fields();
-        wasm_bindgen_futures::spawn_local(handle_navigate(
-            state.clone(),
-            dirty.clone(),
-            Identity {
-                current_file_name: current_file_name.clone(),
-                current_patch_name: current_patch_name.clone(),
-                current_bank: current_bank.clone(),
-                current_program: current_program.clone(),
-                unsaved_changes: unsaved_changes.clone(),
-                presets: presets.clone(),
-            },
-            initial_bank,
-            initial_program,
-        ));
+        wasm_bindgen_futures::spawn_local(handle_navigate(target, identity, initial_bank, initial_program));
 
         Self {
             state,
             dirty,
-            op505: Op505State::new(),
+            op505,
             keyboard: keyboard::KeyboardState::new(),
             presets,
             current_file_name,
@@ -342,6 +349,16 @@ impl EditorApp {
             current_bank,
             current_program,
             unsaved_changes,
+            suppress_unsaved,
+        }
+    }
+
+    /// 今どちらのエンジンがアクティブかに応じて、PRESETSサイドバーの読み書き先を組み立てる。
+    fn patch_target(&self) -> ipc::PatchTarget {
+        if crate::engine_sync::active_engine() == 0 {
+            ipc::PatchTarget::Op505 { patch: self.op505.patch.clone(), dirty: self.op505.dirty.clone() }
+        } else {
+            ipc::PatchTarget::Ym38x6 { state: self.state.clone(), dirty: self.dirty.clone() }
         }
     }
 
@@ -353,6 +370,8 @@ impl EditorApp {
             current_program: self.current_program.clone(),
             unsaved_changes: self.unsaved_changes.clone(),
             presets: self.presets.clone(),
+            suppress_unsaved: self.suppress_unsaved.clone(),
+            target: self.patch_target(),
         }
     }
 }
@@ -360,10 +379,14 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
-        // main.js側でOP505のデモ/Bank変換切替が起きていれば、バックエンドの現在パッチを
-        // 再フェッチする（`Op505State::new`の初回同期は一度きりのため。project memory
-        // `project_op505_editor_state_stale_on_demo_switch`参照）。
-        self.op505.refresh_if_stale();
+        // main.js側でエンジン切替またはBank/Program欄の変更が起きていれば、メイン画面の現在値を
+        // 読み直して現在のアクティブエンジンへ`handle_navigate`する（PRESETSサイドバーを常に
+        // メイン画面のBank/Program欄と一致させる唯一の経路。`engine_sync.rs`参照。project memory
+        // `project_op505_editor_state_stale_on_demo_switch`の後継設計）。
+        if crate::engine_sync::take_selection_stale() {
+            let (bank, program) = ipc::read_program_fields();
+            wasm_bindgen_futures::spawn_local(handle_navigate(self.patch_target(), self.identity(), bank, program));
+        }
 
         // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
         // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。
@@ -383,20 +406,17 @@ impl eframe::App for EditorApp {
             .min_size(120.0)
             .max_size(400.0)
             .show_inside(ui, |ui| {
+                let target = self.patch_target();
+
                 // Open/Save/Save As（presets_dir内/外を区別しない、ネイティブファイルダイアログ）。
                 ui.horizontal(|ui| {
                     if ui.button("Open").clicked() {
-                        wasm_bindgen_futures::spawn_local(handle_open_patch_file(
-                            self.state.clone(),
-                            self.dirty.clone(),
-                            self.current_bank.get(),
-                            self.identity(),
-                        ));
+                        wasm_bindgen_futures::spawn_local(handle_open_patch_file(target.clone(), self.current_bank.get(), self.identity()));
                     }
                     let save_enabled = self.current_file_name.borrow().is_some();
                     if ui.add_enabled(save_enabled, egui::Button::new("Save")).clicked() {
                         wasm_bindgen_futures::spawn_local(handle_save_patch_overwrite(
-                            self.state.clone(),
+                            target.clone(),
                             self.current_bank.get(),
                             self.current_program.get(),
                             self.current_patch_name.borrow().clone(),
@@ -408,17 +428,18 @@ impl eframe::App for EditorApp {
                         // ダイアログの提案ファイル名は「今開いているファイル名」を優先する
                         // （Save Asはバンク全体を書き出すため、個々の音色名より自然）。
                         // 何も開いていなければ音色名、それも空なら"patch"にフォールバックする。
+                        let ext_suffix = format!(".{}", target.file_ext());
                         let default_file_name = self
                             .current_file_name
                             .borrow()
                             .as_deref()
-                            .and_then(|f| f.strip_suffix(".38x6"))
+                            .and_then(|f| f.strip_suffix(ext_suffix.as_str()))
                             .filter(|f| !f.is_empty())
                             .map(str::to_string)
                             .or_else(|| (!patch_name.is_empty()).then(|| patch_name.clone()))
                             .unwrap_or_else(|| "patch".to_string());
                         wasm_bindgen_futures::spawn_local(handle_save_patch_as(
-                            self.state.clone(),
+                            target.clone(),
                             patch_name,
                             self.current_bank.get(),
                             self.current_program.get(),
@@ -437,8 +458,7 @@ impl eframe::App for EditorApp {
                     let bank_field = BankField {
                         current_bank: self.current_bank.clone(),
                         current_program: self.current_program.clone(),
-                        state: self.state.clone(),
-                        dirty: self.dirty.clone(),
+                        target: target.clone(),
                         identity: self.identity(),
                     };
                     ym38x6_ui::spin_control(ui, &bank_field, egui::TextStyle::Body);
@@ -466,8 +486,7 @@ impl eframe::App for EditorApp {
                             // programだけ切り替える＝別ファイルへは飛ばない（handle_navigate参照）。
                             self.current_program.set(preset.program);
                             wasm_bindgen_futures::spawn_local(handle_navigate(
-                                self.state.clone(),
-                                self.dirty.clone(),
+                                self.patch_target(),
                                 self.identity(),
                                 self.current_bank.get(),
                                 preset.program,
@@ -489,14 +508,25 @@ impl eframe::App for EditorApp {
             }
         });
 
+        // プリセット読込直後の1回だけは`suppress_unsaved`が消費し、未保存マーク`*`を立てない
+        // （`Identity`のdoc参照。読込自体がdirtyを立てるため、素通しすると読んだ瞬間`*`が付いてしまう）。
         if self.dirty.get() {
             self.dirty.set(false);
             ipc::send_patch(&self.state.borrow());
-            self.unsaved_changes.set(true);
+            if self.suppress_unsaved.replace(false) {
+                // 消費済み。
+            } else {
+                self.unsaved_changes.set(true);
+            }
         }
         if self.op505.dirty.get() {
             self.op505.dirty.set(false);
             ipc::send_op505_patch(&self.op505.patch.borrow());
+            if self.suppress_unsaved.replace(false) {
+                // 消費済み。
+            } else {
+                self.unsaved_changes.set(true);
+            }
         }
     }
 

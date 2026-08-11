@@ -130,16 +130,16 @@ let activeEngine = 0;
       // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
       // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
       const patch = await invoke('op505_set_program', { bank, program });
-      if (patch) {
-        labelEl.textContent = `OP505: ${programName(bank, program)}`;
-        invalidateEditorOp505Patch();
-      } else {
-        labelEl.textContent = `OP505: ${programName(bank, program)}（.op505未登録）`;
-      }
+      labelEl.textContent = patch
+        ? `OP505: ${programName(bank, program)}`
+        : `OP505: ${programName(bank, program)}（.op505未登録）`;
     } else {
       labelEl.textContent = programName(bank, program);
       await invoke('ym38x6_set_program', { bank, program });
     }
+    // PRESETSサイドバー（editor-wasm）へBank/Program変更を伝える。エンジン・見つかったか否かに
+    // 関わらず常に呼ぶ（サイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため）。
+    notifyEditorSelection();
     lastChordKey = null; // 同じコードでも即座に音色変更させる
   }
 
@@ -384,11 +384,11 @@ function notifyEditorEngine(engineId) {
   if (editorModule) editorModule.notify_engine(engineId);
 }
 
-// OP505のデモ/Bank変換切替をeditor-wasm側へ伝える。未起動時は何もしない
-// （Op505Stateはエディタ起動時に一度しか現在パッチを同期しないため、開いたままのエディタが
-// 古いパッチを表示し続けないよう、次にエディタが再描画される際の再フェッチを予約する）。
-function invalidateEditorOp505Patch() {
-  if (editorModule) editorModule.invalidate_op505_patch();
+// メイン画面のBank/Program欄の変更（エンジン問わず）をeditor-wasm側へ伝える。未起動時は何もしない
+// （PRESETSサイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため、次にエディタが
+// 再描画される際にサイドバーの再読み込みを予約する）。
+function notifyEditorSelection() {
+  if (editorModule) editorModule.notify_selection_changed();
 }
 
 async function toggleEditor() {

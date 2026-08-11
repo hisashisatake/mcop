@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engines;
+mod op505_presets;
 mod ym38x6_dto;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use engines::{ActiveEngine, Engines};
 use op505_core::{op505_presets_dir, Op505Patch, Op505PresetBank};
+use op505_presets::{build_op505_registry, Op505BankRegistry};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -250,49 +252,39 @@ fn op505_get_current_patch(engine: tauri::State<'_, Arc<Mutex<Engines>>>) -> Op5
 }
 
 /// (bank, program)に対応する`.op505`プリセットをカレントパッチに設定する
-/// （次のnote-onから適用。`ym38x6_set_program`のOP505版）。`.38x6`側の`ym38x6_set_program`と違い
-/// 波形メモリ/GM2/プレースホルダーのフォールバックチェーンを持たない。見つからなければ
-/// エンジンには触れず`None`を返す（`Op505Patch::default()`はtl=0で無音のため、
-/// 黙って無音へ切り替えるより「見つからない」を呼び出し側に伝えて現在の音を維持するほうが安全）。
+/// （次のnote-onから適用。`ym38x6_set_program`のOP505版）。解決順位はレジストリ→`Op505PresetBank`
+/// （`op505_presets::resolve_patch`参照）。`.38x6`側と違い波形メモリ/GM2/プレースホルダーの
+/// フォールバックチェーンを持たない。見つからなければエンジンには触れず`None`を返す
+/// （`Op505Patch::default()`はtl=0で無音のため、黙って無音へ切り替えるより「見つからない」を
+/// 呼び出し側に伝えて現在の音を維持するほうが安全）。
 /// 既存`.38x6`をOP505で鳴らしたい場合は`op505_probe --convert-bank`で`.op505`へ変換してから
 /// `op505_presets_dir()`へ置く（Adapterでのその場変換は廃止。EGの近似変換警告が出る変換は
 /// 「一度変換して確認する」明示的な手順にすべき、という判断）。
 #[tauri::command]
 fn op505_set_program(
     engine: tauri::State<'_, Arc<Mutex<Engines>>>,
+    registry: tauri::State<'_, Mutex<Op505BankRegistry>>,
     bank_state: tauri::State<'_, Mutex<Op505PresetBank>>,
     bank: u16,
     program: u8,
 ) -> Option<Op505Patch> {
-    let patch = bank_state.lock().unwrap().get(bank, program)?.patch;
+    let patch = op505_presets::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
     engine.lock().unwrap().op505.set_patch(patch);
     Some(patch)
 }
 
-/// 指定bankに属する`.op505`プリセット一覧を返す（`list_bank_entries`のOP505版）。
-/// `.38x6`側と違いOpen/Save/Save Asによる担当ファイル管理は無いため、
-/// `op505_presets_dir()`から起動時（または`op505_reload_presets`）に読み込んだ
-/// `Op505PresetBank`全体をそのまま参照する。
-#[tauri::command]
-fn op505_list_bank_entries(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>, bank: u16) -> Vec<PresetEntryDto> {
-    bank_state
-        .lock()
-        .unwrap()
-        .sorted_entries()
-        .into_iter()
-        .filter(|((b, _), _)| *b == bank)
-        .map(|((b, program), preset)| PresetEntryDto { bank: b, program, name: preset.name })
-        .collect()
-}
-
 /// `op505_presets_dir()`から`.op505`プリセットを読み直し、読み込んだプリセット総数を返す。
 /// アプリ起動中に外部（op505_probe/opz2op505等の変換ツールや手編集）でプリセットファイルが
-/// 追加・更新された場合に、再起動せず反映するためのコマンド。
+/// 追加・更新された場合に、再起動せず反映するためのコマンド。`Op505PresetBank`（フォールバック用）
+/// と`Op505BankRegistry`（Open/Save/Save Asの担当ファイル管理）の両方を作り直す
+/// （セッション中のOpen/Save/Save Asによる担当ファイルの変更はこの操作で失われる）。
 #[tauri::command]
-fn op505_reload_presets(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>) -> usize {
-    let reloaded = Op505PresetBank::load_from_dir(&op505_presets_dir());
+fn op505_reload_presets(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>, registry: tauri::State<'_, Mutex<Op505BankRegistry>>) -> usize {
+    let dir = op505_presets_dir();
+    let reloaded = Op505PresetBank::load_from_dir(&dir);
     let count = reloaded.sorted_entries().len();
     *bank_state.lock().unwrap() = reloaded;
+    *registry.lock().unwrap() = build_op505_registry(&dir);
     count
 }
 
@@ -498,9 +490,11 @@ fn main() {
     let fallback = PresetBank::load_from_dir(&presets_dir());
     let registry = build_registry(&presets_dir());
     // op505_presets_dir()はym38x6のpresets_dir()とは別ディレクトリ（%APPDATA%\op505\presets）。
-    // Open/Save/Save As相当は無いため単一のMutex状態のみで、`op505_reload_presets`が
-    // セッション中の再読み込みを担う。
+    // - op505_bank: 波形メモリ/GM2に相当するフォールバックの無い読み取り専用集合（起動時1回）。
+    // - op505_registry: bank番号ごとの担当ファイル。ym38x6のregistry同様、Open/Save/Save Asが
+    //   セッション中に直接更新する。
     let op505_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
+    let op505_registry = build_op505_registry(&op505_presets_dir());
 
     let stream = device
         .build_output_stream::<f32, _, _>(
@@ -529,6 +523,7 @@ fn main() {
         .manage(fallback)
         .manage(Mutex::new(registry))
         .manage(Mutex::new(op505_bank))
+        .manage(Mutex::new(op505_registry))
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,
@@ -541,13 +536,17 @@ fn main() {
             op505_set_patch,
             op505_get_current_patch,
             op505_set_program,
-            op505_list_bank_entries,
             op505_reload_presets,
             list_bank_entries,
             get_bank_program,
             open_patch_file,
             save_patch_overwrite,
             save_patch_as,
+            op505_presets::op505_list_bank_entries,
+            op505_presets::op505_get_bank_program,
+            op505_presets::op505_open_patch_file,
+            op505_presets::op505_save_patch_overwrite,
+            op505_presets::op505_save_patch_as,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

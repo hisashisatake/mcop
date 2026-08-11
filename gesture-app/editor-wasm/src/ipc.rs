@@ -430,13 +430,6 @@ pub fn send_op505_patch(patch: &op505_core::Op505Patch) {
     invoke("op505_set_patch", &SetOp505PatchArgs { patch: *patch });
 }
 
-/// `op505_get_current_patch`コマンドを呼び、バックエンドの現在のOP505カレントパッチを読む
-/// （エディタ起動時、main.js側のデモ選択/Bank・Program変換で既に設定済みの内容を
-/// エディタのローカル状態へ同期するために使う。引数なしのため専用argsは不要）。
-pub async fn load_op505_current_patch() -> Option<op505_core::Op505Patch> {
-    invoke_query("op505_get_current_patch", &serde_json::json!({})).await
-}
-
 /// 現在の`EditorState`を`ym38x6_set_patch`/`set_master_effects`へ送信する。
 /// `app.rs`からdirtyフラグが立ったフレームでのみ呼ばれる。
 pub fn send_patch(state: &EditorState) {
@@ -458,8 +451,8 @@ pub fn send_patch(state: &EditorState) {
     );
 }
 
-/// `list_bank_entries`コマンドが返す、今のbankの担当ファイルが持つ音色一覧の1件。
-/// エントリーは常に同一bank（問い合わせたbank）のため`bank`は保持しない
+/// `list_bank_entries`/`op505_list_bank_entries`コマンドが返す、今のbankの担当ファイルが持つ
+/// 音色一覧の1件。エントリーは常に同一bank（問い合わせたbank）のため`bank`は保持しない
 /// （DTOには含まれるが、ここでは無視して構わない）。
 #[derive(Deserialize, Clone)]
 pub struct PresetEntry {
@@ -478,9 +471,34 @@ struct BankArgs {
     bank: u16,
 }
 
+/// PRESETSサイドバーのOpen/Save/Save As/Bank切替/プリセット選択が、どちらのエンジンの状態へ
+/// 読み書きするかを表す。`app.rs`が`engine_sync::active_engine()`を見て都度組み立て、
+/// ここから先の関数（`fetch_bank_entries`/`load_preset`/`open_patch_file`/
+/// `save_patch_overwrite`/`save_patch_as`）はこれ1つでym38x6/OP505を出し分ける
+/// （ym38x6版とOP505版を別関数として二重実装しないための共通化）。
+#[derive(Clone)]
+pub enum PatchTarget {
+    Ym38x6 { state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>> },
+    Op505 { patch: Rc<RefCell<op505_core::Op505Patch>>, dirty: Rc<Cell<bool>> },
+}
+
+impl PatchTarget {
+    /// Save Asダイアログの拡張子（先頭のドット無し）。
+    pub fn file_ext(&self) -> &'static str {
+        match self {
+            PatchTarget::Ym38x6 { .. } => "38x6",
+            PatchTarget::Op505 { .. } => "op505",
+        }
+    }
+}
+
 /// 今のbankの担当ファイルが持つ音色一覧を取得する（presets_dir全体ではない。未登録なら空）。
-pub async fn fetch_bank_entries(bank: u16) -> Vec<PresetEntry> {
-    invoke_query("list_bank_entries", &BankArgs { bank }).await.unwrap_or_default()
+pub async fn fetch_bank_entries(target: &PatchTarget, bank: u16) -> Vec<PresetEntry> {
+    let cmd = match target {
+        PatchTarget::Ym38x6 { .. } => "list_bank_entries",
+        PatchTarget::Op505 { .. } => "op505_list_bank_entries",
+    };
+    invoke_query(cmd, &BankArgs { bank }).await.unwrap_or_default()
 }
 
 /// ファイル/音色の識別情報（ファイル名・音色名・bank/program）。ロード/保存系の関数が
@@ -492,46 +510,21 @@ pub struct PatchIdentity {
     pub program: u8,
 }
 
-/// 指定のbank/programをレジストリから読み込んで`state`へ書き込み、`dirty`を立てる
-/// （次フレームの`send_patch()`でエンジンへも反映される。エンジン側へ直接`ym38x6_set_program`は
-/// 呼ばない。`state`を単一の真実の情報源に保つことで、その後のノブ操作によるsend_patchが
-/// プリセット内容を上書きしてしまう不整合を避けるため）。バックエンド側はレジストリを引くだけで
-/// ディスクの再検索は行わない（`get_bank_program`）。Bank/Programスピンの変更・PRESETSリストの
-/// クリックの両方から呼ぶ（レジストリがOpen/Save/Save Asで正しく更新されているため、
-/// 常にこれだけで一貫した結果になる。別ファイルへ飛ぶ経路とファイル内に留まる経路を
-/// 分ける必要はない）。戻り値の`bank`/`program`は常に問い合わせた値をそのまま返す
-/// （見つからなくても、ユーザーが指定した値を表示に反映するため）。
-pub async fn load_preset(
-    state: Rc<RefCell<EditorState>>,
-    dirty: Rc<Cell<bool>>,
-    bank: u16,
-    program: u8,
-) -> Option<PatchIdentity> {
-    let loaded =
-        invoke_query::<LoadedPatchDto>("get_bank_program", &PresetPatchArgs { bank, program }).await?;
-    loaded.patch.apply_to(&mut state.borrow_mut());
-    dirty.set(true);
-    Some(PatchIdentity {
-        file_name: loaded.file_name,
-        patch_name: loaded.patch_name,
-        bank: loaded.bank,
-        program: loaded.program,
-    })
-}
-
-/// `open_patch_file`/`get_bank_program`が返す、読み込んだ音色の内容。
+/// `open_patch_file`/`get_bank_program`（およびOP505版）が返す、読み込んだ音色の内容。
 /// `file_name`（実ファイル名）と`patch_name`（音色名、`PresetEntry.name`）は別概念のため
 /// 分けて持つ（1ファイルに複数音色が入りうる以上、ファイル名と音色名は一致するとは限らない）。
+/// `P`は`PatchDto`(ym38x6)または`op505_core::Op505Patch`（`PatchTarget`参照）。
 #[derive(Deserialize)]
-struct LoadedPatchDto {
-    patch: PatchDto,
+struct LoadedPatchDto<P> {
+    patch: P,
     patch_name: String,
     file_name: Option<String>,
     bank: u16,
     program: u8,
 }
 
-/// `save_patch_overwrite`/`save_patch_as`が成功時に返す保存結果。
+/// `save_patch_overwrite`/`save_patch_as`が成功時に返す保存結果（ym38x6/OP505共通、
+/// パッチ本体を含まないため非ジェネリック）。
 #[derive(Deserialize)]
 struct SavedFileDto {
     patch_name: String,
@@ -542,8 +535,8 @@ struct SavedFileDto {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SavePatchArgs {
-    patch: PatchDto,
+struct SavePatchArgs<P> {
+    patch: P,
     patch_name: String,
     bank: u16,
     program: u8,
@@ -551,74 +544,128 @@ struct SavePatchArgs {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SaveAsArgs {
-    patch: PatchDto,
+struct SaveAsArgs<P> {
+    patch: P,
     patch_name: String,
     bank: u16,
     program: u8,
     default_file_name: String,
 }
 
-/// presets_dir内/外を区別しない任意の`.38x6`ファイルをネイティブOpenダイアログで選び、`state`へ書き込む。
+/// 指定のbank/programをレジストリから読み込んで`target`へ書き込み、`target`のdirtyを立てる
+/// （次フレームの`send_patch()`/`send_op505_patch()`でエンジンへも反映される。エンジン側へ直接
+/// `ym38x6_set_program`/`op505_set_program`は呼ばない。`target`を単一の真実の情報源に保つことで、
+/// その後のノブ操作による送信がプリセット内容を上書きしてしまう不整合を避けるため）。
+/// バックエンド側はレジストリを引くだけでディスクの再検索は行わない
+/// （`get_bank_program`/`op505_get_bank_program`）。Bank/Programスピンの変更・PRESETSリストの
+/// クリック・エンジン切替の全経路がこれを呼ぶ（レジストリがOpen/Save/Save Asで正しく
+/// 更新されているため、常にこれだけで一貫した結果になる）。戻り値の`bank`/`program`は
+/// 常に問い合わせた値をそのまま返す（見つからなくても、ユーザーが指定した値を表示に反映するため）。
+pub async fn load_preset(target: &PatchTarget, bank: u16, program: u8) -> Option<PatchIdentity> {
+    match target {
+        PatchTarget::Ym38x6 { state, dirty } => {
+            let loaded =
+                invoke_query::<LoadedPatchDto<PatchDto>>("get_bank_program", &PresetPatchArgs { bank, program }).await?;
+            loaded.patch.apply_to(&mut state.borrow_mut());
+            dirty.set(true);
+            Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
+        }
+        PatchTarget::Op505 { patch, dirty } => {
+            let loaded = invoke_query::<LoadedPatchDto<op505_core::Op505Patch>>(
+                "op505_get_bank_program",
+                &PresetPatchArgs { bank, program },
+            )
+            .await?;
+            *patch.borrow_mut() = loaded.patch;
+            dirty.set(true);
+            Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
+        }
+    }
+}
+
+/// presets_dir内/外を区別しない任意のファイルをネイティブOpenダイアログで選び、`target`へ書き込む。
 /// PRESETSパネルの`load_preset`とは別経路（レジストリを経由しない直接ファイル読み込み）。
 /// `bank`は「今エディタで選択中のbank」を渡す。ダイアログの初期ディレクトリ決定に使うだけでなく、
 /// ファイル自身が宣言するbank番号は**無視され**、この`bank`へファイルの全音色が丸ごとロードされる
-/// （ファイル自身のbankをそのまま採用するのではない。ユーザー確認済みの仕様）。
+/// （ファイル自身のbankをそのまま採用するのではない。ym38x6で確認済みの仕様をOP505にも適用する）。
 /// 戻り値の`bank`はこの引数と同じ値になる。
-pub async fn open_patch_file(state: Rc<RefCell<EditorState>>, dirty: Rc<Cell<bool>>, bank: u16) -> Option<PatchIdentity> {
-    let loaded = invoke_query::<Option<LoadedPatchDto>>("open_patch_file", &BankArgs { bank }).await.flatten()?;
-    loaded.patch.apply_to(&mut state.borrow_mut());
-    dirty.set(true);
-    Some(PatchIdentity {
-        file_name: loaded.file_name,
-        patch_name: loaded.patch_name,
-        bank: loaded.bank,
-        program: loaded.program,
-    })
+pub async fn open_patch_file(target: &PatchTarget, bank: u16) -> Option<PatchIdentity> {
+    match target {
+        PatchTarget::Ym38x6 { state, dirty } => {
+            let loaded =
+                invoke_query::<Option<LoadedPatchDto<PatchDto>>>("open_patch_file", &BankArgs { bank }).await.flatten()?;
+            loaded.patch.apply_to(&mut state.borrow_mut());
+            dirty.set(true);
+            Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
+        }
+        PatchTarget::Op505 { patch, dirty } => {
+            let loaded = invoke_query::<Option<LoadedPatchDto<op505_core::Op505Patch>>>("op505_open_patch_file", &BankArgs { bank })
+                .await
+                .flatten()?;
+            *patch.borrow_mut() = loaded.patch;
+            dirty.set(true);
+            Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
+        }
+    }
 }
 
-/// 現在のbank/programの担当ファイルへ現在の`state`を上書き保存する。`patch_name`は名前入力欄の
+/// 現在のbank/programの担当ファイルへ現在の`target`の内容を上書き保存する。`patch_name`は名前入力欄の
 /// 内容で、保存の都度エントリ名を更新する。そのbankにまだファイルが無ければ
 /// （バックエンド側がエラーを返すため）Noneが返る。
-pub async fn save_patch_overwrite(
-    state: Rc<RefCell<EditorState>>,
-    bank: u16,
-    program: u8,
-    patch_name: String,
-) -> Option<PatchIdentity> {
-    let patch = patch_dto_from_state(&state.borrow());
-    let saved =
-        invoke_query::<SavedFileDto>("save_patch_overwrite", &SavePatchArgs { patch, patch_name, bank, program }).await?;
-    Some(PatchIdentity {
-        file_name: Some(saved.file_name),
-        patch_name: saved.patch_name,
-        bank: saved.bank,
-        program: saved.program,
-    })
+pub async fn save_patch_overwrite(target: &PatchTarget, bank: u16, program: u8, patch_name: String) -> Option<PatchIdentity> {
+    match target {
+        PatchTarget::Ym38x6 { state, .. } => {
+            let patch = patch_dto_from_state(&state.borrow());
+            let saved = invoke_query::<SavedFileDto>(
+                "save_patch_overwrite",
+                &SavePatchArgs { patch, patch_name, bank, program },
+            )
+            .await?;
+            Some(PatchIdentity { file_name: Some(saved.file_name), patch_name: saved.patch_name, bank: saved.bank, program: saved.program })
+        }
+        PatchTarget::Op505 { patch, .. } => {
+            let patch = *patch.borrow();
+            let saved = invoke_query::<SavedFileDto>(
+                "op505_save_patch_overwrite",
+                &SavePatchArgs { patch, patch_name, bank, program },
+            )
+            .await?;
+            Some(PatchIdentity { file_name: Some(saved.file_name), patch_name: saved.patch_name, bank: saved.bank, program: saved.program })
+        }
+    }
 }
 
-/// ネイティブSaveダイアログで保存先を選び、現在の`state`を新規`.38x6`として書き出す。
+/// ネイティブSaveダイアログで保存先を選び、現在の`target`の内容を新規ファイルとして書き出す。
 /// `patch_name`（名前入力欄の内容）をそのままエントリ名として使い、`bank`/`program`は今表示されている
 /// スピンの値をそのまま書き込む（自動採番はしない＝見た目と動作を一致させる）。`default_file_name`は
 /// ダイアログの提案ファイル名にのみ使う。以後の`save_patch_overwrite`はこの新しいファイルに対して行われる。
 pub async fn save_patch_as(
-    state: Rc<RefCell<EditorState>>,
+    target: &PatchTarget,
     patch_name: String,
     bank: u16,
     program: u8,
     default_file_name: String,
 ) -> Option<PatchIdentity> {
-    let patch = patch_dto_from_state(&state.borrow());
-    let saved = invoke_query::<Option<SavedFileDto>>(
-        "save_patch_as",
-        &SaveAsArgs { patch, patch_name, bank, program, default_file_name },
-    )
-    .await
-    .flatten()?;
-    Some(PatchIdentity {
-        file_name: Some(saved.file_name),
-        patch_name: saved.patch_name,
-        bank: saved.bank,
-        program: saved.program,
-    })
+    match target {
+        PatchTarget::Ym38x6 { state, .. } => {
+            let patch = patch_dto_from_state(&state.borrow());
+            let saved = invoke_query::<Option<SavedFileDto>>(
+                "save_patch_as",
+                &SaveAsArgs { patch, patch_name, bank, program, default_file_name },
+            )
+            .await
+            .flatten()?;
+            Some(PatchIdentity { file_name: Some(saved.file_name), patch_name: saved.patch_name, bank: saved.bank, program: saved.program })
+        }
+        PatchTarget::Op505 { patch, .. } => {
+            let patch = *patch.borrow();
+            let saved = invoke_query::<Option<SavedFileDto>>(
+                "op505_save_patch_as",
+                &SaveAsArgs { patch, patch_name, bank, program, default_file_name },
+            )
+            .await
+            .flatten()?;
+            Some(PatchIdentity { file_name: Some(saved.file_name), patch_name: saved.patch_name, bank: saved.bank, program: saved.program })
+        }
+    }
 }
