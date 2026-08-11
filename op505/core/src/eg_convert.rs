@@ -169,16 +169,15 @@ pub(crate) fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings
     params.release_start += 1;
 }
 
-/// Pitch/Cutoff/Gain FGの`EgParams`（delay込み）をTimeEgParamsへ変換する。
-/// Gain FGのrr=0特例（透過既定を維持する据え置き変換）は`apply_transparent_gain_release`を
-/// 追加で適用すること（この関数はFG種別を区別しない汎用変換のみ行う）。
-pub fn convert_fg_eg(eg: &EgParams) -> TimeEgParams {
-    let mut warnings = Vec::new();
-    let mut result = convert_eg_shape(
-        eg.ar, eg.d1r, eg.d1l, eg.d2r, eg.rr, eg.floor, eg.loop_enabled, eg.curve, &mut warnings, "fg",
-    );
+/// Pitch/Cutoff/Gain FGの`EgParams`（delay込み）をTimeEgParamsへ変換する。`label`は
+/// 警告メッセージの先頭に付く識別子（例: `"pitch_fg"`）。Gain FGのrr=0特例（透過既定を
+/// 維持する据え置き変換）は`apply_transparent_gain_release`を追加で適用すること
+/// （この関数はFG種別を区別しない汎用変換のみ行う）。
+pub fn convert_fg_eg(eg: &EgParams, warnings: &mut Vec<String>, label: &str) -> TimeEgParams {
+    let mut result =
+        convert_eg_shape(eg.ar, eg.d1r, eg.d1l, eg.d2r, eg.rr, eg.floor, eg.loop_enabled, eg.curve, warnings, label);
     if eg.delay > 0 {
-        prepend_delay_stage(&mut result, eg.delay, &mut warnings, "fg");
+        prepend_delay_stage(&mut result, eg.delay, warnings, label);
     }
     result
 }

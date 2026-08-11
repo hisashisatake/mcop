@@ -4,11 +4,11 @@
 //! EG非依存の安定部分（アルゴリズム結線・波形・チップ内LFO・パラメーターマッピングテーブル・
 //! 質感LFO）は`sound-fm`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
 //! （fork-on-write方針。将来op505独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
-//! `ym38x6-core`への依存は`adapter.rs`（既存`.38x6`からの変換）のみに限定する。
+//! `ym38x6-core`への依存は`[dev-dependencies]`のみ（`examples/op505_probe.rs`が既存`.38x6`
+//! からの変換に使う）。`src/`は一切依存しない（op505/デフォーク計画Phase 4）。
 //! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
 //! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
-pub mod adapter;
 pub mod demo;
 pub mod eg_convert;
 pub mod operator;
