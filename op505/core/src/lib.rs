@@ -10,6 +10,7 @@
 
 pub mod adapter;
 pub mod demo;
+pub mod eg_convert;
 pub mod operator;
 pub mod preset;
 pub use operator::Op505OperatorParams;

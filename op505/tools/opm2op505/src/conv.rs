@@ -1,13 +1,13 @@
 //! OPM（YM2151）レジスタ値 → OP505パッチへの直接変換ロジック。
 //!
 //! 実機レート写像・非EGフィールド構築（[crate::map]、opm2x6からの複製）と、
-//! op505-core `adapter::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
+//! op505-core `eg_convert::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
 //! 1ツール内で合成することで、中間の`.38x6`ファイルを経由せず直接TimeEgParamsを得る。
 //! opm2x6にはキャリアサステイン等の味付けオプションが存在しないため、
 //! opz2op505/psr2op505と異なりis_carrier/carrier_sustainは扱わない。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::adapter::convert_eg_shape;
+use op505_core::eg_convert::convert_eg_shape;
 use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry};
 use sound_core::TimeEgParams;
 

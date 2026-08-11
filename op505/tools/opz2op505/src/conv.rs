@@ -6,7 +6,7 @@
 //! `AttackMode::Bias`はゴールデンテスト（`tests/golden.rs`）でデフォーク前の実装と
 //! ビット一致することを確認済み。実際の既定は聴感A/Bの結果`AttackMode::None`（詳細は[AttackMode]参照）。
 
-use op505_core::adapter::convert_eg_shape;
+use op505_core::eg_convert::convert_eg_shape;
 use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry};
 use sound_core::TimeEgParams;
 

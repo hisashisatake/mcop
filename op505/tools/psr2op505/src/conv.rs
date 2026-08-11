@@ -1,11 +1,11 @@
 //! PSR-70（OPQ/YM3806）ボイスレジスタ → OP505パッチへの直接変換ロジック。
 //!
 //! 実機レート写像・非EGフィールド構築（[crate::map]、psr2x6からの複製）と、
-//! op505-core `adapter::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
+//! op505-core `eg_convert::convert_eg_shape`（EGレートスケール→TimeEgParams変換）を
 //! 1ツール内で合成することで、中間の`.38x6`ファイルを経由せず直接TimeEgParamsを得る。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::adapter::convert_eg_shape;
+use op505_core::eg_convert::convert_eg_shape;
 use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry, Op505PresetFile};
 use sound_core::TimeEgParams;
 
