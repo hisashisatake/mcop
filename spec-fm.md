@@ -414,23 +414,35 @@ OPNベース音程ズレの真因はYM2608のプリスケーラだった（修�
 `op505/tools/vgm2op505`は、VGM/VGZを中間の`.38x6`を経由せず`.op505`（OP505のN点Time/Level
 方式EG）へ直接変換する。他の直接変換ツール（`opz2op505`等）と異なり、vgm2x6は音色変換だけで
 なく演奏ロジック本体（VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理）が主体だったため、
-新数式は書かずに**演奏ロジックの共有**で対応した:
+当初（2026-08-09時点）は`ym38x6/tools/vgm2x6`をlib+binへ切り出しジェネリクス経由で
+**演奏ロジックを共有**していた。しかし「op505はym38x6依存ゼロが理想」という方針
+（8章「op505デフォーク」参照）のもと、2026-08-11のデフォークで**演奏ロジックごと独立複製**
+へ切り替え、現在vgm2op505はym38x6グループへの依存を持たない:
 
-- `ym38x6/tools/vgm2x6`をlib+binの2ターゲット構成へ切り出し、チップ判定・SMF/WAV出力抽象
-  （`OpnSink`/`WavEngine`）・OPM/OPN演奏ループを`PatchConverter`トレイトでパッチ型非依存に
-  ジェネリクス化した（`vgm2x6::patch::PatchBank<C>`/`vgm2x6::play`）。vgm2op505はこの
-  libへ薄いバイナリとして相乗りし、`Op505Converter`（opm2op505/mucom2op505の
-  `voice_to_op505_patch`へ委譲）と`Engine505`（`Op505Engine`のnewtypeラッパー）を
-  差し込むだけで済む
-- **バンク重複判定キーの統一が要**: 元のvgm2x6は非OPMエントリー（OPNボイス・SSG合成パッチ）
-  の重複判定を「`.38x6`変換後のパッチ値」で行っていた（OPNボイスは`find_or_insert_fixed`
-  経由）。直接変換でもこの判定基準を`Ym38x6Patch`のまま統一しないと、x6変換で潰れる2音色が
-  変換器によって別エントリーになり、SMFのProgram Change番号がvgm2x6と食い違う。
-  `PatchBank::find_or_insert_opn`（キー=`voice.to_ym38x6_patch()`）を新設し、
-  `find_or_insert_fixed`と同一プールを共有させることで解決した
-- SSG合成パッチ（`psg_patch`/`noise_patch`/`mix_patch`、`ssg.rs`）はx6ネイティブ定義の
-  人工パッチ（実機レート由来ではない）なので、実機レート写像を新設せず
-  `op505_core::adapter::convert_patch`（既存の`.38x6`→`.op505`2段変換）をそのまま使う
+- `vgm2x6/src/{vgm,opm,opn,ssg,smf,patch,play}.rs`（計約2,478行）を`vgm2op505/src/`へ
+  ファイル単位で複製し、以後は独立に進化させる（fork-on-write。複製ファイル冒頭に
+  由来コミットハッシュを記載する規約は8章参照）。
+  `play.rs`の`use ym38x6_core::Vco`は`use sound_core::Vco`へ、`impl WavEngine for
+  Ym38x6Engine`は`impl WavEngine for Op505Engine`へ直接差し替え、orphan rule回避用の
+  `Engine505` newtypeラッパーは不要になり削除した
+- 複製直後（ジェネリクス保持）と、OP505専用に確定してからの畳み込み（`PatchConverter`/
+  `OpnSink<P>`/`WavSink<E>`等の型パラメータ撤廃、正味-64行）を**分離コミット**にした。
+  前者のレビュー観点は「複製が正しいか」、後者は「簡素化で挙動が変わっていないか」
+  （＝ゴールデン緑と実データ比較一致が答え）に分けられる
+- **バンク重複判定キー**: 元のvgm2x6は非OPMエントリー（OPNボイス・SSG合成パッチ）の
+  重複判定を「`.38x6`変換後のパッチ値」（`x6_key: Option<Ym38x6Patch>`）で行っていた。
+  デフォーク後は`Ym38x6Patch`型自体を参照できないため、キーを`DedupKey`
+  （`Opn(OpnDedupKey)` / `Fixed(SsgPatchId)`の2バリアントenum、`patch.rs`）へ
+  置き換えた。`OpnDedupKey`は旧`to_ym38x6_patch()`変換が生成する値と同じ衝突パターン
+  （dt1=0/4衝突等）をバイト列として再現するよう設計してあり、**旧挙動を1ビットも変えず
+  ym38x6型への依存だけを断つ**（ソース値そのものをキーにする案は、旧変換が潰していた
+  ペアを分離してしまいSMFのProgram Change番号がズレるため不採用。判断根拠は8章②参照）
+- SSG合成パッチ（`psg_patch`/`noise_patch`/`mix_patch`、`ssg.rs`）は元々x6ネイティブ
+  定義の人工パッチ（実機レート由来ではない）だったため、デフォーク前の`convert_patch`
+  変換結果をゴールデンJSON化した上で`Op505Patch`を手書き定数として再実装し、**同じ
+  ゴールデンを照合先にしてym38x6を一切参照せずビット一致を証明**した（Gain FGの3本は
+  `Ym38x6Patch::default()`由来のビット表現を意図的に焼き込んでおり、`Op505ChannelParams
+  ::default()`へ寄せる整理は別コミット・合格条件はPCMハッシュ不変とする）
 - Pitch/Cutoff/Gain FGはOP505ネイティブ既定値（他の直接変換ツールと同じ仕様）のため、
   `--attack bias`時の回帰テストは「operators全フィールド + channelの非FGフィールド」で
   ビット一致を確認する（FG差異は意図的、可聴上はノーオペ）
@@ -460,3 +472,61 @@ ZCR/輝度（diff energy比）を測定する検証手法を確立し、最終�
 | `A_kvs` | Key Velocity Sensitivity（打鍵の強さ）由来の減衰 |
 | `A_ebs` | EG Bias Sensitivity（ブレスコントローラ）由来の減衰 |
 | Aol/Aalg等の単位 | TX81Z系はTLレジスタ7bit・0.75dB/step。38x6は8bit・0.373dB/step（ちょうど2倍解像度） |
+
+---
+
+## 8. op505デフォーク（ym38x6依存の排除、横断知見）
+
+`ym38x6`（旧チップ）は将来非推奨、`op505`（新チップ）が主力という方針に対し、`op505/`配下
+（`op505-core`・`op505/tools/*`の5ツール）が`ym38x6-core`・`ym38x6/tools/*`へ製品コードで
+依存していた状態を2026-08-11の`feature/op505-defork`ブランチで解消した。`op505-core`の
+`src/`は現在ym38x6-coreに一切依存せず（`ym38x6-core`は`examples/op505_probe.rs`用の
+`[dev-dependencies]`のみ）、`op505/tools/*`もxxx2x6/vgm2x6/ym38x6-coreへの依存がゼロになった。
+共有資産（パーサ・実機レート写像・VGM演奏エンジン）は中立共有クレート化ではなく**複製**
+（fork-on-write）で対応した——op505は今後ym38x6と独立に進化させる前提のため、共有クレートに
+してしまうと「op505が主力・ym38x6が将来非推奨」という非対称な関係を中立クレートが覆い隠して
+しまう。作業全体の詳細（フェーズ構成・ゴールデン設計・dedupキーの判断根拠）はmemory
+`project_op505_defork`を参照。ここでは他のコンバーター開発にも再利用できる横断知見4点を残す。
+
+### ① 「x6レート」の正体はsound-coreのレートスケールでチップ非依存だった
+
+各コンバーターの`ar_to_x6`/`rr_to_x6`等の関数群は、名前からは「38x6固有のレート値」を
+生成しているように見えるが、実体は`sound_core::eg::{ar_to_delta, decay_to_delta,
+rr_to_delta}`が解釈する**チップ非依存のレートスケール**（0〜255）だった。デフォークでは
+これを`ar_to_eg_rate`等へ改名し、`map.rs`冒頭にこの事実を明文化した。**名前が実体を
+正しく表していないと、依存関係の判断自体を誤らせる**（このケースでは「op505もこの関数を
+使ってよいか」の判断が「38x6固有か否か」という誤った軸で行われかけた）。
+
+### ② 「旧2段変換との実行時一致」は独立オラクルではない
+
+デフォーク前の回帰テスト（`direct_eg_bias_matches_two_stage_adapter_path`等）は、新しい
+直接変換の出力を「`.38x6`を経由する旧2段変換」の出力と比較して一致を確認していた。しかし
+両者は**同じ実装（旧2段変換）を祖先に持つ**ため、旧2段変換自体にバグがあっても検出できない
+——[[feedback_oracle_independence_verification]]の再適用そのもの。デフォークでは
+この比較テストをゴールデンデータ（デフォーク**前**の時点で採取し固定化）へ置き換え、
+「新実装が過去の既知の挙動から逸脱していないか」だけを検証する設計に切り替えた。
+「A/Bが一致する」ことと「A/Bが独立に正しい」ことは別の主張であり、比較対象の系譜
+（共通祖先の有無）を先に確認する習慣が要る。
+
+### ③ ゴールデンの二層設計とUPDATE_GOLDEN
+
+`op505-tools::golden`は**フィンガープリント**（`*.fnv`、FNV-1aハッシュ数行で数十万ケースの
+掃引を凍結、網羅性重視）と**可読サンプル**（`.op505`/`.json`のpretty JSON、デバッグ可能性
+重視）の二層で構成する。ハッシュだけでは壊れた原因がdiffで見えず、可読サンプルだけでは
+掃引の網羅性が足りないため、両方持つ。更新は`$env:UPDATE_GOLDEN=1; cargo test -p <crate>;
+Remove-Item Env:\UPDATE_GOLDEN`（詳細はCLAUDE.md）。
+
+### ④ 複製ファイルに由来コミットを書く規約
+
+`vgm2x6`から`vgm2op505`へ複製したファイルの冒頭には、複製元のコミットハッシュと日付を
+コメントで残す:
+
+```rust
+//! 由来: ym38x6/tools/vgm2x6/src/play.rs（コミット f2f3688 時点の複製、2026-08-11）。
+//! 以後は独立に進化させる（fork-on-write）。vgm2x6側の修正は自動では反映されない。
+```
+
+fork-on-write方針では複製後の2ファイルは意図的に乖離していくため、「vgm2x6側でバグが
+見つかったとき、複製先にも同じバグが混入しているか」を`git diff f2f3688 -- <元ファイル>`
+で機械的に確認できるようにするための最小限の来歴情報。共有クレート化を避けた代償
+（修正の手動横展開が必要になる）を最小コストで緩和する。

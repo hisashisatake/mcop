@@ -2,7 +2,8 @@
 //!
 //! チップ判定（[detect_chip]）・SMF/WAV出力先の抽象（[OpnSink]）・OPN共通ループ
 //! （[process_opn]）・OPM専用ループ（[opm_to_smf]/[opm_to_audio]）を持つ。
-//! bin側（vgm2x6本体）と外部クレート（vgm2op505等）の双方から呼ばれる想定。
+//! bin側（vgm2x6本体）から呼ばれる。`op505/tools/vgm2op505`はop505デフォーク（2026-08-11）で
+//! 独立複製したため、現在は参照していない（詳細はspec-fm.md 8章）。
 
 use std::path::Path;
 

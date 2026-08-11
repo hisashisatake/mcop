@@ -1,8 +1,9 @@
 //! VGM から抽出したボイスを管理し、変換後パッチのバンクファイルを出力する。
 //!
-//! パッチ型は [PatchConverter] を実装した変換器（[X6Converter] 等）でジェネリック化されている。
-//! vgm2x6本体は `.38x6` を出力する [X6Converter] を使うが、外部クレート（vgm2op505等）は
-//! 同じ [PatchBank] にOP505等の別変換器を差し込んで直接変換できる。
+//! パッチ型は [PatchConverter] を実装した変換器（[X6Converter] 等）でジェネリック化されている
+//! （vgm2x6本体は `.38x6` を出力する [X6Converter] を使う）。かつては`op505/tools/vgm2op505`が
+//! 同じ[PatchBank]にOP505用変換器を差し込んで再利用していたが、op505デフォーク（2026-08-11）で
+//! 独立複製済み（詳細はspec-fm.md 8章）。
 
 use std::path::Path;
 
