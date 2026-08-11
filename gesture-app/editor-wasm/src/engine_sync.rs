@@ -11,7 +11,7 @@ use std::cell::Cell;
 use wasm_bindgen::prelude::*;
 
 thread_local! {
-    /// 0=38x6 / 1=OP505。既定は38x6（main.jsの`<select id="engine-select">`初期値と一致）。
+    /// 0=OP505 / 1=38x6。既定はOP505（main.jsの`<select id="engine-select">`初期値と一致）。
     static ACTIVE_ENGINE: Cell<u8> = const { Cell::new(0) };
 }
 

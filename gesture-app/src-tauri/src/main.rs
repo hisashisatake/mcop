@@ -219,7 +219,7 @@ fn set_master_effects(
 // OP505（エンジン切替 + 音色コマンド）
 // ---------------------------------------------------------------------------
 
-/// 演奏入力（note_on）を受けるエンジンを切り替える（0=38x6 / 1=OP505）。
+/// 演奏入力（note_on）を受けるエンジンを切り替える（0=OP505 / 1=38x6）。
 /// 非アクティブ側のリリース尾はrenderで鳴り続けるため、切替は無音を挟まない。
 #[tauri::command]
 fn set_active_engine(engine: tauri::State<'_, Arc<Mutex<Engines>>>, engine_id: u8) {
@@ -294,21 +294,6 @@ fn op505_reload_presets(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>) ->
     let count = reloaded.sorted_entries().len();
     *bank_state.lock().unwrap() = reloaded;
     count
-}
-
-/// OP505のデモパッチ表示名一覧（フロントのデモ選択UIの選択肢）。
-#[tauri::command]
-fn op505_demo_names() -> Vec<String> {
-    op505_core::demo::DEMO_NAMES.iter().map(|s| s.to_string()).collect()
-}
-
-/// OP505のデモパッチ（TimeEg固有の表現力を示す組み込み音色）をカレントパッチに設定する。
-/// Adapter変換した`.38x6`では絶対に現れない形（静止を挟んだループ等）はこれだけが示せる。
-#[tauri::command]
-fn op505_set_demo(engine: tauri::State<'_, Arc<Mutex<Engines>>>, index: u8) -> Option<Op505Patch> {
-    let patch = op505_core::demo::demo_patch(index)?;
-    engine.lock().unwrap().op505.set_patch(patch);
-    Some(patch)
 }
 
 /// bank番号ごとの「担当ファイル」（presets_dir全体の中で、そのbankを最後に定義したファイル）。
@@ -558,8 +543,6 @@ fn main() {
             op505_set_program,
             op505_list_bank_entries,
             op505_reload_presets,
-            op505_demo_names,
-            op505_set_demo,
             list_bank_entries,
             get_bank_program,
             open_patch_file,

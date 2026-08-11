@@ -254,7 +254,8 @@ mod tests {
         stages
     }
 
-    /// e3相当（demo_patch(0)のgain_fgと同じ形）: 静止を挟んだ音量2値スイッチ、4段ループ+リリース。
+    /// e3相当（かつてのop505-coreデモパッチ`demo_patch(0)`のgain_fgと同じ形、現在は廃止済み）:
+    /// 静止を挟んだ音量2値スイッチ、4段ループ+リリース。
     fn gain_switch_params() -> TimeEgParams {
         TimeEgParams {
             stages: stages(&[(15, 230, 0), (40, 230, 0), (15, 40, 0), (40, 40, 0), (100, 0, 0)]),
@@ -342,7 +343,7 @@ mod tests {
 
     #[test]
     fn gain_switch_demo_has_two_flat_regions() {
-        // e3(demo_patch(0))の核＝静止を挟んだ2値スイッチが、保持区間に2つの水平区間として現れる。
+        // e3(旧op505-core demo_patch(0))の核＝静止を挟んだ2値スイッチが、保持区間に2つの水平区間として現れる。
         let g = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         let flat_count = g.points.windows(2).take(g.release_point).filter(|w| (w[1].y - w[0].y).abs() < 1e-3).count();
         assert!(flat_count >= 2, "静止区間が2つ以上見えるはず: flat_count={flat_count}");

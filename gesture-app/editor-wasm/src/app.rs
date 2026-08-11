@@ -480,7 +480,7 @@ impl eframe::App for EditorApp {
         // main.jsのEngineセレクトで選ばれている方のパネルだけを描く。両エンジンの状態は
         // 常時保持している（Op505State::new参照）ため、切替をまたいでも編集内容は失われない。
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if crate::engine_sync::active_engine() == 1 {
+            if crate::engine_sync::active_engine() == 0 {
                 let panel = self.op505.build_panel_params();
                 draw_op505_panel(ui, &panel);
             } else {

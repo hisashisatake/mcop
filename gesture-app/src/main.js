@@ -77,7 +77,7 @@ async function applyPerformanceLfoToActiveChannels() {
 // Bank/Programを復元する（FM⇔波形メモリのどちら向きの切替でも双方向に復元される）。
 // 「波形メモリ」チェックON時はBank欄をWAVEFORM_MEMORY_BANKに固定して編集不可にする。
 // ─────────────────────────────────────────────
-// エンジン切替（0=38x6 / 1=OP505）。note_on/note_offのIPCは共通で、どちらのエンジンが鳴るかは
+// エンジン切替（0=OP505 / 1=38x6）。note_on/note_offのIPCは共通で、どちらのエンジンが鳴るかは
 // バックエンドのactive側が決める（engines.rs参照）。モジュールスコープに置くのは、
 // 音色エディタ起動時（toggleEditor()、IIFE外）にも現在値を参照して同期する必要があるため。
 let activeEngine = 0;
@@ -88,27 +88,6 @@ let activeEngine = 0;
   const numEl    = document.getElementById('program-num');
   const labelEl  = document.getElementById('program-label');
   const engineEl = document.getElementById('engine-select');
-  const demoEl   = document.getElementById('op505-demo');
-
-  // OP505のデモ選択（-1=Bank/Programの.38x6をAdapter変換、0以上=demo_patchのインデックス）。
-  let op505DemoIndex = -1;
-
-  // デモ選択肢を起動時に構築する（先頭は「Bank/Program変換」固定）。
-  (async () => {
-    const conv = document.createElement('option');
-    conv.value = '-1';
-    conv.textContent = 'Bank/Program変換';
-    demoEl.appendChild(conv);
-    const names = await invoke('op505_demo_names');
-    if (Array.isArray(names)) {
-      names.forEach((name, i) => {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = `Demo: ${name}`;
-        demoEl.appendChild(opt);
-      });
-    }
-  })();
 
   // 各モードで最後に使っていたBank/Program（モード切替時の復元先）
   let savedFmBank    = parseInt(bankEl.value, 10) || 0;
@@ -147,22 +126,15 @@ let activeEngine = 0;
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
     const program = Math.max(0, Math.min(127, parseInt(numEl.value, 10) || 0));
 
-    if (activeEngine === 1) {
-      if (op505DemoIndex >= 0) {
-        // OP505組み込みデモ（TimeEg固有の形。.op505プリセットには無い形）。
-        labelEl.textContent = `OP505 ${demoEl.selectedOptions[0]?.textContent ?? ''}`;
-        await invoke('op505_set_demo', { index: op505DemoIndex });
+    if (activeEngine === 0) {
+      // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
+      // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
+      const patch = await invoke('op505_set_program', { bank, program });
+      if (patch) {
+        labelEl.textContent = `OP505: ${programName(bank, program)}`;
         invalidateEditorOp505Patch();
       } else {
-        // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
-        // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
-        const patch = await invoke('op505_set_program', { bank, program });
-        if (patch) {
-          labelEl.textContent = `OP505: ${programName(bank, program)}`;
-          invalidateEditorOp505Patch();
-        } else {
-          labelEl.textContent = `OP505: ${programName(bank, program)}（.op505未登録）`;
-        }
+        labelEl.textContent = `OP505: ${programName(bank, program)}（.op505未登録）`;
       }
     } else {
       labelEl.textContent = programName(bank, program);
@@ -174,21 +146,16 @@ let activeEngine = 0;
   engineEl.addEventListener('change', async () => {
     activeEngine = parseInt(engineEl.value, 10) || 0;
     await invoke('set_active_engine', { engineId: activeEngine });
-    demoEl.style.display = activeEngine === 1 ? '' : 'none';
     await applyProgram();
     // 音色エディタ(editor-wasm)側にも切替を伝える（未起動ならE キー初回起動時にsyncEditorEngine()が反映する）。
     notifyEditorEngine(activeEngine);
-  });
-  demoEl.addEventListener('change', () => {
-    op505DemoIndex = parseInt(demoEl.value, 10);
-    applyProgram();
   });
   wmToggle.addEventListener('change', () => { syncBankField(); applyProgram(); });
   bankEl.addEventListener('input', applyProgram);
   numEl.addEventListener('input', applyProgram);
 
   syncBankField();
-  applyProgram(); // 起動時に既定の音色（FM音源 Bank0/Program0）を反映
+  applyProgram(); // 起動時に既定の音色（OP505 Bank0/Program0）を反映
 })();
 
 // ─────────────────────────────────────────────
@@ -438,7 +405,7 @@ async function toggleEditor() {
     });
     editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
-    // wasmモジュールは起動のたびリセットされる（既定38x6）ため、現在のエンジン選択を反映する。
+    // wasmモジュールは起動のたびリセットされる（既定OP505）ため、現在のエンジン選択を反映する。
     notifyEditorEngine(activeEngine);
   } else if (!editorVisible && editorHandle) {
     // エディタを閉じてメイン画面に戻る瞬間に、Bank/Program欄をエディタ側の最新値へ同期する

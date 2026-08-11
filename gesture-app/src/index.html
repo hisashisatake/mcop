@@ -77,12 +77,9 @@
   <div id="program-panel">
     <div class="program-row">
       Engine <select id="engine-select">
-        <option value="0" selected>38x6</option>
-        <option value="1">OP505</option>
+        <option value="0" selected>OP505</option>
+        <option value="1">38x6</option>
       </select>
-      <!-- OP505選択時のみ表示。「Bank/Program変換」= 下のBank/Programの.38x6をAdapter変換して鳴らす。
-           デモ音色はTimeEg固有の形（静止付きループ等）を持つ組み込みパッチ。 -->
-      <select id="op505-demo" style="display: none;"></select>
     </div>
     <div class="program-row">
       <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
