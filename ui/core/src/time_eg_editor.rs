@@ -40,8 +40,15 @@ const FLOOR_SNAP_PX: f32 = 3.0;
 /// 例:t=15で約0.055）、割合しきい値だと本物の短い時間まで巻き込んで0へ潰してしまうため
 /// （実機テストで発覚。「グラフ左端の数pxだけ」の掴みやすさを保証する目的に絞る）。
 const ZERO_SNAP_PX: f32 = 2.0;
-/// 頂点・ループマーカーのドラッグ／右クリックのヒットテスト半径（px）。
-const HIT_RADIUS_PX: f32 = 8.0;
+/// 頂点・ループマーカーのドラッグ／右クリックのヒットテスト半径（px）。`EDITOR_DOT_RADIUS_PX`と
+/// 同じ倍率で拡大してあり、見た目の点の大きさとクリック可能範囲がずれないようにしている
+/// （実機確認で「点が小さすぎて掴みにくい」と判明し、旧来値(8.0/2.5px)から2.5倍に拡大した。
+/// 当初5倍で試したが実機確認で大きすぎると判明し2.5倍へ調整した）。
+const HIT_RADIUS_PX: f32 = 20.0;
+/// GRAPHモードで描く頂点ドットの半径（px）。読み取り専用プレビューの`DOT_RADIUS`（2.5px、
+/// パネルサイズに応じて`ui_scale`倍される）とは独立の固定値。編集操作の対象になるドットは
+/// パネルサイズに関わらず十分な大きさで掴めるようにするため、`ui_scale`をかけない。
+const EDITOR_DOT_RADIUS_PX: f32 = crate::time_eg_preview::DOT_RADIUS * 2.5;
 /// ループ区間マーカー（三角形）を描く、グラフ下端からのオフセット（px）。
 const LOOP_MARKER_OFFSET: f32 = 6.0;
 /// ループ区間マーカー（三角形）の半径（px）。
@@ -460,7 +467,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     let inner = rect.shrink(GRAPH_PAD);
     painter.rect_filled(inner, 2.0, COLOR_PANEL);
     let geometry = time_eg_editor_layout(&params, inner, mapping, tl);
-    draw_geometry(painter, &params, &geometry, 1.0);
+    draw_geometry(painter, &params, &geometry, 1.0, EDITOR_DOT_RADIUS_PX);
 
     let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;
     let loop_markers = (params.loop_enabled != 0)

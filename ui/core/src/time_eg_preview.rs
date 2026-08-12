@@ -38,7 +38,7 @@ use crate::eg_preview::{
 const DEFAULT_WIDTH: f32 = 130.0;
 const DEFAULT_HEIGHT: f32 = 66.0;
 const PAD: f32 = 6.0;
-const DOT_RADIUS: f32 = 2.5;
+pub(crate) const DOT_RADIUS: f32 = 2.5;
 const COLOR_DOT: egui::Color32 = egui::Color32::from_gray(200);
 
 /// `time_to_seconds`が写す秒数レンジ（`sound_core::time_eg`のT_MIN/T_MAXと一致させること）。
@@ -194,7 +194,10 @@ pub fn time_eg_editor_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmpl
 
 /// `TimeEgGeometry`をeguiで描画する（保持区間=緑、リリース区間=赤。曲線整形は各段の`curve`に従う）。
 /// `time_eg_editor`（同一クレート内、Step 8）もGRAPHモードの描画で共有するため`pub(crate)`。
-pub(crate) fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geometry: &TimeEgGeometry, ui_scale: f32) {
+/// `dot_radius`は頂点ドットの半径をpx単位で明示指定する（線の太さは従来通り`ui_scale`依存のまま、
+/// ドットだけ独立して大きくできるように分離してある。`time_eg_editor`のGRAPHモードは
+/// 固定の大きめ半径`EDITOR_DOT_RADIUS_PX`を渡し、読み取り専用プレビューは`DOT_RADIUS * ui_scale`を渡す）。
+pub(crate) fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geometry: &TimeEgGeometry, ui_scale: f32, dot_radius: f32) {
     for i in 1..geometry.points.len() {
         let from = geometry.points[i - 1];
         let to = geometry.points[i];
@@ -204,7 +207,7 @@ pub(crate) fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geom
         draw_ramp(painter, from, to, color, false, curved, ui_scale);
     }
     for &p in &geometry.points {
-        painter.circle_filled(p, DOT_RADIUS * ui_scale, COLOR_DOT);
+        painter.circle_filled(p, dot_radius, COLOR_DOT);
     }
 }
 
@@ -226,7 +229,7 @@ pub fn time_eg_preview(ui: &mut Ui, size: Vec2, mapping: EgAmplitudeMapping, tl:
     painter.rect_filled(inner, 2.0, COLOR_PANEL);
 
     let geometry = time_eg_layout(&params, inner, mapping, tl);
-    draw_geometry(painter, &params, &geometry, ui_scale);
+    draw_geometry(painter, &params, &geometry, ui_scale, DOT_RADIUS * ui_scale);
 
     // ループ区間を強調する下線（loop_span内の頂点の直下に一本引く）。
     if let Some((lo, hi)) = geometry.loop_span {
