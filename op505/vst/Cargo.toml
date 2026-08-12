@@ -13,4 +13,5 @@ egui = "0.34.1"
 op505-core = { path = "../core" }
 op505-ui = { path = "../ui" }
 sound-core = { path = "../../sound/core" }
+sound-fm = { path = "../../sound/fm" }
 serde = { version = "1", features = ["derive"] }

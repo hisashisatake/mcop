@@ -124,14 +124,18 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
                           既存.38x6からの変換に使う。旧adapter.rsは廃止済み）。
                           .op505バンク形式はpreset.rsのOp505PresetFile/Entry（.38x6のPresetFile/Entry相当）
     ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）
-    vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了、2026-08-12）。
+    vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了
+                          2026-08-12、フェーズ2完了2026-08-12）。
                           パラメーターDAWパラメーター75個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
                           （OP1〜4 EG・Pitch/Cutoff/Gain FG、計203値）はnice-plugの`#[persist]`で
                           プロジェクト保存（DAWパラメーター化するとEGグラフの点操作1回で29個の
                           オートメーションイベントが走り記録単位が壊れるため）。オーディオスレッドは
                           `try_read()`でpersist状態を取り込み、ロック待ちで詰まらない設計。
-                          NRPN・表情CC（CC1/2/4/76/77/78）・CC66/67/120/121/123・OP単位キーオン等の
-                          MIDI表現系はフェーズ2で未着手
+                          NRPN（30エントリ、ym38x6のPitch/Cutoff/Gain FG Loop/Curve=NRPN(0,28)〜(0,33)
+                          はpersist状態のため欠番）・表情CC（CC1/2/4/76/77/78、全16 MIDIチャンネル
+                          独立）・CC66/67/120/121/123・OP単位キーオンCC103〜106・OP単位F-Number・
+                          RPN(0,0)/(0,5)・MASTER EFFECTSの共有パネル統合まで実装済み（フェーズ2、
+                          `op505/vst/src/midi.rs`新設。参考実装は凍結済み`ym38x6-vst`）
     tools/             ← レガシーFM音源→OP505直接変換ツール群（実機レート→TimeEg直接変換、.38x6を経由しない。
                           op505デフォークによりym38x6-core/xxx2x6/vgm2x6への依存もゼロ）
       common/          ← クレート名op505-tools。op505ツール群専用の共有ユーティリティ
@@ -397,7 +401,7 @@ op505のN点Time/Level方式EGはパラメーター体系が異なるため適�
 - `sound-core`/`sound-fm`と`ym38x6-core`/`op505-core`は常にnice-plug・Tauri・cpalに無依存を保つ
 - 波形フォーマットは1024×uint16_t対数で統一。変換パイプラインはsound-coreに実装
 - パラメーターは全て0〜255（8bit）統一。例外は周波数（オクターブ3bit + F-Number 13bit = 16bit、常にOP単位×4）とMUL（0〜15、OPM/OPN/OPQ/OPZ共通のMultiple 4bitに準拠）
-- **（2026-08-12以降）新規開発は`op505-core`/`op505-vst`が対象**。`op505-vst`はフェーズ1（DAWパラメーター75個+persist EG7本、鳴らす・編集する・プリセット選択まで）が完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ。NRPN・表情CC等のMIDI表現系はフェーズ2で未着手（詳細はspec-roadmap.mdフェーズ8）。`ym38x6-core`/`ym38x6-vst`は凍結のため新機能は追加しない
+- **（2026-08-12以降）新規開発は`op505-core`/`op505-vst`が対象**。`op505-vst`はフェーズ1（DAWパラメーター75個+persist EG7本、鳴らす・編集する・プリセット選択まで）・フェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等のMIDI表現系）とも完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ（詳細はspec-roadmap.mdフェーズ8）。`ym38x6-core`/`ym38x6-vst`は凍結のため新機能は追加しない
 - VST3/CLAPプラグインフレームワークはnice-plug（nih-plugのフォーク、https://codeberg.org/RustAudio/nice-plug ）を使用する
 - **nice-plug制限: `ProcessContext::set_parameter()`未実装（nice-plug-core 0.1.4時点）**。`process()`内からDAWパラメーターを書き戻せないため、NRPNとDAWオートメーションの共存には「シャドウフィールド＋差分検知方式」で迂回している（`last_algorithm`・`last_operator_waveforms`等）。nice-plugがこれを実装したら差分検知ロジックを削除しNRPN受信時に`context.set_parameter()`を呼ぶ方式へ移行できる
 - Co-Authored-By:～はコミットメッセージに追加しない

@@ -534,6 +534,13 @@ impl Op505Engine {
     pub fn active_voice_count(&self) -> usize {
         self.channels.len()
     }
+
+    /// 発音中のボイスIDを`out`へ書き出す（`out`は呼び出し側が事前に確保する。
+    /// オーディオスレッドからの毎ブロック呼び出しでアロケーションが走らないようにするため）。
+    pub fn collect_active_channels(&self, out: &mut Vec<usize>) {
+        out.clear();
+        out.extend(self.channels.keys().copied());
+    }
 }
 
 impl Vco for Op505Engine {
@@ -684,6 +691,23 @@ mod tests {
         assert!(engine.channels.contains_key(&1), "発音中のボイスは残るはず");
         assert!(engine.channels.contains_key(&2), "新規ボイスは確保されるはず");
         assert_eq!(engine.channels.len(), 2);
+    }
+
+    #[test]
+    fn collect_active_channels_reports_only_sounding_voices() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100);
+        engine.note_on(1, 440.0, 100);
+        engine.note_on(2, 440.0, 100);
+
+        let mut ids = Vec::new();
+        engine.collect_active_channels(&mut ids);
+        assert_eq!(ids, vec![0, 1, 2], "BTreeMapのキー昇順で決定論的に列挙されるはず");
+
+        engine.silence_group(0);
+        engine.collect_active_channels(&mut ids);
+        assert!(ids.is_empty(), "silence_groupで消えたチャンネルは含まれないはず");
     }
 
     #[test]

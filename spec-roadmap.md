@@ -32,8 +32,8 @@ N点Time/Level方式EG）に一本化する。**
 
 **op505ツール群のデフォーク（ym38x6依存ゼロ化）・gesture-app既定エンジンのOP505化・
 op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op505-vstフェーズ1（DAWで鳴らす・
-編集する・プリセット選択）が完了**（2026-08-12時点、詳細はフェーズ8・フェーズ12）。
-一方で、op505-vstのMIDI表現系（NRPN・表情CC・各種ペダル・OP単位キーオン等）は**フェーズ2として未着手**。
+編集する・プリセット選択）・op505-vstフェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等の
+MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェーズ12）。
 また`smf2wav`/`wavetest`/`patchlab`/`opzref`はまだym38x6専用のままで、op505向けの移行が
 残っている（フェーズ5.5）。
 
@@ -278,12 +278,19 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op
     `op505-ui`の`draw_op505_panel`をそのまま再利用（エディタ側の改修なし）。
     REAPER実機確認済み（発音・ライブ伝播・EGドラッグ・`.op505`プリセット選択・
     プロジェクト保存→再起動でのpersistラウンドトリップ）
-  → **op505-vstフェーズ2（未着手）**: NRPNテーブルの再設計（ym38x6のNRPN(0,9)〜(0,13)等EG系は
-    TimeEgへ写像できないため新規設計が必要）、表情ルーティングCC1/CC2/CC4/CC76/CC77/CC78
-    （`ExpressionDestination`モデルの移植）、CC66(Sostenuto)/CC67(Soft Pedal)/CC120/CC121/CC123、
-    OP単位キーオンCC103〜106・OP単位F-Number・RPN(0,0)ピッチベンド感度・RPN(0,5)、
-    MASTER EFFECTSのGUIノブ（`Op505PanelParams`は意図的にMASTER EFFECTSを含まない設計のため
-    op505-vst側の独自ストリップ等の追加検討）
+  → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系
+    （NRPN・表情CC・ペダル・OP単位キーオン・RPN）を`ym38x6-vst`（凍結・参照実装）から移植した。
+    NRPNテーブル30エントリ（ym38x6の36からPitch/Cutoff/Gain FG Loop/Curve=NRPN(0,28)〜(0,33)を
+    欠番化。op505のTimeEg 7本はpersist状態でNRPNから直接書けないため）、表情ルーティング
+    CC1/CC2/CC4/CC76/CC77/CC78（`ExpressionDestination`モデル移植、CC78はTimeEgにDelay
+    フィールドが無いためPitch FG第0段の`time`への相対補正で代替）、CC66/CC67/CC120/CC121/CC123、
+    OP単位キーオンCC103〜106・OP単位F-Number(NRPN 0,18〜21)・RPN(0,0)ピッチベンド感度・RPN(0,5)、
+    MASTER EFFECTSのGUIノブ（`op505-ui`の`panel.xml`へ共有パネルとして追加、`Op505PanelParams`に
+    9フィールド。VST独自ストリップにはせず、gesture-app editor-wasmとも共有）を実装。
+    表情CC/Channel Pressure/Poly Key Pressureはym38x6のグローバル単一値から全16 MIDIチャンネル
+    独立へ拡張（`Op505Engine::collect_active_channels`を新設し、発音中ボイスのみ列挙して
+    MIDIチャンネル別の実効パッチを適用）。NRPN/RPN状態自体はグローバル単一のまま（パッチ全体設定の
+    ため）。詳細はop505-vstフェーズ2実装メモ・spec-sound.md「op505でのNRPNテーブル差分」参照
   → パラメーターUI・音色保存・プリセットライブラリ（.op505 の書き出しUI、op505-vstのGUIからの
     保存導線は未着手）
   → Bank Select / Program Change（gesture-app側・op505-vst側とも受信・切替は実装済み。
@@ -338,6 +345,7 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op
   → **共有クレートのsound/uiグループ再編完了**（2026-08-09、`3a95c79`）: `sound-fm`/`ui-core`/
     `ui-layout`/`ui-codegen`を製品非依存の共有クレートとして整理
   → **op505-vstフェーズ1完了**（2026-08-12、`op505/vst`新設）: 詳細はフェーズ8参照
+  → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系。詳細はフェーズ8参照
   → 残タスクはフェーズ5.5（smf2wav/wavetest/opzref/patchlabのop505移行）・フェーズ6（GM2テンプレート
-    のop505向け再設計）・フェーズ8（op505-vstフェーズ2）に整理済み
+    のop505向け再設計）に整理済み
 ```

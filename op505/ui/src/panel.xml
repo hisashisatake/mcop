@@ -114,6 +114,32 @@
   </panels>
 
   <panels>
+    <panel span="5" title="MASTER EFFECT (REVERB)">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
+        <knob label="REV" handle="rev_send"/>
+        <knob label="R.TIME" handle="reverb_time"/>
+      </row>
+    </panel>
+    <panel span="7" title="MASTER EFFECT (CHORUS)">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
+        <knob label="CHO" handle="cho_send"/>
+        <knob label="C.RATE" handle="chorus_mod_rate"/>
+        <knob label="C.DEP" handle="chorus_mod_depth"/>
+        <knob label="C.FB" handle="chorus_feedback"/>
+        <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
     <panel repeat="operators" as="op" index="i">
       <header>
         <title>OP {index+1}</title>

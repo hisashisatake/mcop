@@ -17,6 +17,9 @@ use op505_core::Op505Patch;
 use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 use sound_core::TimeEgParams;
 
+use crate::handle::{int_field, IntField};
+use crate::state::EditorState;
+
 /// `Op505Patch`内の1つのi32相当(u8)フィールドへの単純ハンドル。`handle.rs::IntField`のOP505版。
 pub struct Op505IntField {
     pub state: Rc<RefCell<Op505Patch>>,
@@ -219,7 +222,13 @@ impl Op505State {
         Self { patch, dirty }
     }
 
-    pub fn build_panel_params(&self) -> Op505PanelParams<'static> {
+    /// `master_state`/`master_dirty`はym38x6側`EditorState`と共有するMASTER EFFECTS状態
+    /// （エンジン非依存のため複製せず参照する。`app.rs`の`self.state`/`self.dirty`をそのまま渡す）。
+    pub fn build_panel_params(
+        &self,
+        master_state: &Rc<RefCell<EditorState>>,
+        master_dirty: &Rc<Cell<bool>>,
+    ) -> Op505PanelParams<'static> {
         let state = &self.patch;
         let dirty = &self.dirty;
         macro_rules! ch {
@@ -303,6 +312,15 @@ impl Op505State {
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.gain_fg = v,
                 "GAIN FG",
             ),
+            rev_send: int_field!(master_state, master_dirty, rev_send, "Reverb Send", 0, 255, 0),
+            reverb_type: int_field!(master_state, master_dirty, reverb_type, "Reverb Type", 0, 7, 3),
+            reverb_time: int_field!(master_state, master_dirty, reverb_time, "Reverb Time", 0, 255, 128),
+            cho_send: int_field!(master_state, master_dirty, cho_send, "Chorus Send", 0, 255, 0),
+            chorus_type: int_field!(master_state, master_dirty, chorus_type, "Chorus Type", 0, 7, 0),
+            chorus_mod_rate: int_field!(master_state, master_dirty, chorus_mod_rate, "Chorus Mod Rate", 0, 255, 128),
+            chorus_mod_depth: int_field!(master_state, master_dirty, chorus_mod_depth, "Chorus Mod Depth", 0, 255, 128),
+            chorus_feedback: int_field!(master_state, master_dirty, chorus_feedback, "Chorus Feedback", 0, 255, 0),
+            chorus_send_to_reverb: int_field!(master_state, master_dirty, chorus_send_to_reverb, "Chorus Send To Reverb", 0, 255, 0),
             operators: [
                 operator_panel_params::<0>(state, dirty),
                 operator_panel_params::<1>(state, dirty),

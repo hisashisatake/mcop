@@ -2,7 +2,7 @@ use crate::algorithm_diagram::algorithm_diagram;
 use crate::knob::{bool_checkbox, knob};
 use crate::layout::{self, leaf, row, row_grow, stack, Justify};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use crate::selector::{enum_selector, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES};
+use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 use ui_core::mapping::mul_fine_ratio;
@@ -33,9 +33,10 @@ pub struct Op505OperatorPanelParams<'a> {
     pub velocity_gain: Box<dyn IntParamHandle + 'a>,
 }
 
-/// `draw_op505_panel`に渡すパラメーター一式。ym38x6-uiの`PanelParams`と異なりMASTER EFFECTは
-/// 含まない（エンジン非依存のため38x6パネル側から操作できる。`EditorState`のマスターエフェクト
-/// リファクタをこのステップに持ち込まないための意図的な省略）。
+/// `draw_op505_panel`に渡すパラメーター一式。MASTER EFFECTS（Reverb/Chorus）はエンジン非依存の
+/// 共有状態のため、`op505-vst`（DAWパラメーター）とgesture-app editor-wasm
+/// （`EditorState`の既存フィールド、ym38x6パネルと共用）の両方から同じ9フィールドとして渡す
+/// （フェーズ2で追加。当初はVST独自ストリップとして省く設計だったが、共有パネルへ統合した）。
 pub struct Op505PanelParams<'a> {
     // CHANNEL
     pub algorithm: Box<dyn IntParamHandle + 'a>,
@@ -65,6 +66,16 @@ pub struct Op505PanelParams<'a> {
     pub pitch_fg: Op505BipolarFgPanelParams<'a>,
     pub cutoff_fg: Op505BipolarFgPanelParams<'a>,
     pub gain_fg: Box<dyn TimeEgHandle + 'a>,
+    // MASTER EFFECTS
+    pub rev_send: Box<dyn IntParamHandle + 'a>,
+    pub reverb_type: Box<dyn IntParamHandle + 'a>,
+    pub reverb_time: Box<dyn IntParamHandle + 'a>,
+    pub cho_send: Box<dyn IntParamHandle + 'a>,
+    pub chorus_type: Box<dyn IntParamHandle + 'a>,
+    pub chorus_mod_rate: Box<dyn IntParamHandle + 'a>,
+    pub chorus_mod_depth: Box<dyn IntParamHandle + 'a>,
+    pub chorus_feedback: Box<dyn IntParamHandle + 'a>,
+    pub chorus_send_to_reverb: Box<dyn IntParamHandle + 'a>,
     // OPERATORS
     pub operators: [Op505OperatorPanelParams<'a>; 4],
 }

@@ -500,7 +500,7 @@ impl eframe::App for EditorApp {
         // 常時保持している（Op505State::new参照）ため、切替をまたいでも編集内容は失われない。
         egui::CentralPanel::default().show_inside(ui, |ui| {
             if crate::engine_sync::active_engine() == 0 {
-                let panel = self.op505.build_panel_params();
+                let panel = self.op505.build_panel_params(&self.state, &self.dirty);
                 draw_op505_panel(ui, &panel);
             } else {
                 let panel = build_panel_params(&self.state, &self.dirty);
