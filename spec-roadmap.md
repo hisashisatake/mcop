@@ -31,8 +31,9 @@ N点Time/Level方式EG）に一本化する。**
 ## 現在地
 
 **op505ツール群のデフォーク（ym38x6依存ゼロ化）・gesture-app既定エンジンのOP505化・
-op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編が完了**（2026-08-11時点、詳細はフェーズ12）。
-一方で、op505には**VST3/CLAPプラグインが未着手**（ym38x6-vst相当が存在しない、フェーズ8）。
+op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op505-vstフェーズ1（DAWで鳴らす・
+編集する・プリセット選択）が完了**（2026-08-12時点、詳細はフェーズ8・フェーズ12）。
+一方で、op505-vstのMIDI表現系（NRPN・表情CC・各種ペダル・OP単位キーオン等）は**フェーズ2として未着手**。
 また`smf2wav`/`wavetest`/`patchlab`/`opzref`はまだym38x6専用のままで、op505向けの移行が
 残っている（フェーズ5.5）。
 
@@ -263,14 +264,30 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編が�
   → **ステップ7〜10・smf2wav対応（ステップ9）の実装対象はym38x6-vst/ym38x6/tools/smf2wavだった。
     op505-vst新設時（フェーズ8）・smf2op505新設時（フェーズ5.5）に同等の配線を行う必要がある**
 
-フェーズ8: パラメーターUI・音色運用（op505向けに再定義、op505-vst新設が最優先候補）
-  → **op505用VST3/CLAPプラグイン（`op505-vst`）が未着手**。`op505/`配下は現状`core`/`tools/*`/`ui`
-    のみで、`ym38x6/vst`に相当するDAWプラグインクレートが存在しない。開発方針
-    （「新機能は同じタイミングでVST配線」）とop505一本化の方針を踏まえ、`ym38x6-vst`
-    （nice-plug、NRPN差分検知方式）を参考に新設するのが次の中心作業
-  → パラメーターUI・音色保存・プリセットライブラリ（.op505 の書き出しUI）
-  → Bank Select / Program Change（gesture-app側の受信・切替は実装済み、VST側UI・運用は
-    op505-vst新設と合わせて設計）
+フェーズ8: パラメーターUI・音色運用（op505向けに再定義）
+  → **op505用VST3/CLAPプラグイン（`op505-vst`）フェーズ1完了**（2026-08-12、`op505/vst`新設）。
+    `Op505Patch`全269値のうち、EG以外のスカラー75個（TL/ALG/LFO/FG Depth等）をDAWパラメーター
+    （オートメーション可）、TimeEg 7本＝203値（OP1〜4 EG・Pitch/Cutoff/Gain FG）をnice-plugの
+    `#[persist]`状態（プロジェクト保存、オートメーション不可）とするハイブリッド構成を採用した。
+    理由: `TimeEgHandle`は「EG1本を丸ごと読み書き」するAPIのため、全269値をDAWパラメーター化すると
+    グラフの点を1つ動かすたび29パラメーターへの書き込みが走りオートメーション記録単位が壊れる。
+    オーディオスレッドは`RwLock::try_read()`でpersist状態を取り込み、ロック待ちで詰まらない
+    （取れなければ前ブロックの値を使い1〜2ブロック遅れで収束）。既定パッチは`Op505Patch::default()`
+    （tl=0・空EG＝無音）のままだと挿入直後に無音になるため、TL=200＋瞬時サステインEG
+    （instant_sustain_eg、`default_gain_fg()`と同形）で明示的に「鳴る」既定値にした。
+    `op505-ui`の`draw_op505_panel`をそのまま再利用（エディタ側の改修なし）。
+    REAPER実機確認済み（発音・ライブ伝播・EGドラッグ・`.op505`プリセット選択・
+    プロジェクト保存→再起動でのpersistラウンドトリップ）
+  → **op505-vstフェーズ2（未着手）**: NRPNテーブルの再設計（ym38x6のNRPN(0,9)〜(0,13)等EG系は
+    TimeEgへ写像できないため新規設計が必要）、表情ルーティングCC1/CC2/CC4/CC76/CC77/CC78
+    （`ExpressionDestination`モデルの移植）、CC66(Sostenuto)/CC67(Soft Pedal)/CC120/CC121/CC123、
+    OP単位キーオンCC103〜106・OP単位F-Number・RPN(0,0)ピッチベンド感度・RPN(0,5)、
+    MASTER EFFECTSのGUIノブ（`Op505PanelParams`は意図的にMASTER EFFECTSを含まない設計のため
+    op505-vst側の独自ストリップ等の追加検討）
+  → パラメーターUI・音色保存・プリセットライブラリ（.op505 の書き出しUI、op505-vstのGUIからの
+    保存導線は未着手）
+  → Bank Select / Program Change（gesture-app側・op505-vst側とも受信・切替は実装済み。
+    運用UI・ドキュメントは今後整備）
   → MUL表示のOPZ比率化（ym38x6-ui向けは完了済み、2026-07-20、`15e3df1`）。op505-ui側の
     対応要否・EGパラメーター体系の違い（Time/Level方式）を踏まえた表示設計は別途判断
 
@@ -297,12 +314,15 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編が�
   → `op505/core`（クレート名op505-core）を新設し、EG系統（オペレーターEG・Pitch/Cutoff/Gain
     ファンクションジェネレーター）を全面的に`TimeEg`化。EG非依存の共通部分（アルゴリズム結線・波形・
     チップ内LFO・質感LFO）は`sound-fm`をそのまま共有する
-  → e3知見をそのまま実装した組み込みデモパッチ「Gain Switch (e3)」を含む3種のデモパッチ
-    （`op505/core/src/demo.rs`）を追加し、gesture-appのエンジン切替UIから選択・試聴できるようにした
-    （2026-08-10、gesture-appでの実聴取確認まで完了）
+  → e3知見をそのまま実装した組み込みデモパッチ「Gain Switch (e3)」を含む3種のデモパッチを追加し、
+    gesture-appのエンジン切替UIから選択・試聴できるようにした（2026-08-10、gesture-appでの
+    実聴取確認まで完了）。**当初`op505/core/src/demo.rs`に実装していたが、op505デフォーク後に廃止済み**
+    （現在デモパッチ相当のヘルパーは`gesture-app/src-tauri/src/engines.rs`のテストコードに残るのみ。
+    `op505/core/src/`の実体は`lib.rs`/`operator.rs`/`preset.rs`/`eg_convert.rs`の4ファイル）
   → `op505/ui`（クレート名op505-ui）を新設し、panel.xmlからのコード生成方式でエディタパネルを実装。
-    1パッチ約196値のEGを見せるため、TimeEgエディタ（ノブ列のKNOBSモード／折れ線ドラッグ編集の
-    GRAPHモードをタブ切替するハイブリッド方式）を`ui-core`に実装、gesture-app（editor-wasm）へ配線済み
+    `Op505Patch`はEGだけで203値（TimeEg 7本×29値、全269値中の大半）を占めるため、TimeEgエディタ
+    （ノブ列のKNOBSモード／折れ線ドラッグ編集のGRAPHモードをタブ切替するハイブリッド方式）を
+    `ui-core`に実装、gesture-app（editor-wasm）へ配線済み
   → **op505デフォーク完了**（2026-08-11、feature/op505-defork、developへ--no-ffマージ・push済み
     `64a1de2`）: `op505-core`の`ym38x6-core`依存を`[dev-dependencies]`のみへ降格（旧`adapter.rs`は廃止）、
     EG変換ロジックをym38x6非依存の`eg_convert.rs`へ移設、`.op505`バンクローダーを新設し
@@ -317,6 +337,7 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編が�
     Step1〜6全て移行済み
   → **共有クレートのsound/uiグループ再編完了**（2026-08-09、`3a95c79`）: `sound-fm`/`ui-core`/
     `ui-layout`/`ui-codegen`を製品非依存の共有クレートとして整理
+  → **op505-vstフェーズ1完了**（2026-08-12、`op505/vst`新設）: 詳細はフェーズ8参照
   → 残タスクはフェーズ5.5（smf2wav/wavetest/opzref/patchlabのop505移行）・フェーズ6（GM2テンプレート
-    のop505向け再設計）・フェーズ8（op505-vst新設）に整理済み
+    のop505向け再設計）・フェーズ8（op505-vstフェーズ2）に整理済み
 ```

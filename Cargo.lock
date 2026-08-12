@@ -3520,6 +3520,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "op505-vst"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "nice-plug",
+ "nice-plug-egui",
+ "op505-core",
+ "op505-ui",
+ "serde",
+ "sound-core",
+]
+
+[[package]]
 name = "open"
 version = "5.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

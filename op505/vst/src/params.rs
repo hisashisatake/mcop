@@ -1,0 +1,222 @@
+use nice_plug::prelude::*;
+use serde::{Deserialize, Serialize};
+use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
+use std::sync::{Arc, RwLock};
+
+pub(crate) const DEFAULT_ALGORITHM: u8 = 0;
+pub(crate) const DEFAULT_REVERB_TIME: u8 = 128;
+pub(crate) const DEFAULT_CHORUS_MOD_RATE: u8 = 128;
+pub(crate) const DEFAULT_CHORUS_MOD_DEPTH: u8 = 128;
+pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
+pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
+pub(crate) const DEFAULT_REVERB_TYPE: u8 = 3;
+pub(crate) const DEFAULT_CHORUS_TYPE: u8 = 0;
+
+/// キーオンから即座にフルレベルへ達し無期限にサステインする1段EG
+/// （`op505-core`の`default_gain_fg()`・`gesture-app/src-tauri/src/engines.rs`の
+/// `loud_op505_patch()`テストヘルパーと同形）。DAWパラメーターに載らないpersist状態の
+/// EG群（`Op505EgBank`）の既定値に使う。`TimeEgParams::default()`（全段time=0/level=0=無音）を
+/// そのまま使うとプラグイン挿入直後に無音になるため、これで明示的に「鳴る」状態にする。
+pub(crate) fn instant_sustain_eg() -> TimeEgParams {
+    let mut stages = [TimeStage::default(); MAX_STAGES];
+    stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+    TimeEgParams {
+        stages,
+        stage_count: 1,
+        loop_enabled: 0,
+        loop_start: 0,
+        loop_end: 0,
+        release_start: 0,
+    }
+}
+
+/// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝8段×3(time/level/curve)+
+/// メタ5(stage_count/loop_enabled/loop_start/loop_end/release_start)=29値、7本で203値。
+/// `Op505Patch`の全269値のうち大半を占めるが、DAWパラメーターにはせずnice-plugの
+/// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
+/// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
+/// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Op505EgBank {
+    pub operators: [TimeEgParams; 4],
+    pub pitch_fg: TimeEgParams,
+    pub cutoff_fg: TimeEgParams,
+    pub gain_fg: TimeEgParams,
+}
+
+impl Default for Op505EgBank {
+    fn default() -> Self {
+        let eg = instant_sustain_eg();
+        Self { operators: [eg; 4], pitch_fg: eg, cutoff_fg: eg, gain_fg: eg }
+    }
+}
+
+/// オペレーター単位のDAWパラメーター一式（11個）。EG本体は`Op505EgBank`（persist）側が持つ。
+/// min/max/defaultは`gesture-app/editor-wasm/src/op505_state.rs`の
+/// `operator_panel_params()`（`op!`マクロ呼び出し）を正本として写した。
+#[derive(Params)]
+pub(crate) struct OperatorVstParams {
+    #[id = "tl"]
+    pub tl: IntParam,
+    #[id = "mul"]
+    pub mul: IntParam,
+    #[id = "dt1"]
+    pub dt1: IntParam,
+    #[id = "ksr"]
+    pub ksr: IntParam,
+    #[id = "ame"]
+    pub ame: BoolParam,
+    #[id = "vel_sens"]
+    pub vel_sens: IntParam,
+    #[id = "op_fine"]
+    pub op_fine_tune: IntParam,
+    #[id = "wf"]
+    pub waveform: IntParam,
+    #[id = "op_eg_shift"]
+    pub eg_shift: IntParam,
+    #[id = "op_level_scale"]
+    pub level_scale: IntParam,
+    #[id = "op_vel_gain"]
+    pub velocity_gain: IntParam,
+}
+
+impl Default for OperatorVstParams {
+    /// 「鳴る」状態を初期値とする（`ym38x6-vst`の`OperatorVstParams::default()`と同じ配慮。
+    /// `Op505OperatorParams::default()`はtl=0で無音のため個別に明示値を設定する）。
+    fn default() -> Self {
+        Self {
+            tl: IntParam::new("TL", 200, IntRange::Linear { min: 0, max: 255 }),
+            mul: IntParam::new("MUL", 1, IntRange::Linear { min: 0, max: 15 }),
+            dt1: IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 }),
+            ksr: IntParam::new("KSR", 64, IntRange::Linear { min: 0, max: 255 }),
+            ame: BoolParam::new("AM Enable", false),
+            vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
+            op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
+            waveform: IntParam::new("Waveform", 0, IntRange::Linear { min: 0, max: 255 }),
+            eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
+            level_scale: IntParam::new("Op Level Scale", 0, IntRange::Linear { min: 0, max: 255 }),
+            velocity_gain: IntParam::new("Op Velocity Gain", 255, IntRange::Linear { min: 0, max: 255 }),
+        }
+    }
+}
+
+#[derive(Params)]
+pub(crate) struct Op505VstParams {
+    // ---- チャンネル単位 ----
+    #[id = "algorithm"]
+    pub algorithm: IntParam,
+    #[id = "feedback"]
+    pub feedback: IntParam,
+    #[id = "chip_lfo_freq"]
+    pub chip_lfo_freq: IntParam,
+    #[id = "chip_lfo_pmd"]
+    pub chip_lfo_pmd: IntParam,
+    #[id = "chip_lfo_amd"]
+    pub chip_lfo_amd: IntParam,
+    #[id = "chip_lfo_delay"]
+    pub chip_lfo_delay: IntParam,
+    #[id = "pms"]
+    pub pms: IntParam,
+    #[id = "ams"]
+    pub ams: IntParam,
+    #[id = "cutoff"]
+    pub cutoff: IntParam,
+    #[id = "resonance"]
+    pub resonance: IntParam,
+    #[id = "filter_type"]
+    pub filter_type: IntParam,
+    #[id = "filter_self_osc"]
+    pub filter_self_oscillation: BoolParam,
+
+    // ---- FG Depth（EG本体はOp505EgBank側） ----
+    #[id = "pitch_fg_depth"]
+    pub pitch_fg_depth: IntParam,
+    #[id = "cutoff_fg_depth"]
+    pub cutoff_fg_depth: IntParam,
+
+    // ---- Texture LFO ----
+    #[id = "texture_lfo_rate"]
+    pub texture_lfo_rate: IntParam,
+    #[id = "texture_lfo_depth"]
+    pub texture_lfo_depth: IntParam,
+    #[id = "texture_lfo_delay"]
+    pub texture_lfo_delay: IntParam,
+    #[id = "texture_lfo_waveform"]
+    pub texture_lfo_waveform: IntParam,
+    #[id = "texture_lfo_fade_mode"]
+    pub texture_lfo_fade_mode: IntParam,
+    #[id = "texture_lfo_fade_time"]
+    pub texture_lfo_fade_time: IntParam,
+    #[id = "texture_lfo_offset"]
+    pub texture_lfo_offset: IntParam,
+    #[id = "texture_lfo_destination"]
+    pub texture_lfo_destination: IntParam,
+
+    // ---- オペレーター単位（11個 × 4op = 44個） ----
+    #[nested(array, group = "Operator")]
+    pub operators: [OperatorVstParams; 4],
+
+    // ---- マスター単位 ----
+    #[id = "rev_send"]
+    pub rev_send: IntParam,
+    #[id = "cho_send"]
+    pub cho_send: IntParam,
+    #[id = "rev_type"]
+    pub reverb_type: IntParam,
+    #[id = "rev_time"]
+    pub reverb_time: IntParam,
+    #[id = "cho_type"]
+    pub chorus_type: IntParam,
+    #[id = "cho_rate"]
+    pub chorus_mod_rate: IntParam,
+    #[id = "cho_depth"]
+    pub chorus_mod_depth: IntParam,
+    #[id = "cho_fb"]
+    pub chorus_feedback: IntParam,
+    #[id = "cho_to_rev"]
+    pub chorus_send_to_reverb: IntParam,
+
+    // ---- TimeEg 7本（persist状態、DAWパラメーターではない。plan参照） ----
+    #[persist = "op505_egs"]
+    pub egs: Arc<RwLock<Op505EgBank>>,
+}
+
+impl Default for Op505VstParams {
+    fn default() -> Self {
+        Self {
+            algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
+            feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_freq: IntParam::new("Chip LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_pmd: IntParam::new("Chip LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_amd: IntParam::new("Chip LFO AMD", 0, IntRange::Linear { min: 0, max: 255 }),
+            chip_lfo_delay: IntParam::new("Chip LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            pms: IntParam::new("PMS", 0, IntRange::Linear { min: 0, max: 255 }),
+            ams: IntParam::new("AMS", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
+            resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
+            filter_type: IntParam::new("Filter Type", 0, IntRange::Linear { min: 0, max: 255 }),
+            filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
+            pitch_fg_depth: IntParam::new("Pitch FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_waveform: IntParam::new("Texture LFO Waveform", 0, IntRange::Linear { min: 0, max: 4 }),
+            texture_lfo_fade_mode: IntParam::new("Texture LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
+            texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_offset: IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
+            operators: Default::default(),
+            rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
+            cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
+            reverb_type: IntParam::new("Reverb Type", DEFAULT_REVERB_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
+            reverb_time: IntParam::new("Reverb Time", DEFAULT_REVERB_TIME as i32, IntRange::Linear { min: 0, max: 255 }),
+            chorus_type: IntParam::new("Chorus Type", DEFAULT_CHORUS_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
+            chorus_mod_rate: IntParam::new("Chorus Mod Rate", DEFAULT_CHORUS_MOD_RATE as i32, IntRange::Linear { min: 0, max: 255 }),
+            chorus_mod_depth: IntParam::new("Chorus Mod Depth", DEFAULT_CHORUS_MOD_DEPTH as i32, IntRange::Linear { min: 0, max: 255 }),
+            chorus_feedback: IntParam::new("Chorus Feedback", DEFAULT_CHORUS_FEEDBACK as i32, IntRange::Linear { min: 0, max: 255 }),
+            chorus_send_to_reverb: IntParam::new("Chorus Send To Reverb", DEFAULT_CHORUS_SEND_TO_REVERB as i32, IntRange::Linear { min: 0, max: 255 }),
+            egs: Arc::new(RwLock::new(Op505EgBank::default())),
+        }
+    }
+}

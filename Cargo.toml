@@ -8,6 +8,7 @@ members = [
     "ym38x6/core",
     "op505/core",
     "op505/ui",
+    "op505/vst",
     "ym38x6/ui",
     "ym38x6/vst",
     "gesture-app/src-tauri",

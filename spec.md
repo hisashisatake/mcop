@@ -83,6 +83,9 @@ op505用VST3/CLAPプラグイン（op505-vst）の新設（フェーズ8）と�
                             Vco実装の一つ。デフォーク完了により`ym38x6-core`への依存は
                             `[dev-dependencies]`のみ、製品コードは非依存）
     ui/                  ← エディタパネル定義（クレート名op505-ui）
+    vst/                 ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了、
+                            2026-08-12）。DAWパラメーター75個+TimeEg 7本（`#[persist]`状態、203値）の
+                            ハイブリッド構成。詳細はCLAUDE.md「クレート構成」・spec-roadmap.mdフェーズ8参照
     tools/               ← レガシーFM音源→OP505直接変換ツール群（ym38x6依存ゼロ、opz2op505等）
 
   gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象）
@@ -107,7 +110,7 @@ op505用VST3/CLAPプラグイン（op505-vst）の新設（フェーズ8）と�
 アプリ:         Tauri（VST3/CLAP両対応）
 音声出力:       cpal（デスクトップ）/ Core Audio（iOS、将来）
 参照実装:       ymfm（C++、BSD 3-Clause）
-VSTプラグイン:  nice-plug（ym38x6-vstに実装済み、凍結。op505-vstは未着手）
+VSTプラグイン:  nice-plug（ym38x6-vstは凍結。op505-vstはフェーズ1完了・フェーズ2未着手）
 ターゲット:     Windowsデスクトップ → タブレット（iOS/Android）→ VST
 ```
 

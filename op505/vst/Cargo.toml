@@ -1,0 +1,16 @@
+[package]
+name = "op505-vst"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nice-plug = "0.1.9"
+nice-plug-egui = "0.1.5"
+egui = "0.34.1"
+op505-core = { path = "../core" }
+op505-ui = { path = "../ui" }
+sound-core = { path = "../../sound/core" }
+serde = { version = "1", features = ["derive"] }
