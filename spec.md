@@ -2,15 +2,17 @@
 
 ## 概要
 
-- YAMAHAのYM3806(OPQ)をベースに、OPZ系の波形拡張を加えた架空のFM音源
+- YAMAHAのYM3806(OPQ)をベースに、OPZ系の波形拡張を加えた架空のFM音源として出発（チップ名ym38x6/38x6）
 - 梅本竜氏がSynthEdit+VOPMで構築したYM-2609（2008年）と同じ発想：
   「PCM音源へ移行する前に、FM音源があと一歩進化していたとしたら」
 - ソフトウェア実装（Rust）なので制約なし
 - 作曲支援アプリのエンジンとしての役割も持つ
 - 作曲支援アプリはTauriで実装。まずWindowsデスクトップ版から開始
-- 同一ワークスペース内に後継チップ**OP505**（EG方式をレート方式からN点Time/Level方式へ全面移行した
-  派生チップ、`op505/`）も並行開発中。38x6とはFM合成の基本部分（アルゴリズム・波形・チップ内LFO等）を
-  `sound-fm`経由で共有しつつ、EG系統だけ差し替えた兄弟実装（詳細はクレート構成、進捗はspec-roadmap.md参照）
+- **⚠️ 方針転換（2026-08-12）**: 後継チップ**OP505**（EG方式をレート方式からN点Time/Level方式へ
+  全面移行した派生チップ、`op505/`）への一本化を決定し、**ym38x6（38x6チップ本体）は開発中止・凍結**した。
+  以後の新規開発は全てop505が対象。ym38x6とop505はFM合成の基本部分（アルゴリズム・波形・チップ内LFO等）を
+  `sound-fm`経由で共有しており、この部分の投資は無駄にならずop505に引き継がれている
+  （詳細はクレート構成、進捗はspec-roadmap.md冒頭「方針転換」節参照）
 
 ---
 
@@ -20,20 +22,27 @@
 詳細仕様は以下の文書に分割されている。
 
 - [spec-roadmap.md](spec-roadmap.md)：実装フェーズ一覧と現在地
-- [spec-sound.md](spec-sound.md)：38x6音源エンジンの仕様（パラメーター・MIDI実装・OPQコンバーター・波形メモリ専用音色バンク等）
+- [spec-sound.md](spec-sound.md)：38x6音源エンジンの仕様（パラメーター・MIDI実装・OPQコンバーター・波形メモリ専用音色バンク等）。
+  **ym38x6凍結（2026-08-12）時点の仕様として保持**。ただしVCO抽象・FG（Pitch/Cutoff/Gain）・質感LFO・
+  三層モデル等の`sound-core`/`sound-fm`共有層の記述はop505にもそのまま適用される。`.38x6`ファイル形式・
+  ym38x6-vstのCC/NRPN・OPQコンバーター設計等のym38x6固有部分は凍結対象
 - [spec-app.md](spec-app.md)：作曲支援アプリのUI設計仕様
-- [spec-fm.md](spec-fm.md)：FM音源変換ツール群（`ym38x6/tools/`）の横断知見
+- [spec-fm.md](spec-fm.md)：FM音源変換ツール群（`ym38x6/tools/`）の横断知見。ym38x6凍結に伴い、
+  op505向け変換ツール（`op505/tools/`）移植時に参照する過去知見という位置づけ
 
-OP505（後継チップ）は専用のspec文書をまだ持たない。進捗はspec-roadmap.mdの該当フェーズに記録し、
+OP505（主力チップ）は専用のspec文書をまだ持たない。進捗はspec-roadmap.mdの該当フェーズに記録し、
 パラメーター仕様は`op505/core`のソースコード直下のドキュメントコメント（`lib.rs`/`demo.rs`等）を正本とする。
+将来的に`spec-sound.md`からop505固有のspec文書を分離する可能性がある（未着手）。
 
 ---
 
 ## 実装ロードマップ
 
 フェーズ一覧と現在地は [spec-roadmap.md](spec-roadmap.md) に分離した。
-現在は **フェーズ5：実機音色資産の取り込みと音作り基盤** と **フェーズ7：MC-505風モジュレーション拡張** を並行進行中
-（フェーズ7はチャンネルLFO三層再編＝ステップ5とVCF/VCAファンクションジェネレーター統合＝ステップ5.5の設計・spec改訂が完了し、次はコア実装＝ステップ6）。
+2026-08-12の方針転換によりym38x6は凍結、op505へ一本化。op505ツール群のデフォーク・gesture-app既定
+エンジンのOP505化・共有クレートのsound/uiグループ再編が完了しており、残タスクは
+op505用VST3/CLAPプラグイン（op505-vst）の新設（フェーズ8）と、smf2wav/wavetest/opzref/patchlab等
+検証・音作りツール群のop505移行（フェーズ5.5）に整理されている（詳細はspec-roadmap.md参照）。
 
 ---
 
@@ -61,17 +70,20 @@ OP505（後継チップ）は専用のspec文書をまだ持たない。進捗�
     layout/              ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存）
     codegen/             ← クレート名ui-codegen。パネルXML DSL（panel.xml）のパーサー・IR・Rustコード生成器
 
-  ym38x6/                ← 38x6製品一式（レート方式5段EG）
+  ym38x6/                ← 38x6製品一式（レート方式5段EG）。**2026-08-12より開発中止・凍結**
+                            （新機能追加なし、op505側の参考資産として保持）
     core/                ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/sound-fmに依存、
                             Vco実装の一つ。波形メモリ専用音色バンクも生成）
     ui/                  ← エディタパネル定義（クレート名ym38x6-ui。src/panel.xmlが正本）
     vst/                 ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst、nice-plug）
     tools/               ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（patchlab等）
 
-  op505/                 ← OP505製品一式（N点Time/Level方式EG、ym38x6の後継チップ）
+  op505/                 ← OP505製品一式（N点Time/Level方式EG）。**唯一の主力チップ（2026-08-12〜）**
     core/                ← OP505 FMエンジン実装（クレート名op505-core。sound-core/sound-fmに依存、
-                            Vco実装の一つ。ym38x6-coreへの依存は既存.38x6パッチ変換のAdapterのみ）
+                            Vco実装の一つ。デフォーク完了により`ym38x6-core`への依存は
+                            `[dev-dependencies]`のみ、製品コードは非依存）
     ui/                  ← エディタパネル定義（クレート名op505-ui）
+    tools/               ← レガシーFM音源→OP505直接変換ツール群（ym38x6依存ゼロ、opz2op505等）
 
   gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象）
     package.json
@@ -95,7 +107,7 @@ OP505（後継チップ）は専用のspec文書をまだ持たない。進捗�
 アプリ:         Tauri（VST3/CLAP両対応）
 音声出力:       cpal（デスクトップ）/ Core Audio（iOS、将来）
 参照実装:       ymfm（C++、BSD 3-Clause）
-VSTプラグイン:  nice-plug（ym38x6-vstに実装済み）
+VSTプラグイン:  nice-plug（ym38x6-vstに実装済み、凍結。op505-vstは未着手）
 ターゲット:     Windowsデスクトップ → タブレット（iOS/Android）→ VST
 ```
 
@@ -110,8 +122,11 @@ sound-core（モジュレーション/処理層 + VCO抽象）
   MasterEffects          ← Reverb/Chorus（出力後段）
         ▲ implements VCO
         │
-ym38x6-core（VCO実装の一つ＝FM発振源）
-  Ym38x6Engine           ← 4opFM合成（差し替え対象。将来はPCM/減算/物理モデル等に置換可能）
+op505-core（VCO実装の主力＝FM発振源、N点Time/Level方式EG）
+  Op505Engine            ← 4opFM合成（2026-08-12以降の唯一の主力実装）
+        │
+ym38x6-core（VCO実装の一つ、レート方式5段EG、凍結）
+  Ym38x6Engine           ← 4opFM合成（新機能追加なし、資産として保持）
 ```
 
 **モジュレーションの三層モデル：** モジュレーション層の値は、帰属を①音色（パッチ.38x6）／②パート状態

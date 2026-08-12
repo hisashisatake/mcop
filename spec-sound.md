@@ -1,5 +1,13 @@
 # 38x6 音源仕様
 
+**⚠️ 2026-08-12の方針転換により、ym38x6は開発中止・凍結した（詳細はspec-roadmap.md冒頭「方針転換」節）。
+本ドキュメントは凍結時点のym38x6仕様として保持する。** ただし「sound-core共通」と注記されたVCO抽象・
+FG（Pitch/Cutoff/Gain）・質感LFO・チャンネルIDとキーオン契約・三層モデル等の記述は`sound-core`/`sound-fm`
+に実装されたチップ非依存の共有仕様であり、後継の主力チップop505にもそのまま適用される。`.38x6`ファイル形式・
+ym38x6-vstのCC/NRPN・OPQコンバーター設計等、`ym38x6-core`/`ym38x6-vst`固有の記述は凍結対象。
+op505固有のパラメーター仕様は`op505/core`のソースコード直下のドキュメントコメントを正本とする
+（専用spec文書は未着手、spec.md参照）。
+
 ## チャンネルIDとキーオン契約（sound-core共通）
 
 `Ym38x6Engine::note_on(channel, frequency, velocity, patch)`で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。

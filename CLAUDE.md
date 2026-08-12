@@ -62,10 +62,16 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 
 ## プロジェクト概要
 
-架空FM音源「38x6」と、それを使った作曲支援アプリ（Tauri）のワークスペース。
+架空FM音源チップと、それを使った作曲支援アプリ（Tauri）のワークスペース。
 
-- **38x6**: YM3806(OPQ)ベース + OPZ系波形拡張の架空FM音源
-- **波形メモリ専用音色バンク**: 38x6のOP1のみを鳴らす1オペレーター音色を予約バンクに用意したもの（エンジンのモードではなく通常パッチのバンク。フェーズ1のプロトタイプ「WMS-1」＝波形オシレーター＋ADSRの独立クレート（wms1-core/wms1-vst、廃止済み）の後継。`ym38x6-core`の`waveform_memory_patch`が生成）
+**⚠️ 方針転換（2026-08-12）**: 後継チップ**op505**（N点Time/Level方式EG）へ開発を一本化し、
+**ym38x6（38x6、YM3806(OPQ)ベースの旧チップ）は開発中止・凍結**した（新機能追加なし、資産として保持）。
+以後の新規開発は全てop505が対象。詳細はspec-roadmap.md冒頭「方針転換」節を参照。
+
+- **ym38x6（38x6、凍結）**: YM3806(OPQ)ベース + OPZ系波形拡張の架空FM音源
+- **op505（主力）**: N点Time/Level方式EGを持つ後継チップ。ym38x6とはFM合成の基本部分
+  （アルゴリズム・波形・チップ内LFO等）を`sound-fm`経由で共有する兄弟実装
+- **波形メモリ専用音色バンク**: 38x6のOP1のみを鳴らす1オペレーター音色を予約バンクに用意したもの（エンジンのモードではなく通常パッチのバンク。フェーズ1のプロトタイプ「WMS-1」＝波形オシレーター＋ADSRの独立クレート（wms1-core/wms1-vst、廃止済み）の後継。`ym38x6-core`の`waveform_memory_patch`が生成。ym38x6凍結対象）
 - **作曲支援アプリ**: グリッドなし・キャリブレーションベースのジェスチャーUIで、知識がなくても良い感じのコードが弾けることを目指す
 
 ---
@@ -150,6 +156,10 @@ Cargoのワークスペースメンバーパスとパッケージ名は独立し
 （VSTとgesture-app双方の音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用）。
 
 ---
+
+**（2026-08-12注記）** 以下の音色試聴・性能検証スキルはym38x6（凍結）のツール群を対象にしている。
+op505版ツール（smf2op505・patchlab op505対応等）は未着手（spec-roadmap.mdフェーズ5.5参照）。
+op505版ができるまではym38x6資産の動作確認・過去知見の参照用として引き続き使える。
 
 ## 音色試聴スキル（ym38x6/tools/patchlab）
 
@@ -331,7 +341,11 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 
 ---
 
-## パラメーターリファレンス（ソース再読不要・ここを参照）
+## パラメーターリファレンス（ソース再読不要・ここを参照、ym38x6のレート方式EG専用）
+
+**（2026-08-12注記）** 以下はym38x6（凍結）のレート方式5段EG（AR/D1R/D2R/RR）のパラメーターリファレンス。
+op505のN点Time/Level方式EGはパラメーター体系が異なるため適用できない。op505側のリファレンスは
+`op505/core`のソースコード直下のドキュメントコメント（`lib.rs`/`demo.rs`等）を参照。
 
 ### TL（Total Level）: 0〜255
 - `tl=0` → **消音**（−95.25 dB）/ `tl=255` → **最大出力**（0 dB）
@@ -371,10 +385,10 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 
 ## 開発方針
 
-- `sound-core` と `ym38x6-core` は常にnice-plug・Tauri・cpalに無依存を保つ
+- `sound-core`/`sound-fm`と`ym38x6-core`/`op505-core`は常にnice-plug・Tauri・cpalに無依存を保つ
 - 波形フォーマットは1024×uint16_t対数で統一。変換パイプラインはsound-coreに実装
 - パラメーターは全て0〜255（8bit）統一。例外は周波数（オクターブ3bit + F-Number 13bit = 16bit、常にOP単位×4）とMUL（0〜15、OPM/OPN/OPQ/OPZ共通のMultiple 4bitに準拠）
-- `sound-core`/`ym38x6-core`に新機能を実装したら、同じタイミングで`ym38x6-vst`に配線し、VST単体でも機能が使える状態を保つ。MIDI CC/RPN/NRPNの受信処理やパラメーター追加など、VST側対応が必要な場合は実装範囲に含める
+- **（2026-08-12以降）新規開発は`op505-core`が対象。`op505-vst`はまだ存在しないため新設が必要**（`ym38x6-vst`のnice-plug/NRPN差分検知方式を参考にする）。`ym38x6-core`/`ym38x6-vst`は凍結のため新機能は追加しない。以前の方針（`sound-core`/`ym38x6-core`に新機能を実装したら同じタイミングで`ym38x6-vst`に配線する）はym38x6凍結前のものとして参考に残す
 - VST3/CLAPプラグインフレームワークはnice-plug（nih-plugのフォーク、https://codeberg.org/RustAudio/nice-plug ）を使用する
 - **nice-plug制限: `ProcessContext::set_parameter()`未実装（nice-plug-core 0.1.4時点）**。`process()`内からDAWパラメーターを書き戻せないため、NRPNとDAWオートメーションの共存には「シャドウフィールド＋差分検知方式」で迂回している（`last_algorithm`・`last_operator_waveforms`等）。nice-plugがこれを実装したら差分検知ロジックを削除しNRPN受信時に`context.set_parameter()`を呼ぶ方式へ移行できる
 - Co-Authored-By:～はコミットメッセージに追加しない
