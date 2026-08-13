@@ -49,6 +49,7 @@ members = [
 # 詳細はop505/tools/common/Cargo.tomlのコメント）。
 exclude = [
     "ym38x6/tools/patchlab",
+    "op505/tools/patchlab",
     "gesture-app/editor-wasm",
     "ym38x6/ui/preview-wasm",
     "ym38x6/tools/xml-panel-dsl/preview-native",
