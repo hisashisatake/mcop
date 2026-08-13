@@ -284,9 +284,9 @@ impl Default for Op505Plugin {
 }
 
 impl Op505Plugin {
-    /// 現在のDAWパラメーター・NRPN状態・`cached_egs`から、指定MIDIチャンネルの
-    /// Pitch FG補正（CC1/76/77/78）を適用した`Op505Patch`を構築する。
-    fn build_patch(&self, midi_ch: usize) -> Op505Patch {
+    /// 現在のDAWパラメーター・NRPN状態・`cached_egs`から`Op505Patch`を構築する（MIDIチャンネル
+    /// 非依存。CC1/76/77/78のPitch FG演奏補正は`apply_pitch_fg_expression`で別途適用する）。
+    fn build_patch(&self) -> Op505Patch {
         let p = &self.params;
         let egs = &self.cached_egs;
         let operators = std::array::from_fn(|i| {
@@ -307,28 +307,11 @@ impl Op505Plugin {
             }
         });
 
-        // Pitch FG: ②パート状態(CC76/77)・③ジェスチャー(CC1)の補正を毎ブロック計算し直す
-        // （spec-sound.md「演奏層による補正」節。実効Depth=①パッチ基準値+②③の加算）。
-        // CC1のセント換算分をDepthと同じ0〜255単位空間へ逆変換して加算する
-        // （Pitch FGの`(depth-128)/128*1200`セント変換式の逆算、cc1_cents = cc1/127 * rpn0_5*50/64）。
-        let cc1_cents = (self.pitch_fg_cc1[midi_ch] as f32 / 127.0) * (self.pitch_fg_rpn0_5 as f32 * 50.0 / 64.0);
-        let cc1_depth_units = (cc1_cents / 1200.0 * 128.0).round() as i32;
-        let effective_pitch_fg_depth = (p.pitch_fg_depth.value()
-            + self.pitch_fg_cc77[midi_ch] as i32
-            + cc1_depth_units)
-            .clamp(0, 255) as u8;
-
-        // CC78(Vibrato Delay)：TimeEgにDelayフィールドが無いため、Pitch FGの第0段が
-        // 「level=0の待ち段」であるときに限り、その段のtimeへ(CC78-64)を加算してDelay相当とする
-        // （TimeEgではDelayを「level=0の段」で表現するのが自然なため）。第0段がlevel>0
-        // （＝いきなり立ち上がる形）のときは対応する概念が無いので何もしない。
-        let mut pitch_fg_eg = egs.pitch_fg;
-        if pitch_fg_eg.stages[0].level == 0 {
-            let delay_delta = self.pitch_fg_cc78[midi_ch] as i32 - 64;
-            let adjusted = pitch_fg_eg.stages[0].time as i32 + delay_delta;
-            pitch_fg_eg.stages[0].time = adjusted.clamp(0, 255) as u8;
-        }
-
+        // Pitch FGの生値（①音色パッチそのまま）をここでは詰めるだけにする。CC1/76/77/78の
+        // ②③層補正は`apply_pitch_fg_expression`で後段適用する（`build_patch()`内に埋め込むと
+        // Program Change選択中（`program_patch`がSomeでbuild_patch()自体が呼ばれない）チャンネルで
+        // 補正が丸ごとスキップされてしまうバグがあったため、apply_expression_modulation/
+        // apply_soft_pedalと同じ「note_patchへの後処理」パターンへ分離した）。
         let channel = Op505ChannelParams {
             algorithm: self.algorithm,
             feedback: p.feedback.value() as u8,
@@ -342,7 +325,7 @@ impl Op505Plugin {
             filter_resonance: p.resonance.value() as u8,
             filter_type: self.filter_type,
             filter_self_oscillation: self.filter_self_oscillation,
-            pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: effective_pitch_fg_depth },
+            pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
             cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
             gain_fg: egs.gain_fg,
             // 質感LFOは焼き込み専用のためCC補正を受けない（NRPN/DAWパラメーターのみ、
@@ -388,6 +371,34 @@ impl Op505Plugin {
     /// 直接エンジンへ渡す（ChannelParamsを経由しない、pitch_bend/channel_volumeと同じ経路）。
     fn pitch_fg_rate_scale(&self, midi_ch: usize) -> f32 {
         cc76_to_rate_scale(self.pitch_fg_cc76[midi_ch])
+    }
+
+    /// CC1(モジュレーションホイール)・CC77(Vibrato Depth)・CC78(Vibrato Delay)によるPitch FGの
+    /// ②③層補正を`patch`へ適用する（spec-sound.md「演奏層による補正」節）。`apply_expression_modulation`/
+    /// `apply_soft_pedal`と同じ「note_patchへの後処理」として、`base_patch`がDAWパラメーター由来
+    /// （`build_patch()`）かProgram Change由来（`program_patch`）かに関わらず一律に効かせる
+    /// （build_patch()内に埋め込んだままだとprogram_patchがアクティブなチャンネルでこの補正が
+    /// 完全にスキップされるバグがあったため分離した。CC76(Rate)は`set_pitch_fg_rate_scale`という
+    /// 別経路のため、この関数の対象外）。
+    fn apply_pitch_fg_expression(&self, patch: &mut Op505Patch, midi_ch: usize) {
+        // CC1のセント換算分をDepthと同じ0〜255単位空間へ逆変換して加算する
+        // （Pitch FGの`(depth-128)/128*1200`セント変換式の逆算、cc1_cents = cc1/127 * rpn0_5*50/64）。
+        let cc1_cents = (self.pitch_fg_cc1[midi_ch] as f32 / 127.0) * (self.pitch_fg_rpn0_5 as f32 * 50.0 / 64.0);
+        let cc1_depth_units = (cc1_cents / 1200.0 * 128.0).round() as i32;
+        let base_depth = patch.channel.pitch_fg.depth as i32;
+        patch.channel.pitch_fg.depth =
+            (base_depth + self.pitch_fg_cc77[midi_ch] as i32 + cc1_depth_units).clamp(0, 255) as u8;
+
+        // CC78(Vibrato Delay)：TimeEgにDelayフィールドが無いため、Pitch FGの第0段が
+        // 「level=0の待ち段」であるときに限り、その段のtimeへ(CC78-64)を加算してDelay相当とする
+        // （TimeEgではDelayを「level=0の段」で表現するのが自然なため）。第0段がlevel>0
+        // （＝いきなり立ち上がる形）のときは対応する概念が無いので何もしない。
+        let stage0 = &mut patch.channel.pitch_fg.eg.stages[0];
+        if stage0.level == 0 {
+            let delay_delta = self.pitch_fg_cc78[midi_ch] as i32 - 64;
+            let adjusted = stage0.time as i32 + delay_delta;
+            stage0.time = adjusted.clamp(0, 255) as u8;
+        }
     }
 
     /// NRPN(0,18)〜(0,21)：CC6(Data Entry MSB)+CC38(Data Entry LSB)の14bit値を
@@ -808,7 +819,7 @@ impl Plugin for Op505Plugin {
             let note = (ch_id & 127) as u8;
             let base_patch = channel_patches[midi_ch].unwrap_or_else(|| {
                 // Program Changeで選ばれていればそれを基底に、無ければDAWパラメーター由来。
-                let patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch(midi_ch));
+                let patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
                 channel_patches[midi_ch] = Some(patch);
                 patch
             });
@@ -824,6 +835,7 @@ impl Plugin for Op505Plugin {
                 &self.poly_pressure[midi_ch],
                 &mut note_patch,
             );
+            self.apply_pitch_fg_expression(&mut note_patch, midi_ch);
             if self.soft_notes[midi_ch] & (1u128 << note) != 0 {
                 apply_soft_pedal(&mut note_patch, self.cc67[midi_ch]);
             }
@@ -853,7 +865,10 @@ impl Plugin for Op505Plugin {
                         self.soft_notes[midi_ch] &= !bit;
                     }
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければDAW値。
-                    let mut note_on_patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch(midi_ch));
+                    let mut note_on_patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
+                    // CC78(Delay)は`TimeEg::note_on()`が読む最初のtickから効かせる必要があるため、
+                    // 伝播ループでの1ブロック遅れの反映を待たずここで適用する（CC1/77も併せて統一適用）。
+                    self.apply_pitch_fg_expression(&mut note_on_patch, midi_ch);
                     if self.soft_notes[midi_ch] & bit != 0 {
                         apply_soft_pedal(&mut note_on_patch, self.cc67[midi_ch]);
                     }
