@@ -3584,7 +3584,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "opzref"
+name = "opzref4x6"
 version = "0.1.0"
 dependencies = [
  "cc",

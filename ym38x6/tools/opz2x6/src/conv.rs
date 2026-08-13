@@ -21,7 +21,7 @@ pub const CARRIERS: [&[usize]; 8] = [
 ];
 
 /// 指定アルゴリズムでオペレーター`operator_index`（38x6 operators[]のインデックス）が
-/// キャリアかどうか。opzref（レジスタ直書き検証ツール）からも共有で使う。
+/// キャリアかどうか。opzref4x6（レジスタ直書き検証ツール）からも共有で使う。
 pub fn is_carrier(alg: u8, operator_index: usize) -> bool {
     CARRIERS[alg.min(7) as usize].contains(&operator_index)
 }
@@ -35,7 +35,7 @@ pub fn is_carrier(alg: u8, operator_index: usize) -> bool {
 /// 0.75dB/stepでほぼ厳密に8/13/16と一致）。モジュレーターおよび単一キャリアのアルゴリズムは0。
 const ALG_ATTEN_BY_CARRIER_COUNT: [u8; 5] = [0, 0, 8, 13, 16];
 
-/// アルゴリズム(0-7)のキャリアに適用するAalg減衰量。opzrefからも共有で使う。
+/// アルゴリズム(0-7)のキャリアに適用するAalg減衰量。opzref4x6からも共有で使う。
 pub fn alg_atten(alg: u8) -> u8 {
     ALG_ATTEN_BY_CARRIER_COUNT[CARRIERS[alg.min(7) as usize].len().min(4)]
 }
@@ -65,7 +65,7 @@ const OL_TO_AOL: [u8; 100] = [
 ];
 
 /// TX81Z Operator Output Level(OL, 0-99) → 実機のTLレジスタ加算値(Aol, 0-127)。
-/// opzref（レジスタ直書き検証ツール）からも共有で使う。
+/// opzref4x6（レジスタ直書き検証ツール）からも共有で使う。
 pub fn ol_to_atten(ol: u8) -> u8 {
     OL_TO_AOL[ol.min(99) as usize]
 }
@@ -92,7 +92,7 @@ fn out_to_tl(out: u8, extra_atten: u8) -> u8 {
 /// **【2026-07-18 再評価・既定を天井なしへ差し戻し】** この2026-07-02の聴感判定は、
 /// D1L極性反転バグ（[[project_opz2x6_d1l_polarity_bug]]、2026-07-15修正）が混入した状態での
 /// 比較だった疑いが濃厚（同バグは全音色のエンベロープ極性を反転させており、聴感比較の前提が
-/// 汚染されていた）。修正後にopzref(ymfm実機参照)を基準として再測定したところ、天井なし
+/// 汚染されていた）。修正後にopzref4x6(ymfm実機参照)を基準として再測定したところ、天井なし
 /// （[out_to_tl_mod]の`None`分岐）の方がA028 RichHarpsi・D023 FM Hi-Hats等で実機の明るさ・
 /// ノイズ感に明確に近く（例: A028のスペクトル重心が実機の27%→89%に改善、D023のノイズ成分
 /// (スペクトル平坦度)も0→実機の70%相当まで回復）、ユーザー試聴でも天井なしを支持する結果に
@@ -120,7 +120,7 @@ fn out_to_tl_mod(out: u8, cap: Option<u8>) -> u8 {
 /// （ファクトリーバンクの持続系音色SynString/FrenchHorn/Alarm CallはすべてD1L=15、
 /// 減衰系GrandPianoはD1L=0＝レジスタ極性だと弦・ホルンが即死する不合理な解釈になる）。
 /// 冒頭で `reg = 15 - panel` に変換してから既存のレジスタ極性カーブに通す。
-/// opzref(main.rs)のレジスタ直書きにも同じ反転が必要（オラクル汚染回避のため同時修正）。
+/// opzref4x6(main.rs)のレジスタ直書きにも同じ反転が必要（オラクル汚染回避のため同時修正）。
 ///
 /// reg（変換後）はサスティンレベルの減衰量（reg=0で0dB=減衰なし、reg=15で-93dB≈無音、3dB/step）。
 ///
@@ -159,12 +159,12 @@ fn det_to_x6(det: u8) -> u8 {
 /// - 平均15.6¢の誤差に加え、低coarse×高fineの隅で最大753.9¢（約6半音）の移調バグ。
 ///   実機テーブルは低coarseでfineが途中で頭打ち（例: coarse=0はfine=7の0.93で飽和し以降クランプ）
 ///   になるのに対し、線形近似はfineを際限なく加算し続けていた。
-/// - 一方でopzref（fine完全無視）は平均199.6¢・最大1149¢で全域大外れだった。
+/// - 一方でopzref4x6（fine完全無視）は平均199.6¢・最大1149¢で全域大外れだった。
 ///
 /// DXConvertの`freq_4op`（`fourop.py`、コメント「4op frequencies (16*CRS+FINE)」）は
 /// `16*coarse+fine`でインデックスする1024要素の実測テーブルで、TX81Z/DX11のfine分割挙動
 /// （coarse間をfineが非線形に補間し、低coarseでは早期飽和する）をそのまま含む権威データ。
-/// これを直接引くことで opz2x6/opzref 双方が実機のfine挙動に一致する。
+/// これを直接引くことで opz2x6/opzref4x6 双方が実機のfine挙動に一致する。
 /// fine≠0音色（A008 LoTine81Z等、carrierがcoarse=5/fine=1でratio≈1.49＝5度上に鳴る「移調」も
 /// **実機仕様**）を正しく再現する。
 ///
@@ -242,7 +242,7 @@ const FREQ_4OP: [f32; 1024] = [
     25.95, 26.05, 26.16, 26.27, 26.38, 26.49, 26.59, 26.70, 26.81, 26.92, 27.03, 27.13, 27.24, 27.35, 27.46, 27.57, // coarse=63
 ];
 
-/// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref共通で使う変換の核（fine=0固定）。
+/// TX81Z FREQ coarse(0-63) → 周波数比率(ratio)。opz2x6/opzref4x6共通で使う変換の核（fine=0固定）。
 pub fn coarse_to_ratio(coarse: u8) -> f32 {
     coarse_fine_to_ratio(coarse, 0)
 }
@@ -309,7 +309,7 @@ fn voice_pitch_fold(voice: &OpzVoice) -> f32 {
 
 /// A4 相当のキーコード（KSR rate scaling の焼き込み量基準）。
 /// 標準OPM/OPZのnote code表（C=0,C#=1,D=2,D#=4,E=5,F=6,F#=8,G=9,G#=10,A=12,A#=13,B=14。
-/// opzref::NOTECODEと同一）を用いて、block_freq上位5bitのkeycode=(block<<2)|(note>>2)
+/// opzref4x6::NOTECODEと同一）を用いて、block_freq上位5bitのkeycode=(block<<2)|(note>>2)
 /// （ymfm opm_key_code_to_phase_step/ymfm_opz.cppのkeycode定義と同一式）にA4(block=4, note=12)を
 /// 代入すると (4<<2)|(12>>2) = 19。他ツールのKEY_CODE_A4も同じ導出。
 const KEY_CODE_A4: u16 = 19;
@@ -342,7 +342,7 @@ pub fn ks_to_ksr(rs: u8) -> u8 {
 /// 【2026-07-02改訂】旧実装はキャリアの焼き込みを廃止し、ノート依存KSRを実行時の
 /// `ksr_rate_multiplier(rs, note)` のみに任せていたが、当時のエンジン側実装は
 /// A4未満で倍率を1.0にクランプしており、低音キャリアのKSRが実質消失していた
-/// （opzref実機忠実レンダリングとのEG減衰スロープ比較で発覚。GrandPiano D2の
+/// （opzref4x6実機忠実レンダリングとのEG減衰スロープ比較で発覚。GrandPiano D2の
 /// キャリアで実機-13.5dB/sに対し-3.8dB/sと約3.5倍遅かった）。
 /// クランプを撤去した（`ksr_rate_multiplier`側）ことで「A4焼き込み＋実行時倍率」が
 /// 実機の絶対keycode法則（eg_rate=2R+keycode>>(3-KS)）と数学的に等価になったため、
@@ -397,7 +397,7 @@ fn fb_to_x6(fb: u8) -> u8 {
 ///
 /// 出典: nornandブログ「導出方法を考えてみた」のattLS実測疑似コード。ノート24が基準点で、
 /// 3半音（1オクターブ/4）ごとにカーブテーブルのインデックスが1増える（高音ほど急峻に増加）。
-/// レジスタ直書きの[opzref](../../opzref)（ymfm実機参照レンダラ）がTL計算にそのまま使う値。
+/// レジスタ直書きの[opzref4x64x6](../../opzref4x64x6)（ymfm実機参照レンダラ）がTL計算にそのまま使う値。
 /// 38x6エンジン側の等価カーブは[ym38x6_core::mapping::level_scale_atten]（0-255 TLスケールへ
 /// 再量子化した版、ノート依存でエンジンが実行時に適用する。opz2x6コンバーターはこちらではなく
 /// `OperatorParams::level_scale`(depth=ls*165/64)を静的パッチに埋め込むだけで、レジスタ加算値
@@ -596,7 +596,7 @@ pub fn voice_to_patch_opts(voice: &OpzVoice, opts: ConvOptions) -> Ym38x6Patch {
     // 旧実装は [ops[3], ops[1], ops[2], ops[0]]（OP1をoperators[0]=フィードバック対象へ）
     // だったが、これは「VMEMがOP1→slot0の素直な順で書かれる」という誤った前提に基づいていた。
     // TX81Z公式ドキュメント（fm_overview: 「OP4 modulates OP3, 3 modulates 2, 2 modulates 1」）・
-    // NOZ氏の解説（OPP系はOPN/OPM系と結線順が逆）・ymfm OPZ参照(opzref)での実測波形
+    // NOZ氏の解説（OPP系はOPN/OPM系と結線順が逆）・ymfm OPZ参照(opzref4x6)での実測波形
     // （旧写像は全サンプル±最大振幅で暴れる純ノイズ、恒等写像は滑らかな減衰包絡線）の
     // 三点で恒等写像が正しいことを確認した。
     const OP_SRC: [usize; 4] = [0, 1, 2, 3]; // operators[i] ← ops[OP_SRC[i]]（恒等写像）
@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn conv_options_default_has_no_modulator_cap() {
-        // 2026-07-18: D1L極性バグ修正後にopzref基準で再評価し、天井なし(None)を既定へ戻した
+        // 2026-07-18: D1L極性バグ修正後にopzref4x6基準で再評価し、天井なし(None)を既定へ戻した
         // （[DEFAULT_MOD_TL_CAP]のコメント参照）。180は`--mod-cap`のオプトイン値として残る。
         assert_eq!(ConvOptions::default().mod_tl_cap, None);
         let op = OpzOpData { out: 99, freq: 4, det: 3, ar: 31, rr: 7, ..Default::default() };

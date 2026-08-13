@@ -1,0 +1,18 @@
+[package]
+name = "opzref4x6"
+version = "0.1.0"
+edition = "2021"
+
+# ymfm OPZ(YM2414)を参照レンダラとして使う検証用ツール（ym38x6/opz2x6向け、凍結資産）。
+# op505向けは op505/tools/opzref（デフォーク・複製、パッケージ名 opzref）を参照。
+# ymfm本体(BSD-3-Clause)は vendor/ymfm に同梱し、cc でC++をビルドしFFIで呼ぶ。
+
+[[bin]]
+name = "opzref4x6"
+path = "src/main.rs"
+
+[dependencies]
+opz2x6 = { path = "../opz2x6" }
+
+[build-dependencies]
+cc = "1"

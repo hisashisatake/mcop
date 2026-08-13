@@ -1,11 +1,12 @@
-//! opzref — ymfm OPZ(YM2414) を参照レンダラとして使う検証用ツール。
+//! opzref4x6 — ymfm OPZ(YM2414) を参照レンダラとして使う検証用ツール（ym38x6/opz2x6向け、凍結資産）。
+//! op505向けは op505/tools/opzref（デフォーク・複製、パッケージ名 opzref）を参照。
 //!
 //! TX81Z の .syx ボイスを ymfm OPZ エミュで直接鳴らし WAV 化する。
 //! opz2x6＋38x6 の変換忠実度を、実機録音の交絡なしに突き合わせるための参照を作る。
 //!
 //! 使い方:
-//!   opzref --selftest [out.wav] [kc(hex)]
-//!   opzref render <bank.syx> <voice_index> [out.wav]
+//!   opzref4x6 --selftest [out.wav] [kc(hex)]
+//!   opzref4x6 render <bank.syx> <voice_index> [out.wav]
 //!                 [--note <midi>] [--dur <sec>] [--gate <sec>]
 //!                 [--kc <hex>] [--slots a,b,c,d] [--force-sine]
 //!
@@ -127,7 +128,7 @@ fn render_voice(
     // 各オペレーター
     // Aalg（アルゴリズムによる追加減衰、opz2x6::conv::alg_atten）はキャリアのみに乗る。
     // TX81Zファームウェアが「OL」パラメーターをTLレジスタへ書き込む際に加算する値なので、
-    // レジスタ直書きのopzrefでも同じ補正が必要（opz2x6と共有、project memory参照）。
+    // レジスタ直書きのopzref4x6でも同じ補正が必要（opz2x6と共有、project memory参照）。
     let atten = opz2x6::conv::alg_atten(v.algorithm);
     for (j, op) in v.ops.iter().enumerate() {
         let slot = slots[j];
@@ -162,7 +163,7 @@ fn write_operator(opz: &Opz, op: &OpzOpData, slot: u32, alg_atten: u8, note: u8)
     // 実機の非線形テーブル(opz2x6::conv::ol_to_atten、nornandブログのTX81Zシステムrom解析による実測値)に
     // Aalg（アルゴリズムによる追加減衰、キャリアのみ）とAls（Level Scaling、音域依存減衰、
     // opz2x6::conv::attls_reg。キャリア・モジュレーター双方に効く実機仕様）を加算する。
-    // 【2026-07-20 LS追加】レジスタ直書きのopzrefはvoice load時にnoteが確定しているため、
+    // 【2026-07-20 LS追加】レジスタ直書きのopzref4x6はvoice load時にnoteが確定しているため、
     // 38x6エンジンのようなランタイム適用(ym38x6_core::mapping::level_scale_atten)ではなく、
     // ここでTLレジスタへ静的に加算する（実機ファームウェアが note-on 時にTLを計算し直すのと等価）。
     let ls_atten = opz2x6::conv::attls_reg(op.ls, note);
@@ -212,7 +213,7 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     }
     let bank = &args[0];
     let vidx: usize = args[1].parse().map_err(|_| "voice_index が不正")?;
-    let mut out = format!("opzref_voice{vidx}.wav");
+    let mut out = format!("opzref4x6_voice{vidx}.wav");
     let mut note: u8 = 68; // G#4
     let mut dur = 2.5f32;
     let mut gate = 2.0f32;
@@ -319,19 +320,19 @@ fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let res = match args.first().map(|s| s.as_str()) {
         Some("--selftest") => {
-            let out = args.get(1).cloned().unwrap_or_else(|| "opzref_selftest.wav".into());
+            let out = args.get(1).cloned().unwrap_or_else(|| "opzref4x6_selftest.wav".into());
             let kc = args.get(2)
                 .and_then(|s| u8::from_str_radix(s.trim_start_matches("0x"), 16).ok())
                 .unwrap_or(0x4a);
             selftest(Path::new(&out), kc)
         }
         Some("render") => cmd_render(&args[1..]),
-        _ => Err("usage: opzref render <bank.syx> <voice> [out.wav] | --selftest".into()),
+        _ => Err("usage: opzref4x6 render <bank.syx> <voice> [out.wav] | --selftest".into()),
     };
     match res {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("opzref: {e}");
+            eprintln!("opzref4x6: {e}");
             std::process::ExitCode::FAILURE
         }
     }

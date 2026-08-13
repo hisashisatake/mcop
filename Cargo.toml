@@ -16,7 +16,7 @@ members = [
     "ym38x6/tools/mucom2x6",
     "ym38x6/tools/opm2x6",
     "ym38x6/tools/opz2x6",
-    "ym38x6/tools/opzref",
+    "ym38x6/tools/opzref4x6",
     "ym38x6/tools/smf2wav",
     "ym38x6/tools/wavetest",
     "ym38x6/tools/vgm2x6",
