@@ -1,0 +1,25 @@
+[package]
+name = "opzref"
+version = "0.1.0"
+edition = "2021"
+
+# ymfm OPZ(YM2414)を参照レンダラとして使う検証用ツール（op505向け、opz2op505ベース）。
+# 由来: ym38x6/tools/opzref4x6（コミット b61ba7a 時点の複製、2026-08-13）。デフォーク後の
+# op505ツール群向け複製（fork-on-write）。ym38x6/tools/opzref4x6側の修正は自動では反映されない
+# （`git diff b61ba7a -- ym38x6/tools/opzref4x6/src/main.rs` で追従漏れを確認できる）。
+# ymfm本体(BSD-3-Clause)は vendor/ymfm に同梱し、cc でC++をビルドしFFIで呼ぶ。
+
+[lib]
+name = "opzref"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opzref"
+path = "src/main.rs"
+
+[dependencies]
+opz2op505 = { path = "../opz2op505" }
+op505-tools = { path = "../common" }
+
+[build-dependencies]
+cc = "1"
