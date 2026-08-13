@@ -18,7 +18,7 @@ members = [
     "ym38x6/tools/opz2x6",
     "ym38x6/tools/opzref4x6",
     "ym38x6/tools/smf2wav",
-    "ym38x6/tools/wavetest",
+    "ym38x6/tools/wavetest4x6",
     "ym38x6/tools/vgm2x6",
     "op505/tools/common",
     "op505/tools/opzref",

@@ -1,5 +1,6 @@
-//! wavetest — OPZ準拠8波形をFMのキャリア/モジュレーターに使ったときの
-//! 音色変化を試聴で確認するツール。
+//! wavetest4x6 — OPZ準拠8波形をFMのキャリア/モジュレーターに使ったときの
+//! 音色変化を試聴で確認するツール（ym38x6向け、凍結資産）。
+//! op505向けは op505/tools/wavetest（デフォーク・複製、パッケージ名 wavetest）を参照。
 //!
 //! 9系統の基本音色（pure/ピアノ/E.ピアノ/シンセベース/リード/ブラス/ベル/オルガン/プラック）に
 //! 対し、ビルトイン32波形（0-7サイン/8-15ノコギリ/16-23矩形/24-31三角）をオペレーター全体に
@@ -8,7 +9,7 @@
 //!
 //! 使い方:
 //! ```text
-//! wavetest <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres <名前,...>]
+//! wavetest4x6 <output_dir> [--bank <N>] [--note <C/D/...>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres <名前,...>]
 //! ```
 //! - 既定: bank=1 / C4 / on=1.2秒 + リリース3.0秒 / 全9音色 + フィルターデモ。
 //! - `--timbres pure,pluck` 等で基本音色を絞ると検証が速い（指定時はフィルターデモを省略）。
@@ -389,8 +390,8 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
-            eprintln!("wavetest: {msg}");
-            eprintln!("usage: wavetest <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres pure,pluck,...]");
+            eprintln!("wavetest4x6: {msg}");
+            eprintln!("usage: wavetest4x6 <output_dir> [--bank <N>] [--note <C..B>] [--octave <N>] [--on <秒>] [--release <秒>] [--timbres pure,pluck,...]");
             ExitCode::FAILURE
         }
     }

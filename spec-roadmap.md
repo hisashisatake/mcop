@@ -34,7 +34,7 @@ N点Time/Level方式EG）に一本化する。**
 op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op505-vstフェーズ1（DAWで鳴らす・
 編集する・プリセット選択）・op505-vstフェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等の
 MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェーズ12）。
-また`smf2wav`/`wavetest`/`patchlab`/`opzref4x6`はまだym38x6専用のままで、op505向けの移行が
+また`smf2wav`/`wavetest4x6`/`patchlab`/`opzref4x6`はまだym38x6専用のままで、op505向けの移行が
 残っている（フェーズ5.5）。
 
 ---
@@ -76,7 +76,7 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     mucom2op505/opm2op505、`op505/tools/`）へ移行済み。ym38x6-core/xxx2x6/vgm2x6への依存はゼロ
     （fork-on-write方式で複製・再構築、詳細はmemory「op505デフォーク全フェーズ完了」・spec-fm.md「デフォーク」節）
   → 試聴・検証ツール（ym38x6/tools/、凍結・**op505版は未着手**）: smf2wav（SMF→WAV、エンジン性能検証・
-    CC/NRPN解釈の参照実装を兼ねる）/ wavetest（波形試聴）/ opzref4x6（ymfm参照レンダラ、音程・配線の検算用）
+    CC/NRPN解釈の参照実装を兼ねる）/ wavetest4x6（波形試聴）/ opzref4x6（ymfm参照レンダラ、音程・配線の検算用）
     → op505向け移行はフェーズ5.5へ
   → エンジン忠実度チューニング（feedback・KSR・EG曲線等、完了・ym38x6-coreで実施済み）。
     OPN/OPM忠実を保ちつつ拡張軸（8bit・非サイン波形・フィルター等）へ投資した知見は、
@@ -169,7 +169,7 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
         `texture_lfo`（5波形専用8項目、完全パッチ所有）へ再編。`ChannelParams`に手動`Deserialize`
         （`ChannelParamsWire`シャドー構造体経由）を実装し、旧`.38x6`ファイルを新スキーマへ自動移行する
         後方互換レイヤーを追加（回帰テストで検証）。`Ym38x6Engine::set_performance_lfo`ランタイムAPIは
-        質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`ym38x6/tools/wavetest`は新スキーマへ
+        質感LFOの完全パッチ所有化により廃止。`ym38x6-vst`/`gesture-app`/`ym38x6/tools/wavetest4x6`は新スキーマへ
         機械的に追従済み（新パラメーターのUI/NRPN露出はステップ7/8）
     → `cargo test --workspace`で全クレート0 failedを確認
   → ステップ7「VST配線」完了（`sound-core`/`ym38x6-core`/`ym38x6-vst`/`ym38x6-ui`、2026-07-16）:
@@ -346,6 +346,6 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     `ui-layout`/`ui-codegen`を製品非依存の共有クレートとして整理
   → **op505-vstフェーズ1完了**（2026-08-12、`op505/vst`新設）: 詳細はフェーズ8参照
   → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系。詳細はフェーズ8参照
-  → 残タスクはフェーズ5.5（smf2wav/wavetest/opzref4x6/patchlabのop505移行）・フェーズ6（GM2テンプレート
+  → 残タスクはフェーズ5.5（smf2wav/wavetest4x6/opzref4x6/patchlabのop505移行）・フェーズ6（GM2テンプレート
     のop505向け再設計）に整理済み
 ```

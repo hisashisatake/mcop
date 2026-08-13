@@ -110,7 +110,7 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     ui/                ← エディタパネル定義（クレート名ym38x6-ui。egui+sound-core+ui-coreに依存。VST/gesture-app両対応）。
                           `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成
     vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
-    tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref4x6/vgm2x6/smf2wav/wavetest/patchlab/xml-panel-dsl等）
+    tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref4x6/vgm2x6/smf2wav/wavetest4x6/patchlab/xml-panel-dsl等）
       vgm2x6/          ← VGM/VGZ→.38x6+SMF/WAV変換（lib+binの2ターゲット構成。演奏ロジック
                           （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理・PatchBank<C>等）を
                           lib側（src/play.rs等）に持つ。op505/tools/vgm2op505はop505デフォーク
