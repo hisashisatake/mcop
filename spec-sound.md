@@ -1075,6 +1075,32 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | CC2 Destination | 0, 34 | 0〜5（destination enum、下記参照。既定5=TLキャリア一括） |
 | CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
 
+**op505でのNRPNテーブル差分（2026-08、op505-vstフェーズ2実装時）：**
+
+上記テーブルは`ym38x6-vst`（凍結）のもの。`op505-vst`（フェーズ2、`op505/vst/src/lib.rs`）では以下の差分がある。
+
+- **NRPN(0,28)〜(0,33)（Pitch/Cutoff/Gain FG Loop/Curve）は欠番として予約**する（未実装、`_ => {}`で無視）。
+  op505のTimeEg 7本はDAWパラメーターではなくnice-plugの`#[persist]`状態
+  （`Arc<RwLock<Op505EgBank>>`、[[project_op505_vst_phase1]]参照）のため、NRPNから直接書き込むと
+  GUI表示と実際に鳴る音がズレる。Loop/Curve相当（`TimeEgParams`の`loop_enabled`等）はGUI/persist
+  経由でのみ編集する設計に統一した。番号を詰めずそのまま欠番にしたのは、将来persist状態への
+  安全な書き込み手段（`try_write()`等）を追加する余地を残すため。
+- **NRPN(0,14) Filter Type・NRPN(0,15) Filter Self-Oscillationは、op505では二重公開**
+  （DAWパラメーターとの1シャドウ差分検知）になる。ym38x6ではこの2つがNRPN専用だったが、
+  op505-vstフェーズ1で先にDAWパラメーター化されていたため、algorithmや質感LFO群と同じ
+  シャドウ差分検知パターンで両立させる。
+- 上記以外（質感LFO・Algorithm・Waveform・AT/Poly AT/CC2/CC4 Destination・Operator F-Number）は
+  ym38x6と同一のNRPN番号・意味論のまま`op505-vst`へ移植済み。
+
+**CC78（Vibrato Delay）のop505固有の扱い：**
+
+`TimeEgParams`（N点Time/Level方式EG）にはym38x6の`EgParams::delay`に相当するフィールドが
+存在しない。そのためop505では、Pitch FGの**第0段が`level=0`（＝無音の待ち段）であるときに限り**、
+その段の`time`へ`(CC78生値-64)`を加算してDelay相当とする（`build_patch()`が毎ブロック計算、
+`cached_egs.pitch_fg`のコピーに対して適用しpersist状態そのものは変更しない）。TimeEgでは
+Delayを「level=0の段」で表現するのが自然なため。第0段が`level>0`（＝いきなり立ち上がる形の
+Pitch FG）のときは対応する概念が無いので何もしない（CC78を送っても無音のまま無視される）。
+
 **Expression Destination（表情コントローラーの加算先、AT/CC2/CC4共通）：**
 
 Channel Pressure・Poly Key Pressure・CC2（ブレス）・CC4（フット）は、いずれも同じ
@@ -1107,6 +1133,14 @@ destination enum（共通）：
 複数の表情ソース（Channel Pressure・Poly Key Pressure・CC2・CC4）が同じdestinationを指す場合、
 全ソースの値が加算される。Poly Key Pressure対応コントローラーは少数（MPE等）のため、
 多くの環境ではChannel Pressure（またはCC2/CC4）のみが機能する。
+
+**op505でのMIDIチャンネル対応範囲：** `ym38x6-vst`はCC1/CC2/CC4/CC76/CC77/CC78・Channel
+Pressure・Poly Key Pressureをグローバル単一値（MIDIチャンネル非依存）として扱っていたが、
+`op505-vst`（フェーズ2）ではこれらを**全16 MIDIチャンネル独立**に拡張した（`[u8; 16]`等で
+チャンネルごとに保持）。CC66(Sostenuto)/CC67(Soft Pedal)は元からチャンネルごとだったため変更なし。
+Destination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/(0,5)はグローバル単一のまま
+（NRPN/RPN状態自体がMIDIチャンネル非依存の設計、パッチ全体の設定を切り替えるものであり
+マルチティンバー用途を想定していないため。詳細はop505-vstフェーズ2実装メモ参照）。
 
 **手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
 フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。

@@ -3530,6 +3530,7 @@ dependencies = [
  "op505-ui",
  "serde",
  "sound-core",
+ "sound-fm",
 ]
 
 [[package]]
