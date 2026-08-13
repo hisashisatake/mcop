@@ -5905,6 +5905,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavetest"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "op505-tools",
+ "sound-core",
+]
+
+[[package]]
 name = "wavetest4x6"
 version = "0.1.0"
 dependencies = [

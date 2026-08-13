@@ -22,6 +22,7 @@ members = [
     "ym38x6/tools/vgm2x6",
     "op505/tools/common",
     "op505/tools/opzref",
+    "op505/tools/wavetest",
     "op505/tools/opz2op505",
     "op505/tools/psr2op505",
     "op505/tools/mucom2op505",

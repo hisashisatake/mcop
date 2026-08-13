@@ -1,0 +1,26 @@
+[package]
+name = "wavetest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 非サイン波形（OPZ系 waveform 1〜7）をFMのキャリア/モジュレーターに使ったときの
+# 音色変化を試聴で確認するための開発ツール（op505向け）。
+# 由来: ym38x6/tools/wavetest4x6（コミット ef3d309 時点の複製、2026-08-13）。デフォーク後の
+# op505ツール群向け複製（fork-on-write）。ym38x6/tools/wavetest4x6側の修正は自動では
+# 反映されない（`git diff ef3d309 -- ym38x6/tools/wavetest4x6/src/main.rs` で追従漏れを確認できる）。
+# 9系統の基本音色 × 波形バリエーションを .op505 バンクとWAVへ書き出す。
+# op505-core の正規型(Op505Patch/Op505PresetFile)とエンジンを再利用する。
+# レート方式EG(ar/d1r/d2r/d1l/rr)の音色数値はop505-core::eg_convert::convert_eg_shapeを
+# 経由してTimeEgParamsへ変換する（手で追い込んだ聴感資産をそのまま移植するため）。
+# それとは別にTimeEgネイティブのデモ音色（多段リリース・ループGain FGゲート・非単調EG）も
+# 追加してあり、convert_eg_shapeでは作れない形をop505固有の価値として示す。
+
+[[bin]]
+name = "wavetest"
+path = "src/main.rs"
+
+[dependencies]
+op505-core = { path = "../../core" }
+sound-core = { path = "../../../sound/core" }
+op505-tools = { path = "../common" }
