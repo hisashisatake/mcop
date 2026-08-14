@@ -15,7 +15,7 @@ use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
 use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
-use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, DB_FLOOR};
+use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL};
 use crate::knob::{bool_checkbox, knob, spin_control};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, time_eg_preview, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
@@ -319,22 +319,24 @@ fn format_time_seconds(time: u8) -> String {
 }
 
 /// GRAPHモードのY座標(px)をlevel(0〜255)へ逆写像する（Step Dのドラッグ編集が使う）。
-/// `inner`は`time_eg_editor_layout`に渡したのと同じ描画可能領域。
-/// TL<255時、`DB_FLOOR`付近では複数のlevelがほぼ同じdBに潰れて逆写像が縮退するため、
+/// `inner`は`time_eg_editor_layout`に渡したのと同じ描画可能領域。軸の床は`axis_floor_db`で
+/// パネル種別ごとに決まる（`layout_impl`の描画側と必ず同じ床を使う。ずれると見た目の点位置と
+/// ドラッグ後の実際の値が食い違う）。床付近では複数のlevelがほぼ同じdBに潰れて逆写像が縮退するため、
 /// 床から`FLOOR_SNAP_PX`以内はlevel=0へスナップし、天井（`tl_db`）を超える位置は255へクランプする
 /// （縮退帯の精密編集はKNOBSモードが受け皿になる）。
 fn y_to_level(mapping: EgAmplitudeMapping, tl: u8, inner: Rect, y: f32) -> u8 {
     if inner.bottom() - y <= FLOOR_SNAP_PX {
         return 0;
     }
-    let db = DB_FLOOR + ((inner.bottom() - y) / inner.height()) * (-DB_FLOOR);
+    let floor = crate::time_eg_preview::axis_floor_db(mapping);
+    let db = floor + ((inner.bottom() - y) / inner.height()) * (-floor);
     let tl_db = tl_to_db(tl);
     let contribution = db - tl_db;
     if contribution >= 0.0 {
         return 255;
     }
     let level_linear = match mapping {
-        EgAmplitudeMapping::DbLinear => 1.0 - contribution / DB_FLOOR,
+        EgAmplitudeMapping::DbLinear | EgAmplitudeMapping::RawLinear => 1.0 - contribution / floor,
         EgAmplitudeMapping::AmplitudeLinear => 10f32.powf(contribution / 20.0),
     };
     (level_linear.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -730,13 +732,14 @@ mod tests {
         for level in [40u8, 128, 200] {
             for tl in [255u8, 200] {
                 for mapping in [EgAmplitudeMapping::DbLinear, EgAmplitudeMapping::AmplitudeLinear] {
+                    let floor = crate::time_eg_preview::axis_floor_db(mapping);
                     let tl_db = tl_to_db(tl);
-                    let contribution = crate::eg_preview::level_contribution_db(mapping, level as f32 / 255.0);
-                    let db_unclamped = tl_db + contribution;
-                    if db_unclamped <= DB_FLOOR + 1.0 {
+                    // 実際に描画へ使うstage_target_dbを直接呼ぶ（floorでクランプ済みの値）。
+                    let db = crate::time_eg_preview::stage_target_db(mapping, floor, tl_db, level);
+                    if db <= floor + 1.0 {
                         continue; // 縮退帯（別テストでlevel=0に丸まることを確認済み）
                     }
-                    let y = inner.bottom() - ((db_unclamped - DB_FLOOR) / -DB_FLOOR) * inner.height();
+                    let y = inner.bottom() - ((db - floor) / -floor) * inner.height();
                     let round_tripped = y_to_level(mapping, tl, inner, y);
                     assert!(
                         (round_tripped as i32 - level as i32).abs() <= 2,
@@ -754,9 +757,10 @@ mod tests {
         let inner = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(200.0, 100.0));
         let tl_db = tl_to_db(200);
         let contribution = crate::eg_preview::level_contribution_db(EgAmplitudeMapping::DbLinear, 40.0 / 255.0);
-        let db = (tl_db + contribution).max(DB_FLOOR);
-        assert_eq!(db, DB_FLOOR, "このケースはDB_FLOORへクランプされる前提のテスト");
-        let y = inner.bottom() - ((db - DB_FLOOR) / -DB_FLOOR) * inner.height();
+        let floor = crate::eg_preview::DB_FLOOR;
+        let db = (tl_db + contribution).max(floor);
+        assert_eq!(db, floor, "このケースはDB_FLOORへクランプされる前提のテスト");
+        let y = inner.bottom() - ((db - floor) / -floor) * inner.height();
         assert_eq!(y_to_level(EgAmplitudeMapping::DbLinear, 200, inner, y), 0);
     }
 

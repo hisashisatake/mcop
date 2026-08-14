@@ -40,6 +40,18 @@ fn repeat_count(name: &str) -> usize {
     }
 }
 
+/// `mapping`属性の文字列を[`EgAmplitudeMapping`]へ変換する。`codegen.rs`はIRの文字列をそのまま
+/// `EgAmplitudeMapping::{mapping}`へ埋め込む（コンパイル時にRustの列挙子名として検証される）のに対し、
+/// こちらは実行時のプレビューなので手動でマッチさせる必要がある。未知の文字列は`DbLinear`へ
+/// フォールバックする（panel.xml側の記述漏れに対して寛容にする方針、Step 5から踏襲）。
+fn parse_eg_amplitude_mapping(mapping: &str) -> EgAmplitudeMapping {
+    match mapping {
+        "AmplitudeLinear" => EgAmplitudeMapping::AmplitudeLinear,
+        "RawLinear" => EgAmplitudeMapping::RawLinear,
+        _ => EgAmplitudeMapping::DbLinear,
+    }
+}
+
 /// プレビュー専用のモック整数パラメーター（Cellでフレーム跨ぎの値を保持し、ドラッグを効かせる）。
 struct MockInt {
     value: Cell<i32>,
@@ -311,8 +323,7 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             enum_selector(ui, store.int(&key), label, names_slice, salt_n);
         }
         Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => {
-            let mapping_v =
-                if mapping == "AmplitudeLinear" { EgAmplitudeMapping::AmplitudeLinear } else { EgAmplitudeMapping::DbLinear };
+            let mapping_v = parse_eg_amplitude_mapping(mapping);
             let tl_v = eg_field_value(store, tl, idx);
             let eg = EgParams {
                 ar: eg_field_value(store, ar, idx),
@@ -334,8 +345,7 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
         }
         Widget::TimeEgEditor { handle, mapping, tl } => {
             let key = scoped(handle, idx);
-            let mapping_v =
-                if mapping == "AmplitudeLinear" { EgAmplitudeMapping::AmplitudeLinear } else { EgAmplitudeMapping::DbLinear };
+            let mapping_v = parse_eg_amplitude_mapping(mapping);
             let tl_v = eg_field_value(store, tl, idx);
             let handle_mock = store.time_eg(&key);
             time_eg_editor(ui, egui::vec2(leaf.size.w, leaf.size.h), handle_mock, mapping_v, tl_v);

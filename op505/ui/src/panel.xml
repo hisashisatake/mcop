@@ -82,7 +82,7 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.pitch_fg.eg" mapping="AmplitudeLinear" tl-value="255"/>
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255"/>
         <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
       </row>
     </panel>
@@ -92,7 +92,7 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="AmplitudeLinear" tl-value="255"/>
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255"/>
         <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
       </row>
     </panel>

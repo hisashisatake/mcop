@@ -64,12 +64,42 @@ fn log_width(seconds: f32) -> f32 {
     ((seconds.max(TIME_MIN_SECONDS).log10() - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
+/// パネル種別ごとのグラフY軸の床(dB)。`DbLinear`/`RawLinear`は式が`floor*(1-level)`という
+/// floorに対する線形不変な形（floorをどう選んでも高さの割合は`level`に厳密比例する）なので、
+/// OP(DbLinear)の物理値である`DB_FLOOR`(operator.rsの`env_amp`式由来、変更禁止)のまま据え置く。
+/// `AmplitudeLinear`(GAIN FG)は真の対数（`20*log10(level)`）で、`DB_FLOOR`(-96)のままだと
+/// レベル1〜255が高さの上半分に圧縮され下半分をどれだけドラッグしても無反応という操作性問題が
+/// 実機確認で判明したため、床を浅くして実用域(level概ね16〜255)を高さ全体に広げる
+/// （代償として極小レベル1〜15程度は床に張り付いて区別できなくなるが、GAIN FGの本命ユースケース
+/// である「静止を挟んだ2値スイッチ」では実用上ほぼ支障がない）。
+const AMPLITUDE_LINEAR_AXIS_FLOOR: f32 = -24.0;
+
+pub(crate) fn axis_floor_db(mapping: EgAmplitudeMapping) -> f32 {
+    match mapping {
+        EgAmplitudeMapping::AmplitudeLinear => AMPLITUDE_LINEAR_AXIS_FLOOR,
+        EgAmplitudeMapping::DbLinear | EgAmplitudeMapping::RawLinear => DB_FLOOR,
+    }
+}
+
 /// TL(0〜255)とTimeEgの1段(level)からターゲットdBを求める。`level_contribution_db`は
-/// 「TLからの相対減衰」を返すため、`tl_db`に加算しDB_FLOORで下限クランプする
+/// 「TLからの相対減衰」を返すため、`tl_db`に加算し`floor`（`axis_floor_db`参照）で下限クランプする
 /// （`eg_preview::eg_preview`のTL→SL算出と同じ式。TimeEgは全段が同じ式で求まる——
 /// レート方式のように「AR到達点=常にTL」という特別扱いが要らない）。
-fn stage_target_db(mapping: EgAmplitudeMapping, tl_db: f32, level: u8) -> f32 {
-    (tl_db + level_contribution_db(mapping, level as f32 / 255.0)).max(DB_FLOOR)
+/// `AmplitudeLinear`だけは`level_contribution_db`（内部floorが`DB_FLOOR`固定）を経由せず、
+/// パネル固有の`floor`で直接クランプする（`DbLinear`/`RawLinear`はfloor不変なので共通実装のまま）。
+pub(crate) fn stage_target_db(mapping: EgAmplitudeMapping, floor: f32, tl_db: f32, level: u8) -> f32 {
+    let level_linear = level as f32 / 255.0;
+    let contribution = match mapping {
+        EgAmplitudeMapping::AmplitudeLinear => {
+            if level_linear <= 0.0 {
+                floor
+            } else {
+                (20.0 * level_linear.log10()).max(floor)
+            }
+        }
+        EgAmplitudeMapping::DbLinear | EgAmplitudeMapping::RawLinear => level_contribution_db(mapping, level_linear),
+    };
+    (tl_db + contribution).max(floor)
 }
 
 /// `time_eg_preview`が計算した折れ線の幾何情報。egui非依存の純粋計算なので単体テスト可能。
@@ -145,16 +175,17 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     // targetへ向かう多段リリース。以前のfor advance()と同じ順序を辿る）。
     let release_sequence: Vec<usize> = (release_start..n).collect();
 
+    let floor = axis_floor_db(mapping);
     let tl_db = tl_to_db(tl);
     let x0 = inner.left();
     let width = inner.width();
     let drawn_count = (held_sequence.len() + release_sequence.len()).max(1);
     let scale = width / drawn_count as f32;
     let right_edge = x0 + width;
-    let db_to_y = |db: f32| inner.bottom() - ((db.max(DB_FLOOR) - DB_FLOOR) / -DB_FLOOR) * inner.height();
+    let db_to_y = |db: f32| inner.bottom() - ((db.max(floor) - floor) / -floor) * inner.height();
 
     // note-onは常にlevel=0.0から始まる（TimeEg::note_on参照）。
-    let start_db = stage_target_db(mapping, tl_db, 0);
+    let start_db = stage_target_db(mapping, floor, tl_db, 0);
     let mut points = vec![Pos2::new(x0, db_to_y(start_db))];
     let mut stage_of_point = vec![*held_sequence.first().unwrap_or(&0)];
     let mut x = x0;
@@ -165,7 +196,7 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
         // min_weightの床には引っかからず常に幅0（垂直）のままにする。
         let weight = if stage.time == 0 { 0.0 } else { log_width(time_to_seconds(stage.time)).max(opts.min_weight) };
         x = (x + weight * scale).min(right_edge);
-        let target_db = stage_target_db(mapping, tl_db, stage.level);
+        let target_db = stage_target_db(mapping, floor, tl_db, stage.level);
         points.push(Pos2::new(x, db_to_y(target_db)));
         stage_of_point.push(stage_idx);
     }

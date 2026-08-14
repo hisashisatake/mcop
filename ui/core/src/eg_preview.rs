@@ -163,13 +163,21 @@ pub enum EgAmplitudeMapping {
     /// FILTER: EG出力はcutoff加算量の比率であり物理的なdB量ではないが（vcf.rs参照）、
     /// OP/VCAと視覚を揃えるため同じ対数圧縮の軸に載せる（レベル形状の相似表示として使う）。
     AmplitudeLinear,
+    /// PITCH FG/CUTOFF FG(op505): `level`はP.DEP±/F.DEP±との掛け算で直接セント/カットオフ比率に
+    /// なる線形の変調量であり、音量・dB量ではない。`AmplitudeLinear`(20*log10)だと極小レベル
+    /// (例:level=1)が対数圧縮でグラフ中央付近まで浮いてしまい紛らわしいと判明したため
+    /// （実機確認）、`level`をそのままグラフの高さに比例させる。式は`DbLinear`と同一（このdB軸上で
+    /// `DB_FLOOR*(1-level)`は`level`に対して厳密に線形なため）だが、OPの振幅EGが物理的に
+    /// dBリニアという別の理由に基づく`DbLinear`とは意味が別なので、式が将来どちらかだけ
+    /// 変わっても互いに影響しないようあえて別バリアントにしてある。
+    RawLinear,
 }
 
 /// EGレベル(0.0〜1.0)がTLからどれだけdB減衰するかを、マッピング方式に応じて求める。
 /// `time_eg_preview`とも共有する。
 pub(crate) fn level_contribution_db(mapping: EgAmplitudeMapping, level_linear: f32) -> f32 {
     match mapping {
-        EgAmplitudeMapping::DbLinear => DB_FLOOR * (1.0 - level_linear),
+        EgAmplitudeMapping::DbLinear | EgAmplitudeMapping::RawLinear => DB_FLOOR * (1.0 - level_linear),
         EgAmplitudeMapping::AmplitudeLinear => level_to_db(level_linear),
     }
 }
