@@ -17,3 +17,6 @@ path = "src/lib.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# fxモジュール（マスターリバーブ後段適用）専用。既存5ツールは全てop505-core経由でsound-core依存済み
+# のため実害はない（詳細はfx.rs冒頭コメント参照）。
+sound-core = { path = "../../../sound/core" }
