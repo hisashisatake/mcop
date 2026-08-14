@@ -1,4 +1,4 @@
-# opzref — ymfm OPZ 参照レンダラ
+# opzref4x6 — ymfm OPZ 参照レンダラ
 
 TX81Z（YM2414 / OPZ）の `.syx` ボイスを **ymfm エミュレータで直接レンダリング**し、
 WAV 化する検証用ツール。`opz2x6` + `ym38x6` の変換・エンジン忠実度を、
@@ -12,10 +12,10 @@ FFI（`csrc/shim.cpp`）で呼ぶ。ライセンスは [THIRD_PARTY_NOTICES.md](
 
 ```powershell
 # ツールチェーン自己テスト（単一キャリアのサイン波を出力）
-cargo run -p opzref --release -- --selftest out.wav
+cargo run -p opzref4x6 --release -- --selftest out.wav
 
 # .syx の voice 0 を G#4(midi68) で 2.5 秒レンダリング
-cargo run -p opzref --release -- render "bank.syx" 0 out.wav --note 68 --dur 2.5 --gate 2.0
+cargo run -p opzref4x6 --release -- render "bank.syx" 0 out.wav --note 68 --dur 2.5 --gate 2.0
 ```
 
 ### render オプション

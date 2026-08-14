@@ -41,7 +41,7 @@ OP505（主力チップ）は専用のspec文書をまだ持たない。進捗�
 フェーズ一覧と現在地は [spec-roadmap.md](spec-roadmap.md) に分離した。
 2026-08-12の方針転換によりym38x6は凍結、op505へ一本化。op505ツール群のデフォーク・gesture-app既定
 エンジンのOP505化・共有クレートのsound/uiグループ再編が完了しており、残タスクは
-op505用VST3/CLAPプラグイン（op505-vst）の新設（フェーズ8）と、smf2wav/wavetest/opzref/patchlab等
+op505用VST3/CLAPプラグイン（op505-vst）の新設（フェーズ8）と、smf2wav/wavetest4x6/opzref4x6/patchlab等
 検証・音作りツール群のop505移行（フェーズ5.5）に整理されている（詳細はspec-roadmap.md参照）。
 
 ---

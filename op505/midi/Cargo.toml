@@ -1,0 +1,10 @@
+[package]
+name = "op505-midi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# ALGORITHMSのキャリア判定のみに使う。MasterEffects等sound-core型はAPIに出さない
+# （CC/NRPN解釈はop505-vst/smf2op505の両方が参照する共有クレートのため、依存はこの2本のみに絞る）。
+op505-core = { path = "../core" }
+sound-fm = { path = "../../sound/fm" }

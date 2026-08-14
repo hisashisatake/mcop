@@ -7,26 +7,26 @@
 ```
 /audition                          # piano_template.py の全8音色
 /audition 4                        # piano_template.py の prog 4 のみ
-/audition private/foo.38x6         # バンクファイルの全プリセット
-/audition private/foo.38x6 --prog 4  # バンクファイルの prog 4 のみ
+/audition private/foo.op505        # バンクファイルの全プリセット
+/audition private/foo.op505 --prog 4  # バンクファイルの prog 4 のみ
 ```
 
 ## 手順
 
 引数を解析して以下を実行する。
 
-1. `ym38x6/tools/patchlab` ディレクトリで `uv run python` を使って
+1. `op505/tools/patchlab` ディレクトリで `uv run python` を使って
    `python\audition.py` を実行する。
    - 引数が数字のみ → `--prog <N>`
-   - 引数が `.38x6` ファイルパス → `--bank <path>`
-   - 引数が `.38x6` ファイルパス + `--prog N` → `--bank <path> --prog <N>`
+   - 引数が `.op505` ファイルパス → `--bank <path>`
+   - 引数が `.op505` ファイルパス + `--prog N` → `--bank <path> --prog <N>`
    - 引数なし → 引数なし（全音色）
 
 2. 実行コマンド例:
    ```powershell
-   cd "c:\Users\satake\source\repos\ym38x6\tools\patchlab"
+   cd "c:\Users\satake\source\repos\ym38x6\op505\tools\patchlab"
    uv run python python\audition.py --prog 4
-   uv run python python\audition.py --bank private/piano_template.38x6
+   uv run python python\audition.py --bank private/piano_template.op505
    ```
 
 3. 出力先 `private/audition_wav/<label>/` に生成された WAV ファイルのパスを報告する。

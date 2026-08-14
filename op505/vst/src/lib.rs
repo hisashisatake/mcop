@@ -1,9 +1,11 @@
 mod editor;
-mod midi;
 mod param_adapter;
 mod params;
 
-use midi::{apply_expression_modulation, apply_soft_pedal, cc_to_u8, cc_to_u7, ExpressionDestination, RpnSelection};
+use op505_midi::{
+    apply_expression_modulation, apply_pitch_fg_expression, apply_soft_pedal, cc_to_u7, cc_to_u8,
+    control_target, released_notes, ControlTarget, ExpressionDestination, PedalState, RpnTracker,
+};
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
     DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE, DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
@@ -117,11 +119,7 @@ struct Op505Plugin {
 
     // RPN/NRPN選択状態（MIDIチャンネル非依存のグローバル状態、`ym38x6-vst`と同型。
     // Algorithm/Filter Type等のNRPN対象はパッチ全体のグローバルパラメーターのため）。
-    rpn_msb: u8,
-    rpn_lsb: u8,
-    nrpn_msb: u8,
-    nrpn_lsb: u8,
-    rpn_selection: RpnSelection,
+    rpn: RpnTracker,
 
     // マスター単位パラメーターの「前回ブロックで適用したDAW値」（1シャドウ差分検知方式）。
     // Reverb/Chorus TypeはNRPN(0,2)/(0,3)等からも直接effectsへ書き込まれるため、
@@ -180,15 +178,7 @@ struct Op505Plugin {
     // ペダル（CC64 Sustain / CC66 Sostenuto / CC67 Soft、ホールドフラグ方式。
     // spec-sound.md「サステインペダル（CC64）の実装方針」参照）。エンジン無改造・
     // 1ノート=1チャンネルのまま、MIDIチャンネルごとに管理する。
-    keys_down: [u128; 16],
-    pedal_down: [bool; 16],
-    pending_release: [u128; 16],
-    /// CC66 ON時点でkeys_downをスナップショットしたノート（bit N = ノート番号N）。CC66 OFFで解除。
-    sostenuto: [u128; 16],
-    /// Soft Pedal（CC67）の深さ（0〜127、0=無効）。
-    cc67: [u8; 16],
-    /// cc67>0の間にNote-Onしたノート（bit N = ノート番号N）。実効TL/Cutoff減算の対象。
-    soft_notes: [u128; 16],
+    pedals: [PedalState; 16],
 
     // `op505_presets_dir()`から読み込んだユーザープリセット集合（`initialize()`で読み込む）。
     preset_bank: Op505PresetBank,
@@ -241,11 +231,7 @@ impl Default for Op505Plugin {
             pitch_fg_rpn0_5: 64,
             last_rev_send: 0,
             last_cho_send: 0,
-            rpn_msb: 0,
-            rpn_lsb: 0,
-            nrpn_msb: 0,
-            nrpn_lsb: 0,
-            rpn_selection: RpnSelection::default(),
+            rpn: RpnTracker::default(),
             last_reverb_type: DEFAULT_REVERB_TYPE,
             last_reverb_time: DEFAULT_REVERB_TIME,
             last_chorus_type: DEFAULT_CHORUS_TYPE,
@@ -271,12 +257,7 @@ impl Default for Op505Plugin {
             pitch_bend_range: 2.0,
             cc7: [127; 16],
             cc11: [127; 16],
-            keys_down: [0; 16],
-            pedal_down: [false; 16],
-            pending_release: [0; 16],
-            sostenuto: [0; 16],
-            cc67: [0; 16],
-            soft_notes: [0; 16],
+            pedals: [PedalState::default(); 16],
             preset_bank: Op505PresetBank::default(),
             egui_state: EguiState::from_size(1200, 680),
         }
@@ -345,60 +326,11 @@ impl Op505Plugin {
         Op505Patch { operators, channel }
     }
 
-    /// `candidates & pending_release[channel]` のうち、`other_held`（他のペダルが保持中の
-    /// ノート）にも`keys_down`（再押下中のノート）にも該当しないものをnote_offして
-    /// `pending_release`/`soft_notes`から除去する。CC64/CC66 OFF・CC121の解放処理で共有する
-    /// （`ym38x6-vst`と同一設計。CC64 OFF: candidates=pending_release, other_held=sostenuto。
-    /// 　CC66 OFF: candidates=sostenuto, other_held=pedal_down相当の全ビット。
-    /// 　CC121: candidates=pending_release, other_held=0）。
-    fn release_unheld(&mut self, channel: u8, candidates: u128, other_held: u128) {
-        let ch = channel as usize;
-        let mut mask = candidates & self.pending_release[ch];
-        while mask != 0 {
-            let note = mask.trailing_zeros() as u8;
-            let bit = 1u128 << note;
-            mask &= mask - 1;
-            if other_held & bit == 0 && self.keys_down[ch] & bit == 0 {
-                self.engine.note_off(midi_channel_note_id(channel, note));
-                self.pending_release[ch] &= !bit;
-                self.soft_notes[ch] &= !bit;
-            }
-        }
-    }
-
     /// CC76(Vibrato Rate)由来のPitch FG速さスケールを計算する（`cc76_to_rate_scale`、
     /// 64=1.0倍=無補正）。build_patch()とは別に、`engine.set_pitch_fg_rate_scale`で
     /// 直接エンジンへ渡す（ChannelParamsを経由しない、pitch_bend/channel_volumeと同じ経路）。
     fn pitch_fg_rate_scale(&self, midi_ch: usize) -> f32 {
         cc76_to_rate_scale(self.pitch_fg_cc76[midi_ch])
-    }
-
-    /// CC1(モジュレーションホイール)・CC77(Vibrato Depth)・CC78(Vibrato Delay)によるPitch FGの
-    /// ②③層補正を`patch`へ適用する（spec-sound.md「演奏層による補正」節）。`apply_expression_modulation`/
-    /// `apply_soft_pedal`と同じ「note_patchへの後処理」として、`base_patch`がDAWパラメーター由来
-    /// （`build_patch()`）かProgram Change由来（`program_patch`）かに関わらず一律に効かせる
-    /// （build_patch()内に埋め込んだままだとprogram_patchがアクティブなチャンネルでこの補正が
-    /// 完全にスキップされるバグがあったため分離した。CC76(Rate)は`set_pitch_fg_rate_scale`という
-    /// 別経路のため、この関数の対象外）。
-    fn apply_pitch_fg_expression(&self, patch: &mut Op505Patch, midi_ch: usize) {
-        // CC1のセント換算分をDepthと同じ0〜255単位空間へ逆変換して加算する
-        // （Pitch FGの`(depth-128)/128*1200`セント変換式の逆算、cc1_cents = cc1/127 * rpn0_5*50/64）。
-        let cc1_cents = (self.pitch_fg_cc1[midi_ch] as f32 / 127.0) * (self.pitch_fg_rpn0_5 as f32 * 50.0 / 64.0);
-        let cc1_depth_units = (cc1_cents / 1200.0 * 128.0).round() as i32;
-        let base_depth = patch.channel.pitch_fg.depth as i32;
-        patch.channel.pitch_fg.depth =
-            (base_depth + self.pitch_fg_cc77[midi_ch] as i32 + cc1_depth_units).clamp(0, 255) as u8;
-
-        // CC78(Vibrato Delay)：TimeEgにDelayフィールドが無いため、Pitch FGの第0段が
-        // 「level=0の待ち段」であるときに限り、その段のtimeへ(CC78-64)を加算してDelay相当とする
-        // （TimeEgではDelayを「level=0の段」で表現するのが自然なため）。第0段がlevel>0
-        // （＝いきなり立ち上がる形）のときは対応する概念が無いので何もしない。
-        let stage0 = &mut patch.channel.pitch_fg.eg.stages[0];
-        if stage0.level == 0 {
-            let delay_delta = self.pitch_fg_cc78[midi_ch] as i32 - 64;
-            let adjusted = stage0.time as i32 + delay_delta;
-            stage0.time = adjusted.clamp(0, 255) as u8;
-        }
     }
 
     /// NRPN(0,18)〜(0,21)：CC6(Data Entry MSB)+CC38(Data Entry LSB)の14bit値を
@@ -416,142 +348,123 @@ impl Op505Plugin {
         self.active_ids = ids;
     }
 
-    /// CC99/98(NRPN)・CC101/100(RPN)受信時に選択状態を更新する。
-    /// MSB,LSB=127,127（Null）の場合は選択解除する。
-    fn update_rpn_selection(&mut self, is_nrpn: bool) {
-        let (msb, lsb) = if is_nrpn { (self.nrpn_msb, self.nrpn_lsb) } else { (self.rpn_msb, self.rpn_lsb) };
-        self.rpn_selection = if msb == 127 && lsb == 127 {
-            RpnSelection::None
-        } else if is_nrpn {
-            RpnSelection::Nrpn(msb, lsb)
-        } else {
-            RpnSelection::Rpn(msb, lsb)
-        };
-    }
-
-    /// CC6(Data Entry MSB)受信時、選択中のRPN/NRPNに応じて値を適用する。
-    /// `value`はCC値の正規化値（0.0〜1.0）。enum系パラメーターは`cc_to_u7`、
-    /// 0〜255連続値パラメーターは`cc_to_u8`で変換する。
+    /// CC6(Data Entry MSB)受信時、`op505_midi::control_target`で解決した制御対象に応じて
+    /// 値を適用する。`value`はCC値の正規化値（0.0〜1.0）。enum系パラメーターは`cc_to_u7`、
+    /// 0〜255連続値パラメーターは`cc_to_u8`で変換する。`_ =>`を使わず全バリアントを列挙する
+    /// ことで、`op505-midi`側にNRPNアドレスが追加されたときここもコンパイルエラーで気づける。
     ///
-    /// NRPN(0,28)〜(0,33)（ym38x6版FG Loop/Curve相当）は欠番として予約する
+    /// `ControlTarget::ReservedFgLoopCurve`（ym38x6版FG Loop/Curve相当）は欠番として何もしない
     /// （op505のTimeEg 7本はDAWパラメーターではなくpersist状態のため、NRPNから直接触ると
     /// GUI表示と実音がズレる。plan「NRPNからTimeEgは触らない」参照）。
     fn handle_data_entry(&mut self, value: f32) {
         self.data_entry_msb = cc_to_u7(value);
-        match self.rpn_selection {
+        match control_target(self.rpn.selection) {
             // RPN(0,0): Pitch Bend Sensitivity（半音）。CC6の生値(0〜127)を半音数とする。
-            RpnSelection::Rpn(0, 0) => {
+            ControlTarget::PitchBendRange => {
                 self.pitch_bend_range = cc_to_u7(value) as f32;
             }
             // RPN0,5: Modulation Depth Range（Pitch FGのCC1セント換算係数、64≈50セント）。
-            RpnSelection::Rpn(0, 5) => {
+            ControlTarget::ModulationDepthRange => {
                 self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
             // NRPN(0,0): 質感LFO Destination（0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff/4=未接続）。
             // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
             // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
-            RpnSelection::Nrpn(0, 0) => {
+            ControlTarget::TextureLfoDestination => {
                 self.texture_lfo_destination = FmLfoDestination::from_u8(cc_to_u7(value).min(4));
             }
             // NRPN(0,1): 質感LFO Waveform（0〜4、質感LFOの5波形パレットへ直接対応）。
-            RpnSelection::Nrpn(0, 1) => {
+            ControlTarget::TextureLfoWaveform => {
                 self.texture_lfo_waveform = cc_to_u7(value).min(4);
             }
             // NRPN(0,2): Reverb Type
-            RpnSelection::Nrpn(0, 2) => {
+            ControlTarget::ReverbType => {
                 self.effects.set_reverb_type(ReverbType::from_u8(cc_to_u7(value)));
             }
             // NRPN(0,3): Chorus Type
-            RpnSelection::Nrpn(0, 3) => {
+            ControlTarget::ChorusType => {
                 self.effects.set_chorus_type(ChorusType::from_u8(cc_to_u7(value)));
             }
             // NRPN(0,4): Reverb Time
-            RpnSelection::Nrpn(0, 4) => {
+            ControlTarget::ReverbTime => {
                 self.effects.set_reverb_time(cc_to_u8(value));
             }
             // NRPN(0,5): Chorus Mod Rate
-            RpnSelection::Nrpn(0, 5) => {
+            ControlTarget::ChorusModRate => {
                 self.effects.set_chorus_mod_rate(cc_to_u8(value));
             }
             // NRPN(0,6): Chorus Mod Depth
-            RpnSelection::Nrpn(0, 6) => {
+            ControlTarget::ChorusModDepth => {
                 self.effects.set_chorus_mod_depth(cc_to_u8(value));
             }
             // NRPN(0,7): Chorus Feedback
-            RpnSelection::Nrpn(0, 7) => {
+            ControlTarget::ChorusFeedback => {
                 self.effects.set_chorus_feedback(cc_to_u8(value));
             }
             // NRPN(0,8): Chorus Send To Reverb
-            RpnSelection::Nrpn(0, 8) => {
+            ControlTarget::ChorusSendToReverb => {
                 self.effects.set_chorus_send_to_reverb(cc_to_u8(value));
             }
             // NRPN(0,9): Algorithm（0〜7、範囲外は7にclamp）
-            RpnSelection::Nrpn(0, 9) => {
+            ControlTarget::Algorithm => {
                 self.algorithm = cc_to_u7(value).min(7);
             }
             // NRPN(0,10)〜(0,13): Waveform Op0〜3（0〜255）
-            RpnSelection::Nrpn(0, 10) => {
-                self.operator_waveforms[0] = cc_to_u8(value);
-            }
-            RpnSelection::Nrpn(0, 11) => {
-                self.operator_waveforms[1] = cc_to_u8(value);
-            }
-            RpnSelection::Nrpn(0, 12) => {
-                self.operator_waveforms[2] = cc_to_u8(value);
-            }
-            RpnSelection::Nrpn(0, 13) => {
-                self.operator_waveforms[3] = cc_to_u8(value);
+            ControlTarget::OperatorWaveform(op_index) => {
+                self.operator_waveforms[op_index as usize] = cc_to_u8(value);
             }
             // NRPN(0,14): Filter Type（0=LP/1=HP/2=BP、範囲外は2にclamp）
-            RpnSelection::Nrpn(0, 14) => {
+            ControlTarget::FilterType => {
                 self.filter_type = cc_to_u7(value).min(2);
             }
             // NRPN(0,15): Filter Self-Oscillation（0=OFF/1=ON）
-            RpnSelection::Nrpn(0, 15) => {
+            ControlTarget::FilterSelfOscillation => {
                 self.filter_self_oscillation = cc_to_u7(value) != 0;
             }
             // NRPN(0,16): AT Destination（Channel Pressureの加算先）
-            RpnSelection::Nrpn(0, 16) => {
+            ControlTarget::AtDestination => {
                 self.at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,17): Poly AT Destination（Poly Key Pressureの加算先）
-            RpnSelection::Nrpn(0, 17) => {
+            ControlTarget::PolyAtDestination => {
                 self.poly_at_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3
-            RpnSelection::Nrpn(0, lsb @ 18..=21) => {
-                self.apply_operator_f_number_override((lsb - 18) as usize);
+            ControlTarget::OperatorFNumber(op_index) => {
+                self.apply_operator_f_number_override(op_index as usize);
             }
             // NRPN(0,22): 質感LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
-            RpnSelection::Nrpn(0, 22) => {
+            ControlTarget::TextureLfoFadeMode => {
                 self.texture_lfo_fade_mode = lfo_fade_mode_from_index(cc_to_u7(value));
             }
             // NRPN(0,23)〜(0,27): 質感LFO Rate/Depth/Delay/FadeTime/Offset（焼き込み専用、
             // DAWパラメーターとの1シャドウ差分検知はprocess()側。ここはNRPNからの直接書き込み）。
-            RpnSelection::Nrpn(0, 23) => {
+            ControlTarget::TextureLfoRate => {
                 self.texture_lfo_rate = cc_to_u8(value);
             }
-            RpnSelection::Nrpn(0, 24) => {
+            ControlTarget::TextureLfoDepth => {
                 self.texture_lfo_depth = cc_to_u8(value);
             }
-            RpnSelection::Nrpn(0, 25) => {
+            ControlTarget::TextureLfoDelay => {
                 self.texture_lfo_delay = cc_to_u8(value);
             }
-            RpnSelection::Nrpn(0, 26) => {
+            ControlTarget::TextureLfoFadeTime => {
                 self.texture_lfo_fade_time = cc_to_u8(value);
             }
-            RpnSelection::Nrpn(0, 27) => {
+            ControlTarget::TextureLfoOffset => {
                 self.texture_lfo_offset = cc_to_u8(value);
             }
+            // NRPN(0,28)〜(0,33): 欠番として予約（TimeEgはpersist状態のためNRPNから触らない）。
+            ControlTarget::ReservedFgLoopCurve => {}
             // NRPN(0,34): CC2(ブレス)Destination
-            RpnSelection::Nrpn(0, 34) => {
+            ControlTarget::Cc2Destination => {
                 self.cc2_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,35): CC4(フット)Destination。既定FilterCutoff＝手動ワウ。
-            RpnSelection::Nrpn(0, 35) => {
+            ControlTarget::Cc4Destination => {
                 self.cc4_destination = ExpressionDestination::from_u8(cc_to_u7(value));
             }
-            _ => {}
+            ControlTarget::Unassigned => {}
         }
     }
 }
@@ -624,11 +537,7 @@ impl Plugin for Op505Plugin {
         self.pitch_fg_rpn0_5 = 64;
         self.last_rev_send = 0;
         self.last_cho_send = 0;
-        self.rpn_msb = 0;
-        self.rpn_lsb = 0;
-        self.nrpn_msb = 0;
-        self.nrpn_lsb = 0;
-        self.rpn_selection = RpnSelection::default();
+        self.rpn.reset();
         self.last_reverb_type = DEFAULT_REVERB_TYPE;
         self.last_reverb_time = DEFAULT_REVERB_TIME;
         self.last_chorus_type = DEFAULT_CHORUS_TYPE;
@@ -654,12 +563,7 @@ impl Plugin for Op505Plugin {
         self.pitch_bend_range = 2.0;
         self.cc7 = [127; 16];
         self.cc11 = [127; 16];
-        self.keys_down = [0; 16];
-        self.pedal_down = [false; 16];
-        self.pending_release = [0; 16];
-        self.sostenuto = [0; 16];
-        self.cc67 = [0; 16];
-        self.soft_notes = [0; 16];
+        self.pedals = [PedalState::default(); 16];
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
@@ -835,9 +739,15 @@ impl Plugin for Op505Plugin {
                 &self.poly_pressure[midi_ch],
                 &mut note_patch,
             );
-            self.apply_pitch_fg_expression(&mut note_patch, midi_ch);
-            if self.soft_notes[midi_ch] & (1u128 << note) != 0 {
-                apply_soft_pedal(&mut note_patch, self.cc67[midi_ch]);
+            apply_pitch_fg_expression(
+                &mut note_patch,
+                self.pitch_fg_cc1[midi_ch],
+                self.pitch_fg_cc77[midi_ch],
+                self.pitch_fg_cc78[midi_ch],
+                self.pitch_fg_rpn0_5,
+            );
+            if self.pedals[midi_ch].soft_notes & (1u128 << note) != 0 {
+                apply_soft_pedal(&mut note_patch, self.pedals[midi_ch].cc67);
             }
             self.engine.set_channel_params(ch_id, note_patch.channel);
             for (op_index, op) in note_patch.operators.iter().enumerate() {
@@ -856,21 +766,20 @@ impl Plugin for Op505Plugin {
                     let midi_ch = channel as usize;
                     let bit = 1u128 << note;
                     // 弾き直したらペダル保留を解除する（`ym38x6-vst`と同一理由）。
-                    self.pending_release[midi_ch] &= !bit;
-                    self.keys_down[midi_ch] |= bit;
-                    // Soft Pedal（CC67）: ON中に新規キーオンしたノートのみ対象。
-                    if self.cc67[midi_ch] > 0 {
-                        self.soft_notes[midi_ch] |= bit;
-                    } else {
-                        self.soft_notes[midi_ch] &= !bit;
-                    }
+                    self.pedals[midi_ch].note_on(note);
                     // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければDAW値。
                     let mut note_on_patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
                     // CC78(Delay)は`TimeEg::note_on()`が読む最初のtickから効かせる必要があるため、
                     // 伝播ループでの1ブロック遅れの反映を待たずここで適用する（CC1/77も併せて統一適用）。
-                    self.apply_pitch_fg_expression(&mut note_on_patch, midi_ch);
-                    if self.soft_notes[midi_ch] & bit != 0 {
-                        apply_soft_pedal(&mut note_on_patch, self.cc67[midi_ch]);
+                    apply_pitch_fg_expression(
+                        &mut note_on_patch,
+                        self.pitch_fg_cc1[midi_ch],
+                        self.pitch_fg_cc77[midi_ch],
+                        self.pitch_fg_cc78[midi_ch],
+                        self.pitch_fg_rpn0_5,
+                    );
+                    if self.pedals[midi_ch].soft_notes & bit != 0 {
+                        apply_soft_pedal(&mut note_on_patch, self.pedals[midi_ch].cc67);
                     }
                     self.engine.set_patch(note_on_patch);
                     self.engine.note_on(ch_id, freq, velocity_u8);
@@ -887,14 +796,8 @@ impl Plugin for Op505Plugin {
                 NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     let midi_ch = channel as usize;
                     self.poly_pressure[midi_ch][note as usize] = 0;
-                    let bit = 1u128 << note;
-                    self.keys_down[midi_ch] &= !bit;
-                    let held = self.pedal_down[midi_ch] || self.sostenuto[midi_ch] & bit != 0;
-                    if held {
-                        self.pending_release[midi_ch] |= bit;
-                    } else {
+                    if self.pedals[midi_ch].note_off(note) {
                         self.engine.note_off(midi_channel_note_id(channel, note));
-                        self.soft_notes[midi_ch] &= !bit;
                     }
                 }
                 NoteEvent::MidiPitchBend { channel, value, .. } => {
@@ -958,43 +861,33 @@ impl Plugin for Op505Plugin {
                         }
                         // CC64(サステインペダル)：ホールドフラグ方式（`ym38x6-vst`と同一設計）。
                         64 => {
-                            if cc_to_u7(value) >= 64 {
-                                self.pedal_down[midi_ch] = true;
-                            } else {
-                                self.pedal_down[midi_ch] = false;
-                                let candidates = self.pending_release[midi_ch];
-                                let other_held = self.sostenuto[midi_ch];
-                                self.release_unheld(channel, candidates, other_held);
+                            let released = self.pedals[midi_ch].cc64(cc_to_u7(value));
+                            for note in released_notes(released) {
+                                self.engine.note_off(midi_channel_note_id(channel, note));
                             }
                         }
                         // CC66(Sostenuto)：ON時点でkeys_down中のノートのみをlatchし、CC66 OFF
                         // （かつCC64も踏まれていない）までReleaseに入らせない。
                         66 => {
-                            if cc_to_u7(value) >= 64 {
-                                self.sostenuto[midi_ch] = self.keys_down[midi_ch];
-                            } else {
-                                let candidates = self.sostenuto[midi_ch];
-                                let other_held = if self.pedal_down[midi_ch] { u128::MAX } else { 0 };
-                                self.release_unheld(channel, candidates, other_held);
-                                self.sostenuto[midi_ch] = 0;
+                            let released = self.pedals[midi_ch].cc66(cc_to_u7(value));
+                            for note in released_notes(released) {
+                                self.engine.note_off(midi_channel_note_id(channel, note));
                             }
                         }
                         // CC67(Soft Pedal)：深さを保持するのみ。ON中に新規キーオンしたノートのみ
                         // への適用はNoteOn/live伝播ループ側（soft_notesビット）で行う。
                         67 => {
-                            self.cc67[midi_ch] = cc_to_u7(value);
+                            self.pedals[midi_ch].cc67(cc_to_u7(value));
                         }
                         // CC121(Reset All Controllers)：③ジェスチャー層のみリセットする
                         // （②パート状態・①音色は保持、spec-sound.md「補強規則」）。CC64/66/67ペダル・
                         // Pitch Bend・CC1・アフタータッチが対象。CC2/CC4/CC7/CC11/CC76〜78/センド/
                         // RPN等は保持。
                         121 => {
-                            let candidates = self.pending_release[midi_ch];
-                            self.release_unheld(channel, candidates, 0);
-                            self.pedal_down[midi_ch] = false;
-                            self.sostenuto[midi_ch] = 0;
-                            self.cc67[midi_ch] = 0;
-                            self.soft_notes[midi_ch] = 0;
+                            let released = self.pedals[midi_ch].cc121();
+                            for note in released_notes(released) {
+                                self.engine.note_off(midi_channel_note_id(channel, note));
+                            }
                             self.channel_bend_cents[midi_ch] = 0.0;
                             self.engine.set_pitch_bend_group(midi_ch, 0.0);
                             self.pitch_fg_cc1[midi_ch] = 0;
@@ -1004,27 +897,15 @@ impl Plugin for Op505Plugin {
                         // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
                         0 => self.bank_select_msb[midi_ch] = cc_to_u7(value),
                         32 => self.bank_select_lsb[midi_ch] = cc_to_u7(value),
-                        98 => {
-                            self.nrpn_lsb = cc_to_u7(value);
-                            self.update_rpn_selection(true);
-                        }
-                        99 => {
-                            self.nrpn_msb = cc_to_u7(value);
-                            self.update_rpn_selection(true);
-                        }
-                        100 => {
-                            self.rpn_lsb = cc_to_u7(value);
-                            self.update_rpn_selection(false);
-                        }
-                        101 => {
-                            self.rpn_msb = cc_to_u7(value);
-                            self.update_rpn_selection(false);
-                        }
+                        98 => self.rpn.set_nrpn_lsb(cc_to_u7(value)),
+                        99 => self.rpn.set_nrpn_msb(cc_to_u7(value)),
+                        100 => self.rpn.set_rpn_lsb(cc_to_u7(value)),
+                        101 => self.rpn.set_rpn_msb(cc_to_u7(value)),
                         6 => self.handle_data_entry(value),
                         38 => {
                             self.data_entry_lsb = cc_to_u7(value);
-                            if let RpnSelection::Nrpn(0, lsb @ 18..=21) = self.rpn_selection {
-                                self.apply_operator_f_number_override((lsb - 18) as usize);
+                            if let ControlTarget::OperatorFNumber(op_index) = control_target(self.rpn.selection) {
+                                self.apply_operator_f_number_override(op_index as usize);
                             }
                         }
                         91 => self.effects.set_reverb_send(cc_to_u8(value)),
@@ -1062,21 +943,14 @@ impl Plugin for Op505Plugin {
                         // 残響も無い。
                         120 => {
                             self.engine.silence_group(midi_ch);
-                            self.keys_down[midi_ch] = 0;
-                            self.pending_release[midi_ch] = 0;
-                            self.pedal_down[midi_ch] = false;
-                            self.sostenuto[midi_ch] = 0;
-                            self.soft_notes[midi_ch] = 0;
+                            self.pedals[midi_ch].cc120_reset();
                         }
                         // CC123(All Notes Off)：通常のNote-Off相当（リリースして自然減衰）。
                         123 => {
                             for note in 0u8..MIDI_NOTE_COUNT {
                                 self.engine.note_off(midi_channel_note_id(channel, note));
                             }
-                            self.keys_down[midi_ch] = 0;
-                            self.pending_release[midi_ch] = 0;
-                            self.sostenuto[midi_ch] = 0;
-                            self.soft_notes[midi_ch] = 0;
+                            self.pedals[midi_ch].cc123_reset();
                         }
                         _ => {}
                     }

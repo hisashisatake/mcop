@@ -1,0 +1,27 @@
+[package]
+name = "patchlab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# op505 FMエンジンのPythonバインディング。音色設計・試聴・分析ツール群（patchlab）から
+# Python経由でエンジンを呼べるようにするPyO3拡張モジュール。
+# 由来: ym38x6/tools/patchlab（コミット 5cccac8 時点の複製、2026-08-13）。デフォーク後の
+# op505ツール群向け複製（fork-on-write）。ym38x6/tools/patchlab側の修正は自動では反映されない
+# （`git diff 5cccac8 -- ym38x6/tools/patchlab/src/lib.rs` で追従漏れを確認できる）。
+# ym38x6版は凍結資産として残し、過去の.38x6音色との聴き比べに使う。
+#
+# tools/ 配下だが他ツール（純Rust CLI・workspaceメンバー）と異なり、PyO3拡張モジュール
+# （cdylib）かつworkspace除外（root Cargo.toml の exclude 参照）。ビルドはmaturin専任。
+# パッケージ名"patchlab"はym38x6版と同名だが、両方ともworkspace除外の独立クレートで
+# 互いにpath依存されないため衝突しない。
+
+[lib]
+name = "patchlab"
+crate-type = ["cdylib"]
+
+[dependencies]
+op505-core = { path = "../../core" }
+sound-core = { path = "../../../sound/core" }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+serde_json = "1"

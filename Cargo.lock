@@ -3502,11 +3502,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "op505-midi"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "sound-fm",
+]
+
+[[package]]
 name = "op505-tools"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sound-core",
 ]
 
 [[package]]
@@ -3527,6 +3536,7 @@ dependencies = [
  "nice-plug",
  "nice-plug-egui",
  "op505-core",
+ "op505-midi",
  "op505-ui",
  "serde",
  "sound-core",
@@ -3585,6 +3595,15 @@ dependencies = [
 
 [[package]]
 name = "opzref"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "op505-tools",
+ "opz2op505",
+]
+
+[[package]]
+name = "opzref4x6"
 version = "0.1.0"
 dependencies = [
  "cc",
@@ -4565,6 +4584,16 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "smf2op505"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "op505-midi",
+ "op505-tools",
+ "sound-core",
+]
 
 [[package]]
 name = "smf2wav"
@@ -5897,6 +5926,15 @@ dependencies = [
 
 [[package]]
 name = "wavetest"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "op505-tools",
+ "sound-core",
+]
+
+[[package]]
+name = "wavetest4x6"
 version = "0.1.0"
 dependencies = [
  "ym38x6-core",

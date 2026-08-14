@@ -7,6 +7,7 @@ members = [
     "ui/codegen",
     "ym38x6/core",
     "op505/core",
+    "op505/midi",
     "op505/ui",
     "op505/vst",
     "ym38x6/ui",
@@ -16,16 +17,19 @@ members = [
     "ym38x6/tools/mucom2x6",
     "ym38x6/tools/opm2x6",
     "ym38x6/tools/opz2x6",
-    "ym38x6/tools/opzref",
+    "ym38x6/tools/opzref4x6",
     "ym38x6/tools/smf2wav",
-    "ym38x6/tools/wavetest",
+    "ym38x6/tools/wavetest4x6",
     "ym38x6/tools/vgm2x6",
     "op505/tools/common",
+    "op505/tools/opzref",
+    "op505/tools/wavetest",
     "op505/tools/opz2op505",
     "op505/tools/psr2op505",
     "op505/tools/mucom2op505",
     "op505/tools/opm2op505",
     "op505/tools/vgm2op505",
+    "op505/tools/smf2op505",
 ]
 # ym38x6/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
@@ -47,6 +51,7 @@ members = [
 # 詳細はop505/tools/common/Cargo.tomlのコメント）。
 exclude = [
     "ym38x6/tools/patchlab",
+    "op505/tools/patchlab",
     "gesture-app/editor-wasm",
     "ym38x6/ui/preview-wasm",
     "ym38x6/tools/xml-panel-dsl/preview-native",
