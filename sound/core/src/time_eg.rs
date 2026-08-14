@@ -37,10 +37,13 @@ fn build_time_seconds_table(t_min: f32, t_max: f32) -> [f32; 256] {
 
 fn time_seconds_table() -> &'static [f32; 256] {
     static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
-    TABLE.get_or_init(|| build_time_seconds_table(0.001, 30.0))
+    TABLE.get_or_init(|| build_time_seconds_table(0.001, 300.0))
 }
 
-/// time(0〜255)→秒数。0.001秒（1ms）〜30秒の指数マッピング。
+/// time(0〜255)→秒数。0.001秒（1ms）〜300秒の指数マッピング
+/// （T_MAX=300はレート方式EGの理論最遅値284.9秒(D1R/D2R rate=1・RR rate=0のフルスパン)を
+/// 余裕を持ってカバーする値。旧T_MAX=30秒はOPZ等実機の遅いレートを変換する際に約9.5倍も
+/// クロップしていた。memory `project_timeeg_time_field_16bit_consideration.md`参照）。
 /// `time=0`は「瞬時（0秒）」という、レート方式の`rate=0`＝フリーズとは意味が真逆の特殊値
 /// （混同すると事故るので明記）。
 pub fn time_to_seconds(time: u8) -> f32 {
@@ -52,10 +55,10 @@ pub fn time_to_seconds(time: u8) -> f32 {
 
 /// `time_to_seconds`の逆写像。秒数からtime値(0〜255)を逆算する
 /// （`op505-core`のAdapter、レート方式EGパラメーターからの変換で使用）。
-/// 0秒以下は`time=0`（瞬時）、30秒以上は`time=255`にクランプする。
+/// 0秒以下は`time=0`（瞬時）、300秒以上は`time=255`にクランプする。
 pub fn seconds_to_time(seconds: f32) -> u8 {
     const T_MIN: f32 = 0.001;
-    const T_MAX: f32 = 30.0;
+    const T_MAX: f32 = 300.0;
     if seconds <= 0.0 {
         return 0;
     }
@@ -123,8 +126,9 @@ pub struct TimeEg {
     level: f32,
     segment_start: f32,
     segment_end: f32,
-    /// 現在の段に入ってからの経過秒数。
-    elapsed: f32,
+    /// 現在の段に入ってからの経過秒数。T_MAX=300秒の長い段でも毎サンプル加算の丸め誤差が
+    /// 蓄積しにくいよう`f64`で保持する（他フィールドは`f32`のまま、ここだけ精度を上げる）。
+    elapsed: f64,
     releasing: bool,
     pending_start: PendingStart,
     /// note_off直後、まだ`tick`が呼ばれておらず`release_start`段のセグメント境界を
@@ -235,11 +239,11 @@ impl TimeEg {
         let cur = self.stage_index.min(stage_count - 1);
         let stage = &params.stages[cur];
         let curve = stage.curve;
-        let seconds = time_to_seconds(stage.time);
+        let seconds = time_to_seconds(stage.time) as f64;
 
-        self.elapsed += (1.0 / sample_rate) * speed_scale;
+        self.elapsed += (1.0 / sample_rate as f64) * speed_scale as f64;
 
-        let (progress, overflow) = if seconds <= f32::EPSILON {
+        let (progress, overflow): (f64, f64) = if seconds <= f64::EPSILON {
             (1.0, 0.0)
         } else {
             let p = self.elapsed / seconds;
@@ -250,7 +254,7 @@ impl TimeEg {
             }
         };
 
-        self.level = self.segment_start + (self.segment_end - self.segment_start) * progress;
+        self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
         let out = self.shaped_output(curve);
 
         if progress >= 1.0 {
@@ -261,7 +265,7 @@ impl TimeEg {
         out
     }
 
-    fn advance(&mut self, params: &TimeEgParams, cur: usize, stage_count: usize, overflow: f32) {
+    fn advance(&mut self, params: &TimeEgParams, cur: usize, stage_count: usize, overflow: f64) {
         if self.releasing {
             if cur + 1 < stage_count {
                 self.enter_stage(params, cur + 1, overflow);
@@ -290,7 +294,7 @@ impl TimeEg {
         }
     }
 
-    fn enter_stage(&mut self, params: &TimeEgParams, next: usize, overflow: f32) {
+    fn enter_stage(&mut self, params: &TimeEgParams, next: usize, overflow: f64) {
         self.stage_index = next;
         self.segment_start = self.level;
         self.segment_end = level_of(&params.stages[next]);
@@ -354,7 +358,7 @@ mod tests {
         assert_eq!(seconds_to_time(0.0), 0);
         assert_eq!(seconds_to_time(-1.0), 0);
         assert_eq!(seconds_to_time(0.0005), 1);
-        assert_eq!(seconds_to_time(30.0), 255);
+        assert_eq!(seconds_to_time(300.0), 255);
         assert_eq!(seconds_to_time(1000.0), 255);
     }
 

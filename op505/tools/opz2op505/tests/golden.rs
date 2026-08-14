@@ -240,7 +240,7 @@ fn push_patch(fp: &mut Fingerprint, voice: &OpzVoice, opts: ConvOptions) {
     fp.push(&warnings);
 }
 
-/// 特殊分岐が全部出る代表ボイス（`ar=0`フリーズ、`d1r=0`、30秒クランプ、`rs`/`kvs`最大、
+/// 特殊分岐が全部出る代表ボイス（`ar=0`フリーズ、`d1r=0`、低速レート(旧30秒クランプ相当)、`rs`/`kvs`最大、
 /// `d1l`両端、alg 0/4/7、モジュレーターTL天井の有無、`carrier_sustain=1.0`）を
 /// 可読JSONとして凍結する。フィールド差分をdiffで追えるのが目的（`eg_sweep`/`voice_sweep`は
 /// ハッシュ1本なので、壊れたときどこが変わったか分からない）。
@@ -260,7 +260,7 @@ fn representative_voices_golden() {
     v.ops[0].d1r = 0;
     voices.push(v);
 
-    // 30秒クランプ発生ケース（d2r=1、egt=0で減衰が非常に遅い）。
+    // 減衰が非常に遅いケース（d2r=1、egt=0）。T_MAX=30秒だった頃はここでクランプが発生していた。
     let mut v = baseline_voice(0);
     v.name = "ThirtySecClamp".to_string();
     v.ops[0].d2r = 1;

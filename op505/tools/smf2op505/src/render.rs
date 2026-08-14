@@ -1058,7 +1058,7 @@ mod tests {
         patch.operators[0].mul = 1;
         let mut stages = [TimeStage::default(); MAX_STAGES];
         stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
-        stages[1] = TimeStage { time: 52, level: 0, curve: 0 }; // time_to_seconds(52) ≈ 7.9ms
+        stages[1] = TimeStage { time: 52, level: 0, curve: 0 }; // time_to_seconds(52) ≈ 12.6ms
 
         patch.operators[0].eg = TimeEgParams {
             stages,

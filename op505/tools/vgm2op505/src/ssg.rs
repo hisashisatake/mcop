@@ -261,10 +261,13 @@ fn ssg_op_eg(rr_time: u8) -> TimeEgParams {
     TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, loop_end: 0, release_start: 1 }
 }
 
-/// rr=255（実機最速、旧EGレート換算で≒8.71ms）に対応するtime値。
-const RR_FAST_TIME: u8 = 54;
-/// rr=0（旧EGのフリーズしない特殊値、284.9秒）はTimeEgの上限30秒を超えるためtime=255にクランプ。
-const RR_ZERO_CLAMPED_TIME: u8 = 255;
+/// rr=255（実機最速、旧EGレート換算で≒8.71ms）に対応するtime値
+/// （`seconds_to_time`をT_MAX=300秒の現行テーブルで手計算した値。T_MAX変更時は要再計算）。
+const RR_FAST_TIME: u8 = 45;
+/// rr=0（旧EGのフリーズしない特殊値、284.9秒）に対応するtime値。
+/// T_MAX=300秒はレート方式EGの理論最遅値284.9秒を余裕を持ってカバーするため、
+/// クランプは発生しない（旧T_MAX=30秒時代はここでtime=255にクランプしていた名残の定数名）。
+const RR_ZERO_TIME: u8 = 254;
 
 /// 矩形波トーンオペレーター（[psg_patch]用、rr=255相当の最速リリース）。
 fn tone_op_fast_release(tl: u8) -> Op505OperatorParams {
@@ -286,7 +289,7 @@ fn tone_op_fast_release(tl: u8) -> Op505OperatorParams {
 
 /// 矩形波トーンオペレーター（[mix_patch]用、rr=0相当＝284.9秒をtime=255にクランプ）。
 fn tone_op_transparent_release(tl: u8) -> Op505OperatorParams {
-    Op505OperatorParams { eg: ssg_op_eg(RR_ZERO_CLAMPED_TIME), ..tone_op_fast_release(tl) }
+    Op505OperatorParams { eg: ssg_op_eg(RR_ZERO_TIME), ..tone_op_fast_release(tl) }
 }
 
 /// ノイズ専用オペレーター（波形番号32+NP、rr=255相当の最速リリース）。

@@ -45,14 +45,14 @@ const COLOR_DOT: egui::Color32 = egui::Color32::from_gray(200);
 /// `pub(crate)`昇格は`time_eg_editor`（Step 8、同一crate内）が`width_to_time`の逆写像で
 /// `log_width`と同じレンジを使う必要があるため。
 pub(crate) const TIME_MIN_SECONDS: f32 = 0.001;
-pub(crate) const TIME_MAX_SECONDS: f32 = 30.0;
+pub(crate) const TIME_MAX_SECONDS: f32 = 300.0;
 
 fn clamp_stage_count(stage_count: u8) -> usize {
     (stage_count as usize).clamp(1, MAX_STAGES)
 }
 
 /// フェーズの実測秒数を横幅の重み(0.0〜1.0)へ変換する。`eg_preview::log_width`と同じ対数正規化
-/// （`time=0`→0.0秒→重み0＝垂直＝瞬時、`time=255`→30秒→重み1.0＝最大幅）。
+/// （`time=0`→0.0秒→重み0＝垂直＝瞬時、`time=255`→300秒→重み1.0＝最大幅）。
 /// `pub(crate)`昇格せず複製するのは、フェーズ固有レンジ(AR/D1R等)を持つeg_preview版と違い
 /// TimeEgは全段が同一レンジ(TIME_MIN_SECONDS〜TIME_MAX_SECONDS)を使うため、シグネチャが異なるため。
 fn log_width(seconds: f32) -> f32 {

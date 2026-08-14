@@ -657,7 +657,7 @@ mod tests {
     fn format_time_seconds_covers_ms_and_seconds() {
         assert_eq!(format_time_seconds(0), "0m");
         assert!(format_time_seconds(1).ends_with('m'), "time=1(最速)はミリ秒表示のはず");
-        assert!(format_time_seconds(255).ends_with('s'), "time=255(30秒)は秒表示のはず");
+        assert!(format_time_seconds(255).ends_with('s'), "time=255(300秒)は秒表示のはず");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //
 // `opz2op505`/`psr2op505`/`mucom2op505`/`opm2op505`が実機レートを本モジュールの
 // レートスケールへ写像した後`convert_eg_shape`に通すことで、段割り当て・特殊ケース・
-// 30秒クランプ警告を共有する（旧`.38x6`経由の2段変換と同じ変換ロジックを直接呼ぶ形）。
+// 300秒クランプ警告を共有する（旧`.38x6`経由の2段変換と同じ変換ロジックを直接呼ぶ形）。
 // ---------------------------------------------------------------------------
 
 use sound_core::{seconds_to_time, EgParams, TimeEgParams, TimeStage, MAX_STAGES};
@@ -37,12 +37,15 @@ fn seconds_for_rr(rate: u8) -> f32 {
     1.0 / sound_core::eg::rr_to_delta(rate, 1.0)
 }
 
-/// 秒数→time値。30秒（TimeEgの上限）を超える場合は警告を積んでからクランプする
+/// 秒数→time値。300秒（TimeEgの上限）を超える場合は警告を積んでからクランプする
 /// （`seconds_to_time`自体もクランプするが、ここでは変換の実害をユーザーに可視化する）。
+/// レート方式EGの理論最遅値は284.9秒（D1R/D2R rate=1・RR rate=0のフルスパン）なので、
+/// `convert_eg_shape`経由の通常変換ではこのクランプは実質発生しない
+/// （実発生するのはレート方式の範囲を超えた入力を渡した場合のみ）。
 fn time_for_seconds(seconds: f32, warnings: &mut Vec<String>, label: &str, what: &str) -> u8 {
-    if seconds >= 30.0 {
+    if seconds >= 300.0 {
         warnings.push(format!(
-            "{label}: {what} {seconds:.1}秒はTimeEgの上限30秒を超えるためtime=255にクランプした"
+            "{label}: {what} {seconds:.1}秒はTimeEgの上限300秒を超えるためtime=255にクランプした"
         ));
     }
     seconds_to_time(seconds)
@@ -52,7 +55,7 @@ fn time_for_seconds(seconds: f32, warnings: &mut Vec<String>, label: &str, what:
 /// オペレーターEGとPitch/Cutoff/Gain FGのeg部分（`EgParams`の`delay`以外の7フィールド）が
 /// 同じ形なので、この1関数で両方をまかなう。
 /// `opz2op505`等の直接変換ツールも、実機レートをこのモジュールのレートスケール相当へ
-/// 写像した後この関数に通すことで、段割り当て・特殊ケース・30秒クランプ警告を共有する。
+/// 写像した後この関数に通すことで、段割り当て・特殊ケース・300秒クランプ警告を共有する。
 pub fn convert_eg_shape(
     ar: u8,
     d1r: u8,
@@ -284,11 +287,17 @@ mod tests {
     }
 
     #[test]
-    fn very_slow_rate_triggers_clamp_warning() {
+    fn slowest_rate_no_longer_clamps_against_300sec_ceiling() {
+        // decay_to_delta(1, 1.0)のフルスパンは284.9秒（レート方式EGの理論最遅値）。
+        // T_MAX=30秒だった頃はここで約9.5倍クロップされていたが、T_MAX=300秒への拡張後は
+        // 理論最遅値がT_MAX以内に収まるため、クランプ警告は出ない
+        // （memory `project_timeeg_time_field_16bit_consideration.md`参照）。
         let mut warnings = Vec::new();
-        // decay_to_delta(1, 1.0)のフルスパンは284.9秒 → 30秒上限を超える。
         let _ = convert_eg_shape(200, 1, 128, 0, 200, 0, 0, 0, &mut warnings, "test");
-        assert!(warnings.iter().any(|w| w.contains("30秒")), "expected a clamp warning, got {warnings:?}");
+        assert!(
+            !warnings.iter().any(|w| w.contains("クランプ")),
+            "expected no clamp warning, got {warnings:?}"
+        );
     }
 
     #[test]

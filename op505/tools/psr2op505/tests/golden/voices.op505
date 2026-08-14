@@ -16,7 +16,7 @@
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -73,22 +73,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -135,22 +135,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -197,22 +197,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -444,12 +444,12 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -506,22 +506,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -568,22 +568,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -630,22 +630,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -877,22 +877,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 46,
+                  "time": 38,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 154,
+                  "time": 126,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 255,
+                  "time": 240,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 166,
+                  "time": 136,
                   "level": 0,
                   "curve": 0
                 },
@@ -939,22 +939,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1001,22 +1001,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1063,22 +1063,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1315,17 +1315,17 @@
                   "curve": 0
                 },
                 {
-                  "time": 83,
+                  "time": 68,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 144,
+                  "time": 118,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 94,
+                  "time": 77,
                   "level": 0,
                   "curve": 0
                 },
@@ -1377,17 +1377,17 @@
                   "curve": 0
                 },
                 {
-                  "time": 83,
+                  "time": 68,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 144,
+                  "time": 118,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 94,
+                  "time": 77,
                   "level": 0,
                   "curve": 0
                 },
@@ -1439,17 +1439,17 @@
                   "curve": 0
                 },
                 {
-                  "time": 83,
+                  "time": 68,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 144,
+                  "time": 118,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 94,
+                  "time": 77,
                   "level": 0,
                   "curve": 0
                 },
@@ -1501,17 +1501,17 @@
                   "curve": 0
                 },
                 {
-                  "time": 83,
+                  "time": 68,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 144,
+                  "time": 118,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 94,
+                  "time": 77,
                   "level": 0,
                   "curve": 0
                 },
@@ -1743,7 +1743,7 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
@@ -1753,12 +1753,12 @@
                   "curve": 0
                 },
                 {
-                  "time": 217,
+                  "time": 177,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1805,7 +1805,7 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
@@ -1815,12 +1815,12 @@
                   "curve": 0
                 },
                 {
-                  "time": 217,
+                  "time": 177,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1867,7 +1867,7 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
@@ -1877,12 +1877,12 @@
                   "curve": 0
                 },
                 {
-                  "time": 217,
+                  "time": 177,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -1929,7 +1929,7 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
@@ -1939,12 +1939,12 @@
                   "curve": 0
                 },
                 {
-                  "time": 217,
+                  "time": 177,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2176,12 +2176,12 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 174,
+                  "time": 143,
                   "level": 0,
                   "curve": 0
                 },
@@ -2191,7 +2191,7 @@
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2238,12 +2238,12 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 174,
+                  "time": 143,
                   "level": 0,
                   "curve": 0
                 },
@@ -2253,7 +2253,7 @@
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2300,12 +2300,12 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 174,
+                  "time": 143,
                   "level": 0,
                   "curve": 0
                 },
@@ -2315,7 +2315,7 @@
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2362,12 +2362,12 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 174,
+                  "time": 143,
                   "level": 0,
                   "curve": 0
                 },
@@ -2377,7 +2377,7 @@
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2609,22 +2609,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2671,22 +2671,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2733,22 +2733,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -2795,22 +2795,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3042,22 +3042,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3104,22 +3104,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3166,22 +3166,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3228,22 +3228,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3475,22 +3475,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3537,22 +3537,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3599,22 +3599,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3661,22 +3661,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3908,22 +3908,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -3970,22 +3970,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4032,22 +4032,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4094,22 +4094,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4341,22 +4341,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4403,22 +4403,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 200,
+                  "time": 163,
                   "level": 230,
                   "curve": 0
                 },
                 {
-                  "time": 255,
+                  "time": 241,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4465,22 +4465,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 146,
+                  "time": 120,
                   "level": 173,
                   "curve": 0
                 },
                 {
-                  "time": 207,
+                  "time": 169,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
@@ -4527,22 +4527,22 @@
             "eg": {
               "stages": [
                 {
-                  "time": 38,
+                  "time": 32,
                   "level": 255,
                   "curve": 0
                 },
                 {
-                  "time": 200,
+                  "time": 163,
                   "level": 230,
                   "curve": 0
                 },
                 {
-                  "time": 255,
+                  "time": 241,
                   "level": 0,
                   "curve": 0
                 },
                 {
-                  "time": 157,
+                  "time": 128,
                   "level": 0,
                   "curve": 0
                 },
