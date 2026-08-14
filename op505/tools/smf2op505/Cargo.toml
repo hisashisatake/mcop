@@ -1,0 +1,23 @@
+[package]
+name = "smf2op505"
+version = "0.1.0"
+edition = "2021"
+
+# `.op505`音色バンクで標準MIDIファイル（SMF）を再生しWAVへ書き出す。
+# 由来: ym38x6/tools/smf2wav（コミットc0a86e2時点の複製、2026-08-14）のop505向け複製
+# （fork-on-write。op505デフォーク方針によりym38x6-core/smf2wavへは依存しない）。
+# CC/NRPN解釈はop505-midi（op505-vstと共有）を参照する。
+
+[lib]
+name = "smf2op505"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smf2op505"
+path = "src/main.rs"
+
+[dependencies]
+op505-core = { path = "../../core" }
+op505-midi = { path = "../../midi" }
+op505-tools = { path = "../common" }
+sound-core = { path = "../../../sound/core" }

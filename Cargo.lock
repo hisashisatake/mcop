@@ -4586,6 +4586,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "smf2op505"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "op505-midi",
+ "op505-tools",
+ "sound-core",
+]
+
+[[package]]
 name = "smf2wav"
 version = "0.1.0"
 dependencies = [
