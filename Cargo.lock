@@ -3502,6 +3502,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "op505-midi"
+version = "0.1.0"
+dependencies = [
+ "op505-core",
+ "sound-fm",
+]
+
+[[package]]
 name = "op505-tools"
 version = "0.1.0"
 dependencies = [

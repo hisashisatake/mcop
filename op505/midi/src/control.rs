@@ -1,0 +1,173 @@
+use crate::rpn::RpnSelection;
+
+/// RPN/NRPN選択状態が指し示す制御対象。CC6(Data Entry MSB)が届いたときに実際どのパラメーターへ
+/// 書き込むべきかを解決する（VST/smf2op505が独立に大きな`match`を持つと解釈がすれるため、
+/// アドレス表をこの一箇所に集約する）。
+///
+/// 利用側は`_ =>`を書かず全バリアントを列挙すること。バリアント追加時に呼び出し側も
+/// コンパイルエラーになり「片方だけ実装して解釈がすれる」が構造的に起きなくなる。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ControlTarget {
+    /// RPN(0,0): Pitch Bend Sensitivity（半音）
+    PitchBendRange,
+    /// RPN(0,5): Modulation Depth Range
+    ModulationDepthRange,
+    /// NRPN(0,0): 質感LFO Destination
+    TextureLfoDestination,
+    /// NRPN(0,1): 質感LFO Waveform
+    TextureLfoWaveform,
+    /// NRPN(0,2): Reverb Type
+    ReverbType,
+    /// NRPN(0,3): Chorus Type
+    ChorusType,
+    /// NRPN(0,4): Reverb Time
+    ReverbTime,
+    /// NRPN(0,5): Chorus Mod Rate
+    ChorusModRate,
+    /// NRPN(0,6): Chorus Mod Depth
+    ChorusModDepth,
+    /// NRPN(0,7): Chorus Feedback
+    ChorusFeedback,
+    /// NRPN(0,8): Chorus Send To Reverb
+    ChorusSendToReverb,
+    /// NRPN(0,9): Algorithm
+    Algorithm,
+    /// NRPN(0,10)〜(0,13): Waveform Op0〜3（引数はOpインデックス0〜3）
+    OperatorWaveform(u8),
+    /// NRPN(0,14): Filter Type
+    FilterType,
+    /// NRPN(0,15): Filter Self-Oscillation
+    FilterSelfOscillation,
+    /// NRPN(0,16): AT Destination
+    AtDestination,
+    /// NRPN(0,17): Poly AT Destination
+    PolyAtDestination,
+    /// NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（引数はOpインデックス0〜3）
+    OperatorFNumber(u8),
+    /// NRPN(0,22): 質感LFO Fade Mode
+    TextureLfoFadeMode,
+    /// NRPN(0,23): 質感LFO Rate
+    TextureLfoRate,
+    /// NRPN(0,24): 質感LFO Depth
+    TextureLfoDepth,
+    /// NRPN(0,25): 質感LFO Delay
+    TextureLfoDelay,
+    /// NRPN(0,26): 質感LFO Fade Time
+    TextureLfoFadeTime,
+    /// NRPN(0,27): 質感LFO Offset
+    TextureLfoOffset,
+    /// NRPN(0,28)〜(0,33)。op505のTimeEg 7本はpersist状態のためNRPNから触ると
+    /// GUI表示と実音がズレる。**欠番として予約**（ym38x6版FG Loop/Curve相当）。
+    ReservedFgLoopCurve,
+    /// NRPN(0,34): CC2(ブレス)Destination
+    Cc2Destination,
+    /// NRPN(0,35): CC4(フット)Destination
+    Cc4Destination,
+    /// 未割り当てのRPN/NRPN、または選択解除中
+    Unassigned,
+}
+
+/// RPN/NRPN選択状態から制御対象を解決する。
+pub fn control_target(selection: RpnSelection) -> ControlTarget {
+    match selection {
+        RpnSelection::None => ControlTarget::Unassigned,
+        RpnSelection::Rpn(0, 0) => ControlTarget::PitchBendRange,
+        RpnSelection::Rpn(0, 5) => ControlTarget::ModulationDepthRange,
+        RpnSelection::Rpn(_, _) => ControlTarget::Unassigned,
+        RpnSelection::Nrpn(0, 0) => ControlTarget::TextureLfoDestination,
+        RpnSelection::Nrpn(0, 1) => ControlTarget::TextureLfoWaveform,
+        RpnSelection::Nrpn(0, 2) => ControlTarget::ReverbType,
+        RpnSelection::Nrpn(0, 3) => ControlTarget::ChorusType,
+        RpnSelection::Nrpn(0, 4) => ControlTarget::ReverbTime,
+        RpnSelection::Nrpn(0, 5) => ControlTarget::ChorusModRate,
+        RpnSelection::Nrpn(0, 6) => ControlTarget::ChorusModDepth,
+        RpnSelection::Nrpn(0, 7) => ControlTarget::ChorusFeedback,
+        RpnSelection::Nrpn(0, 8) => ControlTarget::ChorusSendToReverb,
+        RpnSelection::Nrpn(0, 9) => ControlTarget::Algorithm,
+        RpnSelection::Nrpn(0, lsb @ 10..=13) => ControlTarget::OperatorWaveform(lsb - 10),
+        RpnSelection::Nrpn(0, 14) => ControlTarget::FilterType,
+        RpnSelection::Nrpn(0, 15) => ControlTarget::FilterSelfOscillation,
+        RpnSelection::Nrpn(0, 16) => ControlTarget::AtDestination,
+        RpnSelection::Nrpn(0, 17) => ControlTarget::PolyAtDestination,
+        RpnSelection::Nrpn(0, lsb @ 18..=21) => ControlTarget::OperatorFNumber(lsb - 18),
+        RpnSelection::Nrpn(0, 22) => ControlTarget::TextureLfoFadeMode,
+        RpnSelection::Nrpn(0, 23) => ControlTarget::TextureLfoRate,
+        RpnSelection::Nrpn(0, 24) => ControlTarget::TextureLfoDepth,
+        RpnSelection::Nrpn(0, 25) => ControlTarget::TextureLfoDelay,
+        RpnSelection::Nrpn(0, 26) => ControlTarget::TextureLfoFadeTime,
+        RpnSelection::Nrpn(0, 27) => ControlTarget::TextureLfoOffset,
+        RpnSelection::Nrpn(0, 28..=33) => ControlTarget::ReservedFgLoopCurve,
+        RpnSelection::Nrpn(0, 34) => ControlTarget::Cc2Destination,
+        RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
+        RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
+    }
+}
+
+/// この制御対象への書き込みが、発音中ボイスへの即時反映（次の定期同期を待たない伝播）を
+/// 必要とするかどうか。Operator F-Numberは`build_patch`の毎ブロック同期経路に乗らない
+/// 専用APIのため、この値がtrueの間は呼び出し側が発音中チャンネルを直接走査して書き込む。
+pub fn needs_voice_update(target: ControlTarget) -> bool {
+    match target {
+        ControlTarget::OperatorFNumber(_) => true,
+        ControlTarget::PitchBendRange
+        | ControlTarget::ModulationDepthRange
+        | ControlTarget::TextureLfoDestination
+        | ControlTarget::TextureLfoWaveform
+        | ControlTarget::ReverbType
+        | ControlTarget::ChorusType
+        | ControlTarget::ReverbTime
+        | ControlTarget::ChorusModRate
+        | ControlTarget::ChorusModDepth
+        | ControlTarget::ChorusFeedback
+        | ControlTarget::ChorusSendToReverb
+        | ControlTarget::Algorithm
+        | ControlTarget::OperatorWaveform(_)
+        | ControlTarget::FilterType
+        | ControlTarget::FilterSelfOscillation
+        | ControlTarget::AtDestination
+        | ControlTarget::PolyAtDestination
+        | ControlTarget::TextureLfoFadeMode
+        | ControlTarget::TextureLfoRate
+        | ControlTarget::TextureLfoDepth
+        | ControlTarget::TextureLfoDelay
+        | ControlTarget::TextureLfoFadeTime
+        | ControlTarget::TextureLfoOffset
+        | ControlTarget::ReservedFgLoopCurve
+        | ControlTarget::Cc2Destination
+        | ControlTarget::Cc4Destination
+        | ControlTarget::Unassigned => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_indices_are_zero_based() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 10)), ControlTarget::OperatorWaveform(0));
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 13)), ControlTarget::OperatorWaveform(3));
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 18)), ControlTarget::OperatorFNumber(0));
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 21)), ControlTarget::OperatorFNumber(3));
+    }
+
+    #[test]
+    fn reserved_fg_loop_curve_range_is_never_touched() {
+        for lsb in 28..=33 {
+            assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedFgLoopCurve);
+            assert!(!needs_voice_update(ControlTarget::ReservedFgLoopCurve));
+        }
+    }
+
+    #[test]
+    fn operator_f_number_needs_immediate_voice_update() {
+        assert!(needs_voice_update(ControlTarget::OperatorFNumber(0)));
+        assert!(!needs_voice_update(ControlTarget::Algorithm));
+    }
+
+    #[test]
+    fn unknown_nrpn_group_is_unassigned() {
+        assert_eq!(control_target(RpnSelection::Nrpn(1, 0)), ControlTarget::Unassigned);
+        assert_eq!(control_target(RpnSelection::None), ControlTarget::Unassigned);
+    }
+}
