@@ -134,21 +134,43 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
                           NRPN（30エントリ、ym38x6のPitch/Cutoff/Gain FG Loop/Curve=NRPN(0,28)〜(0,33)
                           はpersist状態のため欠番）・表情CC（CC1/2/4/76/77/78、全16 MIDIチャンネル
                           独立）・CC66/67/120/121/123・OP単位キーオンCC103〜106・OP単位F-Number・
-                          RPN(0,0)/(0,5)・MASTER EFFECTSの共有パネル統合まで実装済み（フェーズ2、
-                          `op505/vst/src/midi.rs`新設。参考実装は凍結済み`ym38x6-vst`）
-    tools/             ← レガシーFM音源→OP505直接変換ツール群（実機レート→TimeEg直接変換、.38x6を経由しない。
-                          op505デフォークによりym38x6-core/xxx2x6/vgm2x6への依存もゼロ）
+                          RPN(0,0)/(0,5)・MASTER EFFECTSの共有パネル統合まで実装済み（フェーズ2）。
+                          CC/NRPN解釈は`op505-midi`クレートへ切り出し済み（フェーズ5.5、旧`src/midi.rs`は
+                          削除。参考実装は凍結済み`ym38x6-vst`）
+    midi/              ← CC/NRPN解釈の共有クレート（クレート名op505-midi。フェーズ5.5新設）。
+                          `op505-vst`と`op505/tools/smf2op505`の両方が参照する、fork-on-write方針の
+                          限定的な例外（VSTと参照実装の解釈が食い違うと正誤の基準が消えるため。
+                          詳細はspec-fm.md 8章⑤）。`ControlTarget` enumがNRPNアドレス表を一元化し、
+                          `_ =>`を使わせない全列挙で解釈のずれを構造的に防ぐ。依存は`op505-core`と
+                          `sound-fm`の2本のみ
+    tools/             ← レガシーFM音源→OP505直接変換ツール群 + 検証・音作りツール群
+                          （実機レート→TimeEg直接変換、.38x6を経由しない。op505デフォークにより
+                          ym38x6-core/xxx2x6/vgm2x6への依存もゼロ）
       common/          ← クレート名op505-tools。op505ツール群専用の共有ユーティリティ
-                          （WAV書き出し・ファイル名サニタイズ・音名変換・ゴールデンテストヘルパー）。
-                          ym38x6側のsmf2wav等には依存しない複製先（fork-on-write）。詳細はCargo.tomlのコメント
+                          （WAV書き出し・ファイル名サニタイズ・音名変換・ゴールデンテストヘルパー・
+                          マスターリバーブ後段適用）。ym38x6側のsmf2wav等には依存しない複製先
+                          （fork-on-write）。詳細はCargo.tomlのコメント
       opz2op505/       ← TX81Z(OPZ/YM2414) syx → .op505直接変換（クレート名opz2op505。実機パーサ・
                           レート写像・EG変換ロジックをop505-core::eg_convert経由で自己完結。--attack bias/none/curveで
                           アタック立ち上がり表現をA/B可能、既定は`none`）
+      psr2op505/ opm2op505/ mucom2op505/ ← PSR-70/OPM/MUCOM88 → .op505直接変換（デフォーク済み、
+                          opz2op505と同型のCLI構成）
       vgm2op505/       ← VGM/VGZ → .op505+SMF/WAV直接変換（クレート名vgm2op505。演奏ロジック
                           （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理等）はym38x6/tools/vgm2x6から
                           独立複製（by-value dedupキー方式）、音色変換はopm2op505/mucom2op505の
                           voice_to_op505_patchを再利用。SSG合成パッチもOp505Patchをネイティブ構築。
                           --dump-pitch/--fb-*系はvgm2x6専用のまま非搭載（ピッチロジック共通/op505-core非搭載のため）
+      opzref/          ← ymfm(YM2414)を参照レンダラとするOPZ実機比較検証ツール（フェーズ5.5新設、
+                          opz2op505ベース。旧ym38x6版は`ym38x6/tools/opzref4x6`へ改名し凍結）
+      wavetest/        ← 非sine波形試聴ツール（フェーズ5.5新設。既存9音色は`convert_eg_shape`で
+                          レート方式EG数値を維持しつつTimeEg化、TimeEgネイティブデモも追加。
+                          旧ym38x6版は`ym38x6/tools/wavetest4x6`へ改名し凍結）
+      patchlab/        ← 音色設計ツール群（PyO3バインディング、フェーズ5.5新設。詳細は「音色設計ツール」節。
+                          旧ym38x6版`ym38x6/tools/patchlab`は凍結資産として保持）
+      smf2op505/       ← `.op505`音色バンクでSMFを再生しWAVへ書き出す（クレート名smf2op505、
+                          フェーズ5.5新設。エンジン性能検証（/perf-bench）とCC/NRPN解釈の参照実装を
+                          兼ねる。CC/NRPN解釈は`op505-midi`を参照するため`op505-vst`と常に同じ解釈になる。
+                          旧ym38x6版`ym38x6/tools/smf2wav`は凍結資産として保持）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
@@ -159,8 +181,9 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
 Cargoのワークスペースメンバーパスとパッケージ名は独立しているため、`cargo check -p sound-core`等は
 ディレクトリ位置に関わらずそのまま使える。
 
-`sound-core`・`sound-fm`・`ui-layout`・`ui-codegen`・`ym38x6-core`・`op505-core`はnice-plugにもTauriにも
-依存しない純粋なRustライブラリ。音源エンジンの変更は`sound/`と各製品の`core/`に閉じる。
+`sound-core`・`sound-fm`・`ui-layout`・`ui-codegen`・`ym38x6-core`・`op505-core`・`op505-midi`はnice-plugにも
+Tauriにも依存しない純粋なRustライブラリ。音源エンジンの変更は`sound/`と各製品の`core/`に閉じる
+（`op505-midi`はMIDI解釈層のため厳密には「音源エンジン」ではないが、同じく純粋ライブラリの原則を守る）。
 `ym38x6-core`は`algorithm`/`mapping`/`chip_lfo`/`waveform`モジュールと`TextureLfo`/`Ym38x6LfoDestination`型を
 `sound-fm`から同名で再エクスポートしており、外部クレート（`ym38x6-vst`等）は`ym38x6_core::algorithm::ALGORITHMS`
 のように従来通りのパスで参照できる（`sound-fm`直下への切り替えは不要）。
@@ -169,11 +192,11 @@ Cargoのワークスペースメンバーパスとパッケージ名は独立し
 
 ---
 
-**（2026-08-12注記）** 以下の音色試聴・性能検証スキルはym38x6（凍結）のツール群を対象にしている。
-op505版ツール（smf2op505・patchlab op505対応等）は未着手（spec-roadmap.mdフェーズ5.5参照）。
-op505版ができるまではym38x6資産の動作確認・過去知見の参照用として引き続き使える。
+**（2026-08-14注記）** 以下の音色試聴・性能検証スキルはフェーズ5.5完了によりop505版ツール群
+（`op505/tools/patchlab`・`op505/tools/smf2op505`）を対象にしている。ym38x6版（`ym38x6/tools/patchlab`・
+`ym38x6/tools/smf2wav`）は凍結資産として残っており、過去の`.38x6`音色との聴き比べ等に使える。
 
-## 音色試聴スキル（ym38x6/tools/patchlab）
+## 音色試聴スキル（op505/tools/patchlab）
 
 `.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
 `~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
@@ -185,18 +208,18 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 
 | スキル | 使い方 | 概要 |
 |---|---|---|
-| `/audition` | `/audition 4` または `/audition private/foo.38x6` | 単音 C2-C5 + ストラムアルペジオを生成 |
+| `/audition` | `/audition 4` または `/audition private/foo.op505` | 単音 C2-C5 + ストラムアルペジオを生成 |
 | `/fm-compare` | `/fm-compare 4 brightness 138,155,168` | 1パラメーターを多段比較WAVで一括生成 |
 | `/phrase` | `/phrase 7 funk` | ストラム/ファンク/バロックの定型フレーズで試聴 |
 
-## エンジン性能検証スキル（ym38x6/tools/smf2wav）
+## エンジン性能検証スキル（op505/tools/smf2op505）
 
 `.claude/skills/` にスキル定義を収録している。スラッシュコマンドとして使うには
 `~/.claude/skills/` にコピーが必要（プロジェクト内の定義はドキュメント兼 Claude 参照用）。
 
 | スキル | 使い方 | 概要 |
 |---|---|---|
-| `/perf-bench` | `/perf-bench bank.38x6 song.mid` | ym38x6/tools/smf2wavで実曲を交互A/B計測し、出力WAVのビット一致も検証しながらレンダリング性能を最適化する |
+| `/perf-bench` | `/perf-bench bank.op505 song.mid` | op505/tools/smf2op505で実曲を交互A/B計測し、出力WAVのビット一致も検証しながらレンダリング性能を最適化する |
 
 ### グローバル専用スキル（プロジェクトコード非依存）
 
@@ -215,18 +238,21 @@ Copy-Item .claude/skills/*.md "$env:USERPROFILE\.claude\skills\"
 
 ## コマンド
 
-### 音色設計ツール（ym38x6/tools/patchlab）
+### 音色設計ツール（op505/tools/patchlab）
 
 ```powershell
 # .venv 内の Python を呼び出す共通コマンド（uv で管理）
-cd ym38x6/tools/patchlab
+cd op505/tools/patchlab
 uv run python python/<script>.py
 
 # 例: オルガン族テンプレートを生成
 uv run python python/organ_template.py
 uv run python python/organ_template.py --only 16,18
-uv run python python/organ_template.py --bank private/hand_designed/organ_family.38x6
+uv run python python/organ_template.py --bank private/hand_designed/organ_family.op505
 ```
+
+ym38x6版（`ym38x6/tools/patchlab`）は凍結資産として残っており、過去の`.38x6`音色資産の参照・
+聴き比べに同じ手順で使える（`cd ym38x6/tools/patchlab`、拡張子は`.38x6`）。
 
 ### ビルド・チェック
 

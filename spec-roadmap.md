@@ -33,9 +33,9 @@ N点Time/Level方式EG）に一本化する。**
 **op505ツール群のデフォーク（ym38x6依存ゼロ化）・gesture-app既定エンジンのOP505化・
 op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op505-vstフェーズ1（DAWで鳴らす・
 編集する・プリセット選択）・op505-vstフェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等の
-MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェーズ12）。
-また`smf2wav`/`wavetest4x6`/`patchlab`/`opzref4x6`はまだym38x6専用のままで、op505向けの移行が
-残っている（フェーズ5.5）。
+MIDI表現系）・フェーズ5.5（検証・音作りツール群のop505移行、opzref/wavetest/patchlab/
+smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、詳細はフェーズ5.5・フェーズ8・
+フェーズ12）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
 
 ---
 
@@ -67,7 +67,7 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
 フェーズ4: OP単位F-Number・独立キーオンを実装（完了）
   → OPQ由来の音楽的表現を一般化して活用
 
-フェーズ5: 実機音色資産の取り込みと音作り基盤（op505直接変換ツール群への移行が完了、検証ツール群は移行中）
+フェーズ5: 実機音色資産の取り込みと音作り基盤（op505直接変換ツール群・検証ツール群とも移行完了）
   → 変換ツール群（ym38x6/tools/、凍結）: opz2x6 / vgm2x6 / psr2x6 / mucom2x6 / opm2x6
     実機・既存資産（OPZ/OPM/OPN/OPQ/PSR-70/MUCOM88）を .38x6 バンクへ変換していた
     （WAVEFORM_MEMORY_BANK+1以降。Bank 0には流用しない）
@@ -75,9 +75,9 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     `64a1de2`）: 上記5ツール全てを .op505 直接変換版（opz2op505/vgm2op505/psr2op505/
     mucom2op505/opm2op505、`op505/tools/`）へ移行済み。ym38x6-core/xxx2x6/vgm2x6への依存はゼロ
     （fork-on-write方式で複製・再構築、詳細はmemory「op505デフォーク全フェーズ完了」・spec-fm.md「デフォーク」節）
-  → 試聴・検証ツール（ym38x6/tools/、凍結・**op505版は未着手**）: smf2wav（SMF→WAV、エンジン性能検証・
+  → 試聴・検証ツール（ym38x6/tools/、凍結）: smf2wav（SMF→WAV、エンジン性能検証・
     CC/NRPN解釈の参照実装を兼ねる）/ wavetest4x6（波形試聴）/ opzref4x6（ymfm参照レンダラ、音程・配線の検算用）
-    → op505向け移行はフェーズ5.5へ
+    → **op505向け移行はフェーズ5.5で完了**（smf2op505 / wavetest / opzref、op505/tools/配下）
   → エンジン忠実度チューニング（feedback・KSR・EG曲線等、完了・ym38x6-coreで実施済み）。
     OPN/OPM忠実を保ちつつ拡張軸（8bit・非サイン波形・フィルター等）へ投資した知見は、
     op505-coreの新規EG設計（4点T/L EG検討）にも引き継がれている
@@ -86,20 +86,29 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     opz2x6/psr2x6のmod_tl_cap既定をNone（天井なし）化することで両方を改善
     （2026-07-17〜18、`ea2b998`）。op505-coreへの同様の適用状況は要確認
 
-フェーズ5.5（新設・2026-08-12）: 検証・音作りツール群のop505移行
-  → **smf2wav → op505版（仮称smf2op505）新設**: エンジン性能検証（/perf-bench）・
-    CC/NRPN解釈の参照実装（VSTと同等の解釈器）をop505-coreベースへ移植する。
-    op505-vst（フェーズ8）の設計と合わせて実施するのが効率的
-  → **wavetest → op505版新設**: 非sine波形試聴を`Op505Patch`/`Op505PresetFile`
-    （op505-core::preset.rs）ベースへ移植する
-  → **opzref のop505対応**: ymfm直結でOPZ実機を参照レンダリングする検証オラクル自体は
-    チップ非依存だが、CLIが`opz2x6`クレートの型を借用しているため、opz2op505ベースの
-    比較に使えるよう小改修が必要（`op505-tools`との連携方法は要検討）
-  → **patchlab のop505対応**: PyO3バインディング（maturin）の参照先をym38x6-coreから
-    op505-coreへ切替え、GM2テンプレート設計をop505（.op505形式）向けに再開する。
-    既存の知覚記述子分析・probe探索ロジック自体はエンジン非依存の設計のため、
-    バインディング差し替えのみで再利用できる見込み
-  → 優先順位はop505-vst（フェーズ8）着手時の必要度に応じて決定
+フェーズ5.5（新設・2026-08-12、完了・2026-08-14）: 検証・音作りツール群のop505移行
+  → `feature/op505-tools-migration`ブランチで実施。ステップ1〜4（opzref/wavetest/patchlab/
+    op505-midi+smf2op505）+ ドキュメント更新まで全て完了、developへ--no-ffマージ済み
+  → **opzref のop505対応 完了**: `op505/tools/opzref`新設（opz2op505ベース、`RegSink`トレイトで
+    実機/テスト二重化）。旧`opzref4x6`（`ym38x6/tools/opzref4x6`へリネームし凍結資産として保持）
+    とWAVハッシュ完全一致を確認済み
+  → **wavetest のop505対応 完了**: `op505/tools/wavetest`新設。`op505_core::eg_convert::convert_eg_shape`
+    経由で既存9音色×4opのレート方式EG数値を維持しつつTimeEg化、TimeEgネイティブデモ3種
+    （多段リリース・ループGain FGゲート・非単調EG）を追加。旧`wavetest4x6`は凍結資産として保持
+  → **patchlab のop505対応 完了**: `op505/tools/patchlab`新設（PyO3バインディング）。35次元
+    パラメーター空間は維持し、`vector_to_patch()`の出口で`convert_eg_shape`を一度通す設計。
+    `python/op505_patch.py`が「レート方式ノブdict→op505パッチdict」の唯一の変換入口。
+    ym38x6版（`ym38x6/tools/patchlab`）は凍結資産として保持
+  → **op505-midi クレート新設・smf2op505 新設 完了**: CC/NRPN解釈を`op505-midi`
+    （`op505/midi`）へ共有クレート化し、`op505-vst`と`smf2op505`の両方が参照する
+    （fork-on-writeの限定的な例外、詳細はspec-fm.md 8章）。`ControlTarget` enumで
+    NRPNアドレス表を一元化し`_ =>`を禁止する全列挙で解釈のずれを構造的に防止。
+    `PedalState`（CC64/66/67/120/121/123の状態機械）・`RpnTracker`・`apply_pitch_fg_expression`
+    等も共有。`op505-vst`はmidi.rsを廃しop505-midi参照へ全面移行（REAPERの既存フェーズ2
+    検証プロジェクトで全CC/NRPNマーカーの再生確認済み）。`smf2op505`は`ym38x6/tools/smf2wav`
+    から複製し、単体テスト19件を移植・実バンク+実SMFでの動作確認済み
+  → `op505-tools`に`fx`（マスターリバーブ後段適用）を追加、`/perf-bench`スキルをsmf2op505版へ切替
+  → 次はフェーズ6（GM2テンプレートのop505向け再設計）
 
 フェーズ6: 音色設計（patchlab）でGM2準拠Bank0を生成（op505向けに仕切り直し）
   → 当初は目標音声からのFMパラメーター逆算（ML/A-by-S インバース合成）を計画していたが、
@@ -112,9 +121,8 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
   → 残り13族（Chromatic Percussion(8-15)/Guitar(24-31)/Bass(32-39)/Strings(40-47)/
     Ensemble(48-55)/Reed(64-71)/Pipe(72-79)/Synth Lead(80-87)/Synth Pad(88-95)/
     Synth Effects(96-103)/Ethnic(104-111)/Percussive(112-119)/Sound Effects(120-127)）は
-    未着手のまま。op505向けpatchlab移行（フェーズ5.5）完了後に着手
-  → 同一リポジトリ内の ym38x6/tools/patchlab/ に収録（配置はそのまま。op505向け改修時に
-    ディレクトリ移動の要否も判断）
+    未着手のまま。**op505向けpatchlab移行（フェーズ5.5）が完了したため着手可能**
+  → `op505/tools/patchlab/` に収録（フェーズ5.5でym38x6/tools/patchlab/から複製・移行済み）
 
 フェーズ7: MC-505風モジュレーション拡張（完了・共有基盤としてop505に継承）
   → 実装層は sound-core。FMをVCOと見なし後段にアナログシンセ的なVCF/VCA/VCO変調層を被せる
@@ -263,6 +271,7 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     質感LFOは固定1基であり、モッドマトリクスではない（配線先はDestination enumの4種に固定）
   → **ステップ7〜10・smf2wav対応（ステップ9）の実装対象はym38x6-vst/ym38x6/tools/smf2wavだった。
     op505-vst新設時（フェーズ8）・smf2op505新設時（フェーズ5.5）に同等の配線を行う必要がある**
+    → **両方完了**（op505-vstフェーズ2、フェーズ5.5、2026-08-14時点）
 
 フェーズ8: パラメーターUI・音色運用（op505向けに再定義）
   → **op505用VST3/CLAPプラグイン（`op505-vst`）フェーズ1完了**（2026-08-12、`op505/vst`新設）。
@@ -346,6 +355,6 @@ MIDI表現系）が完了**（2026-08-12時点、詳細はフェーズ8・フェ
     `ui-layout`/`ui-codegen`を製品非依存の共有クレートとして整理
   → **op505-vstフェーズ1完了**（2026-08-12、`op505/vst`新設）: 詳細はフェーズ8参照
   → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系。詳細はフェーズ8参照
-  → 残タスクはフェーズ5.5（smf2wav/wavetest4x6/opzref4x6/patchlabのop505移行）・フェーズ6（GM2テンプレート
-    のop505向け再設計）に整理済み
+  → **フェーズ5.5完了**（2026-08-14、smf2wav/wavetest4x6/opzref4x6/patchlabのop505移行、
+    op505-midi共有クレート化含む）。残タスクはフェーズ6（GM2テンプレートのop505向け再設計）
 ```
