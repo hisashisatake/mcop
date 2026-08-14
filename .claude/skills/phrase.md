@@ -21,9 +21,9 @@
 
 1. 引数を解析して `--prog` / `--bank` / `--type` を決定する
 
-2. `ym38x6/tools/patchlab` ディレクトリで以下を実行:
+2. `op505/tools/patchlab` ディレクトリで以下を実行:
    ```powershell
-   cd "c:\Users\satake\source\repos\ym38x6\tools\patchlab"
+   cd "c:\Users\satake\source\repos\ym38x6\op505\tools\patchlab"
    # prog 番号指定
    uv run python python\phrase.py --prog <prog> [--type <type>]
    # バンクファイル指定
