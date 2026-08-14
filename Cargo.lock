@@ -3535,6 +3535,7 @@ dependencies = [
  "nice-plug",
  "nice-plug-egui",
  "op505-core",
+ "op505-midi",
  "op505-ui",
  "serde",
  "sound-core",
