@@ -119,7 +119,7 @@ pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
                 ui.add(Knob::for_handle(handle).with_diameter(28.0));
             });
             // 数値欄＋スピンボタン
-            spin_control(ui, handle, egui::TextStyle::Small);
+            spin_control(ui, handle, egui::TextStyle::Small, 24.0);
         },
     );
 }
@@ -199,8 +199,11 @@ pub(crate) fn repeat_button(ui: &mut egui::Ui, label: &str) -> bool {
 ///   フォーカス中はカーソルキー↑↓でも1ステップずつ増減できる
 /// - ＋−：長押しで連続増減（±1、`[min, max]`へクランプ）
 /// `text_style`は数値欄のフォントサイズ（ノブの並びでは`TextStyle::Small`、他のUI要素と大きさを
-/// 揃えたい単体使用では`TextStyle::Body`等を指定する）。
-pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: egui::TextStyle) {
+/// 揃えたい単体使用では`TextStyle::Body`等を指定する）。`desired_width`は数値欄(px)。
+/// 桁数はハンドルごとに異なる（0〜255の3桁からミリ秒表示の6桁まで）ため、呼び出し側が
+/// 明示する（旧実装は`text_style`から24px/44pxの2択を自動選択していたが、TimeEgのTIME欄が
+/// 300000msまで表示するようになり2択では足りなくなったため呼び出し側指定へ変更）。
+pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: egui::TextStyle, desired_width: f32) {
     let (min, max) = (handle.min(), handle.max());
     let set = |value: i32| {
         handle.begin_edit();
@@ -229,7 +232,6 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
         } else {
             handle.display()
         };
-        let desired_width = if text_style == egui::TextStyle::Small { 24.0 } else { 44.0 };
         let response = ui.add(
             egui::TextEdit::singleline(&mut text)
                 .id(id)

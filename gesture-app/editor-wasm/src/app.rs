@@ -461,7 +461,7 @@ impl eframe::App for EditorApp {
                         target: target.clone(),
                         identity: self.identity(),
                     };
-                    ym38x6_ui::spin_control(ui, &bank_field, egui::TextStyle::Body);
+                    ym38x6_ui::spin_control(ui, &bank_field, egui::TextStyle::Body, 44.0);
                 });
                 let file_label = self.current_file_name.borrow().clone().unwrap_or_else(|| "(unsaved)".to_string());
                 let mark = if self.unsaved_changes.get() { "*" } else { "" };

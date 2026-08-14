@@ -2,13 +2,14 @@
 // TimeEg 1本ぶんの編集UI（OP505のOP1〜4/PITCH FG/CUTOFF FG/GAIN FG各パネル用、Step 8）。
 //
 // `time_eg_preview`（読み取り専用の折れ線プレビュー）の姉妹モジュールで、実際に値を編集できる
-// ようにしたもの。Step 7の判断ゲートで確定した「折れ線ドラッグ編集とノブ編集をタブで切り替える
-// ハイブリッド方式」を実装する。
+// ようにしたもの。Step 7の判断ゲートで確定した「折れ線ドラッグ編集と数値編集をタブで切り替える
+// ハイブリッド方式」を実装する（数値編集側は当初KNOBS=ノブ主体だったが、STAGES=8だと横に
+// 並びきらずスクロール必須になる問題が実機確認で判明し、VALUE=spin_control主体へ変更した）。
 //
 // 段×フィールドごとに`IntParamHandle`を196個(28値×7本)構築するのは高コストなので、
 // `TimeEgHandle`（EG1本ぶんの値ハンドル、`param_handle.rs`）を起点に、このモジュール内だけで
 // 使う使い捨てアダプター（`TimeEgFieldHandle`/`TimeEgBoolFieldHandle`）を都度導出して
-// 既存の`knob`/`spin_control`/`bool_checkbox`（`IntParamHandle`/`BoolParamHandle`前提）へ渡す。
+// 既存の`spin_control`/`bool_checkbox`（`IntParamHandle`/`BoolParamHandle`前提）へ渡す。
 // ---------------------------------------------------------------------------
 
 use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
@@ -16,21 +17,22 @@ use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
 use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL};
-use crate::knob::{bool_checkbox, knob, spin_control};
+use crate::knob::{bool_checkbox, spin_control};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, time_eg_preview, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
+use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
-/// ヘッダ行（EG名+GRAPH/KNOBSタブ）の見込み高さ（px）。`time_eg_editor`の固定枠`size`から
-/// 差し引いてコンテンツ領域（GRAPH/KNOBS）の高さを導出するための概算値。実際の描画高と
-/// px単位で厳密には一致しない（フォントメトリクス依存）が、GRAPH/KNOBS切替・段数変更で
+/// ヘッダ行（EG名+GRAPH/VALUEタブ）の見込み高さ（px）。`time_eg_editor`の固定枠`size`から
+/// 差し引いてコンテンツ領域（GRAPH/VALUE）の高さを導出するための概算値。実際の描画高と
+/// px単位で厳密には一致しない（フォントメトリクス依存）が、GRAPH/VALUE切替・段数変更で
 /// 枠の外形自体は変わらないため実用上問題ない（Step 2の固定枠化）。
 const HEADER_HEIGHT: f32 = 20.0;
 /// STAGES/LOOP/L.START/L.END/RELのspin行（`stage_spin_row`）の見込み高さ（px）。
 /// `HEADER_HEIGHT`と同じ扱い。
 const SPIN_ROW_HEIGHT: f32 = 35.0;
-/// KNOBSモードの小プレビューの幅（px）。高さはコンテンツ領域いっぱいに伸ばす（`draw_knobs_mode`）。
-const KNOBS_PREVIEW_WIDTH: f32 = 130.0;
 const GRAPH_PAD: f32 = 6.0;
+/// VALUEモードのTIME欄の数値欄幅（px）。ミリ秒表示は最大`300000`(6桁)になるため、
+/// 他の数値欄(24px、最大3桁の0〜255向け)より広く取る。見た目は実機確認で微調整する。
+const TIME_MS_SPIN_WIDTH: f32 = 56.0;
 
 /// ドラッグでlevelを0へスナップする、グラフ下端からの距離（px）。TL<255時、`DB_FLOOR`付近の
 /// 逆写像が縮退する（複数のlevelがほぼ同じdBに潰れる）ことの吸収策（Step D）。
@@ -54,11 +56,11 @@ const LOOP_MARKER_OFFSET: f32 = 6.0;
 /// ループ区間マーカー（三角形）の半径（px）。
 const LOOP_MARKER_RADIUS: f32 = 4.0;
 
-/// GRAPH/KNOBSタブの選択状態。パッチデータではないためegui memoryに保持する（`time_eg_editor`参照）。
+/// GRAPH/VALUEタブの選択状態。パッチデータではないためegui memoryに保持する（`time_eg_editor`参照）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Graph,
-    Knobs,
+    Value,
 }
 
 /// GRAPHモードでドラッグ中の対象。フレーム跨ぎでegui memoryに保持する
@@ -66,7 +68,7 @@ enum Mode {
 /// （`stage_of_point[point]`で対応する段が分かる）。`LoopStart`/`LoopEnd`はループ区間マーカー
 /// （現在保持区間として描画されている頂点、すなわち`0..=loop_end`の範囲にのみスナップできる。
 /// `loop_end`を現在より後ろへ伸ばしたい場合はまだ描画されていない段にスナップ先が無いため、
-/// L.ENDのspin_control（`stage_spin_row`）を使う——GRAPH/KNOBS両モードに共通のこの行を
+/// L.ENDのspin_control（`stage_spin_row`）を使う——GRAPH/VALUE両モードに共通のこの行を
 /// 残している理由の一つ）。
 #[derive(Clone, Copy)]
 enum DragTarget {
@@ -213,9 +215,10 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn display(&self) -> String {
         match self.field {
-            // 生値(0〜255)ではなく実秒数を表示する（スピン欄の直接入力は生値のみ受け付ける、
-            // param_handle.rsのTimeEgHandle docコメント参照）。
-            TimeEgField::StageTime(_) => format_time_seconds(self.value().clamp(0, 255) as u8),
+            // 生値(0〜255)ではなく実ミリ秒を表示する（スピン欄の直接入力は生値のみ受け付ける、
+            // param_handle.rsのTimeEgHandle docコメント参照）。単位記号は付けない
+            // （VALUEモードの列見出し「TIME(m)」側でまとめて示す、`format_time_ms_plain`参照）。
+            TimeEgField::StageTime(_) => format_time_ms_plain(self.value().clamp(0, 255) as u8),
             _ => self.value().to_string(),
         }
     }
@@ -304,9 +307,8 @@ impl BoolParamHandle for TimeEgBoolFieldHandle<'_> {
 /// time値(0〜255)を人が読める秒数表示へ変換する（"0ms"/"1.8ms"/"412ms"/"2.41s"）。
 /// `time=0`は瞬時を表す特殊値なので秒数計算を経由せず"0ms"を返す。
 fn format_time_seconds(time: u8) -> String {
-    // 単位は1文字("m"=ミリ秒/"s"=秒)に短縮する。KNOBSモードのspin_control欄が24px幅しかなく
+    // 単位は1文字("m"=ミリ秒/"s"=秒)に短縮する。VALUEモードのspin_control欄が24px幅しかなく
     // "56ms"のような2文字単位だと末尾が切れて読めなくなるため（実機確認で発覚）。
-    // 正確な値はknob()のホバーツールチップ(name+display)で確認できる。
     if time == 0 {
         return "0m".to_string();
     }
@@ -318,12 +320,22 @@ fn format_time_seconds(time: u8) -> String {
     }
 }
 
+/// time値(0〜255)をミリ秒の素の数値（単位記号なし）へ変換する。VALUEモードのspin_control専用
+/// （列見出し「TIME(m)」で単位をまとめて示すため、値欄ごとに"m"/"s"を付けない。GRAPHモードの
+/// ドラッグ中フローティング表示は`format_time_seconds`のまま——見出しが無い文脈では単位が要る）。
+fn format_time_ms_plain(time: u8) -> String {
+    if time == 0 {
+        return "0".to_string();
+    }
+    format!("{:.0}", time_to_seconds(time) * 1000.0)
+}
+
 /// GRAPHモードのY座標(px)をlevel(0〜255)へ逆写像する（Step Dのドラッグ編集が使う）。
 /// `inner`は`time_eg_editor_layout`に渡したのと同じ描画可能領域。軸の床は`axis_floor_db`で
 /// パネル種別ごとに決まる（`layout_impl`の描画側と必ず同じ床を使う。ずれると見た目の点位置と
 /// ドラッグ後の実際の値が食い違う）。床付近では複数のlevelがほぼ同じdBに潰れて逆写像が縮退するため、
 /// 床から`FLOOR_SNAP_PX`以内はlevel=0へスナップし、天井（`tl_db`）を超える位置は255へクランプする
-/// （縮退帯の精密編集はKNOBSモードが受け皿になる）。
+/// （縮退帯の精密編集はVALUEモードが受け皿になる）。
 fn y_to_level(mapping: EgAmplitudeMapping, tl: u8, inner: Rect, y: f32) -> u8 {
     if inner.bottom() - y <= FLOOR_SNAP_PX {
         return 0;
@@ -411,12 +423,12 @@ fn remove_stage(params: &TimeEgParams, index: usize) -> TimeEgParams {
     out
 }
 
-/// STAGES/LOOP/L.START/L.END/RELのspin行（GRAPH/KNOBS両モード共通、旧`time_eg_block`相当）。
+/// STAGES/LOOP/L.START/L.END/RELのspin行（GRAPH/VALUE両モード共通、旧`time_eg_block`相当）。
 fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("STAGES").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount), egui::TextStyle::Small);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount), egui::TextStyle::Small, 24.0);
         });
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("LOOP").size(8.0));
@@ -424,46 +436,63 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle) {
         });
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("L.START").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart), egui::TextStyle::Small);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart), egui::TextStyle::Small, 24.0);
         });
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("L.END").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopEnd), egui::TextStyle::Small);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopEnd), egui::TextStyle::Small, 24.0);
         });
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("REL").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleaseStart), egui::TextStyle::Small);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleaseStart), egui::TextStyle::Small, 24.0);
         });
     });
 }
 
-/// KNOBSモード: 左に小プレビュー、右に段ぶんのTIME/LEVEL/CURVE列を水平ScrollAreaで収める。
+/// VALUEモード: 段ぶんのTIME/LEVEL/CURVE行を垂直ScrollAreaで収める（1段=1横並び行、
+/// 段が増えると下に伸びる。GRAPHタブに切り替えれば同じ形をいつでも見られるため、
+/// 小プレビューは重複表示として置かない——実機確認で「要らない」と判明）。
+/// TIME/LEVELは`knob`(62×66のダイヤル込みセル)ではなく`spin_control`(数値欄のみ)を使う。
+/// ダイヤルは場所を取りすぎてSTAGES=8だと並びきらずスクロール必須になっていたため、
+/// 数値欄だけに絞って1段あたりの専有面積を削る（実機確認で「数値欄のみでいい」と判明）。
+/// 段番号("S1"等)は付けない（縦に並ぶ行の並び順が段番号を兼ねる——実機確認で「要らない」と判明）。
+/// 1段は1行構成: TIME(m)+LV+CVチェックを横一列に並べる（実機確認でこの割り付けを指定）。
+/// 行ごとに独立した`ui.horizontal`だと、TIME欄の桁数（"0"〜"300000"）で実際の描画幅が
+/// 行ごとに微妙に変わり、LV欄以降の開始位置が段によってずれて見えた（実機確認で発覚）ため、
+/// `egui::Grid`で列位置を強制的に揃える。
 /// `size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を差し引いた残り）。
 /// 段数1〜8でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
-fn draw_knobs_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle) {
     let params = handle.params();
-    let preview_size = Vec2::new(KNOBS_PREVIEW_WIDTH, size.y);
     let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
-    ui.horizontal(|ui| {
-        time_eg_preview(ui, preview_size, mapping, tl, params);
-        egui::ScrollArea::horizontal()
-            .id_salt(("time_eg_editor", handle.name(), "knobs_scroll"))
-            .max_height(size.y)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_height(size.y);
-                ui.horizontal(|ui| {
+    egui::ScrollArea::vertical()
+        .id_salt(("time_eg_editor", handle.name(), "value_scroll"))
+        .max_height(size.y)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(size.x);
+            egui::Grid::new(("time_eg_editor", handle.name(), "value_grid"))
+                .num_columns(5)
+                .spacing([4.0, 2.0])
+                // 既定の最小列幅（ボタン程度）だと"LV"のような短いラベル列に余白が残るため0にする
+                // （実機確認で「ラベルと数値欄の間が離れている」と判明）。
+                .min_col_width(0.0)
+                .show(ui, |ui| {
                     for i in 0..n {
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(format!("S{}", i + 1)).size(8.0));
-                            knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i)), "TIME");
-                            knob(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i)), "LEVEL");
-                            bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CURVE");
-                        });
+                        ui.label(egui::RichText::new("TIME(m)").size(8.0));
+                        spin_control(
+                            ui,
+                            &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i)),
+                            egui::TextStyle::Small,
+                            TIME_MS_SPIN_WIDTH,
+                        );
+                        ui.label(egui::RichText::new("LV").size(8.0));
+                        spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i)), egui::TextStyle::Small, 24.0);
+                        bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CV");
+                        ui.end_row();
                     }
                 });
-            });
-    });
+        });
 }
 
 /// GRAPHモード: 折れ線をコンテンツ領域いっぱいに描画し、頂点のドラッグ（time/level編集）・
@@ -620,9 +649,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     });
 }
 
-/// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/KNOBSタブ＋STAGES等のspin行）。
-/// `size`は外形の固定枠（Step 2）。GRAPH↔KNOBS切替・段数(1〜8)変更で`size`自体は変わらず、
-/// KNOBSモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
+/// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/VALUEタブ＋STAGES等のspin行）。
+/// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜8)変更で`size`自体は変わらず、
+/// VALUEモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
 /// `handle.name()`はegui memoryのId salt兼見出しラベルに使うため、呼び出し側で
 /// EGごとに一意な名前（"OP1 EG"/"PITCH FG"等）を渡すこと。
@@ -634,13 +663,13 @@ pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mappin
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(handle.name()).size(9.0));
             ui.selectable_value(&mut mode, Mode::Graph, "GRAPH");
-            ui.selectable_value(&mut mode, Mode::Knobs, "KNOBS");
+            ui.selectable_value(&mut mode, Mode::Value, "VALUE");
         });
 
         let content_size = Vec2::new(size.x, (size.y - HEADER_HEIGHT - SPIN_ROW_HEIGHT).max(0.0));
         match mode {
             Mode::Graph => draw_graph_mode(ui, content_size, handle, mapping, tl),
-            Mode::Knobs => draw_knobs_mode(ui, content_size, handle, mapping, tl),
+            Mode::Value => draw_value_mode(ui, content_size, handle),
         }
 
         stage_spin_row(ui, handle);
