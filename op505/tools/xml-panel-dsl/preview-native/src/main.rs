@@ -15,8 +15,8 @@ use ui_core::interpret::{draw_panel_from_ir, HandleStore};
 /// エディタでTabキーが押されたときのインデント幅（4スペース）。
 const IND: &str = "    ";
 
-/// `panel.xml`正本の既定パス（`CARGO_MANIFEST_DIR`基準、CWDに依存しない）。既定はym38x6側
-/// （「ファイルを開く」で`op505/ui/src/panel.xml`へ切り替えられる）。
+/// `panel.xml`正本の既定パス（`CARGO_MANIFEST_DIR`基準、CWDに依存しない）。既定はop505側
+/// （op505が主力、ym38x6は凍結。「ファイルを開く」で`ym38x6/ui/src/panel.xml`へ切り替えられる）。
 fn default_xml_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../ui/src/panel.xml")
 }

@@ -1,10 +1,16 @@
-# xml-panel-dsl — パネルレイアウトXML DSL（ym38x6-ui/op505-ui共通、2026-08-09改訂）
+# xml-panel-dsl — パネルレイアウトXML DSL（op505-ui/ym38x6-ui共通、2026-08-14改訂）
 
-`ym38x6-ui`/`op505-ui`の`panel.rs`（VST/gesture-app 共有の音色エディタ・ノブパネル）のレイアウトを
-XMLで宣言的に記述し、実egui描画プレビューと `draw_param_panel()`/`draw_op505_panel()` 本体の
+`op505-ui`/`ym38x6-ui`の`panel.rs`（VST/gesture-app 共有の音色エディタ・ノブパネル）のレイアウトを
+XMLで宣言的に記述し、実egui描画プレビューと `draw_op505_panel()`/`draw_param_panel()` 本体の
 Rustコードを同じXMLパース結果から生成する、自己完結の HTML ツール。プレビュー描画の
 インタープリタ（`interpret.rs`）はチップ非依存の`ui-core`へ移設済みのため、
-`ym38x6-ui/src/panel.xml`・`op505-ui/src/panel.xml`のどちらも同じツールで開ける。
+`op505-ui/src/panel.xml`・`ym38x6-ui/src/panel.xml`のどちらも同じツールで開ける。
+
+**2026-08-14: `ym38x6/tools/xml-panel-dsl`から`op505/tools`へ移動**（op505が主力、ym38x6は凍結の
+ため）。`preview-native`の起動時自動読み込み先もこの移動に伴い`op505/ui/src/panel.xml`へ切り替わった
+（相対パス`CARGO_MANIFEST_DIR/../../../ui/src/panel.xml`は変更していないが、ディレクトリの祖先が
+`op505/tools/xml-panel-dsl`になったことで解決先が変わる）。同様に`preview-wasm`クレート本体も
+`ym38x6/ui/preview-wasm`から`op505/ui/preview-wasm`へ移動した。
 
 依存・ビルド不要。ブラウザで `index.html` を開くだけで動く（外部リソース参照なし）。
 
@@ -26,12 +32,12 @@ IRの`Widget`記述子をmatchし、`ui-codegen`と同じ構造化記述子か�
 （「コード生成→ブラウザでコンパイル」は不可能だが「IR→インタープリタ」は可能、という発想）。
 これを3ターゲットで共有する：
 
-- **ネイティブ（VST/gesture-app）**: `ym38x6-ui`/`op505-ui`それぞれの`build.rs`が`ui-codegen`を
+- **ネイティブ（VST/gesture-app）**: `op505-ui`/`ym38x6-ui`それぞれの`build.rs`が`ui-codegen`を
   build-dependencyとして呼び、各`src/panel.xml`（正本）から`$OUT_DIR/panel_generated.rs`を生成する。
   `panel.rs`はこれを`include!`するだけで、手動でのコード貼り替えは不要
   （XMLを編集して`cargo build`し直すだけで反映される）。`preview`フィーチャは無効のままビルドされ、
   XMLパーサー（roxmltree等）やインタープリタは製品バイナリに含まれない。
-- **ブラウザ（このツール）**: `ym38x6-ui/preview-wasm`が`ui-core`（`features=["preview"]`）を
+- **ブラウザ（このツール）**: `op505-ui/preview-wasm`が`ui-core`（`features=["preview"]`）を
   wasm-bindgen＋eframeでラップし、`build-preview-wasm.ps1`が`wasm32-unknown-unknown`向けにビルド。
   生成された`--target no-modules`のJSグルーコードと、base64エンコードした
   wasmバイナリ本体を、`index.html`内の`<!-- BEGIN/END GENERATED -->`マーカー間に
@@ -53,8 +59,8 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 **初期状態は空（2026-07-26）**。以前は`panel.xml`のコピーを初期サンプルとして`index.html`に
 埋め込んでいたが、正本を編集するたびに黙って陳腐化するため撤去した（実際に2026-07-26時点で
 「正本と同一内容」というコメントを付けたまま数世代分ずれていた）。起動後は
-**「ファイルを開く」か、エディタへのドラッグ&ドロップ**で`ym38x6/ui/src/panel.xml`・
-`op505/ui/src/panel.xml`のどちらかを読み込む。
+**「ファイルを開く」か、エディタへのドラッグ&ドロップ**で`op505/ui/src/panel.xml`・
+`ym38x6/ui/src/panel.xml`のどちらかを読み込む。
 
 `file://`で開いたページから`panel.xml`を**自動で読み込むことはできない**。
 `fetch()`は`file:`スキームを一切サポートせず、`XMLHttpRequest`もブラウザ起動時に
@@ -70,7 +76,7 @@ DOM操作・ファイル開く/保存・プレビュー分離・キャンバス�
 
 **Rust出力タブは廃止済み（2026-07-26）**。`preview-wasm`は代わりにXMLの妥当性検査のみを行う
 `validate_xml`を公開し、上部OK/NGバッジの表示に使う。`ui_codegen::generate_rust`自体
-（実際に`ym38x6-ui/build.rs`が使う本番のコード生成関数）は削除しておらず、生成結果を
+（実際に`op505-ui/build.rs`が使う本番のコード生成関数）は削除しておらず、生成結果を
 目視したい場合は下記`preview-native`の「Rust出力を表示」チェックボックスを使う
 （プレビューと生成コード表示を1ウィンドウに同居させる意味が薄いため、HTML版はプレビュー専用に寄せた）。
 
@@ -89,9 +95,9 @@ cd tools\xml-panel-dsl\preview-native
 cargo run   # scoop版の既定cargoでビルド可（wasm32/rustup/wasm-bindgen不要）
 ```
 
-**起動時に`ym38x6/ui/src/panel.xml`正本を自動で読み込み、rfdの保存ダイアログで同じパスへ
+**起動時に`op505/ui/src/panel.xml`正本を自動で読み込み、rfdの保存ダイアログで同じパスへ
 上書きできる**（`CARGO_MANIFEST_DIR`基準の相対パスなのでCWDに依存しない。既定は
-ym38x6側だが、「ファイルを開く」で`op505/ui/src/panel.xml`へ切り替えて編集・保存も可能）。
+op505側だが、「ファイルを開く」で`ym38x6/ui/src/panel.xml`へ切り替えて編集・保存も可能）。
 ブラウザ版は
 サンドボックスの制約でこれができない（読み込みは手動、保存はダウンロードフォルダ行き）ため、
 `build.rs`が`rerun-if-changed=src/panel.xml`で拾う「編集→`cargo build`→VST/gesture-appへ反映」

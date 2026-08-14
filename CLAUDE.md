@@ -104,13 +104,13 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
     layout/            ← クレート名ui-layout。taffyベースのパネルレイアウト計算（egui非依存の純粋クレート）
     codegen/           ← クレート名ui-codegen。パネルXML DSL（panel.xml）のパーサー・IR・Rustコード生成器
                           （egui非依存。矩形計算はui-layoutへ委譲。各uiクレートのbuild.rsが呼ぶ。
-                           詳細はym38x6/tools/xml-panel-dsl/README.md）
+                           詳細はop505/tools/xml-panel-dsl/README.md）
   ym38x6/              ← 38x6製品一式（レート方式5段EG）
     core/              ← 38x6 FMエンジン実装（クレート名ym38x6-core。sound-core/sound-fmに依存、Vco実装の一つ。波形メモリ音色も生成）
     ui/                ← エディタパネル定義（クレート名ym38x6-ui。egui+sound-core+ui-coreに依存。VST/gesture-app両対応）。
                           `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成
     vst/               ← 38x6 VST3/CLAPプラグイン（クレート名ym38x6-vst。nice-plug）
-    tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref4x6/vgm2x6/smf2wav/wavetest4x6/patchlab/xml-panel-dsl等）
+    tools/             ← レガシーFM音源コンバーター群・音色設計/性能検証ツール（psr2x6/mucom2x6/opm2x6/opz2x6/opzref4x6/vgm2x6/smf2wav/wavetest4x6/patchlab等。xml-panel-dslは2026-08-14にop505/tools/へ移動）
       vgm2x6/          ← VGM/VGZ→.38x6+SMF/WAV変換（lib+binの2ターゲット構成。演奏ロジック
                           （VGM逐次デコード・OPM/OPN二系統・SSGコアレス処理・PatchBank<C>等）を
                           lib側（src/play.rs等）に持つ。op505/tools/vgm2op505はop505デフォーク
@@ -123,7 +123,9 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
                           ym38x6-coreへの依存は`[dev-dependencies]`のみ（examples/op505_probe.rsが
                           既存.38x6からの変換に使う。旧adapter.rsは廃止済み）。
                           .op505バンク形式はpreset.rsのOp505PresetFile/Entry（.38x6のPresetFile/Entry相当）
-    ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）
+    ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）。
+                          `preview-wasm/`（xml-panel-dsl用のwasm-bindgenラッパー、2026-08-14に
+                          `ym38x6/ui/preview-wasm`から移動）が同居。ワークスペース非メンバー
     vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了
                           2026-08-12、フェーズ2完了2026-08-12）。
                           パラメーターDAWパラメーター75個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
@@ -171,6 +173,9 @@ wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.
                           フェーズ5.5新設。エンジン性能検証（/perf-bench）とCC/NRPN解釈の参照実装を
                           兼ねる。CC/NRPN解釈は`op505-midi`を参照するため`op505-vst`と常に同じ解釈になる。
                           旧ym38x6版`ym38x6/tools/smf2wav`は凍結資産として保持）
+      xml-panel-dsl/   ← panel.xmlのXML DSL編集・プレビューツール（自己完結HTML + preview-native、
+                          op505-ui/ym38x6-ui共通。2026-08-14に`ym38x6/tools`から移動、`preview-native`の
+                          既定読み込み先も`op505/ui/src/panel.xml`へ切り替え。詳細はREADME.md）
   gesture-app/         ← 作曲支援Tauriアプリ
     src-tauri/         ← Rustバックエンド（cpalで音声出力）
     src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
