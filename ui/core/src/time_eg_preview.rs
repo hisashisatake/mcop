@@ -40,6 +40,9 @@ const DEFAULT_HEIGHT: f32 = 66.0;
 const PAD: f32 = 6.0;
 pub(crate) const DOT_RADIUS: f32 = 2.5;
 const COLOR_DOT: egui::Color32 = egui::Color32::from_gray(200);
+/// points[0](note-on開始点、常にlevel=0固定でドラッグ対象外)専用の色。他の頂点と同じ塗り丸だと
+/// 「動かせそう」に見えてしまう(実機確認で判明)ため、輪郭のみの控えめな丸で区別する。
+const COLOR_DOT_START: egui::Color32 = egui::Color32::from_gray(110);
 
 /// `time_to_seconds`が写す秒数レンジ（`sound_core::time_eg`のT_MIN/T_MAXと一致させること）。
 /// `pub(crate)`昇格は`time_eg_editor`（Step 8、同一crate内）が`width_to_time`の逆写像で
@@ -84,6 +87,11 @@ pub struct TimeEgGeometry {
     pub loop_span: Option<(usize, usize)>,
     /// リリースが始まる`points`上のindex（＝保持区間の最後の頂点）。
     pub release_point: usize,
+    /// STAGE=1（全区間が1段だけ）のとき、保持側と完全に同じ段を指すリリース側の頂点index。
+    /// 別の値を編集できるわけではなく「ノートオフ後もレベルが変化せず持続する」ことを示す
+    /// だけの目印なので、グラフ右端に固定しドラッグ対象外にする（`points[0]`と同じ扱い）。
+    /// STAGE>=2では常に`None`。
+    pub sustain_terminal_point: Option<usize>,
     /// 1段(重み1.0)あたりのピクセル数（`width / drawn_count`）。Step 8のGRAPHモードが
     /// ドラッグ位置から`time`を逆算する（`width_to_time`）際、このレイアウト計算時と
     /// 同じ`scale`を使う必要があるため公開する。
@@ -174,7 +182,18 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     });
     let release_point = held_sequence.len();
 
-    TimeEgGeometry { points, stage_of_point, loop_span, release_point, scale }
+    // STAGE=1（n==1）は保持区間・リリース区間とも同じ段0を指すため、points[2]は
+    // points[1]と同じ値をドラッグする冗長な点になる。実時間の重みで置くと中途半端な位置に浮き
+    // 「もう1段ある」ように誤読される（実機確認で判明）ため、右端に固定して目印化する。
+    let sustain_terminal_point = if n == 1 {
+        let last = points.len() - 1;
+        points[last].x = right_edge;
+        Some(last)
+    } else {
+        None
+    };
+
+    TimeEgGeometry { points, stage_of_point, loop_span, release_point, scale, sustain_terminal_point }
 }
 
 /// `TimeEgParams`から`TimeEgGeometry`を計算する（読み取り専用プレビュー用）。`inner`はウィジェットの
@@ -206,8 +225,12 @@ pub(crate) fn draw_geometry(painter: &egui::Painter, params: &TimeEgParams, geom
         let color = if i - 1 >= geometry.release_point { COLOR_RELEASE } else { COLOR_HELD };
         draw_ramp(painter, from, to, color, false, curved, ui_scale);
     }
-    for &p in &geometry.points {
-        painter.circle_filled(p, dot_radius, COLOR_DOT);
+    for (i, &p) in geometry.points.iter().enumerate() {
+        if i == 0 || geometry.sustain_terminal_point == Some(i) {
+            painter.circle_stroke(p, dot_radius, Stroke::new(1.0, COLOR_DOT_START));
+        } else {
+            painter.circle_filled(p, dot_radius, COLOR_DOT);
+        }
     }
 }
 

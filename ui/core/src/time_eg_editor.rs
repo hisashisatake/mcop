@@ -87,13 +87,16 @@ enum CtxTarget {
 }
 
 /// `geometry.points[1..]`から`pointer`に最も近い頂点を探す（`HIT_RADIUS_PX`以内のみ）。
-/// `points[0]`（note-on開始点、どの段にも対応しない）は対象外。
+/// `points[0]`（note-on開始点、どの段にも対応しない）と`sustain_terminal_point`
+/// （STAGE=1で保持側と同じ段を指す目印。ドラッグしても`points[1]`と同じ値しか動かせないため
+/// 別に掴ませる意味がない）は対象外。
 fn hit_test_vertex(geometry: &TimeEgGeometry, pointer: Pos2) -> Option<usize> {
     geometry
         .points
         .iter()
         .enumerate()
         .skip(1)
+        .filter(|&(i, _)| Some(i) != geometry.sustain_terminal_point)
         .map(|(i, p)| (i, p.distance(pointer)))
         .filter(|&(_, d)| d <= HIT_RADIUS_PX)
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -162,7 +165,10 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn value(&self) -> i32 {
         let p = self.handle.params();
         match self.field {
-            TimeEgField::StageCount => p.stage_count as i32,
+            // 生値0は「1として扱う」特殊値（`sound_core::time_eg::clamp_stage_count`と同じ床）。
+            // ここでmax(1)しないとSTAGES表示が0のまま、実際には1段ぶんドラッグ可能な点が
+            // 存在するという表示と実体の食い違いが起きる（実機確認で発覚）。
+            TimeEgField::StageCount => p.stage_count.max(1) as i32,
             TimeEgField::LoopStart => p.loop_start as i32,
             TimeEgField::LoopEnd => p.loop_end as i32,
             TimeEgField::ReleaseStart => p.release_start as i32,
