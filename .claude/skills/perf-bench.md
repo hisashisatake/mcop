@@ -1,17 +1,20 @@
 # perf-bench
 
-38x6エンジンのレンダリング性能を、実際の曲データ（ym38x6/tools/smf2wav）で安全に計測・検証するスキル。
+op505エンジンのレンダリング性能を、実際の曲データ（op505/tools/smf2op505）で安全に計測・検証するスキル。
 「速くなったか」だけでなく「音が変わっていないか（出力WAVのビット一致）」を必ずセットで確認する。
+
+（2026-08-14注記）旧`ym38x6/tools/smf2wav`（凍結）でのベースラインは別エンジンのため比較対象にならない。
+op505版へ移行後、ベースラインは新規に採取し直すこと。
 
 ## 使い方
 
 ```
-/perf-bench <bank.38x6> <song.mid> [--pairs N]
+/perf-bench <bank.op505> <song.mid> [--pairs N]
 ```
 
 例:
 ```
-/perf-bench "ym38x6/tools/opz2x6/private/out/Yamaha Factory Bank A.38x6" "C:\Users\satake\Documents\REAPER Media\Media\LastWave_single_track.mid"
+/perf-bench "op505/tools/opz2op505/private/Yamaha Factory Bank A.op505" "C:\Users\satake\Documents\REAPER Media\Media\LastWave_single_track.mid"
 ```
 
 - `--pairs`: 交互A/B計測のペア数（既定5）
@@ -20,11 +23,11 @@
 
 - 必ずリリースビルドで計測する（デバッグビルドの絶対値・相対比較は意味を持たない）:
   ```powershell
-  cargo build --release -p smf2wav
+  cargo build --release -p smf2op505
   ```
 - 比較には「変更前のexe」と「変更後のexe」の両方が要る。最適化に着手する**前**に一度ベースラインをビルドし、スクラッチパッドへ退避しておく:
   ```powershell
-  Copy-Item "target\release\smf2wav.exe" "<scratchpad>\smf2wav_baseline.exe" -Force
+  Copy-Item "target\release\smf2op505.exe" "<scratchpad>\smf2op505_baseline.exe" -Force
   ```
   着手後に気づいた場合は `git stash` で変更前状態に戻し、再ビルド→退避→`git stash pop` で復帰する。
 
@@ -32,7 +35,7 @@
 
 1. **ベースライン確保**（未取得なら）: 上記の通り現在のexeを退避する。
 2. **変更を実装**する。
-3. **リビルド**して `smf2wav_opt.exe` として別名保存する。
+3. **リビルド**して `smf2op505_opt.exe` として別名保存する。
 4. **交互A/B計測**（baseline→opt→baseline→opt…の順で交互に走らせ、マシン負荷の偏りによるバイアスを避ける）:
    ```powershell
    foreach ($i in 1..N) {
@@ -68,20 +71,19 @@ if true { return dry; } // TEMP-PROFILING: VCF/VCAコストの切り分け（後
    「差が出ない」こと自体が正しい結論であり、それ以上の計測は不要。
 2. **上限に実際到達させたい場合はストレス用SMFを自作する**。既存曲で偶然しきい値を超える場面を
    探すより、狙って超えさせる入力を作った方が速く・ノイズも小さい。
-   - `ym38x6/tools/smf2wav`のボイスIDは `MIDIチャンネル*128 + ノート番号` なので、**同一チャンネル×
-     同一ノート番号の再発音は新規ボイスではなく`retrigger`（既存ボイスの再利用）になり、
-     ボイス数が頭打ちになる**。同時発音数を稼ぐには複数MIDIチャンネル×広い音域に分散させ、
-     ノート番号が被らないようにする。
+   - `op505/tools/smf2op505`のボイスIDは `MIDIチャンネル*128 + ノート番号` なので、**同一チャンネル×
+     同一ノート番号の再発音は新規ボイスではなく既存ボイスの再利用になり、ボイス数が頭打ちになる**。
+     同時発音数を稼ぐには複数MIDIチャンネル×広い音域に分散させ、ノート番号が被らないようにする。
    - SMFはバイト列として単純な形式（Format0、可変長delta-time）なので、`uv run python`で
      使い捨てスクリプトを直接書いて生成するのが早い（このマシンはbash経由の`python3`が
-     動かないため、`uv run python <script>.py`を使う。`ym38x6/tools/patchlab`と同じ流儀）。
+     動かないため、`uv run python <script>.py`を使う。`op505/tools/patchlab`と同じ流儀）。
    - スクリプトはスクラッチパッドに置き、リポジトリにはコミットしない（使い捨ての診断資材）。
 3. しきい値をまたぐ3点以上（例: 現状値・候補値・その先の値）を交互A/B計測し、実測ピークが
    狙った上限に到達していることをログで確認してから結論を出す。
 
 ## このプロジェクトで既知の落とし穴
 
-- **`HashMap`のイテレーション順は非決定論**: プロセスごとのランダムシードにより、同一入力でも実行のたびに浮動小数点加算順が変わり出力WAVがビット一致しないことがある。決定論的な順序が必要な場所（ボイス合算等）は`BTreeMap`を使う。
+- **`HashMap`のイテレーション順は非決定論**: プロセスごとのランダムシードにより、同一入力でも実行のたびに浮動小数点加算順が変わり出力WAVがビット一致しないことがある。決定論的な順序が必要な場所（ボイス合算等）は`BTreeMap`を使う。`smf2op505`のPoly Key Pressureは固定長配列（`[u8; 128]`）で持つため、この種の非決定性は無い。
 - **u8パラメーター→f32変換の`powf()`/`tan()`は`OnceLock`の256要素テーブルでLUT化する**のがこのプロジェクトの既定パターン（`mapping.rs`の`tl_to_gain`が最初の実装例）。1ノート中（または1オーディオブロック中）不変の値を毎サンプル超越関数で計算している箇所を見つけたら、同じパターンを適用する。
-- 音色によって負荷が大きく変わる。リリースの長い音色はボイススチール上限までリリース裾ボイスが積み上がり支配的コストになる。単一の短い音色だけでなく、実際に重いと報告された曲・バンクの組み合わせで計測すること。
-- `ym38x6/tools/smf2wav`には`--max-voices <N>`（同時発音数上限の上書き）が常設されている。上限依存の挙動を診断・A/B計測するときはこれを使う（`--fb-two-sample`等と同じ実験用フラグの流儀）。
+- 音色によって負荷が大きく変わる。TimeEgのループ段が長い音色はボイススチール上限までリリース裾ボイスが積み上がり支配的コストになる。単一の短い音色だけでなく、実際に重いと報告された曲・バンクの組み合わせで計測すること。
+- `op505/tools/smf2op505`には`--max-voices <N>`（同時発音数上限の上書き）が常設されている。上限依存の挙動を診断・A/B計測するときはこれを使う。
