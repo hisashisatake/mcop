@@ -222,7 +222,18 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         let mut p = self.handle.params();
         let clamped = value.clamp(self.min(), self.max()) as u8;
         match self.field {
-            TimeEgField::StageCount => p.stage_count = clamped,
+            TimeEgField::StageCount => {
+                let old = p.stage_count.clamp(1, MAX_STAGES as u8);
+                // 新しく有効になる段は前段(old-1)を複製する（`insert_stage_after`と同じ方針）。
+                // 単純にTimeStage::defaultのまま(time=0)にすると、time=0は「瞬時」を表す特殊値
+                // のためGRAPHビュー上で直前の頂点と同じx座標に重なって描画され、増やしたはずの
+                // クリック点が見えなくなる（実機確認で発覚）。
+                let source = (old - 1) as usize;
+                for i in (old as usize)..(clamped as usize) {
+                    p.stages[i] = p.stages[source];
+                }
+                p.stage_count = clamped;
+            }
             TimeEgField::LoopStart => p.loop_start = clamped,
             TimeEgField::LoopEnd => p.loop_end = clamped,
             TimeEgField::ReleaseStart => p.release_start = clamped,
@@ -633,6 +644,26 @@ pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mappin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    /// STAGES増加時の複製ロジック検証用モックハンドル（`interpret.rs`のMockTimeEgと同じ設計）。
+    struct MockTimeEg {
+        value: Cell<TimeEgParams>,
+    }
+
+    impl TimeEgHandle for MockTimeEg {
+        fn params(&self) -> TimeEgParams {
+            self.value.get()
+        }
+        fn set_params(&self, params: TimeEgParams) {
+            self.value.set(params);
+        }
+        fn name(&self) -> String {
+            "TEST EG".to_string()
+        }
+        fn begin_edit(&self) {}
+        fn end_edit(&self) {}
+    }
 
     fn stages(entries: &[(u8, u8, u8)]) -> [sound_core::TimeStage; MAX_STAGES] {
         let mut stages = [sound_core::TimeStage::default(); MAX_STAGES];
@@ -771,5 +802,33 @@ mod tests {
         p.stage_count = 1;
         let out = remove_stage(&p, 0);
         assert_eq!(out.stage_count, 1, "1段のときは削除しないはず");
+    }
+
+    #[test]
+    fn stage_count_increase_duplicates_last_stage_instead_of_zero() {
+        // STAGESの＋ボタン（TimeEgFieldHandle::set経由）で段数を増やしたとき、新しい段が
+        // TimeStage::default()(time=0)のままだと「瞬時」特殊値でGRAPHビュー上の頂点が
+        // 直前の頂点と同じx座標に重なってしまう（実機確認で発覚したバグ）。
+        // 直前の有効段(old_count-1)を複製すれば、time=0のまま据え置かれる場合でも
+        // 直前段自体がtime!=0であればx座標が分離される。
+        let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount);
+        field.set(6); // 5 -> 6
+
+        let out = handle.params();
+        assert_eq!(out.stage_count, 6);
+        let last_original = gain_switch_params().stages[4];
+        assert_eq!(out.stages[5], last_original, "新しい段は直前の段(index4)を複製するはず");
+    }
+
+    #[test]
+    fn stage_count_decrease_does_not_touch_stage_data() {
+        let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount);
+        field.set(3); // 5 -> 3 (減少側は複製ロジックを通らない)
+
+        let out = handle.params();
+        assert_eq!(out.stage_count, 3);
+        assert_eq!(out.stages[0], gain_switch_params().stages[0]);
     }
 }
