@@ -191,7 +191,7 @@ op505側だが、「ファイルを開く」で`ym38x6/ui/src/panel.xml`へ切�
   <style>                                マージン・eg-preview/algorithm-diagramの既定サイズ（後述）
   </style>
   <panels match-height="true">            <panel>を1個以上（1個なら実質フル幅、2個以上でNカラム）
-    <panel repeat="operators" as="op" index="i" title="..." span="4">
+    <panel repeat="operators" as="op" index="i" title="..." span="4" columns="2">
       <header>                            ui.horizontal{}として出力
         <title>...</title>                見出し（下記参照）
         <readout compute="..." args="a,b" format="...{value...}..." tooltip="..."/>
@@ -243,6 +243,25 @@ op505側だが、「ファイルを開く」で`ym38x6/ui/src/panel.xml`へ切�
 - 均等割りが整数にならない場合（例: 5分割で12/5）はパースエラーになるので、その場合は
   各`<panel>`に明示的な`span=`を書く。
 
+### `columns`（`repeat`パネルのN列グリッド折り返し、2026-08-14追加）
+
+`<panel repeat="..." columns="N">`（`repeat`属性との併用が必須、`repeat`なしパネルに付けるとパースエラー）
+を指定すると、繰り返し展開される各要素をN個ごとに`ui.horizontal`で折り返し、縦横のグリッド表示にする。
+例（OP1〜4を2×2グリッドに）:
+
+```xml
+<panel repeat="operators" as="op" index="i" columns="2">...</panel>
+```
+
+- 1セルの幅は「そのパネルに割り当てられた幅（`span`から計算した幅）」を`columns`等分し、
+  列間ギャップ（`<style><panels gap>`）とパネル自身の枠（inner/outer margin＋枠線）ぶんを差し引いて計算する
+  （`gen_panels_group`のN個パネル幅計算をセル単位に適用したもの）。
+- 要素数が`columns`で割り切れない場合は最終行が単純に埋まらないだけ（エラーにはならない）。
+- `<panel repeat>`本文中の`index`変数（例: `{index+1}`）は行×列から復元したフラットな連番のまま使える
+  （グリッド化してもテンプレート側の書き方は変わらない）。
+- コード生成（`codegen.rs`の`gen_repeat_grid`）とプレビューインタープリタ（`interpret.rs`の`draw_panel`のグリッド分岐）
+  の両方に同じ意味論を実装済み。
+
 ### 見出し（`<title>`・`title=`属性）
 
 - `<panel>`に`title=`属性があり、かつ`<header>`が無ければ、見出しが`ui.horizontal`ラップで
@@ -277,8 +296,20 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 ### レイアウト語彙（`<row>`/`<stack>`内、taffyの`Style`に1:1対応）
 
 - `<row justify="...">` / `<stack>` — 入れ子可。`grow="true"`で親の余剰スペースを取りにいく
-  （`layout.rs`の`row_grow`に対応。`<stack grow="true">`は未対応、後述）。`gap`は数値、または`"spacing"`で
+  （`layout.rs`の`row_grow`/`stack_grow`に対応、2026-08-14`stack_grow`追加）。`gap`は数値、または`"spacing"`で
   `ui.spacing().item_spacing.x`を参照する記号値（`outer_gap`変数として生成）。
+  `<stack grow="true">`は、既定の`align-items: stretch`により中に置いた`<row>`群がこの幅いっぱいに
+  引き伸ばされる。「グラフの右に横幅の要るノブ群を複数行へ折り返す」（`<panel repeat columns="N">`で
+  セル幅が半分以下になったOPパネル等）用途に使う。例:
+  ```xml
+  <row justify="start" gap="spacing">
+    <time-eg-editor .../>
+    <stack grow="true" gap="spacing">
+      <row justify="between"><knob .../><knob .../></row>
+      <row justify="between"><knob .../><knob .../></row>
+    </stack>
+  </row>
+  ```
 - `<stack>`は任意のleafウィジェット（`<knob>`/`<checkbox>`/`<waveform>`/`<enum>`等）を縦積みできる
   汎用コンテナ（旧`<checkbox-stack>`はこれに統合され廃止）。予約サイズは各子要素の宣言サイズの
   縦積み合計（幅は最大幅）になるため、`<row>`直下で他ウィジェットと並べる場合は行の高さへの
@@ -311,7 +342,6 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 
 ## 既知の割り切り・未実装
 
-- `<stack grow="true">`は`ui-layout`に`stack_grow`が無いため未対応（パースエラーにする）。
 - インタープリタの`<raw>`はプレースホルダ（グレーの箱＋"raw"ラベル）描画のみ。生Rustは
   解釈できないため（`panel.xml`本体では`<raw>`は未使用、文法としてのみ温存）。
 - `repeat="operators"`の要素数（4）は`interpret.rs`の`repeat_count()`に小さな対応表として

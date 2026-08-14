@@ -324,9 +324,6 @@ fn build_row_tree(el: Node, ctx: &Ctx, style: &Style) -> Result<TreeNode, String
         };
         let grow = el.attribute("grow") == Some("true");
         let justify = el.attribute("justify").unwrap_or("start").to_string();
-        if tag == "stack" && grow {
-            return Err("<stack grow=\"true\">は現時点で未対応です（layout.rsにstack_growが無い）".to_string());
-        }
         let kids = element_children(el);
         if kids.is_empty() {
             return Err(format!("<{tag}>には1個以上の子要素が必要です"));
@@ -417,11 +414,24 @@ fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<u32>), String> 
         ),
         None => None,
     };
+    let columns = match el.attribute("columns") {
+        Some(v) => {
+            let n = v.parse::<usize>().map_err(|_| "<panel>のcolumnsは1以上の整数で指定してください".to_string())?;
+            if n == 0 {
+                return Err("<panel>のcolumnsは1以上の整数で指定してください".to_string());
+            }
+            if repeat.is_none() {
+                return Err("<panel columns=\"...\">はrepeat属性と併用してください".to_string());
+            }
+            Some(n)
+        }
+        None => None,
+    };
     let base = if repeat.is_some() { as_.clone().unwrap() } else { "params".to_string() };
     let ctx = Ctx { base, index: index.clone(), title: title.clone() };
     let mut body = parse_body(el, &ctx, style)?;
     auto_insert_title(&mut body, &title);
-    Ok((Panel { repeat, as_, index, title, span: 0, body }, span_raw))
+    Ok((Panel { repeat, as_, index, title, span: 0, columns, body }, span_raw))
 }
 
 /// `<panels>`内の各`<panel>`の`span`を解決する。CSSの12カラムグリッド（Bootstrap等）を参考にした規約:
@@ -585,6 +595,31 @@ mod span_tests {
         let xml = r#"<layout><panel title="A"><row><knob label="X" handle="x"/></row></panel></layout>"#;
         let err = parse_layout(xml).unwrap_err();
         assert!(err.contains("<panels>で囲んでください"), "{err}");
+    }
+
+    #[test]
+    fn columns_without_repeat_is_rejected() {
+        let xml = wrap(r#"<panel title="A" columns="2"><row><knob label="X" handle="x"/></row></panel>"#);
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("repeat属性と併用"), "{err}");
+    }
+
+    #[test]
+    fn columns_zero_is_rejected() {
+        let xml = wrap(
+            r#"<panel repeat="operators" as="op" columns="0"><row><knob label="X" handle="op.x"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("1以上の整数"), "{err}");
+    }
+
+    #[test]
+    fn columns_on_repeat_panel_is_kept() {
+        let xml = wrap(
+            r#"<panel repeat="operators" as="op" columns="2"><row><knob label="X" handle="op.x"/></row></panel>"#,
+        );
+        let layout = parse_layout(&xml).unwrap();
+        assert_eq!(layout.groups[0].panels[0].columns, Some(2));
     }
 }
 

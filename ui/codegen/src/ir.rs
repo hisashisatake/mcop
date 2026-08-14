@@ -222,9 +222,13 @@ impl TreeNode {
                     ui_layout::row(j, gap.numeric(), kids)
                 }
             }
-            TreeNode::Stack { gap, children, .. } => {
+            TreeNode::Stack { gap, grow, children } => {
                 let kids: Vec<ui_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
-                ui_layout::stack(gap.numeric(), kids)
+                if *grow {
+                    ui_layout::stack_grow(gap.numeric(), kids)
+                } else {
+                    ui_layout::stack(gap.numeric(), kids)
+                }
             }
         }
     }
@@ -279,6 +283,9 @@ pub struct Panel {
     /// 12分割グリッドでの占有幅（Bootstrap等のcol-span相当）。
     /// 同じ`<panels>`内の全`<panel>`のspan合計は常に12（parse.rsで検証・省略時は均等割りで解決済み）。
     pub span: u32,
+    /// `repeat`ありパネルをN列グリッドで折り返す列数（`<panel repeat="..." columns="N">`）。
+    /// `repeat`なしパネルには付けられない（parse.rsで検証済み）。省略時は従来通りの縦一列。
+    pub columns: Option<usize>,
     pub body: Vec<BodyStmt>,
 }
 

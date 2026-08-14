@@ -110,9 +110,17 @@ pub fn row_grow(justify: Justify, gap: f32, children: Vec<Node>) -> Node {
     Node::Row { justify, gap, grow: 1.0, children }
 }
 
-/// 縦積みコンテナ。
+/// 縦積みコンテナ（親の余剰幅を内容幅ぶんに収める＝子の最大幅）。
 pub fn stack(gap: f32, children: Vec<Node>) -> Node {
     Node::Stack { gap, grow: 0.0, children }
+}
+
+/// 縦積みコンテナ（親の余剰幅を`grow`比で受け取って広がる。子（`row`/`row_grow`）は
+/// 既定の`align-items: stretch`でこの幅いっぱいに引き伸ばされる。`repeat`パネルの
+/// 「グラフの右をN行の折り返しノブ群にする」のような、横幅の要る内容を複数行へ
+/// 折り返す用途に使う）。
+pub fn stack_grow(gap: f32, children: Vec<Node>) -> Node {
+    Node::Stack { gap, grow: 1.0, children }
 }
 
 fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {

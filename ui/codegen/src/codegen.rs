@@ -175,9 +175,10 @@ fn tree_expr(node: &TreeNode) -> String {
             let children_str = children.iter().map(tree_expr).collect::<Vec<_>>().join(", ");
             format!("{ctor}(Justify::{}, {}, vec![{children_str}])", capitalize(justify), gap_str(gap))
         }
-        TreeNode::Stack { gap, children, .. } => {
+        TreeNode::Stack { gap, grow, children } => {
+            let ctor = if *grow { "stack_grow" } else { "stack" };
             let children_str = children.iter().map(tree_expr).collect::<Vec<_>>().join(", ");
-            format!("stack({}, vec![{children_str}])", gap_str(gap))
+            format!("{ctor}({}, vec![{children_str}])", gap_str(gap))
         }
     }
 }
@@ -267,6 +268,8 @@ fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
 /// 渡すとマージンぶん二重に積み増しされる。`margin_v`（style由来のコンパイル時定数）と
 /// 実行時の`frame_stroke`を差し引いて中身の高さへ変換してから使う。
 fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bool, style: &Style) -> Vec<String> {
+    let is_grid = p.repeat.is_some() && p.columns.is_some();
+    let cell_width_expr = if is_grid { "w_cell" } else { width_expr };
     let body_lines = gen_body_lines(&p.body);
     let inner_margin = egui_margin_literal(&style.panel_inner_margin);
     let outer_margin = egui_margin_literal(&style.panel_outer_margin);
@@ -278,7 +281,7 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     } else {
         format!("{frame_expr}.show(ui, |ui| {{")
     };
-    let mut inner = vec![group_stmt, format!("    ui.set_width({width_expr});")];
+    let mut inner = vec![group_stmt, format!("    ui.set_width({cell_width_expr});")];
     if match_height && !capture_height {
         inner.push("    ui.set_min_height(match_height);".to_string());
     }
@@ -300,14 +303,72 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
         None => inner,
         Some(repeat) => {
             let as_ = p.as_.as_deref().unwrap_or("");
-            let mut out = vec![format!("for ({}, {as_}) in params.{repeat}.iter().enumerate() {{", p.index)];
-            for l in &inner {
-                out.push(indent(l, 4));
+            match p.columns {
+                None => {
+                    let mut out =
+                        vec![format!("for ({}, {as_}) in params.{repeat}.iter().enumerate() {{", p.index)];
+                    for l in &inner {
+                        out.push(indent(l, 4));
+                    }
+                    out.push("}".to_string());
+                    out
+                }
+                Some(cols) => gen_repeat_grid(p, repeat, as_, cols, width_expr, &inner, style),
             }
-            out.push("}".to_string());
-            out
         }
     }
+}
+
+/// `<panel repeat="..." columns="N">`をN列グリッドに折り返すRustコードを生成する。
+/// `width_expr`（グループから渡された、このパネル1個ぶんの**中身**の幅）をセル1個ぶんの
+/// 幅`w_cell`へ分割し、`chunks(N)`で行ごとに`ui.horizontal`をネストする。
+///
+/// `width_expr`はすでに`gen_panels_group`側で「このパネル自身の枠（マージン＋枠線）ぶん」を
+/// 1回差し引き済みの値（`gen_panels_group`のn=1分岐: `w_0 = usable`、`usable`算出時に
+/// `overhead*1`を控除済み）。グリッドの各セルは`gen_panel`が生成する**個別の**
+/// `egui::Frame::group`（それぞれが独自にマージン＋枠線ぶんの`grid_overhead`を消費する）なので、
+/// セル数`cols`ぶんの`grid_overhead`を単純に`width_expr`から追加で差し引くと、実際には存在しない
+/// 「外側の1個ぶんの枠」の余白まで二重に控除してしまい、グリッド全体の右端が兄弟パネル
+/// （`gen_panels_group`のn>1分岐で計算される通常パネル列）より内側に寄ってしまう
+/// （margin/frame_strokeの合計だけ右マージンが余分に空く実バグを踏んだ）。
+/// 正しくは「`width_expr`に一度差し引かれた1個ぶんの`grid_overhead`をまず足し戻し、
+/// 列間ギャップ`gap`と`grid_overhead`をセル間の`(cols-1)`個ぶんだけ差し引く」計算になる
+/// （`width_expr + grid_overhead - gap*(cols-1) - grid_overhead*cols`を整理すると
+/// `width_expr - (grid_overhead + gap) * (cols - 1)`。cols=1では`width_expr`のまま＝
+/// 非グリッド経路と一致し、footprint合計が`width_expr + grid_overhead`＝
+/// 兄弟パネルの外形幅と厳密に一致することを式変形で確認済み）。
+fn gen_repeat_grid(
+    p: &Panel,
+    repeat: &str,
+    as_: &str,
+    cols: usize,
+    width_expr: &str,
+    inner: &[String],
+    style: &Style,
+) -> Vec<String> {
+    let gap = fmt_num(style.panels_gap);
+    let margin_h = fmt_num(style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal());
+    let index = &p.index;
+    let mut out = vec![
+        format!("let grid_overhead = {margin_h} + frame_stroke * 2.0;"),
+        format!(
+            "let grid_usable = {width_expr} - (grid_overhead + {gap}) * {};",
+            fmt_num((cols.saturating_sub(1)) as f32)
+        ),
+        format!("let w_cell = grid_usable / {};", fmt_num(cols as f32)),
+        format!("for ({index}_row, {index}_chunk) in params.{repeat}.chunks({cols}).enumerate() {{"),
+        "    ui.horizontal(|ui| {".to_string(),
+        format!("        ui.spacing_mut().item_spacing.x = {gap};"),
+        format!("        for ({index}_col, {as_}) in {index}_chunk.iter().enumerate() {{"),
+        format!("            let {index} = {index}_row * {cols} + {index}_col;"),
+    ];
+    for l in inner {
+        out.push(indent(l, 12));
+    }
+    out.push("        }".to_string());
+    out.push("    });".to_string());
+    out.push("}".to_string());
+    out
 }
 
 /// `<panels>`（`<panel>`を1個以上持つ、12分割グリッドの1行）を生成する。

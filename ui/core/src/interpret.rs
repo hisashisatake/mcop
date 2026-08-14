@@ -407,16 +407,29 @@ fn draw_panel(
     style: &Style,
     base_spacing: egui::Vec2,
     jacks: &mut JackLayout,
+    frame_stroke: f32,
 ) -> egui::Response {
     let inner_margin = margin_to_egui(&style.panel_inner_margin);
     let outer_margin = margin_to_egui(&style.panel_outer_margin);
     let has_source_jack = panel_has_source_jack(&p.body);
+    // `width`はgen_panels_group/draw_panels_group側で「このパネル自身の枠(overhead)」を
+    // 1回差し引き済みの中身の幅。グリッドの各セルは個別のFrame::groupを持つため、単純に
+    // `overhead*cols`を追加で差し引くと存在しない「外側の1個ぶんの枠」を二重控除してしまう
+    // （codegen.rsのgen_repeat_gridと同じ計算式・同じ理由、詳細はそちらのdocコメント参照）。
+    let cell_width = match p.columns {
+        Some(cols) if p.repeat.is_some() => {
+            let overhead = style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal() + frame_stroke * 2.0;
+            let usable = width - (overhead + style.panels_gap) * cols.saturating_sub(1) as f32;
+            usable / cols as f32
+        }
+        _ => width,
+    };
     let mut draw_one = |ui: &mut egui::Ui, idx: Option<usize>| {
         let resp = egui::Frame::group(ui.style())
             .inner_margin(inner_margin)
             .outer_margin(outer_margin)
             .show(ui, |ui| {
-                ui.set_width(width);
+                ui.set_width(cell_width);
                 if let Some(h) = min_height {
                     ui.set_min_height(h);
                 }
@@ -432,11 +445,31 @@ fn draw_panel(
     match &p.repeat {
         None => draw_one(ui, None),
         Some(name) => {
-            let mut resp = None;
-            for i in 0..repeat_count(name) {
-                resp = Some(draw_one(ui, Some(i)));
+            let n = repeat_count(name);
+            match p.columns {
+                None => {
+                    let mut resp = None;
+                    for i in 0..n {
+                        resp = Some(draw_one(ui, Some(i)));
+                    }
+                    resp.expect("repeat_count()は常に1以上を返す")
+                }
+                Some(cols) => {
+                    let mut resp = None;
+                    let mut i = 0;
+                    while i < n {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = style.panels_gap;
+                            let row_end = (i + cols).min(n);
+                            while i < row_end {
+                                resp = Some(draw_one(ui, Some(i)));
+                                i += 1;
+                            }
+                        });
+                    }
+                    resp.expect("repeat_count()は常に1以上を返す")
+                }
             }
-            resp.expect("repeat_count()は常に1以上を返す")
         }
     }
 }
@@ -462,7 +495,7 @@ fn draw_panels_group(
     let usable = full_width - style.panels_gap * n.saturating_sub(1) as f32 - overhead * n as f32;
     if n == 1 {
         let w = usable * g.panels[0].span as f32 / 12.0;
-        draw_panel(ui, store, &g.panels[0], w, None, style, base_spacing, jacks);
+        draw_panel(ui, store, &g.panels[0], w, None, style, base_spacing, jacks, frame_stroke);
         return;
     }
     let match_height = g.match_height;
@@ -473,7 +506,7 @@ fn draw_panels_group(
         for (i, p) in g.panels.iter().enumerate() {
             let w = usable * p.span as f32 / 12.0;
             let min_height = if match_height && i > 0 { captured_height } else { None };
-            let resp = draw_panel(ui, store, p, w, min_height, style, base_spacing, jacks);
+            let resp = draw_panel(ui, store, p, w, min_height, style, base_spacing, jacks, frame_stroke);
             if i == 0 && match_height {
                 captured_height = Some(resp.rect.height() - margin_v - frame_stroke * 2.0);
             }

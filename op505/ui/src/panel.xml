@@ -76,7 +76,7 @@
   </panels>
 
   <panels>
-    <panel title="PITCH FG">
+    <panel title="PITCH FG" span="4">
       <header>
         <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
@@ -86,10 +86,7 @@
         <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
       </row>
     </panel>
-  </panels>
-
-  <panels>
-    <panel title="CUTOFF FG">
+    <panel title="CUTOFF FG" span="4">
       <header>
         <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
@@ -99,16 +96,47 @@
         <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
       </row>
     </panel>
-  </panels>
-
-  <panels>
-    <panel title="GAIN FG">
+    <panel title="GAIN FG" span="4">
       <header>
         <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
         <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255"/>
+      </row>
+    </panel>
+  </panels>
+
+  <panels>
+    <panel repeat="operators" as="op" index="i" columns="2">
+      <header>
+        <title>OP {index+1}</title>
+        <readout compute="mul-fine-ratio" args="mul,op_fine_tune" format="×{value:.2}"
+          tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
+        <stack grow="true" gap="spacing">
+          <row justify="between">
+            <knob label="TL" handle="tl"/>
+            <knob label="MUL" handle="mul"/>
+            <knob label="DT1" handle="dt1"/>
+            <knob label="KSR" handle="ksr"/>
+          </row>
+          <row justify="between">
+            <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
+            <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
+            <knob label="FINE" handle="op_fine_tune"/>
+            <knob label="EGSFT" handle="eg_shift"/>
+          </row>
+          <row justify="between">
+            <knob label="LEVEL SCALE" handle="level_scale"/>
+            <stack>
+              <waveform handle="waveform" index="i"/>
+              <checkbox label="AM" handle="ame"/>
+            </stack>
+          </row>
+        </stack>
       </row>
     </panel>
   </panels>
@@ -138,33 +166,4 @@
       </row>
     </panel>
   </panels>
-
-  <panels>
-    <panel repeat="operators" as="op" index="i">
-      <header>
-        <title>OP {index+1}</title>
-        <readout compute="mul-fine-ratio" args="mul,op_fine_tune" format="×{value:.2}"
-          tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
-      </header>
-      <row justify="start" gap="spacing">
-        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
-        <row grow="true" justify="between">
-          <knob label="TL" handle="tl"/>
-          <knob label="MUL" handle="mul"/>
-          <knob label="DT1" handle="dt1"/>
-          <knob label="KSR" handle="ksr"/>
-          <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
-          <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
-          <knob label="FINE" handle="op_fine_tune"/>
-          <knob label="EGSFT" handle="eg_shift"/>
-          <knob label="LEVEL SCALE" handle="level_scale"/>
-          <stack>
-            <waveform handle="waveform" index="i"/>
-            <checkbox label="AM" handle="ame"/>
-          </stack>
-        </row>
-      </row>
-    </panel>
-  </panels>
-
 </layout>

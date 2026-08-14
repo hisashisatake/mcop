@@ -13,7 +13,7 @@
 //! している（egui非依存、`build.rs`とブラウザ用wasmツールが同一コードとして共有する）。
 //! ここではeguiとの橋渡し（[`solve`]/[`place`]の型変換）のみを行う。
 
-pub use ui_layout::{leaf, row, row_grow, stack, Justify, Margin, Node};
+pub use ui_layout::{leaf, row, row_grow, stack, stack_grow, Justify, Margin, Node};
 
 /// [`ui_layout::solve`]を呼び、egui型（[`egui::Vec2`]/[`egui::Rect`]）で受け渡しする薄いラッパー。
 /// `solve`に渡す葉のサイズは`ir::LeafInfo::outer_size()`（ウィジェット自然サイズ+マージン）なので、

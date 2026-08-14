@@ -115,3 +115,66 @@ fn is_deterministic() {
     let b = ui_codegen::generate_rust(&xml).unwrap();
     assert_eq!(a, b);
 }
+
+/// `<panel repeat="..." columns="N">`（op505-ui/src/panel.xmlのOPパネルで採用したN列グリッド、
+/// 2026-08-14追加）が、行ごとの`chunks(N)`+`ui.horizontal`折り返しへ展開されることを確認する。
+/// フラットな`index`変数（本文中の`{index+1}`等）が行×列から復元される点も合わせて検証する。
+#[test]
+fn repeat_panel_with_columns_wraps_into_grid() {
+    let xml = r#"<layout><panels><panel repeat="operators" as="op" index="i" columns="2">
+        <header><title>OP {index+1}</title></header>
+        <row><knob label="X" handle="op.x"/></row>
+    </panel></panels></layout>"#;
+    let rust = ui_codegen::generate_rust(xml).unwrap();
+    assert!(rust.contains("for (i_row, i_chunk) in params.operators.chunks(2).enumerate()"), "{rust}");
+    assert!(rust.contains("for (i_col, op) in i_chunk.iter().enumerate()"), "{rust}");
+    assert!(rust.contains("let i = i_row * 2 + i_col;"), "{rust}");
+    assert!(rust.contains("ui.set_width(w_cell);"), "{rust}");
+    assert!(rust.contains("ui.label(egui::RichText::new(format!(\"OP {}\", i + 1)).strong());"), "{rust}");
+}
+
+/// `columns`なしの既存経路（縦一列）は今回の変更で壊れていないことを確認する回帰テスト。
+#[test]
+fn repeat_panel_without_columns_stays_linear() {
+    let xml = r#"<layout><panels><panel repeat="operators" as="op" index="i">
+        <row><knob label="X" handle="op.x"/></row>
+    </panel></panels></layout>"#;
+    let rust = ui_codegen::generate_rust(xml).unwrap();
+    assert!(rust.contains("for (i, op) in params.operators.iter().enumerate()"), "{rust}");
+    assert!(!rust.contains("chunks("), "{rust}");
+}
+
+/// `<stack grow="true">`（2026-08-14追加、`<panel repeat columns="N">`でセル幅が狭まったOPパネルの
+/// ノブ群をN行へ折り返すのに使う）が`stack_grow(...)`へ生成されることを確認する。
+/// 中の`<row>`は自身に`grow`を付けなくても、既定の`align-items: stretch`でこの幅いっぱいに
+/// 引き伸ばされる想定（`gen_repeat_grid`のセル幅計算とは独立した、木構造の生成だけを確認する）。
+#[test]
+fn stack_grow_generates_stack_grow_ctor() {
+    let xml = r#"<layout><panels><panel title="A">
+        <row justify="start" gap="spacing">
+            <knob label="X" handle="x"/>
+            <stack grow="true" gap="spacing">
+                <row justify="between"><knob label="Y" handle="y"/></row>
+                <row justify="between"><knob label="Z" handle="z"/></row>
+            </stack>
+        </row>
+    </panel></panels></layout>"#;
+    let rust = ui_codegen::generate_rust(xml).unwrap();
+    assert!(rust.contains("stack_grow(outer_gap, vec![row(Justify::Between"), "{rust}");
+}
+
+/// 通常の`<stack>`（`grow`省略）は従来通り`stack(...)`のままであることを確認する回帰テスト。
+#[test]
+fn stack_without_grow_stays_plain_stack() {
+    let xml = r#"<layout><panels><panel title="A">
+        <row justify="start" gap="spacing">
+            <stack>
+                <knob label="Y" handle="y"/>
+                <checkbox label="Z" handle="z"/>
+            </stack>
+        </row>
+    </panel></panels></layout>"#;
+    let rust = ui_codegen::generate_rust(xml).unwrap();
+    assert!(rust.contains("let tree = row(Justify::Start, outer_gap, vec![stack(0.0"), "{rust}");
+    assert!(!rust.contains("stack_grow"), "{rust}");
+}
