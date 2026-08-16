@@ -129,11 +129,12 @@ mod tests {
                 stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
                 stages
             },
-            stage_count: 1,
+            // 段1(TimeStage::default()=time 0/level 0)はリリース用。OP EGは必ずレベル0へ着地させる
+            // （ui_core::TimeEgProfile参照）。押している間は段0で静止するのでサステインは変わらない。
+            stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
 
         let mut patch = op505_core::Op505Patch::default();

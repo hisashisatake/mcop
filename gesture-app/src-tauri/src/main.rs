@@ -661,7 +661,7 @@ mod tests {
 
         // TimeEgParams（オペレーターEGとFGの両方が使う）とTimeStageのキー。
         let eg = &op["eg"];
-        for k in ["stages", "stage_count", "loop_enabled", "loop_start", "loop_end", "release_start"] {
+        for k in ["stages", "stage_count", "loop_enabled", "loop_start", "release_point"] {
             assert!(eg.get(k).is_some(), "eg.{k} が消えている");
         }
         let stage = &eg["stages"][0];

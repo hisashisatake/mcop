@@ -74,8 +74,7 @@ fn main() {
             stage_count: 4,
             loop_enabled: 1,
             loop_start: 1,
-            loop_end: 2,
-            release_start: 3,
+            release_point: 2,
         },
         1.0,
     );
@@ -106,8 +105,7 @@ fn main() {
             stage_count: 3,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         },
         1.0,
     );
@@ -124,8 +122,7 @@ fn main() {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         },
         1.0,
     );
@@ -148,8 +145,7 @@ fn main() {
             stage_count: 3,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         },
         c1_scale,
     );
@@ -161,8 +157,7 @@ fn main() {
             stage_count: 3,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         },
         c2_scale,
     );
@@ -186,8 +181,7 @@ fn main() {
             stage_count: 8,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 6,
-            release_start: 7,
+            release_point: 6,
         },
         1.0,
     );
@@ -209,8 +203,7 @@ fn main() {
             stage_count: 8,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 6,
-            release_start: 7,
+            release_point: 6,
         },
         1.0,
     );
@@ -232,8 +225,7 @@ fn main() {
             stage_count: 8,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 6,
-            release_start: 7,
+            release_point: 6,
         },
         1.0,
     );
@@ -257,8 +249,7 @@ fn main() {
             stage_count: 8,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 6,
-            release_start: 7,
+            release_point: 6,
         },
         1.0,
     );
@@ -277,8 +268,7 @@ fn main() {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         },
         1.0,
     );
@@ -300,8 +290,7 @@ fn main() {
             stage_count: 7,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 5,
-            release_start: 6,
+            release_point: 5,
         },
         1.0,
     );
@@ -319,8 +308,7 @@ fn main() {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         },
         1.0,
     );
@@ -339,8 +327,7 @@ fn main() {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         },
         1.0,
     );

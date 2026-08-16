@@ -54,8 +54,7 @@
               "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 1
+              "release_point": 0
             },
             "mul": 1,
             "dt1": 128,
@@ -116,8 +115,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -178,8 +176,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -240,8 +237,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -312,11 +308,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -364,11 +359,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -418,8 +412,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -487,8 +480,7 @@
               "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 1
+              "release_point": 0
             },
             "mul": 1,
             "dt1": 128,
@@ -549,8 +541,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -611,8 +602,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -673,8 +663,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -745,11 +734,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -797,11 +785,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -851,8 +838,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -920,8 +906,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -982,8 +967,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1044,8 +1028,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1106,8 +1089,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1178,11 +1160,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -1230,11 +1211,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -1284,8 +1264,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -1353,8 +1332,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1415,8 +1393,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1477,8 +1454,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1539,8 +1515,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1611,11 +1586,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -1663,11 +1637,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -1717,8 +1690,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -1786,8 +1758,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1848,8 +1819,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1910,8 +1880,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -1972,8 +1941,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2044,11 +2012,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -2096,11 +2063,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -2150,8 +2116,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -2219,8 +2184,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2281,8 +2245,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2343,8 +2306,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2405,8 +2367,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2477,11 +2438,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -2529,11 +2489,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -2583,8 +2542,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -2652,8 +2610,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2714,8 +2671,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2776,8 +2732,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2838,8 +2793,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -2910,11 +2864,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -2962,11 +2915,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -3016,8 +2968,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -3085,8 +3036,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3147,8 +3097,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3209,8 +3158,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3271,8 +3219,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3343,11 +3290,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -3395,11 +3341,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -3449,8 +3394,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -3518,8 +3462,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3580,8 +3523,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3642,8 +3584,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3704,8 +3645,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -3776,11 +3716,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -3828,11 +3767,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -3882,8 +3820,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,
@@ -3951,8 +3888,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -4013,8 +3949,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -4075,8 +4010,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -4137,8 +4071,7 @@
               "stage_count": 4,
               "loop_enabled": 0,
               "loop_start": 2,
-              "loop_end": 2,
-              "release_start": 3
+              "release_point": 2
             },
             "mul": 1,
             "dt1": 128,
@@ -4209,11 +4142,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -4261,11 +4193,10 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 0,
+              "stage_count": 2,
               "loop_enabled": 0,
               "loop_start": 0,
-              "loop_end": 0,
-              "release_start": 0
+              "release_point": 0
             },
             "depth": 0
           },
@@ -4315,8 +4246,7 @@
             "stage_count": 1,
             "loop_enabled": 0,
             "loop_start": 0,
-            "loop_end": 0,
-            "release_start": 0
+            "release_point": 0
           },
           "texture_lfo": {
             "waveform": 0,

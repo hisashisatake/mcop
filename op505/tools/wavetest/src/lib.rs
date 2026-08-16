@@ -281,8 +281,7 @@ fn multirelease_eg() -> TimeEgParams {
         stage_count: 4,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 1, // stage1(decay到達点)で静止=サステイン
-        release_start: 2,
+        release_point: 1, // stage1(decay到達点)で静止=サステイン、段2〜3がリリース
     }
 }
 
@@ -298,8 +297,8 @@ fn gate_gain_fg() -> TimeEgParams {
         stage_count: 4,
         loop_enabled: 1,
         loop_start: 0,
-        loop_end: 3,
-        release_start: 3,
+        // Gain FGなのでリリース区間が空（release_pointが最終段）でよい＝ゲートは閉じたまま終わる。
+        release_point: 3,
     }
 }
 
@@ -316,8 +315,7 @@ fn nonmonotonic_eg() -> TimeEgParams {
         stage_count: 5,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 3,
-        release_start: 4,
+        release_point: 3,
     }
 }
 
@@ -515,7 +513,7 @@ mod tests {
     fn native_eg_demos_have_expected_stage_shape() {
         let mr = multirelease_eg();
         assert_eq!(mr.stage_count, 4);
-        assert_eq!(mr.release_start, 2, "release_startはstage2(急速な中間レベル)を指すはず");
+        assert_eq!(mr.release_point, 1, "保持は段0〜1、リリースは段2(急速な中間レベル)から始まるはず");
 
         let gate = gate_gain_fg();
         assert_eq!(gate.loop_enabled, 1, "Gain FGゲートはループ有効であるはず");

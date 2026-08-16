@@ -105,8 +105,8 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
         Widget::AlgorithmDiagram { handle } => {
             format!("algorithm_diagram(ui, egui::vec2({}, {}), {handle}.value() as u8);", fmt_num(size.w), fmt_num(size.h))
         }
-        Widget::TimeEgEditor { handle, mapping, tl } => format!(
-            "time_eg_editor(ui, egui::vec2({}, {}), &*{handle}, EgAmplitudeMapping::{mapping}, {});",
+        Widget::TimeEgEditor { handle, mapping, tl, min_stages, terminal_level_zero } => format!(
+            "time_eg_editor(ui, egui::vec2({}, {}), &*{handle}, EgAmplitudeMapping::{mapping}, {}, TimeEgProfile {{ min_stages: {min_stages}, terminal_level_zero: {terminal_level_zero} }});",
             fmt_num(size.w),
             fmt_num(size.h),
             eg_field_expr(tl),

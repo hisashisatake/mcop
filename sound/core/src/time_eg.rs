@@ -86,17 +86,50 @@ pub struct TimeStage {
 }
 
 /// TimeEgのパラメーター一式。`stage_count`本だけ`stages`を使う（残りは無視）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+///
+/// 段リストは`release_point`ただ1つで「保持区間」と「リリース区間」へ過不足なく分割される。
+/// 旧`loop_end`+`release_start`の2フィールド方式は、1つの境界を2つの独立した数で表していたため
+/// 重複（同じ段が両区間に属しグラフに二重描画される）と隙間（どちらにも属さない到達不能段）を
+/// 表現できてしまった。1つに統合したことでその矛盾は表現不能になっている。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimeEgParams {
     pub stages: [TimeStage; MAX_STAGES],
     /// 使用する段数(1〜8)。0は1として扱う。
     pub stage_count: u8,
-    /// 0=ワンショット（`loop_end`で静止＝サステイン点）／1=`loop_start`〜`loop_end`を周回。
+    /// 0=ワンショット（`release_point`で静止＝サステイン点）／1=`loop_start`〜`release_point`を周回。
     pub loop_enabled: u8,
     pub loop_start: u8,
-    pub loop_end: u8,
-    /// キーオフ後に辿り始める段。以降`stage_count-1`まで順に辿り、完了でIdleへ（多段リリース）。
-    pub release_start: u8,
+    /// 保持区間の最終段。キーオン中は`0..=release_point`を辿り、ここで静止（ループ有効なら
+    /// `loop_start`へ戻る）。リリース区間は`release_point+1..stage_count`で、中間段を飛ばさず
+    /// 順に辿る多段リリースになる。
+    ///
+    /// `release_point == stage_count-1`のときリリース区間は空で、note-offは何もしない
+    /// （現在レベルのまま静止し続ける）。Gain FGの透過既定＝ゲートを一切閉じない用途に使う。
+    ///
+    /// serdeのaliasは旧`loop_end`からの移行用。値の意味が同じなので変換は不要
+    /// （旧`release_start`フィールドは`deny_unknown_fields`未使用のため自動的に無視される）。
+    #[serde(alias = "loop_end")]
+    pub release_point: u8,
+}
+
+/// 既定は「保持1段＋リリース1段」の2段（全段time=0/level=0＝無音）。
+///
+/// `#[derive(Default)]`の全ゼロ（`stage_count=0`→1段扱い）にしないのは、1段だとリリース区間
+/// （`release_point+1..stage_count`）が空になり**note-offが何も起きなくなる**ため。
+/// オペレーターEGでそれをやるとEGが永久にIdleにならず、ボイスが解放されないまま溜まる
+/// （op505のボイス解放条件は「全4オペレーターが`is_idle()`」）。
+/// リリース区間を持たせてよいのはGain FG（出力への乗算でボイス解放に関与しない）だけで、
+/// そちらは`op505_core::default_gain_fg`が明示的に1段を組み立てる。
+impl Default for TimeEgParams {
+    fn default() -> Self {
+        Self {
+            stages: [TimeStage::default(); MAX_STAGES],
+            stage_count: 2,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 0,
+        }
+    }
 }
 
 fn level_of(stage: &TimeStage) -> f32 {
@@ -211,13 +244,17 @@ impl TimeEg {
 
         if self.release_pending {
             self.release_pending = false;
-            let release_start = (params.release_start as usize).min(stage_count - 1);
-            self.stage_index = release_start;
-            self.segment_start = self.level;
-            self.segment_end = level_of(&params.stages[release_start]);
-            self.elapsed = 0.0;
-            self.releasing = true;
-            self.idle = false;
+            let release_point = (params.release_point as usize).min(stage_count - 1);
+            // リリース区間は`release_point+1..stage_count`。空（release_pointが最終段）のときは
+            // note-offを何もせず現在レベルのまま静止し続ける（Gain FGの透過既定＝ゲートを閉じない）。
+            if release_point + 1 < stage_count {
+                self.stage_index = release_point + 1;
+                self.segment_start = self.level;
+                self.segment_end = level_of(&params.stages[release_point + 1]);
+                self.elapsed = 0.0;
+                self.releasing = true;
+                self.idle = false;
+            }
         } else if self.pending_start != PendingStart::None {
             let start_level = match self.pending_start {
                 PendingStart::Fresh => 0.0,
@@ -276,20 +313,30 @@ impl TimeEg {
             return;
         }
 
-        let loop_start = (params.loop_start as usize).min(stage_count - 1);
-        let loop_end = (params.loop_end as usize).min(stage_count - 1);
+        let release_point = (params.release_point as usize).min(stage_count - 1);
+        let loop_start = (params.loop_start as usize).min(release_point);
 
-        if cur == loop_end {
+        if cur == release_point {
+            // 保持区間の終端。ループ有効なら戻り、無効ならサステイン点として静止する
+            // （`eg::Eg`のD2R=0フリーズに相当）。ここから先はnote-offでしか進まない。
             if params.loop_enabled != 0 {
+                // 1段ループ（`loop_start == release_point`）だけは、その段の**入口レベル**
+                // （直前段の終端レベル、段0なら0.0）へ跳ね戻してからやり直す。
+                // レベル連続のままだと「自分の終端レベルから自分の終端レベルへ」向かうことになり
+                // 完全に平坦で音として何も起きない。跳ね戻すことで1段だけでノコギリ波を表現できる。
+                // 多段ループ（`loop_start < release_point`）は従来どおりレベル連続で周回する
+                // （区間の両端を行き来する三角波的な動きになる）。
+                if loop_start == release_point {
+                    self.level = if loop_start == 0 { 0.0 } else { level_of(&params.stages[loop_start - 1]) };
+                }
                 self.enter_stage(params, loop_start, overflow);
             } else {
-                // サステイン点で静止（`eg::Eg`のD2R=0フリーズに相当）。
                 self.settle_at_current_level(cur);
             }
         } else if cur + 1 < stage_count {
             self.enter_stage(params, cur + 1, overflow);
         } else {
-            // stage_countの終端に達したがloop_endに届いていない設定不整合。そこで静止する。
+            // stage_countの終端に達したがrelease_pointに届いていない設定不整合。そこで静止する。
             self.settle_at_current_level(cur);
         }
     }
@@ -374,8 +421,7 @@ mod tests {
                 stage_count: 1,
                 loop_enabled: 0,
                 loop_start: 0,
-                loop_end: 0,
-                release_start: 0,
+                release_point: 0,
             };
             let mut eg = TimeEg::new();
             eg.note_on();
@@ -393,21 +439,20 @@ mod tests {
     }
 
     #[test]
-    fn loop_cycles_between_loop_start_and_loop_end_without_idle() {
+    fn loop_cycles_between_loop_start_and_release_point_without_idle() {
         let sr = 44100.0;
         let params = TimeEgParams {
             stages: stages_with(&[(80, 255, 0), (70, 80, 0), (70, 200, 0)]),
             stage_count: 3,
             loop_enabled: 1,
             loop_start: 1,
-            loop_end: 2,
-            release_start: 2,
+            release_point: 2,
         };
         // time値ごとの実秒数から、attack＋複数ループ分のサンプル予算を実測ベースで組み立てる
         // （time=200のような大きな生値は数秒スケールになりうるため、固定回数の決め打ちは避ける）。
         let attack_secs = time_to_seconds(80) as f64;
         let cycle_secs = (time_to_seconds(70) as f64) * 2.0;
-        // attack直後の最初の下降脚（1.0→loop_start）はloop_endの上限(0.784)を一時的に超えて通過する
+        // attack直後の最初の下降脚（1.0→loop_start）はrelease_pointの上限(0.784)を一時的に超えて通過する
         // ため、定常ループに入るまで（attack＋1周期分）はレベル一致判定に使わずスキップする。
         let skip_samples = ((attack_secs + cycle_secs) * sr as f64) as usize + 200;
         let observe_samples = (cycle_secs * 8.0 * sr as f64) as usize + 2000;
@@ -430,15 +475,14 @@ mod tests {
     }
 
     #[test]
-    fn no_loop_settles_at_loop_end_level() {
+    fn no_loop_settles_at_release_point_level() {
         let sr = 44100.0;
         let params = TimeEgParams {
             stages: stages_with(&[(100, 255, 0), (100, 128, 0), (100, 0, 0)]),
             stage_count: 3,
             loop_enabled: 0,
             loop_start: 1,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         };
         let mut eg = TimeEg::new();
         eg.note_on();
@@ -446,7 +490,7 @@ mod tests {
         for _ in 0..20_000 {
             level = eg.tick(sr, params, 1.0);
         }
-        assert!((level - 128.0 / 255.0).abs() < 1e-3, "expected to settle at loop_end level, got {level}");
+        assert!((level - 128.0 / 255.0).abs() < 1e-3, "expected to settle at release_point level, got {level}");
         assert!(!eg.is_idle());
     }
 
@@ -458,8 +502,7 @@ mod tests {
             stage_count: 4,
             loop_enabled: 0,
             loop_start: 1,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         };
         let mut eg = TimeEg::new();
         eg.note_on();
@@ -491,8 +534,7 @@ mod tests {
             stage_count: 1,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
         let seconds = time_to_seconds(180);
         let expected_1x = (seconds * sr).round() as i64;
@@ -524,8 +566,7 @@ mod tests {
             stage_count: 2,
             loop_enabled: 0,
             loop_start: 1,
-            loop_end: 1,
-            release_start: 1,
+            release_point: 1,
         };
 
         let ticks_to_sustain = |params: TimeEgParams| -> i64 {
@@ -545,16 +586,19 @@ mod tests {
         assert_eq!(linear, curved, "curve should not affect stage transition timing");
     }
 
+    /// リリース区間が空（`release_point == stage_count-1`）のときnote-offが何もしないこと。
+    /// Gain FGの透過既定（`op505_core::default_gain_fg`＝ゲートを一切閉じない）が依存する挙動で、
+    /// この形はGain FG専用。OP EG/Pitch FG/Cutoff FGはUI側でSTAGE>=2かつ最終段level=0を強制するため
+    /// 必ずリリース区間を持つ。
     #[test]
-    fn single_stage_is_simple_one_shot() {
+    fn empty_release_region_makes_note_off_a_noop() {
         let sr = 44100.0;
         let params = TimeEgParams {
             stages: stages_with(&[(120, 255, 0)]),
             stage_count: 1,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
         let mut eg = TimeEg::new();
         eg.note_on();
@@ -566,14 +610,181 @@ mod tests {
         assert!(!eg.is_idle(), "single stage without loop should hold (sustain), not free-run to idle");
 
         eg.note_off();
-        let mut became_idle = false;
         for _ in 0..20_000 {
-            eg.tick(sr, params, 1.0);
+            level = eg.tick(sr, params, 1.0);
+        }
+        assert!((level - 1.0).abs() < 1e-3, "gate must stay open after note_off, got {level}");
+        assert!(!eg.is_idle(), "empty release region must never reach Idle (transparent gate)");
+    }
+
+    /// リリースが`release_point+1`から最終段まで中間段を飛ばさず順に辿ること。
+    /// 段2をサステインレベルより「上」に置くことで、段3へ直行した場合と区別できるようにしている
+    /// （直行なら100→0の単調降下でサステインレベルを超えないため）。
+    #[test]
+    fn release_traverses_intermediate_stages_without_skipping() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(100, 255, 0), (100, 100, 0), (100, 220, 0), (100, 0, 0)]),
+            stage_count: 4,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 1,
+        };
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let mut level = 0.0;
+        for _ in 0..40_000 {
+            level = eg.tick(sr, params, 1.0);
+        }
+        assert!((level - 100.0 / 255.0).abs() < 1e-2, "expected sustain at stage1 level, got {level}");
+
+        eg.note_off();
+        let mut peak_during_release = 0.0f32;
+        let mut became_idle = false;
+        for _ in 0..80_000 {
+            let out = eg.tick(sr, params, 1.0);
+            peak_during_release = peak_during_release.max(out);
             if eg.is_idle() {
                 became_idle = true;
                 break;
             }
         }
-        assert!(became_idle, "note_off should eventually release to idle even in the single-stage case");
+        assert!(became_idle, "expected release to reach Idle");
+        assert!(
+            peak_during_release > 200.0 / 255.0,
+            "release must climb through stage2 (220), not jump straight to stage3; peak={peak_during_release}"
+        );
+    }
+
+    /// 保持区間とリリース区間が段リストを過不足なく分割すること（重複も隙間も無い）。
+    /// 旧`loop_end`+`release_start`の2フィールド方式ではこの不変条件を破れたが、
+    /// `release_point`1本になったため型のレベルで破れない。ここでは全ての`release_point`について
+    /// 「保持側の最後の段＝release_point」「リリース側の最初の段＝release_point+1」を確認する。
+    #[test]
+    fn hold_and_release_regions_partition_the_stage_list() {
+        let sr = 44100.0;
+        let levels = [255u8, 200, 150, 100, 0];
+        for release_point in 0u8..4 {
+            let params = TimeEgParams {
+                stages: stages_with(&[
+                    (60, levels[0], 0),
+                    (60, levels[1], 0),
+                    (60, levels[2], 0),
+                    (60, levels[3], 0),
+                    (60, levels[4], 0),
+                ]),
+                stage_count: 5,
+                loop_enabled: 0,
+                loop_start: 0,
+                release_point,
+            };
+            let mut eg = TimeEg::new();
+            eg.note_on();
+            let mut level = 0.0;
+            for _ in 0..60_000 {
+                level = eg.tick(sr, params, 1.0);
+            }
+            let expected_sustain = levels[release_point as usize] as f32 / 255.0;
+            assert!(
+                (level - expected_sustain).abs() < 1e-2,
+                "release_point={release_point}: expected sustain at stage{release_point} level, got {level}"
+            );
+
+            eg.note_off();
+            let mut became_idle = false;
+            let mut final_level = -1.0;
+            for _ in 0..200_000 {
+                let out = eg.tick(sr, params, 1.0);
+                if eg.is_idle() {
+                    became_idle = true;
+                    final_level = out;
+                    break;
+                }
+            }
+            assert!(became_idle, "release_point={release_point}: expected release to reach Idle");
+            assert!(
+                final_level.abs() < 1e-6,
+                "release_point={release_point}: expected final level 0.0, got {final_level}"
+            );
+        }
+    }
+
+    /// 1段ループ（`loop_start == release_point`）はその段の入口レベルへ跳ね戻してやり直すため、
+    /// 1段だけでノコギリ波になる。段0で255まで上がり、段1で120へ下る形をループさせると、
+    /// 「255へ跳ね上がって120へ下る」を繰り返す。
+    #[test]
+    fn single_stage_loop_sawtooths_from_stage_entry_level() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(80, 255, 0), (80, 120, 0), (80, 0, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 1,
+        };
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        // アタック(段0)を抜けて定常のノコギリに入るまで進める。
+        let settle = (time_to_seconds(80) as f64 * 2.5 * sr as f64) as usize;
+        for _ in 0..settle {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut min_seen = 1.0f32;
+        let mut max_seen = 0.0f32;
+        for _ in 0..((time_to_seconds(80) as f64 * 6.0 * sr as f64) as usize) {
+            let out = eg.tick(sr, params, 1.0);
+            min_seen = min_seen.min(out);
+            max_seen = max_seen.max(out);
+        }
+        assert!((max_seen - 1.0).abs() < 0.02, "入口レベル(255)へ跳ね戻るはず: max={max_seen}");
+        assert!((min_seen - 120.0 / 255.0).abs() < 0.02, "段1のtarget(120)まで下るはず: min={min_seen}");
+        assert!(!eg.is_idle(), "ループ中は自然にIdleにならないはず");
+    }
+
+    /// `loop_start == 0`の1段ループは、段0の入口＝レベル0へ跳ね戻す（note_onの開始レベルと同じ）。
+    #[test]
+    fn single_stage_loop_at_stage_zero_falls_back_to_silence() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(80, 255, 0), (80, 0, 0)]),
+            stage_count: 2,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 0,
+        };
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let cycle = (time_to_seconds(80) as f64 * sr as f64) as usize;
+        for _ in 0..(cycle * 2) {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut min_seen = 1.0f32;
+        let mut max_seen = 0.0f32;
+        for _ in 0..(cycle * 4) {
+            let out = eg.tick(sr, params, 1.0);
+            min_seen = min_seen.min(out);
+            max_seen = max_seen.max(out);
+        }
+        assert!((max_seen - 1.0).abs() < 0.02, "段0のtarget(255)まで上るはず: max={max_seen}");
+        assert!(min_seen < 0.05, "入口レベル0へ跳ね戻るはず: min={min_seen}");
+    }
+
+    /// 旧`.op505`バンク（`loop_end`+`release_start`の2フィールド）がそのまま読めること。
+    /// `release_point`は旧`loop_end`と値の意味が同じなので変換不要、余分な`release_start`は
+    /// `deny_unknown_fields`未使用のため自動的に無視される。
+    #[test]
+    fn deserializes_legacy_loop_end_and_ignores_release_start() {
+        let legacy = serde_json::json!({
+            "stages": vec![serde_json::json!({ "time": 10, "level": 200, "curve": 0 }); MAX_STAGES],
+            "stage_count": 4,
+            "loop_enabled": 0,
+            "loop_start": 2,
+            "loop_end": 2,
+            "release_start": 3,
+        });
+        let params: TimeEgParams = serde_json::from_value(legacy).expect("legacy JSON should deserialize");
+        assert_eq!(params.stage_count, 4);
+        assert_eq!(params.loop_start, 2);
+        assert_eq!(params.release_point, 2, "release_point should adopt the legacy loop_end value");
     }
 }

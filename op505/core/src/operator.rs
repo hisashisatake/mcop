@@ -299,19 +299,18 @@ mod tests {
         stages
     }
 
-    /// Attack→Decay1(d1l相当)→Decay2(0へ張り付き、Idleにはならない)の3段。
-    /// stage_count=3・loop_start=loop_end=2で「Decay2の0張り付き」を表現し、
-    /// release_start=2からのリリースは0→0の即時遷移（次段が無いのでIdleへ）。
+    /// Attack→Decay1(d1l相当)→Decay2(0へ張り付き、Idleにはならない)＋リリース段の4段。
+    /// 保持区間`0..=release_point(2)`で「Decay2の0張り付き」を表現し、
+    /// リリース区間は段3の1本（0→0の即時遷移で次段が無いのでIdleへ）。
     fn fast_params() -> Op505OperatorParams {
         Op505OperatorParams {
             tl: 255,
             eg: TimeEgParams {
-                stages: stages_with(&[(1, 255, 0), (1, 128, 0), (1, 0, 0)]),
-                stage_count: 3,
+                stages: stages_with(&[(1, 255, 0), (1, 128, 0), (1, 0, 0), (1, 0, 0)]),
+                stage_count: 4,
                 loop_enabled: 0,
                 loop_start: 2,
-                loop_end: 2,
-                release_start: 2,
+                release_point: 2,
             },
             mul: 1,
             dt1: 128,
@@ -330,12 +329,11 @@ mod tests {
     fn noise_params(wf: u8) -> Op505OperatorParams {
         Op505OperatorParams {
             eg: TimeEgParams {
-                stages: stages_with(&[(0, 255, 0)]),
-                stage_count: 1,
+                stages: stages_with(&[(0, 255, 0), (0, 0, 0)]),
+                stage_count: 2,
                 loop_enabled: 0,
                 loop_start: 0,
-                loop_end: 0,
-                release_start: 0,
+                release_point: 0,
             },
             waveform: wf,
             ..fast_params()
@@ -375,20 +373,19 @@ mod tests {
     }
 
     /// EGSFT（eg_shift）はEGの減衰レンジを圧縮し、サステインの床を持ち上げる。
-    /// stage1(level=128)でloop_start=loop_end=1にして張り付かせ、
-    /// eg_shift=0と255でサステインのピーク振幅を比較する。
+    /// stage1(level=128)をリリース点にして張り付かせ、
+    /// eg_shift=0と255でサステインのピーク振幅を比較する（段2はリリース用）。
     #[test]
     fn eg_shift_raises_sustained_amplitude() {
         let sr = 44100.0;
         let wave = gen_op_sine();
         let base = Op505OperatorParams {
             eg: TimeEgParams {
-                stages: stages_with(&[(1, 255, 0), (1, 128, 0)]),
-                stage_count: 2,
+                stages: stages_with(&[(1, 255, 0), (1, 128, 0), (1, 0, 0)]),
+                stage_count: 3,
                 loop_enabled: 0,
                 loop_start: 1,
-                loop_end: 1,
-                release_start: 1,
+                release_point: 1,
             },
             ..fast_params()
         };
@@ -541,8 +538,7 @@ mod tests {
                 stage_count: 4,
                 loop_enabled: 0,
                 loop_start: 2,
-                loop_end: 2,
-                release_start: 3,
+                release_point: 2,
             },
             velocity_sensitivity: 0,
             eg_shift: 0,
@@ -579,12 +575,12 @@ mod tests {
         let wave = gen_op_sine();
         let params = Op505OperatorParams {
             eg: TimeEgParams {
-                stages: stages_with(&[(100, 255, 0), (90, 0, 0), (90, 255, 0)]),
-                stage_count: 3,
+                // 段3はリリース用（ループ区間は1..=2のまま）。
+                stages: stages_with(&[(100, 255, 0), (90, 0, 0), (90, 255, 0), (90, 0, 0)]),
+                stage_count: 4,
                 loop_enabled: 1,
                 loop_start: 1,
-                loop_end: 2,
-                release_start: 2,
+                release_point: 2,
             },
             ..fast_params()
         };

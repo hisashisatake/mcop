@@ -49,8 +49,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -111,8 +110,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -173,8 +171,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -235,8 +232,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -310,8 +306,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "depth": 128
       },
@@ -362,8 +357,7 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "loop_end": 0,
-          "release_start": 1
+          "release_point": 0
         },
         "depth": 128
       },
@@ -413,8 +407,7 @@
         "stage_count": 2,
         "loop_enabled": 0,
         "loop_start": 0,
-        "loop_end": 0,
-        "release_start": 1
+        "release_point": 0
       },
       "texture_lfo": {
         "waveform": 0,

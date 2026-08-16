@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# TimeEgParamsの旧`loop_end`エイリアス（.op505バンク互換）をテストで直接検証するために使う。
+serde_json = "1"

@@ -16,7 +16,7 @@ use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
 use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
-use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL};
+use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
 use crate::knob::{bool_checkbox, spin_control};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
@@ -51,10 +51,70 @@ const HIT_RADIUS_PX: f32 = 20.0;
 /// パネルサイズに応じて`ui_scale`倍される）とは独立の固定値。編集操作の対象になるドットは
 /// パネルサイズに関わらず十分な大きさで掴めるようにするため、`ui_scale`をかけない。
 const EDITOR_DOT_RADIUS_PX: f32 = crate::time_eg_preview::DOT_RADIUS * 2.5;
+/// ループ区間の背景へ敷く帯の色。保持色を薄く重ねて「どこが繰り返すか」を示す
+/// （折れ線・頂点より背面）。淡すぎると見えず濃すぎると折れ線が読みにくいので、
+/// 実機確認で詰める前提の暫定値。
+const COLOR_LOOP_BAND: egui::Color32 = egui::Color32::from_rgba_premultiplied(20, 46, 22, 0);
 /// ループ区間マーカー（三角形）を描く、グラフ下端からのオフセット（px）。
 const LOOP_MARKER_OFFSET: f32 = 6.0;
 /// ループ区間マーカー（三角形）の半径（px）。
 const LOOP_MARKER_RADIUS: f32 = 4.0;
+
+/// EG種別ごとの編集制約。`panel.xml`の`<time-eg-editor min-stages=".." terminal-level="..">`で宣言し、
+/// `ui-codegen`が生成コードへ埋め込む。既定（`Default`）はOP1〜4 EG/Pitch FG/Cutoff FG用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeEgProfile {
+    /// STAGESの下限。OP EG/Pitch FG/Cutoff FGは2で、リリース段を必ず1本持たせる
+    /// （キーオフで必ずレベル0へ着地させるため）。Gain FGだけ1を許す。
+    pub min_stages: u8,
+    /// trueなら最終段のlevelを0に固定する（GRAPHの縦ドラッグ禁止・VALUEのLV欄をグレーアウト）。
+    ///
+    /// OP EGで必須なのは、ボイス解放条件が「全4オペレーターが`is_idle()`」（op505-coreのVoice）で
+    /// あるため。必ず0へ到達してからIdleになれば、ボイスリークもキーオフ時のクリックも起きない。
+    /// Pitch/Cutoff FGはlevel 0＝変調量ゼロ＝ニュートラルなので同じ扱いで自然な意味になる。
+    /// Gain FGはボイス解放に関与せず、level 0が「無音」を意味してしまう（透過既定は255で
+    /// ゲートを閉じない）ため`false`。
+    pub terminal_level_zero: bool,
+}
+
+impl Default for TimeEgProfile {
+    fn default() -> Self {
+        Self { min_stages: 2, terminal_level_zero: true }
+    }
+}
+
+impl TimeEgProfile {
+    /// Gain FG用。STAGE=1（リリース区間が空＝ゲートを一切閉じない透過既定）を許し、
+    /// 最終段のlevelも自由にする。
+    pub const GAIN_FG: Self = Self { min_stages: 1, terminal_level_zero: false };
+}
+
+/// EG種別ごとの不変条件を満たすようパラメーターを整える。編集操作（段の挿入/削除・STAGES変更・
+/// リリース点ドラッグ等）の直後に必ず通す。
+///
+/// ここで直すのは「今の操作の結果として範囲外になった値」だけに限る。ユーザーが触っていない値を
+/// 裏で書き換えるとUIが信用できなくなる（過去にRELの自動補正で実際に問題になった）ため、
+/// 例えば`loop_enabled`のフラグ自体は消さない——ループ区間が成立しないときは
+/// エンジン側・プレビュー側とも「ループなし」として扱うので、リリース点を右へ戻せば設定も戻る。
+fn normalize(mut params: TimeEgParams, profile: TimeEgProfile) -> TimeEgParams {
+    let min_stages = profile.min_stages.clamp(1, MAX_STAGES as u8);
+    params.stage_count = params.stage_count.clamp(min_stages, MAX_STAGES as u8);
+    let n = params.stage_count as usize;
+
+    // リリース点の上限。リリース段を必ず1本残すEG(min_stages>=2)はn-2まで、
+    // 空リリース（＝リリース無し）を許すGain FGはn-1まで。
+    let max_release_point = if profile.min_stages >= 2 { n.saturating_sub(2) } else { n - 1 };
+    params.release_point = params.release_point.min(max_release_point as u8);
+
+    // ループ区間は`loop_start..=release_point`。1段ループ（`loop_start == release_point`）も
+    // 有効で、その段の入口レベルへ跳ね戻すのでノコギリ波になる（sound-core/time_eg.rsのadvance参照）。
+    params.loop_start = params.loop_start.min(params.release_point);
+
+    if profile.terminal_level_zero {
+        params.stages[n - 1].level = 0;
+    }
+    params
+}
 
 /// GRAPH/VALUEタブの選択状態。パッチデータではないためegui memoryに保持する（`time_eg_editor`参照）。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,16 +125,14 @@ enum Mode {
 
 /// GRAPHモードでドラッグ中の対象。フレーム跨ぎでegui memoryに保持する
 /// （`draw_graph_mode`のdrag_id参照）。`Vertex.point`は`TimeEgGeometry::points`のindex
-/// （`stage_of_point[point]`で対応する段が分かる）。`LoopStart`/`LoopEnd`はループ区間マーカー
-/// （現在保持区間として描画されている頂点、すなわち`0..=loop_end`の範囲にのみスナップできる。
-/// `loop_end`を現在より後ろへ伸ばしたい場合はまだ描画されていない段にスナップ先が無いため、
-/// L.ENDのspin_control（`stage_spin_row`）を使う——GRAPH/VALUE両モードに共通のこの行を
-/// 残している理由の一つ）。
+/// （`stage_of_point[point]`で対応する段が分かる）。
+///
+/// ドラッグできるのは頂点だけ。ループ開始・リリース点の三角マーカーはグラフ下端に描くため、
+/// level=0の頂点とヒットテスト範囲が重なって丸を掴めなくなる問題があり、表示専用にした
+/// （実機確認で判明。編集はspin行のL.START/RELで行う）。
 #[derive(Clone, Copy)]
 enum DragTarget {
     Vertex { point: usize },
-    LoopStart,
-    LoopEnd,
 }
 
 /// 右クリックメニューの対象。`secondary_clicked()`の瞬間に段indexへ解決して保持する
@@ -119,31 +177,26 @@ fn hit_test_segment(geometry: &TimeEgGeometry, x: f32) -> Option<usize> {
     None
 }
 
-/// 保持区間（`points[1..=release_point]`、現在描画されている`0..=loop_end`の段）のうち、
-/// `x`に最も近い頂点が指す段indexを返す（ループマーカーのドラッグ先スナップ用）。
-fn nearest_held_stage(geometry: &TimeEgGeometry, x: f32) -> usize {
-    (1..=geometry.release_point)
-        .min_by(|&a, &b| (geometry.points[a].x - x).abs().total_cmp(&(geometry.points[b].x - x).abs()))
-        .map(|i| geometry.stage_of_point[i])
-        .unwrap_or(0)
-}
-
-/// ループ区間マーカー（小さい三角形）を1つ描く。
-fn draw_loop_marker(painter: &egui::Painter, center: Pos2) {
+/// 区間マーカー（小さい三角形）を1つ描く。ループ開始は保持色、リリース点はリリース色で描き分ける。
+/// 表示専用（ドラッグ不可、`draw_graph_mode`のdocコメント参照）。
+fn draw_loop_marker(painter: &egui::Painter, center: Pos2, color: egui::Color32) {
     let r = LOOP_MARKER_RADIUS;
     let points = vec![Pos2::new(center.x, center.y - r), Pos2::new(center.x - r, center.y + r), Pos2::new(center.x + r, center.y + r)];
-    painter.add(Shape::convex_polygon(points, COLOR_HELD, Stroke::NONE));
+    painter.add(Shape::convex_polygon(points, color, Stroke::NONE));
 }
 
 /// `TimeEgParams`内の1スカラーフィールドを指す種別（`TimeEgFieldHandle`が読み書きする対象）。
-/// `stage_count`(1〜8)・`loop_start`/`loop_end`/`release_start`(0〜7)は0〜255統一ルールの例外
+/// `stage_count`(1〜8)・`loop_start`/`release_point`は0〜255統一ルールの例外
 /// （連続量ではなく段インデックス。MULの0〜15と同じ性質）。
 #[derive(Clone, Copy)]
 enum TimeEgField {
     StageCount,
+    /// ループ開始段。0始まりの段indexをそのまま表示する（グラフ上のマーカー位置と対応）。
     LoopStart,
-    LoopEnd,
-    ReleaseStart,
+    /// 保持区間とリリース区間の境界。`TimeEgParams::release_point`は0始まりの段indexだが、
+    /// **UIでは1始まりのクリック点番号として表示する**（グラフ上でユーザーが数える点の番号と
+    /// 一致させるため。`stage{i+1}`表示と同じ既存慣習）。
+    ReleasePoint,
     /// 段i(0-indexed)のtime。`display()`を秒数表示へオーバーライドする。
     StageTime(usize),
     /// 段i(0-indexed)のlevel。
@@ -155,11 +208,28 @@ enum TimeEgField {
 struct TimeEgFieldHandle<'a> {
     handle: &'a dyn TimeEgHandle,
     field: TimeEgField,
+    profile: TimeEgProfile,
 }
 
 impl<'a> TimeEgFieldHandle<'a> {
-    fn new(handle: &'a dyn TimeEgHandle, field: TimeEgField) -> Self {
-        Self { handle, field }
+    fn new(handle: &'a dyn TimeEgHandle, field: TimeEgField, profile: TimeEgProfile) -> Self {
+        Self { handle, field, profile }
+    }
+
+    /// 現在の段数（プロファイルの下限を効かせたもの）。
+    fn stage_count(&self) -> usize {
+        self.handle.params().stage_count.clamp(self.profile.min_stages.max(1), MAX_STAGES as u8) as usize
+    }
+
+    /// `release_point`(0始まり段index)の上限。リリース段を必ず1本残すEGはn-2、
+    /// 空リリースを許すGain FGはn-1（`normalize`と同じ規則）。
+    fn max_release_point(&self) -> usize {
+        let n = self.stage_count();
+        if self.profile.min_stages >= 2 {
+            n.saturating_sub(2)
+        } else {
+            n - 1
+        }
     }
 }
 
@@ -172,8 +242,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             // 存在するという表示と実体の食い違いが起きる（実機確認で発覚）。
             TimeEgField::StageCount => p.stage_count.max(1) as i32,
             TimeEgField::LoopStart => p.loop_start as i32,
-            TimeEgField::LoopEnd => p.loop_end as i32,
-            TimeEgField::ReleaseStart => p.release_start as i32,
+            // 0始まりの内部値を1始まりのクリック点番号へ変換して見せる。
+            TimeEgField::ReleasePoint => p.release_point as i32 + 1,
             TimeEgField::StageTime(i) => p.stages[i].time as i32,
             TimeEgField::StageLevel(i) => p.stages[i].level as i32,
         }
@@ -181,7 +251,9 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn min(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => 1,
+            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            // クリック点(1)より手前に境界は置けない。
+            TimeEgField::ReleasePoint => 1,
             _ => 0,
         }
     }
@@ -189,14 +261,18 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn max(&self) -> i32 {
         match self.field {
             TimeEgField::StageCount => MAX_STAGES as i32,
-            TimeEgField::LoopStart | TimeEgField::LoopEnd | TimeEgField::ReleaseStart => (MAX_STAGES - 1) as i32,
+            // ループ区間は`loop_start..=release_point`。リリース点と同じ段まで選べる
+            // （1段ループ＝ノコギリ波）。
+            TimeEgField::LoopStart => self.handle.params().release_point as i32,
+            TimeEgField::ReleasePoint => self.max_release_point() as i32 + 1,
             TimeEgField::StageTime(_) | TimeEgField::StageLevel(_) => 255,
         }
     }
 
     fn default(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => 1,
+            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            TimeEgField::ReleasePoint => 1,
             _ => 0,
         }
     }
@@ -206,8 +282,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         match self.field {
             TimeEgField::StageCount => format!("{base} STAGES"),
             TimeEgField::LoopStart => format!("{base} L.START"),
-            TimeEgField::LoopEnd => format!("{base} L.END"),
-            TimeEgField::ReleaseStart => format!("{base} REL"),
+            TimeEgField::ReleasePoint => format!("{base} REL"),
             TimeEgField::StageTime(i) => format!("{base} stage{} TIME", i + 1),
             TimeEgField::StageLevel(i) => format!("{base} stage{} LEVEL", i + 1),
         }
@@ -244,12 +319,12 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
                 p.stage_count = clamped;
             }
             TimeEgField::LoopStart => p.loop_start = clamped,
-            TimeEgField::LoopEnd => p.loop_end = clamped,
-            TimeEgField::ReleaseStart => p.release_start = clamped,
+            // 1始まりのクリック点番号を0始まりの段indexへ戻す。
+            TimeEgField::ReleasePoint => p.release_point = clamped.saturating_sub(1),
             TimeEgField::StageTime(i) => p.stages[i].time = clamped,
             TimeEgField::StageLevel(i) => p.stages[i].level = clamped,
         }
-        self.handle.set_params(p);
+        self.handle.set_params(normalize(p, self.profile));
     }
 
     fn end_edit(&self) {
@@ -376,8 +451,8 @@ fn width_to_time(width_px: f32, scale: f32) -> u8 {
 /// `index`段の直後に複製段を1つ挿入する（右クリックメニュー「この後ろに段を挿入」、Step E）。
 /// `stage_count`が`MAX_STAGES`に達している場合は何もしない（呼び出し側がメニュー項目を
 /// 無効化する想定だが、純粋関数としても安全側に倒す）。挿入位置より後ろの
-/// `loop_start`/`loop_end`/`release_start`は追従して+1する。
-fn insert_stage_after(params: &TimeEgParams, index: usize) -> TimeEgParams {
+/// `loop_start`/`release_point`は追従して+1し、最後に`normalize`で不変条件を整える。
+fn insert_stage_after(params: &TimeEgParams, index: usize, profile: TimeEgProfile) -> TimeEgParams {
     let mut out = *params;
     let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
     if n >= MAX_STAGES {
@@ -391,19 +466,17 @@ fn insert_stage_after(params: &TimeEgParams, index: usize) -> TimeEgParams {
     out.stage_count = (n + 1) as u8;
     let shift = |p: u8| if (p as usize) > index { p + 1 } else { p };
     out.loop_start = shift(params.loop_start);
-    out.loop_end = shift(params.loop_end);
-    out.release_start = shift(params.release_start);
-    out
+    out.release_point = shift(params.release_point);
+    normalize(out, profile)
 }
 
-/// `index`段を削除する（右クリックメニュー「この段を削除」、Step E）。`stage_count`が1の場合は
-/// 何もしない（最後の1段は消せない）。削除位置より後ろの`loop_start`/`loop_end`/`release_start`は
-/// 追従して-1し、削除された段を指していたものは同じ数値のまま新しい範囲へクランプする
-/// （エンジンは不整合値でも到達段で静止するだけで安全、sound-core/time_eg.rsの不変条件参照）。
-fn remove_stage(params: &TimeEgParams, index: usize) -> TimeEgParams {
+/// `index`段を削除する（右クリックメニュー「この段を削除」、Step E）。`stage_count`がプロファイルの
+/// 下限にある場合は何もしない。削除位置より後ろの`loop_start`/`release_point`は追従して-1し、
+/// 削除された段を指していたものは同じ数値のまま新しい範囲へクランプする。
+fn remove_stage(params: &TimeEgParams, index: usize, profile: TimeEgProfile) -> TimeEgParams {
     let mut out = *params;
     let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
-    if n <= 1 {
+    if n <= profile.min_stages.max(1) as usize {
         return out;
     }
     let index = index.min(n - 1);
@@ -418,33 +491,66 @@ fn remove_stage(params: &TimeEgParams, index: usize) -> TimeEgParams {
         shifted.min(new_n - 1) as u8
     };
     out.loop_start = shift(params.loop_start);
-    out.loop_end = shift(params.loop_end);
-    out.release_start = shift(params.release_start);
-    out
+    out.release_point = shift(params.release_point);
+    normalize(out, profile)
 }
 
-/// STAGES/LOOP/L.START/L.END/RELのspin行（GRAPH/VALUE両モード共通、旧`time_eg_block`相当）。
-fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle) {
+/// spin行の各欄を有効にするか（`spin_row_enabled`の戻り値）。
+struct SpinRowEnabled {
+    rel: bool,
+    loop_toggle: bool,
+    loop_start: bool,
+}
+
+/// spin行のグレーアウト判定。**「選択肢が2つ以上あるときだけ有効」で揃える**のが原則
+/// （1つしか選べない欄を押せる見た目で残すと「数字は見えるのに動かせない死んだUI」になり、
+/// 過去に却下された形になる）。UIから切り離してテストできるよう純粋関数にしてある。
+fn spin_row_enabled(params: &TimeEgParams, profile: TimeEgProfile) -> SpinRowEnabled {
+    let n = params.stage_count.clamp(profile.min_stages.max(1), MAX_STAGES as u8) as usize;
+    let max_release_point = if profile.min_stages >= 2 { n.saturating_sub(2) } else { n - 1 };
+    SpinRowEnabled {
+        // リリース点はクリック点(1)〜(max_release_point+1)から選ぶ（STAGE=2は(1)固定）。
+        rel: max_release_point > 0,
+        // LOOPはリリース点が動かせる段数（＝STAGE>=3）で使えるようにする。1段ループも有効なので
+        // release_point=0でも「段0を繰り返す」形が成立する（入口レベル0へ跳ね戻すノコギリ）。
+        loop_toggle: max_release_point > 0,
+        // L.STARTは0〜release_pointから選ぶ。release_point=0だと0しか選べないため無効に保つ
+        // （選択肢が1つの欄を押せる見た目で残さない原則）。
+        loop_start: params.release_point >= 1,
+    }
+}
+
+/// STAGES/LOOP/L.START/RELのspin行（GRAPH/VALUE両モード共通、旧`time_eg_block`相当）。
+/// 旧L.END欄は廃止した（ループ終端＝リリース点で同じ境界なので、REL1本で足りる）。
+///
+/// 段数によって固定になる欄は、消さずに**グレーアウトして残す**。欄の位置が段数で動くと
+/// 目線が迷うため（段数を変えながら詰める操作が多い）。
+fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile) {
+    let params = handle.params();
+    let SpinRowEnabled { rel: rel_enabled, loop_toggle: loop_enabled, loop_start: loop_start_enabled } =
+        spin_row_enabled(&params, profile);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("STAGES").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount), egui::TextStyle::Small, 24.0);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, 24.0);
         });
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("LOOP").size(8.0));
-            bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::LoopEnabled), "");
+        ui.add_enabled_ui(loop_enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("LOOP").size(8.0));
+                bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::LoopEnabled), "");
+            });
         });
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("L.START").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart), egui::TextStyle::Small, 24.0);
+        ui.add_enabled_ui(loop_start_enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("L.START").size(8.0));
+                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart, profile), egui::TextStyle::Small, 24.0);
+            });
         });
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("L.END").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopEnd), egui::TextStyle::Small, 24.0);
-        });
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("REL").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleaseStart), egui::TextStyle::Small, 24.0);
+        ui.add_enabled_ui(rel_enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("REL").size(8.0));
+                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, 24.0);
+            });
         });
     });
 }
@@ -462,9 +568,9 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle) {
 /// `egui::Grid`で列位置を強制的に揃える。
 /// `size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を差し引いた残り）。
 /// 段数1〜8でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
-fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle) {
+fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: TimeEgProfile) {
     let params = handle.params();
-    let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
+    let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
     egui::ScrollArea::vertical()
         .id_salt(("time_eg_editor", handle.name(), "value_scroll"))
         .max_height(size.y)
@@ -482,12 +588,22 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle) {
                         ui.label(egui::RichText::new("TIME(m)").size(8.0));
                         spin_control(
                             ui,
-                            &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i)),
+                            &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i), profile),
                             egui::TextStyle::Small,
                             TIME_MS_SPIN_WIDTH,
                         );
                         ui.label(egui::RichText::new("LV").size(8.0));
-                        spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i)), egui::TextStyle::Small, 24.0);
+                        // 最終段のlevelは0固定のEG（OP EG/Pitch FG/Cutoff FG）がある。
+                        // 動かせないことが分かるようグレーアウトする（`TimeEgProfile`参照）。
+                        let level_editable = !(profile.terminal_level_zero && i == n - 1);
+                        ui.add_enabled_ui(level_editable, |ui| {
+                            spin_control(
+                                ui,
+                                &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i), profile),
+                                egui::TextStyle::Small,
+                                24.0,
+                            );
+                        });
                         bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CV");
                         ui.end_row();
                     }
@@ -495,11 +611,14 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle) {
         });
 }
 
-/// GRAPHモード: 折れ線をコンテンツ領域いっぱいに描画し、頂点のドラッグ（time/level編集）・
-/// ループ区間マーカーのドラッグ（loop_start/loop_end編集）・右クリックメニュー（段の挿入/削除・
-/// カーブ切替）で編集する。`size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を
-/// 差し引いた残り）。面積が増えるぶん頂点・ループマーカーのヒットテストが楽になる。
-fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+/// GRAPHモード: 折れ線をコンテンツ領域いっぱいに描画し、頂点のドラッグ（time/level編集）と
+/// 右クリックメニュー（段の挿入/削除・カーブ切替）で編集する。`size`はコンテンツ領域全体
+/// （`time_eg_editor`がヘッダ・spin行を差し引いた残り）。面積が増えるぶん頂点のヒットテストが楽になる。
+///
+/// ループ開始・リリース点の三角マーカーは**表示専用**（ドラッグ不可）。グラフ下端に置くため、
+/// level=0の頂点とヒットテスト範囲が重なって「丸を掴みたいのにマーカーが取られる」状態になり、
+/// 操作性を損なっていた（実機確認で判明）。両者の編集はspin行のL.START/RELで行う。
+fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8, profile: TimeEgProfile) {
     let base_id = ui.id().with(("time_eg_editor", handle.name()));
     let drag_id = base_id.with("drag");
     let ctx_id = base_id.with("ctx");
@@ -515,34 +634,32 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     let inner = rect.shrink(GRAPH_PAD);
     painter.rect_filled(inner, 2.0, COLOR_PANEL);
     let geometry = time_eg_editor_layout(&params, inner, mapping, tl);
+
+    let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
+    let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;
+    // ループ区間の背景へ淡い帯を敷いて「どこが繰り返すか」を一目で分かるようにする。
+    // 折れ線・頂点より前に描いて背面へ回す。`loop_span`はループが成立するときだけSome。
+    let loop_start_pos = geometry.loop_span.map(|(lo, hi)| {
+        let band = Rect::from_x_y_ranges(geometry.points[lo].x..=geometry.points[hi].x, inner.y_range());
+        painter.rect_filled(band, 0.0, COLOR_LOOP_BAND);
+        Pos2::new(geometry.points[lo].x, marker_y)
+    });
+
     draw_geometry(painter, &params, &geometry, 1.0, EDITOR_DOT_RADIUS_PX);
 
-    let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;
-    let loop_markers = (params.loop_enabled != 0)
-        .then_some(geometry.loop_span)
-        .flatten()
-        .map(|(lo, hi)| (Pos2::new(geometry.points[lo].x, marker_y), Pos2::new(geometry.points[hi].x, marker_y)));
-    if let Some((start_pos, end_pos)) = loop_markers {
-        painter.add(Shape::line(vec![start_pos, end_pos], Stroke::new(1.5, COLOR_HELD)));
-        draw_loop_marker(painter, start_pos);
-        draw_loop_marker(painter, end_pos);
+    // 区間マーカーは表示専用（ヒットテストしない）。ループ終端はリリース点と同じ境界なので
+    // マーカーはリリース点の1つで足りる。
+    let release_pos = Pos2::new(geometry.points[geometry.release_point].x, marker_y);
+    if let Some(start_pos) = loop_start_pos {
+        painter.add(Shape::line(vec![start_pos, release_pos], Stroke::new(1.5, COLOR_HELD)));
+        draw_loop_marker(painter, start_pos, COLOR_HELD);
     }
+    draw_loop_marker(painter, release_pos, COLOR_RELEASE);
 
     if response.drag_started() {
         if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
-            if let Some((start_pos, end_pos)) = loop_markers {
-                if pointer.distance(start_pos) <= HIT_RADIUS_PX {
-                    drag = Some(DragTarget::LoopStart);
-                } else if pointer.distance(end_pos) <= HIT_RADIUS_PX {
-                    drag = Some(DragTarget::LoopEnd);
-                }
-            }
-            if drag.is_none() {
-                if let Some(point) = hit_test_vertex(&geometry, pointer) {
-                    drag = Some(DragTarget::Vertex { point });
-                }
-            }
-            if drag.is_some() {
+            if let Some(point) = hit_test_vertex(&geometry, pointer) {
+                drag = Some(DragTarget::Vertex { point });
                 handle.begin_edit();
             }
         }
@@ -558,35 +675,20 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
                     let new_level = y_to_level(mapping, tl, inner, pointer.y);
                     let mut p = params;
                     p.stages[stage].time = new_time;
-                    p.stages[stage].level = new_level;
-                    handle.set_params(p);
+                    // 最終段のlevelを0に固定するEG（OP EG/Pitch FG/Cutoff FG）では縦方向のドラッグを
+                    // 無視し、横（time）だけ効かせる（`TimeEgProfile::terminal_level_zero`参照）。
+                    if !(profile.terminal_level_zero && stage == n - 1) {
+                        p.stages[stage].level = new_level;
+                    }
+                    let shown_level = p.stages[stage].level;
+                    handle.set_params(normalize(p, profile));
                     painter.text(
                         inner.right_top(),
                         egui::Align2::RIGHT_TOP,
-                        format!("T {}  L {new_level}", format_time_seconds(new_time)),
+                        format!("T {}  L {shown_level}", format_time_seconds(new_time)),
                         egui::FontId::monospace(9.0),
                         egui::Color32::from_gray(220),
                     );
-                }
-            }
-        }
-        Some(DragTarget::LoopStart) => {
-            if response.dragged() {
-                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
-                    let stage = nearest_held_stage(&geometry, pointer.x);
-                    let mut p = params;
-                    p.loop_start = (stage as u8).min(p.loop_end);
-                    handle.set_params(p);
-                }
-            }
-        }
-        Some(DragTarget::LoopEnd) => {
-            if response.dragged() {
-                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
-                    let stage = nearest_held_stage(&geometry, pointer.x);
-                    let mut p = params;
-                    p.loop_end = (stage as u8).max(p.loop_start);
-                    handle.set_params(p);
                 }
             }
         }
@@ -613,7 +715,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
             ui.label("(対象なし)");
             return;
         };
-        let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
+        let min_stages = profile.min_stages.max(1) as usize;
         let curve_stage = match target {
             CtxTarget::Vertex(stage) => Some(stage),
             CtxTarget::Segment(stage) => Some(stage),
@@ -630,9 +732,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
         }
         match target {
             CtxTarget::Vertex(stage) => {
-                if n > 1 && ui.button("この段を削除").clicked() {
+                if n > min_stages && ui.button("この段を削除").clicked() {
                     handle.begin_edit();
-                    handle.set_params(remove_stage(&params, stage));
+                    handle.set_params(remove_stage(&params, stage, profile));
                     handle.end_edit();
                     ui.close();
                 }
@@ -640,7 +742,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
             CtxTarget::Segment(stage) => {
                 if n < MAX_STAGES && ui.button("この後ろに段を挿入").clicked() {
                     handle.begin_edit();
-                    handle.set_params(insert_stage_after(&params, stage));
+                    handle.set_params(insert_stage_after(&params, stage, profile));
                     handle.end_edit();
                     ui.close();
                 }
@@ -655,7 +757,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
 /// `handle.name()`はegui memoryのId salt兼見出しラベルに使うため、呼び出し側で
 /// EGごとに一意な名前（"OP1 EG"/"PITCH FG"等）を渡すこと。
-pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8) {
+/// `profile`はEG種別ごとの編集制約（`TimeEgProfile`参照）。panel.xmlの
+/// `min-stages`/`terminal-level`属性からui-codegenが埋め込む。
+pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8, profile: TimeEgProfile) {
     let mode_id = ui.id().with(("time_eg_editor", handle.name(), "mode"));
     let mut mode = ui.memory(|m| m.data.get_temp::<Mode>(mode_id)).unwrap_or(Mode::Graph);
 
@@ -668,11 +772,11 @@ pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mappin
 
         let content_size = Vec2::new(size.x, (size.y - HEADER_HEIGHT - SPIN_ROW_HEIGHT).max(0.0));
         match mode {
-            Mode::Graph => draw_graph_mode(ui, content_size, handle, mapping, tl),
-            Mode::Value => draw_value_mode(ui, content_size, handle),
+            Mode::Graph => draw_graph_mode(ui, content_size, handle, mapping, tl, profile),
+            Mode::Value => draw_value_mode(ui, content_size, handle, profile),
         }
 
-        stage_spin_row(ui, handle);
+        stage_spin_row(ui, handle, profile);
     });
 
     ui.memory_mut(|m| m.data.insert_temp(mode_id, mode));
@@ -716,8 +820,7 @@ mod tests {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         }
     }
 
@@ -807,40 +910,148 @@ mod tests {
     #[test]
     fn insert_stage_after_shifts_loop_markers() {
         let p = gain_switch_params();
-        let out = insert_stage_after(&p, 1);
+        let out = insert_stage_after(&p, 1, TimeEgProfile::default());
         assert_eq!(out.stage_count, 6);
         assert_eq!(out.stages[2].time, out.stages[1].time, "index+1へindexの複製を挿入するはず");
-        // 元のloop_end=3, release_start=4はindex(1)より後ろなので+1される。loop_start=0は変わらない。
+        // 元のrelease_point=3はindex(1)より後ろなので+1される。loop_start=0は変わらない。
         assert_eq!(out.loop_start, 0);
-        assert_eq!(out.loop_end, 4);
-        assert_eq!(out.release_start, 5);
+        assert_eq!(out.release_point, 4);
     }
 
     #[test]
     fn insert_stage_after_is_noop_at_max_stages() {
         let mut p = gain_switch_params();
         p.stage_count = MAX_STAGES as u8;
-        let out = insert_stage_after(&p, 0);
+        let out = insert_stage_after(&p, 0, TimeEgProfile::default());
         assert_eq!(out.stage_count, MAX_STAGES as u8, "8段のときは挿入しないはず");
     }
 
     #[test]
     fn remove_stage_shifts_loop_markers() {
         let p = gain_switch_params();
-        let out = remove_stage(&p, 1);
+        let out = remove_stage(&p, 1, TimeEgProfile::default());
         assert_eq!(out.stage_count, 4);
-        // 元のloop_end=3, release_start=4はindex(1)より後ろなので-1される。loop_start=0は変わらない。
+        // 元のrelease_point=3はindex(1)より後ろなので-1される。loop_start=0は変わらない。
         assert_eq!(out.loop_start, 0);
-        assert_eq!(out.loop_end, 2);
-        assert_eq!(out.release_start, 3);
+        assert_eq!(out.release_point, 2);
     }
 
     #[test]
-    fn remove_stage_is_noop_at_single_stage() {
+    fn remove_stage_is_noop_at_min_stages() {
+        let mut p = gain_switch_params();
+        p.stage_count = 2;
+        let out = remove_stage(&p, 0, TimeEgProfile::default());
+        assert_eq!(out.stage_count, 2, "既定プロファイルの下限(2段)では削除しないはず");
+    }
+
+    #[test]
+    fn gain_fg_profile_can_remove_down_to_one_stage() {
+        let mut p = gain_switch_params();
+        p.stage_count = 2;
+        let out = remove_stage(&p, 1, TimeEgProfile::GAIN_FG);
+        assert_eq!(out.stage_count, 1, "Gain FGは1段まで減らせる（透過既定の形）");
+    }
+
+    /// リリース点は必ずリリース段を1本残す位置までしか置けない（既定プロファイル）。
+    /// これで「保持区間が段リスト全体を占めてリリースが空」になることが起きなくなり、
+    /// キーオフで必ずレベル0へ着地する。
+    #[test]
+    fn normalize_keeps_at_least_one_release_stage() {
+        let mut p = gain_switch_params();
+        p.release_point = 4; // = stage_count-1。リリース段が無くなる位置
+        let out = normalize(p, TimeEgProfile::default());
+        assert_eq!(out.release_point, 3, "n-2へクランプされるはず");
+        assert_eq!(out.stages[4].level, 0, "最終段のlevelは0固定のはず");
+    }
+
+    /// Gain FGはリリース区間が空（＝ゲートを一切閉じない透過既定）になる形を許し、
+    /// 最終段のlevelも書き換えない。
+    #[test]
+    fn normalize_allows_empty_release_for_gain_fg() {
         let mut p = gain_switch_params();
         p.stage_count = 1;
-        let out = remove_stage(&p, 0);
-        assert_eq!(out.stage_count, 1, "1段のときは削除しないはず");
+        p.stages[0].level = 255;
+        p.release_point = 0;
+        let out = normalize(p, TimeEgProfile::GAIN_FG);
+        assert_eq!(out.stage_count, 1);
+        assert_eq!(out.release_point, 0, "空リリースが許されるはず");
+        assert_eq!(out.stages[0].level, 255, "Gain FGの最終段levelは0へ書き換えないはず");
+    }
+
+    /// ループ区間は`loop_start..=release_point`なので、loop_startはリリース点と同じ段まで許す
+    /// （1段ループ＝入口レベルへ跳ね戻すノコギリ波）。それを超える値だけクランプする。
+    #[test]
+    fn normalize_clamps_loop_start_to_release_point() {
+        let mut p = gain_switch_params();
+        p.loop_start = 3;
+        p.release_point = 1;
+        let out = normalize(p, TimeEgProfile::default());
+        assert_eq!(out.loop_start, 1, "loop_startはrelease_pointまで（同値＝1段ループ）");
+        assert_eq!(out.loop_enabled, 1, "ユーザーが触っていないLOOPフラグは書き換えないはず");
+    }
+
+    /// spin行のグレーアウト判定は「選択肢が2つ以上あるときだけ有効」で揃っているか。
+    /// 特にL.STARTは、LOOPが成立していても選択肢が0だけなら無効に保つ
+    /// （REL=(2)＝release_point=1のとき。実機確認で発覚した不具合の回帰テスト）。
+    #[test]
+    fn spin_row_greys_out_fields_with_only_one_choice() {
+        let profile = TimeEgProfile::default();
+        let build = |stage_count: u8, release_point: u8| TimeEgParams { stage_count, release_point, ..TimeEgParams::default() };
+
+        // STAGE=2: リリース点はクリック点(1)固定、ループ不可。
+        let e = spin_row_enabled(&build(2, 0), profile);
+        assert!(!e.rel && !e.loop_toggle && !e.loop_start, "STAGE=2は全て無効のはず");
+
+        // STAGE=3 / REL=(1): 段0の1段ループは組めるので、LOOPは有効。
+        // ただしL.STARTは0しか選べないため無効に保つ。
+        let e = spin_row_enabled(&build(3, 0), profile);
+        assert!(e.rel, "STAGE=3ならRELは(1)と(2)の2択");
+        assert!(e.loop_toggle, "1段ループが組めるのでLOOPは有効");
+        assert!(!e.loop_start, "選択肢が0だけならL.STARTは無効に保つ");
+
+        // STAGE=3 / REL=(2): L.STARTが0（段0〜1の2段ループ）と1（段1の1段ループ＝ノコギリ）の2択。
+        let e = spin_row_enabled(&build(3, 1), profile);
+        assert!(e.loop_toggle && e.loop_start, "release_point=1でL.STARTが動かせるようになる");
+
+        // STAGE=4 / REL=(3): L.STARTは0〜2の3択。
+        let e = spin_row_enabled(&build(4, 2), profile);
+        assert!(e.loop_toggle && e.loop_start);
+    }
+
+    /// STAGESを増やしてからRELを上げると、LOOPが有効になる条件(`release_point >= 1`)を満たすか。
+    /// spin行のグレーアウト条件が実際に解除されるところまで、編集の連鎖を通しで確認する。
+    #[test]
+    fn raising_stages_then_release_point_unlocks_loop() {
+        let profile = TimeEgProfile::default();
+        let handle = MockTimeEg { value: Cell::new(TimeEgParams::default()) };
+        // 既定は2段・release_point=0 → LOOPは無効（ループ区間が1段になり平坦で無意味なため）。
+        assert_eq!(handle.params().stage_count, 2);
+        assert_eq!(handle.params().release_point, 0);
+
+        TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, profile).set(4);
+        assert_eq!(handle.params().stage_count, 4);
+        // STAGESを増やしただけではRELは動かない（ユーザーが触っていない値は書き換えない）。
+        assert_eq!(handle.params().release_point, 0, "RELは据え置きのはず");
+
+        let rel = TimeEgFieldHandle::new(&handle, TimeEgField::ReleasePoint, profile);
+        assert_eq!(rel.max(), 3, "STAGES=4ならRELはクリック点(3)まで");
+        rel.set(3);
+        assert_eq!(handle.params().release_point, 2, "クリック点(3)は内部値2");
+        assert!(handle.params().release_point >= 1, "ここでLOOPのグレーアウトが解除される");
+    }
+
+    /// RELのspin欄は0始まりの内部値ではなく1始まりのクリック点番号を見せる
+    /// （グラフ上でユーザーが数える点の番号と一致させるため）。
+    #[test]
+    fn release_point_field_is_displayed_one_based() {
+        let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::ReleasePoint, TimeEgProfile::default());
+        assert_eq!(field.value(), 4, "release_point=3はクリック点(4)として表示するはず");
+        assert_eq!(field.min(), 1);
+        assert_eq!(field.max(), 4, "stage_count=5ならクリック点(4)まで（リリース段を1本残す）");
+
+        field.set(2);
+        assert_eq!(handle.params().release_point, 1, "クリック点(2)は内部値1のはず");
     }
 
     #[test]
@@ -851,7 +1062,7 @@ mod tests {
         // 直前の有効段(old_count-1)を複製すれば、time=0のまま据え置かれる場合でも
         // 直前段自体がtime!=0であればx座標が分離される。
         let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
-        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount);
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::default());
         field.set(6); // 5 -> 6
 
         let out = handle.params();
@@ -863,7 +1074,7 @@ mod tests {
     #[test]
     fn stage_count_decrease_does_not_touch_stage_data() {
         let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
-        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount);
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::default());
         field.set(3); // 5 -> 3 (減少側は複製ロジックを通らない)
 
         let out = handle.params();

@@ -24,10 +24,12 @@ fn time_eg_editor_parses_with_style_default_size() {
     assert_eq!(leaf.size.w, layout.style.time_eg_editor_size.w);
     assert_eq!(leaf.size.h, layout.style.time_eg_editor_size.h);
     match &leaf.widget {
-        Widget::TimeEgEditor { handle, mapping, tl } => {
+        Widget::TimeEgEditor { handle, mapping, tl, min_stages, terminal_level_zero } => {
             assert_eq!(handle, "params.eg");
             assert_eq!(mapping, "AmplitudeLinear");
             assert!(matches!(tl, EgField::Literal(v) if v == "255"));
+            assert_eq!(*min_stages, 2, "既定はSTAGE>=2（リリース段を必ず1本残す）");
+            assert!(*terminal_level_zero, "既定は最終段level=0固定");
         }
         other => panic!("TimeEgEditorではありません: {other:?}"),
     }
@@ -60,7 +62,9 @@ fn time_eg_editor_generates_expected_call() {
     );
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(
-        rust.contains("time_eg_editor(ui, egui::vec2(260.0, 245.0), &*params.eg, EgAmplitudeMapping::DbLinear, params.tl.value() as u8);"),
+        rust.contains(
+            "time_eg_editor(ui, egui::vec2(260.0, 245.0), &*params.eg, EgAmplitudeMapping::DbLinear, params.tl.value() as u8, TimeEgProfile { min_stages: 2, terminal_level_zero: true });"
+        ),
         "生成コードにtime_eg_editor呼び出しが見つかりません:\n{rust}"
     );
 }

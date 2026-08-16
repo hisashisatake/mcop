@@ -162,7 +162,7 @@ mod tests {
         let eg = direct_eg(&op, false, 0.0, AttackMode::Bias, &mut warnings, "op");
         assert_eq!(eg.stage_count, 2);
         assert_eq!(eg.stages[0].level, 255);
-        assert_eq!(eg.release_start, 1);
+        assert_eq!(eg.release_point, 0, "保持は段0のみ、リリースは段1");
     }
 
     #[test]
@@ -172,7 +172,7 @@ mod tests {
         let eg = direct_eg(&op, false, 0.0, AttackMode::Bias, &mut warnings, "op");
         assert_eq!(eg.stage_count, 3);
         assert_eq!(eg.loop_start, 1);
-        assert_eq!(eg.loop_end, 1);
+        assert_eq!(eg.release_point, 1);
     }
 
     #[test]

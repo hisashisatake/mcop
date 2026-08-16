@@ -127,7 +127,7 @@ fn default_time_eg_params() -> TimeEgParams {
     let mut stages = [TimeStage::default(); MAX_STAGES];
     stages[0] = TimeStage { time: 60, level: 200, curve: 0 };
     stages[1] = TimeStage { time: 120, level: 0, curve: 0 };
-    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, loop_end: 0, release_start: 1 }
+    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 }
 }
 
 /// 解決済みハンドルパス文字列（例:`"op.tl"`、リピートパネル内は[`scoped`]で
@@ -343,12 +343,13 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let v = store.int(&key).value() as u8;
             algorithm_diagram(ui, egui::vec2(leaf.size.w, leaf.size.h), v);
         }
-        Widget::TimeEgEditor { handle, mapping, tl } => {
+        Widget::TimeEgEditor { handle, mapping, tl, min_stages, terminal_level_zero } => {
             let key = scoped(handle, idx);
             let mapping_v = parse_eg_amplitude_mapping(mapping);
             let tl_v = eg_field_value(store, tl, idx);
             let handle_mock = store.time_eg(&key);
-            time_eg_editor(ui, egui::vec2(leaf.size.w, leaf.size.h), handle_mock, mapping_v, tl_v);
+            let profile = crate::TimeEgProfile { min_stages: *min_stages, terminal_level_zero: *terminal_level_zero };
+            time_eg_editor(ui, egui::vec2(leaf.size.w, leaf.size.h), handle_mock, mapping_v, tl_v, profile);
         }
         Widget::Raw(_) => draw_raw_placeholder(ui, egui::vec2(leaf.size.w, leaf.size.h)),
     }
