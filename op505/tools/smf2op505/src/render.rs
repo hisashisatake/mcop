@@ -811,8 +811,10 @@ mod tests {
         patch.operators[0].mul = 1;
         let mut stages = [TimeStage::default(); MAX_STAGES];
         stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+        // 段1(TimeStage::default()=time 0/level 0)はリリース用。OP EGは必ずレベル0へ着地させる。
+        // 押している間は段0で静止するのでサステイン中の出力は変わらない。
         patch.operators[0].eg =
-            TimeEgParams { stages, stage_count: 1, loop_enabled: 0, loop_start: 0, loop_end: 0, release_start: 0 };
+            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 };
         PatchBank::from_patches(&[patch]).unwrap()
     }
 
@@ -827,22 +829,22 @@ mod tests {
         carrier_stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
         patch.operators[0].eg = TimeEgParams {
             stages: carrier_stages,
-            stage_count: 1,
+            stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
         let mut lfo_stages = [TimeStage::default(); MAX_STAGES];
         lfo_stages[0] = TimeStage { time: 40, level: 255, curve: 0 };
         lfo_stages[1] = TimeStage { time: 40, level: 0, curve: 0 };
+        // 段2はリリース用（ピッチを中心＝level 0へ戻す）。ループ区間は0..=1のまま。
+        lfo_stages[2] = TimeStage { time: 40, level: 0, curve: 0 };
         patch.channel.pitch_fg.eg = TimeEgParams {
             stages: lfo_stages,
-            stage_count: 2,
+            stage_count: 3,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         };
         patch.channel.pitch_fg.depth = 200; // 中立(128)からずらして揺れを出す
         PatchBank::from_patches(&[patch]).unwrap()
@@ -1020,8 +1022,10 @@ mod tests {
         patch.operators[0].mul = 1;
         let mut stages = [TimeStage::default(); MAX_STAGES];
         stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+        // 段1(TimeStage::default()=time 0/level 0)はリリース用。OP EGは必ずレベル0へ着地させる。
+        // 押している間は段0で静止するのでサステイン中の出力は変わらない。
         patch.operators[0].eg =
-            TimeEgParams { stages, stage_count: 1, loop_enabled: 0, loop_start: 0, loop_end: 0, release_start: 0 };
+            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 };
         let bank = PatchBank::from_patches(&[patch]).unwrap();
         let sr = 8000.0;
         let tail_secs = 0.05;
@@ -1065,8 +1069,7 @@ mod tests {
             stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 1,
+            release_point: 0,
         };
         let bank = PatchBank::from_patches(&[patch]).unwrap();
         let sr = 8000.0;

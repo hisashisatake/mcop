@@ -326,10 +326,29 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
 | `<eg-preview>` | `mapping`(`DbLinear`/`AmplitudeLinear`) + 各EGParamsフィールド | 各フィールドは`{field}="handle"`か`{field}-value="リテラル"`のどちらか。フィールド: `tl`,`ar`,`d1r`,`d1l`,`d2r`,`rr`,`floor`,`loop`(→`loop_enabled`),`curve`,`delay` |
 | `<algorithm-diagram>` | `handle` | `width`/`height`で個別サイズ上書き（`<style>`既定は150×100） |
+| `<time-eg-editor>` | `handle`（`TimeEgHandle`実装） | `mapping`（省略時`DbLinear`）、`tl`/`tl-value`、`width`/`height`（`<style>`既定は260×245）、`min-stages`・`terminal-level`（下記） |
 | `<raw width height>` | テキスト内容 = Rustコード | **最終手段**（要サイズ指定）。文法上は温存しているが`panel.xml`本体では未使用 |
 
 全leafウィジェット共通で`margin="..."`属性が使える（`<style>`の既定値・タグ別上書きをさらに上書きする、前節参照）。
 `<eg-preview>`は`width`/`height`で個別サイズ上書きも可能（`<style>`既定は84×66）。
+
+#### `<time-eg-editor>`のEG種別制約（`min-stages` / `terminal-level`）
+
+TimeEgは保持区間`0..=release_point`とリリース区間`release_point+1..stage_count`に段リストを
+分割する。この2属性はEG種別ごとに「どこまで縮められるか」「最終段のlevelを固定するか」を宣言する
+（`ui_core::TimeEgProfile`へそのまま渡る）。
+
+| 属性 | 既定 | 意味 |
+|---|---|---|
+| `min-stages` | `2` | STAGESの下限。2ならリリース段が必ず1本残る |
+| `terminal-level` | `zero` | `zero`＝最終段のlevelを0に固定（縦ドラッグ禁止・VALUEのLV欄をグレーアウト）／`free`＝自由 |
+
+- **OP1〜4 EG / Pitch FG / Cutoff FG は既定のまま**。OP EGはボイス解放条件が「全4オペレーターが
+  `is_idle()`」なので、必ずレベル0へ着地させないとボイスリークとキーオフ時のクリックが起きる。
+  Pitch/Cutoff FGはlevel 0＝変調量ゼロ＝ニュートラルなので同じ扱いで意味も自然。
+- **Gain FGだけ`min-stages="1" terminal-level="free"`**。出力への乗算でボイス解放に関与せず、
+  level 0が「無音」を意味してしまうため。1段＝リリース区間が空＝note-offで何も起きない
+  （`op505-core`の`default_gain_fg`＝ゲートを一切閉じない透過既定）。
 
 ### handle解決ルール
 

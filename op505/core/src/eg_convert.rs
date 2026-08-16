@@ -83,8 +83,7 @@ pub fn convert_eg_shape(
             stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 1,
+            release_point: 0,
         };
     };
     let ar_time_full = time_for_seconds(ar_sec, warnings, label, "attack(ar)");
@@ -106,8 +105,7 @@ pub fn convert_eg_shape(
                 stage_count: 4,
                 loop_enabled: 1,
                 loop_start: 1,
-                loop_end: 2,
-                release_start: 3,
+                release_point: 2,
             };
         }
         warnings.push(format!(
@@ -126,8 +124,7 @@ pub fn convert_eg_shape(
             stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 1,
+            release_point: 0,
         };
     };
     let d1_time = time_for_seconds(d1r_sec * (1.0 - d1l as f32 / 255.0), warnings, label, "decay1(d1r)");
@@ -142,18 +139,17 @@ pub fn convert_eg_shape(
             stage_count: 3,
             loop_enabled: 0,
             loop_start: 1,
-            loop_end: 1,
-            release_start: 2,
+            release_point: 1,
         };
     };
     let d2_time = time_for_seconds(d2r_sec * (d1l as f32 / 255.0), warnings, label, "decay2(d2r)");
     stages[2] = TimeStage { time: d2_time, level: 0, curve };
     let rr_time = time_for_seconds(seconds_for_rr(rr), warnings, label, "release(rr)");
     stages[3] = TimeStage { time: rr_time, level: 0, curve };
-    TimeEgParams { stages, stage_count: 4, loop_enabled: 0, loop_start: 2, loop_end: 2, release_start: 3 }
+    TimeEgParams { stages, stage_count: 4, loop_enabled: 0, loop_start: 2, release_point: 2 }
 }
 
-/// 段の先頭にlevel=0のプラトー段を1つ挿入し、loop_start/loop_end/release_startを+1シフトする
+/// 段の先頭にlevel=0のプラトー段を1つ挿入し、loop_start/release_pointを+1シフトする
 /// （`EgParams::delay`＝キーオンからAR開始までの遅延をTimeEgで表現する。8段上限に収まる前提）。
 pub(crate) fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings: &mut Vec<String>, label: &str) {
     let delay_time = time_for_seconds(sound_core::delay_to_seconds(delay), warnings, label, "delay");
@@ -168,8 +164,7 @@ pub(crate) fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings
     params.stages[0] = TimeStage { time: delay_time, level: 0, curve: 0 };
     params.stage_count = (count + 1) as u8;
     params.loop_start += 1;
-    params.loop_end += 1;
-    params.release_start += 1;
+    params.release_point += 1;
 }
 
 /// Pitch/Cutoff/Gain FGの`EgParams`（delay込み）をTimeEgParamsへ変換する。`label`は
@@ -196,8 +191,13 @@ pub fn apply_transparent_gain_release(
     warnings: &mut Vec<String>,
 ) {
     if src_rr == 0 && src_loop_enabled == 0 {
-        let release_idx = gain_fg_eg.release_start as usize;
-        let settle_level = gain_fg_eg.stages[gain_fg_eg.loop_end as usize].level;
+        // リリース区間は`release_point+1..stage_count`。その先頭段を据え置きへ書き換える
+        // （区間が空＝リリース無しならすでに透過なので何もしない）。
+        let release_idx = gain_fg_eg.release_point as usize + 1;
+        if release_idx >= gain_fg_eg.stage_count as usize {
+            return;
+        }
+        let settle_level = gain_fg_eg.stages[gain_fg_eg.release_point as usize].level;
         gain_fg_eg.stages[release_idx] = TimeStage { time: 0, level: settle_level, curve: 0 };
         warnings.push(format!(
             "gain_fg: rr=0（透過既定）を維持するためリリース段をlevel={settle_level}で据え置きに変換した"

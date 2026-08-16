@@ -6,7 +6,7 @@ use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 use ui_core::mapping::mul_fine_ratio;
-use ui_core::EgAmplitudeMapping;
+use ui_core::{EgAmplitudeMapping, TimeEgProfile};
 
 /// Pitch FG（新規）／Cutoff FG（旧Filter EG）に共通の「TimeEg＋バイポーラDepth」一式。
 pub struct Op505BipolarFgPanelParams<'a> {

@@ -76,9 +76,13 @@ pub struct Op505ChannelParams {
     pub texture_lfo: TextureLfo,
 }
 
-/// `Gain FG`の透過既定：stage0(time=0,level=255)を即座に到達しそのまま静止（loop_endも0）、
-/// リリースも同じ段（level=255のまま）＝ゲートを一切閉じない。発音終了は各オペレーターの
-/// idle判定のみで行う（ym38x6の`default_gain_fg`の設計意図を踏襲）。
+/// `Gain FG`の透過既定：stage0(time=0,level=255)を即座に到達しそのまま静止し、
+/// リリース区間を持たない（`release_point`が最終段＝note-offが何もしない）＝ゲートを一切閉じない。
+/// 発音終了は各オペレーターのidle判定のみで行う（ym38x6の`default_gain_fg`の設計意図を踏襲）。
+///
+/// この1段構成はGain FG専用。OP1〜4 EGとPitch/Cutoff FGはエディタ側でSTAGE>=2と最終段level=0を
+/// 強制するため必ずリリース区間を持つ（`ui_core::TimeEgProfile`参照）。Gain FGだけ例外なのは、
+/// 出力への乗算でボイス解放に関与せず、level 0が「無音」を意味してしまうため。
 fn default_gain_fg() -> Op505GainFg {
     TimeEgParams {
         stages: {
@@ -89,8 +93,7 @@ fn default_gain_fg() -> Op505GainFg {
         stage_count: 1,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 0,
-        release_start: 0,
+        release_point: 0,
     }
 }
 
@@ -632,14 +635,14 @@ mod tests {
     }
 
     /// 瞬時に満レベルへ到達しそのまま無限サスティンするEG（ym38x6版loud_patchのAR=255/D1L=255相当）。
+    /// 段1はリリース用（OP EGは必ずレベル0へ着地させる。`ui_core::TimeEgProfile`参照）。
     fn instant_sustain_eg() -> TimeEgParams {
         TimeEgParams {
-            stages: stages_with(&[(0, 255, 0)]),
-            stage_count: 1,
+            stages: stages_with(&[(0, 255, 0), (0, 0, 0)]),
+            stage_count: 2,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         }
     }
 
@@ -733,14 +736,13 @@ mod tests {
         patch.channel.feedback = 100;
         patch.channel.filter_cutoff = 200;
         patch.channel.filter_resonance = 80;
-        // 瞬時attack→decay(40)→floor(0)で静止、release_start=2から短時間でidleへ落ちる形。
+        // 瞬時attack→decay(40)で静止、リリース段(2)から短時間でidleへ落ちる形。
         let eg = TimeEgParams {
             stages: stages_with(&[(0, 255, 0), (60, 40, 0), (60, 0, 0)]),
             stage_count: 3,
             loop_enabled: 0,
-            loop_start: 2,
-            loop_end: 2,
-            release_start: 2,
+            loop_start: 0,
+            release_point: 1,
         };
         for op in patch.operators.iter_mut() {
             op.eg = eg;
@@ -817,8 +819,7 @@ mod tests {
             stage_count: 4,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 3,
+            release_point: 3,
         };
         let json = serde_json::to_string(&patch).expect("serialize");
         let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");

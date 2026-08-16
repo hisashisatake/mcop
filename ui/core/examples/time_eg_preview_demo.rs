@@ -54,8 +54,7 @@ fn samples() -> Vec<Sample> {
                 stage_count: 5,
                 loop_enabled: 1,
                 loop_start: 0,
-                loop_end: 3,
-                release_start: 4,
+                release_point: 3,
             },
         },
         Sample {
@@ -63,12 +62,13 @@ fn samples() -> Vec<Sample> {
             mapping: EgAmplitudeMapping::DbLinear,
             tl: 220,
             params: TimeEgParams {
-                stages: stages(&[(20, 220, 0), (50, 220, 0), (20, 80, 0), (50, 80, 0)]),
-                stage_count: 4,
+                // 4段ループ(0..=3)を保ったままリリース段を1本足した（旧定義はrelease_start=3で
+                // ループ終端と同じ段を指しており、リリース区間が実質空だった）。
+                stages: stages(&[(20, 220, 0), (50, 220, 0), (20, 80, 0), (50, 80, 0), (60, 0, 0)]),
+                stage_count: 5,
                 loop_enabled: 1,
                 loop_start: 0,
-                loop_end: 3,
-                release_start: 3,
+                release_point: 3,
             },
         },
         Sample {
@@ -89,8 +89,7 @@ fn samples() -> Vec<Sample> {
                 stage_count: 8,
                 loop_enabled: 1,
                 loop_start: 0,
-                loop_end: 6,
-                release_start: 7,
+                release_point: 6,
             },
         },
         Sample {
@@ -98,16 +97,16 @@ fn samples() -> Vec<Sample> {
             mapping: EgAmplitudeMapping::DbLinear,
             tl: 255,
             params: TimeEgParams {
+                // Attack(→255) + Decay(→180)が保持区間、サステインは180。リリースは段2で無音へ。
                 stages: stages(&[(20, 255, 1), (60, 180, 0), (150, 0, 0)]),
                 stage_count: 3,
                 loop_enabled: 0,
                 loop_start: 0,
-                loop_end: 0,
-                release_start: 2,
+                release_point: 1,
             },
         },
         Sample {
-            label: "多段リリース — release_startから複数段を順に辿って無音へ",
+            label: "多段リリース — リリース点の次から複数段を順に辿って無音へ",
             mapping: EgAmplitudeMapping::AmplitudeLinear,
             tl: 255,
             params: TimeEgParams {
@@ -115,8 +114,7 @@ fn samples() -> Vec<Sample> {
                 stage_count: 5,
                 loop_enabled: 0,
                 loop_start: 0,
-                loop_end: 1,
-                release_start: 2,
+                release_point: 1,
             },
         },
     ]
@@ -140,8 +138,8 @@ impl eframe::App for App {
                     ui.label(sample.label);
                     let p = &sample.params;
                     ui.label(format!(
-                        "stage_count={} loop_enabled={} loop=[{},{}] release_start={}",
-                        p.stage_count, p.loop_enabled, p.loop_start, p.loop_end, p.release_start
+                        "stage_count={} loop_enabled={} loop=[{},{}] release_point={}",
+                        p.stage_count, p.loop_enabled, p.loop_start, p.release_point, p.release_point
                     ));
                     time_eg_preview(ui, egui::vec2(360.0, 140.0), sample.mapping, sample.tl, *p);
                 });

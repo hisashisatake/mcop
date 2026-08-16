@@ -13,16 +13,21 @@
 // - フリーズ特殊値が無い（`time=0`は「瞬時」でレート方式の`rate=0`＝フリーズとは意味が真逆。
 //   `log_width`に`time_to_seconds(0)=0.0`を通すと自然に幅0になるため、レート方式のような
 //   `rate_seconds_or_frozen`分岐・破線描画は不要）
-// - ループは`loop_start`〜`loop_end`の任意区間（レート方式はAR/D1Rの2区間固定だった）
-// - リリースは`release_start`から`stage_count-1`まで順に辿る多段リリース（レート方式は
+// - ループは`loop_start`〜`release_point`の任意区間（レート方式はAR/D1Rの2区間固定だった）
+// - リリースは`release_point+1`から`stage_count-1`まで順に辿る多段リリース（レート方式は
 //   RR1本のみで必ず無音へ着地したが、TimeEgのリリースは終着レベルが任意——例えばGain FGの
 //   `rr=0`透過既定を変換したパッチはlevel=255で据え置く——なので、必ず床へ落ちるとは限らない）
 //
 // 実際の音（`sound_core::TimeEg::tick`/`advance`の状態機械）を`time_eg_layout`で忠実に
-// 再現する：note-onは常にlevel=0.0から段0へ向かい、段を`0,1,...,loop_end`と辿る。loop_end到達時
-// `loop_enabled`なら`loop_start`へ戻る（本プレビューでは2周描いて「ここが繰り返す」ことを示す）、
-// でなければその段のレベルで静止（サステイン）。note-offは`release_start`段へ直接ジャンプし
-// （その時点の現在レベルから）、以降`stage_count-1`まで順に辿って終わる。
+// 再現する：note-onは常にlevel=0.0から段0へ向かい、段を`0,1,...,release_point`と辿る。
+// release_point到達時`loop_enabled`なら`loop_start`へ戻る（本プレビューでは2周描いて
+// 「ここが繰り返す」ことを示す）、でなければその段のレベルで静止（サステイン）。
+// note-offは`release_point+1`段へ入り（その時点の現在レベルから）、以降`stage_count-1`まで
+// 中間段を飛ばさず順に辿って終わる。
+//
+// 保持区間`0..=release_point`とリリース区間`release_point+1..stage_count`は段リストを
+// 過不足なく分割するため、重複（同じ段が二重に描かれクリック点が段数+1になる）も
+// 隙間（どの区間にも属さない到達不能段）も構造的に発生しない。
 // ---------------------------------------------------------------------------
 
 use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
@@ -112,15 +117,19 @@ pub struct TimeEgGeometry {
     /// （時刻0の開始点自体は編集対象にならないため、ドラッグ編集のヒットテストでは
     /// `points[1..]`のみを対象にすればよい）。
     pub stage_of_point: Vec<usize>,
-    /// ループ区間が`points`上で占める範囲（開始index, 終了index）。`loop_enabled=0`なら`None`。
-    /// 2周目（＝実際にループし続ける区間）を指す。
+    /// ループ区間が`points`上で占める折れ線の範囲（始点index, 終点index、両端含む）。
+    /// ループが成立しない（`loop_enabled=0`、または`loop_start >= release_point`で1段ループ）なら`None`。
+    /// 2周描画モードでは2周目（＝実際にループし続ける区間）を指す。
+    /// 始点は段`loop_start`の**開始**頂点なので、`loop_start=0`なら`points[0]`（グラフ最左）になる。
     pub loop_span: Option<(usize, usize)>,
-    /// リリースが始まる`points`上のindex（＝保持区間の最後の頂点）。
+    /// リリースが始まる`points`上のindex（＝保持区間の最後の頂点）。`points[0]`が開始点ぶん
+    /// オフセットしているため、これはそのままUI上の1始まりクリック点番号＝「リリース点」に一致する
+    /// （`TimeEgParams::release_point`が指す0始まり段indexに+1した値）。
     pub release_point: usize,
-    /// STAGE=1（全区間が1段だけ）のとき、保持側と完全に同じ段を指すリリース側の頂点index。
-    /// 別の値を編集できるわけではなく「ノートオフ後もレベルが変化せず持続する」ことを示す
-    /// だけの目印なので、グラフ右端に固定しドラッグ対象外にする（`points[0]`と同じ扱い）。
-    /// STAGE>=2では常に`None`。
+    /// リリース区間が空（`TimeEgParams::release_point`が最終段）のとき、「ノートオフ後もレベルが
+    /// 変化せず持続する」ことを示すためだけにグラフ右端へ置く終端頂点のindex。段の値を編集できる
+    /// わけではないのでドラッグ対象外にする（`points[0]`と同じ扱い）。
+    /// リリース区間があるときは常に`None`。
     pub sustain_terminal_point: Option<usize>,
     /// 1段(重み1.0)あたりのピクセル数（`width / drawn_count`）。Step 8のGRAPHモードが
     /// ドラッグ位置から`time`を逆算する（`width_to_time`）際、このレイアウト計算時と
@@ -152,34 +161,40 @@ struct LayoutOptions {
 /// tl=255で呼ぶ）。`time_eg_layout`/`time_eg_editor_layout`はこの薄いラッパー。
 fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8, opts: LayoutOptions) -> TimeEgGeometry {
     let n = clamp_stage_count(params.stage_count);
-    let loop_start = (params.loop_start as usize).min(n - 1);
-    // loop_start > loop_endは設定不整合(UI編集中の一時状態等)。幾何計算がおかしくならないよう
-    // loop_startへクランプする（実エンジンはこの場合stage_count終端で静止する挙動になるが、
-    // プレビューでは「ループなしで1周だけ」と同じ絵になるよう単純化する）。
-    let loop_end = (params.loop_end as usize).min(n - 1).max(loop_start);
-    let release_start = (params.release_start as usize).min(n - 1);
+    let release_point = (params.release_point as usize).min(n - 1);
+    // loop_start > release_pointは設定不整合。実エンジンもrelease_pointへクランプするので合わせる。
+    // `loop_start == release_point`は1段ループで、入口レベルへ跳ね戻すノコギリ波になる
+    // （sound-core/time_eg.rsのadvance参照）。
+    let loop_start = (params.loop_start as usize).min(release_point);
+    let loop_active = params.loop_enabled != 0;
+    // 1段ループは周回のたびにレベルが不連続に跳ぶ。その跳ね先（段の入口レベル）。
+    let single_stage_loop = loop_active && loop_start == release_point;
+    let loop_entry_level = if loop_start == 0 { 0 } else { params.stages[loop_start - 1].level };
 
-    // 保持区間で辿る段indexの列: 0..=loop_end（1周目）。loop_enabledかつ2周描画モードなら
-    // loop_start..=loop_endをもう1周（実機は無限に繰り返すが、プレビューは「ここが繰り返す」と
+    // 保持区間で辿る段indexの列: 0..=release_point（1周目）。ループ有効かつ2周描画モードなら
+    // loop_start..=release_pointをもう1周（実機は無限に繰り返すが、プレビューは「ここが繰り返す」と
     // 分かるよう2周で打ち切る。eg_preview.rsのLoop=1描画と同じ方針）。エディタ用の1周描画モードは
     // 描画段数を減らしヒットテストしやすくするための選択（設計上の意味は変わらない）。
-    let mut held_sequence: Vec<usize> = (0..=loop_end).collect();
-    // 1周目の段数(=loop_end+1)。2周描画モードでは「2周目の先頭」を指すオフセットとして、
+    let mut held_sequence: Vec<usize> = (0..=release_point).collect();
+    // 1周目の段数(=release_point+1)。2周描画モードでは「2周目の先頭」を指すオフセットとして、
     // 1周描画モードでは（延長されないため）held_sequence自体の最終長として使う。
     let first_cycle_len = held_sequence.len();
-    if params.loop_enabled != 0 && opts.loop_two_cycles {
-        held_sequence.extend(loop_start..=loop_end);
+    if loop_active && opts.loop_two_cycles {
+        held_sequence.extend(loop_start..=release_point);
     }
 
-    // リリース区間で辿る段indexの列: release_start..n-1（現在レベルから順にそれぞれの
-    // targetへ向かう多段リリース。以前のfor advance()と同じ順序を辿る）。
-    let release_sequence: Vec<usize> = (release_start..n).collect();
+    // リリース区間で辿る段indexの列: release_point+1..n（現在レベルから順にそれぞれのtargetへ
+    // 向かう多段リリース）。保持区間と合わせて段リストをちょうど分割するので、両者は決して重ならない。
+    // release_pointが最終段のときだけ空になる（＝リリース無し。Gain FGの透過既定用）。
+    let release_sequence: Vec<usize> = (release_point + 1..n).collect();
 
     let floor = axis_floor_db(mapping);
     let tl_db = tl_to_db(tl);
     let x0 = inner.left();
     let width = inner.width();
-    let drawn_count = (held_sequence.len() + release_sequence.len()).max(1);
+    // リリース区間が空のときも1段ぶんの幅を確保しておく（後述の「持続を示す水平線」を
+    // 右端まで伸ばす余地を残すため。確保しないと保持区間だけで横幅を使い切りうる）。
+    let drawn_count = (held_sequence.len() + release_sequence.len().max(1)).max(1);
     let scale = width / drawn_count as f32;
     let right_edge = x0 + width;
     let db_to_y = |db: f32| inner.bottom() - ((db.max(floor) - floor) / -floor) * inner.height();
@@ -190,7 +205,17 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     let mut stage_of_point = vec![*held_sequence.first().unwrap_or(&0)];
     let mut x = x0;
 
-    for &stage_idx in held_sequence.iter().chain(release_sequence.iter()) {
+    // 1段ループを2周描くときは、周回の境目でレベルが入口へ跳ね戻る。同じxに頂点をもう1つ置いて
+    // 幅0の縦線として明示する（描かないと2周目が平坦な線になり、実際の音と食い違って見える）。
+    let jump_at = (single_stage_loop && opts.loop_two_cycles).then_some(first_cycle_len);
+    let jump_extra = usize::from(jump_at.is_some());
+
+    for (i, &stage_idx) in held_sequence.iter().chain(release_sequence.iter()).enumerate() {
+        if jump_at == Some(i) {
+            let entry_db = stage_target_db(mapping, floor, tl_db, loop_entry_level);
+            points.push(Pos2::new(x, db_to_y(entry_db)));
+            stage_of_point.push(stage_idx);
+        }
         let stage = params.stages[stage_idx];
         // time=0は「瞬時」を表す特殊値（レート方式のrate=0=フリーズとは意味が真逆）なので、
         // min_weightの床には引っかからず常に幅0（垂直）のままにする。
@@ -201,30 +226,33 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
         stage_of_point.push(stage_idx);
     }
 
-    // points[0]がlevel=0の開始点ぶんオフセットしているため、held_sequence側のindexへ+1して
-    // points indexへ変換する（points[j+1] == held_sequence[j]の対応関係）。
-    // 2周描画: `first_cycle_len`が2周目の先頭（held_sequence内index）。
-    // 1周描画: 延長されないため`first_cycle_len == held_sequence.len()`となり、
-    //          1周目そのもの（loop_start..=loop_end）を指す。
-    let loop_span = (params.loop_enabled != 0).then_some(if opts.loop_two_cycles {
-        (first_cycle_len + 1, held_sequence.len())
+    // ループ区間は段`loop_start..=release_point`で、段kはグラフ上`points[k]→points[k+1]`の線分。
+    // したがって折れ線としての範囲は**始点`points[loop_start]`から終点`points[release_point+1]`まで**。
+    // 始点側に+1すると1段ぶん右へずれる（実機確認で「L.START=0なのに三角マーカーが最左に来ない」
+    // として発覚したバグ。`loop_start=0`のときの始点はlevel=0の開始点`points[0]`そのものになる）。
+    // 2周描画: 2周目の先頭段の始点が`points[first_cycle_len]`、終点が`points[held_sequence.len()]`。
+    // 1周描画: 延長されないので1周目そのもの（`points[loop_start]`〜`points[first_cycle_len]`）。
+    let loop_span = loop_active.then_some(if opts.loop_two_cycles {
+        (first_cycle_len, held_sequence.len() + jump_extra)
     } else {
-        (loop_start + 1, first_cycle_len)
+        (loop_start, first_cycle_len)
     });
-    let release_point = held_sequence.len();
+    let release_point_index = held_sequence.len() + jump_extra;
 
-    // STAGE=1（n==1）は保持区間・リリース区間とも同じ段0を指すため、points[2]は
-    // points[1]と同じ値をドラッグする冗長な点になる。実時間の重みで置くと中途半端な位置に浮き
-    // 「もう1段ある」ように誤読される（実機確認で判明）ため、右端に固定して目印化する。
-    let sustain_terminal_point = if n == 1 {
+    // リリース区間が空（`release_point`が最終段）のときは、note-off後もレベルが変化せず
+    // 持続することを示す水平線を右端まで伸ばす。段に対応しない目印なのでドラッグ対象外にする
+    // （`points[0]`と同じ扱い）。この形はGain FGの透過既定＝ゲートを一切閉じない専用で、
+    // OP EG/Pitch FG/Cutoff FGはエディタ側がSTAGE>=2と最終段level=0を強制するため発生しない。
+    let sustain_terminal_point = if release_sequence.is_empty() {
         let last = points.len() - 1;
-        points[last].x = right_edge;
-        Some(last)
+        points.push(Pos2::new(right_edge, points[last].y));
+        stage_of_point.push(release_point);
+        Some(points.len() - 1)
     } else {
         None
     };
 
-    TimeEgGeometry { points, stage_of_point, loop_span, release_point, scale, sustain_terminal_point }
+    TimeEgGeometry { points, stage_of_point, loop_span, release_point: release_point_index, scale, sustain_terminal_point }
 }
 
 /// `TimeEgParams`から`TimeEgGeometry`を計算する（読み取り専用プレビュー用）。`inner`はウィジェットの
@@ -319,8 +347,7 @@ mod tests {
             stage_count: 5,
             loop_enabled: 1,
             loop_start: 0,
-            loop_end: 3,
-            release_start: 4,
+            release_point: 3,
         }
     }
 
@@ -340,8 +367,7 @@ mod tests {
             stage_count: 1,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
         let g = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert_eq!(g.points[0].x, g.points[1].x, "time=0は幅0(垂直)のはず");
@@ -362,10 +388,9 @@ mod tests {
         let mut params = gain_switch_params();
         params.stage_count = 5;
         let g_full = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
-        // stage_count=2に絞ると、loop_end/release_startも自動的にクランプされ描画段数が減る。
+        // stage_count=2に絞ると、release_pointも自動的にクランプされ描画段数が減る。
         params.stage_count = 2;
-        params.loop_end = 1;
-        params.release_start = 1;
+        params.release_point = 0;
         let g_small = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert!(g_small.points.len() < g_full.points.len());
         assert!(g_small.stage_of_point.iter().all(|&s| s < 2));
@@ -375,11 +400,28 @@ mod tests {
     fn loop_enabled_draws_two_cycles() {
         let g = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         let (lo, hi) = g.loop_span.expect("loop_enabled=1のはず");
-        // loop_start(0)..=loop_end(3)は4段=3セグメント(頂点間の遷移数)。
-        assert_eq!(hi - lo, 3, "loop_start..=loop_end間のセグメント数のはず");
-        // 2周目の開始頂点(lo)は1周目の対応する頂点(points[1]、loop_start=0のtarget)と同じ高さ
-        // （同じ段のtargetを2回描くだけなので）。
-        assert_eq!(g.points[lo].y, g.points[1].y);
+        // loop_start(0)..=release_point(3)は4段＝折れ線4セグメント。
+        assert_eq!(hi - lo, 4, "loop_start..=release_point間のセグメント数のはず");
+        // ループの始点と終点は同じレベル（1周して同じ場所へ戻るため）。
+        assert!((g.points[lo].y - g.points[hi].y).abs() < 1e-3, "ループは同じレベルへ閉じるはず");
+    }
+
+    /// L.START=0のループ開始マーカーはグラフ最左（level=0の開始点`points[0]`）に来る。
+    /// 段kは`points[k]→points[k+1]`の線分なので、ループ区間`loop_start..=release_point`の
+    /// 始点は`points[loop_start]`。ここを+1すると1段ぶん右へずれる（実機確認で発覚したバグ）。
+    #[test]
+    fn loop_start_marker_anchors_at_stage_entry_vertex() {
+        let mut params = gain_switch_params();
+        params.loop_start = 0;
+        let g = time_eg_editor_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let (lo, hi) = g.loop_span.expect("loop_enabled=1のはず");
+        assert_eq!(lo, 0, "loop_start=0の始点はpoints[0]（グラフ最左）のはず");
+        assert_eq!(hi, g.release_point, "ループ終端はリリース点マーカーと同じ頂点のはず");
+
+        params.loop_start = 2;
+        let g = time_eg_editor_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let (lo, _) = g.loop_span.expect("loop_enabled=1のはず");
+        assert_eq!(lo, 2, "loop_start=2の始点はpoints[2]のはず");
     }
 
     #[test]
@@ -391,9 +433,9 @@ mod tests {
     }
 
     #[test]
-    fn release_point_matches_release_start_transition() {
+    fn release_point_matches_release_transition() {
         let g = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
-        // release_point以降の頂点は release_sequence = [4](release_start=4, stage_count=5) の1段のみ。
+        // release_point以降の頂点は release_sequence = [4](release_point=3, stage_count=5) の1段のみ。
         assert_eq!(g.points.len() - 1 - g.release_point, 1, "リリースはstage4の1段だけのはず");
         assert_eq!(*g.stage_of_point.last().unwrap(), 4);
     }
@@ -409,12 +451,12 @@ mod tests {
     #[test]
     fn editor_layout_draws_single_cycle() {
         // Step 8のGRAPHモード用: 2周描画(time_eg_layout)より頂点数が少なく(1周分)、
-        // loop_start..=loop_end間のセグメント数は同じ(3)であるはず。
+        // loop_start..=release_point間のセグメント数は同じ(4)であるはず。
         let preview = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         let editor = time_eg_editor_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert!(editor.points.len() < preview.points.len(), "1周描画は2周描画より頂点数が少ないはず");
         let (lo, hi) = editor.loop_span.expect("loop_enabled=1のはず");
-        assert_eq!(hi - lo, 3, "1周描画でもloop_start..=loop_end間のセグメント数は変わらないはず");
+        assert_eq!(hi - lo, 4, "1周描画でもloop_start..=release_point間のセグメント数は変わらないはず");
     }
 
     #[test]
@@ -439,8 +481,7 @@ mod tests {
             stage_count: 1,
             loop_enabled: 0,
             loop_start: 0,
-            loop_end: 0,
-            release_start: 0,
+            release_point: 0,
         };
         let g = time_eg_editor_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert_eq!(g.points[0].x, g.points[1].x, "エディタ用レイアウトでもtime=0は幅0(垂直)のはず");

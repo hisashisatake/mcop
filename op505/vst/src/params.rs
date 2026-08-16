@@ -12,26 +12,28 @@ pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
 pub(crate) const DEFAULT_REVERB_TYPE: u8 = 3;
 pub(crate) const DEFAULT_CHORUS_TYPE: u8 = 0;
 
-/// キーオンから即座にフルレベルへ達し無期限にサステインする1段EG
-/// （`op505-core`の`default_gain_fg()`・`gesture-app/src-tauri/src/engines.rs`の
-/// `loud_op505_patch()`テストヘルパーと同形）。DAWパラメーターに載らないpersist状態の
-/// EG群（`Op505EgBank`）の既定値に使う。`TimeEgParams::default()`（全段time=0/level=0=無音）を
-/// そのまま使うとプラグイン挿入直後に無音になるため、これで明示的に「鳴る」状態にする。
+/// キーオンから即座にフルレベルへ達しサステインし、キーオフでレベル0へ落ちる2段EG。
+/// DAWパラメーターに載らないpersist状態のEG群（`Op505EgBank`）の既定値に使う。
+/// `TimeEgParams::default()`（全段time=0/level=0=無音）をそのまま使うとプラグイン挿入直後に
+/// 無音になるため、これで明示的に「鳴る」状態にする。
+///
+/// 段1（`TimeStage::default()`＝time 0/level 0）はリリース用。OP EGは必ずレベル0へ着地させる
+/// 必要がある（ボイス解放条件が「全4オペレーターがidle」のため。`ui_core::TimeEgProfile`参照）。
+/// 押している間は段0で静止するのでサステイン中の出力は1段時代と変わらない。
 pub(crate) fn instant_sustain_eg() -> TimeEgParams {
     let mut stages = [TimeStage::default(); MAX_STAGES];
     stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
     TimeEgParams {
         stages,
-        stage_count: 1,
+        stage_count: 2,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 0,
-        release_start: 0,
+        release_point: 0,
     }
 }
 
 /// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝8段×3(time/level/curve)+
-/// メタ5(stage_count/loop_enabled/loop_start/loop_end/release_start)=29値、7本で203値。
+/// メタ4(stage_count/loop_enabled/loop_start/release_point)=28値、7本で196値。
 /// `Op505Patch`の全269値のうち大半を占めるが、DAWパラメーターにはせずnice-plugの
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の

@@ -37,8 +37,8 @@ fn transparent_gain_fg() -> TimeEgParams {
         stage_count: 1,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 0,
-        release_start: 0,
+        // release_point=最終段＝リリース区間が空。note-offで何も起きずゲートは開いたまま。
+        release_point: 0,
     }
 }
 
@@ -47,31 +47,30 @@ fn neutral_bipolar_fg() -> Op505BipolarFg {
     Op505BipolarFg { eg: TimeEgParams::default(), depth: 128 }
 }
 
-/// アタック→ディケイ→サステイン(loop_endで静止)→ノートオフでリリースの標準的なオペレーターEG。
+/// アタック→ディケイ→サステイン(release_pointで静止)→ノートオフでリリースの標準的なオペレーターEG。
 fn ad_sustain_release_eg(decay_level: u8, release_secs: f32) -> TimeEgParams {
     TimeEgParams {
         stages: stages(&[
             (0.01, 255, 0),         // Attack
             (0.3, decay_level, 0),  // Decay -> サステインレベル
-            (release_secs, 0, 1),   // Release（release_startから辿る、サイン風）
+            (release_secs, 0, 1),   // Release（release_pointの次から辿る、サイン風）
         ]),
         stage_count: 3,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 1, // stage1(Decay到達点)で静止=サステイン
-        release_start: 2,
+        release_point: 1, // stage1(Decay到達点)で静止=サステイン
     }
 }
 
 /// ノートオンから自然減衰し、ノートオフ前にほぼ無音まで落ちる「プラック」型EG。
+/// 段2は無音へ着地させるためのリリース段（OP EGは必ずレベル0で終わる）。
 fn pluck_eg(decay_secs: f32) -> TimeEgParams {
     TimeEgParams {
-        stages: stages(&[(0.0, 255, 0), (decay_secs, 0, 1)]),
-        stage_count: 2,
+        stages: stages(&[(0.0, 255, 0), (decay_secs, 0, 1), (0.01, 0, 0)]),
+        stage_count: 3,
         loop_enabled: 0,
         loop_start: 0,
-        loop_end: 1,
-        release_start: 1,
+        release_point: 1,
     }
 }
 
@@ -79,18 +78,22 @@ fn pluck_eg(decay_secs: f32) -> TimeEgParams {
 /// stage1/2をピンポンループ）。CC78テストは「ノートオンからビブラートが始まるまでの時間」
 /// として聴こえるようにするため、`build_patch()`のCC78補正条件（第0段level==0）に
 /// 合わせてstage0をlevel=0の待ち段にしてある。
+/// 段3はノートオフでピッチを中心(level=0＝変調量ゼロ)へ戻すリリース段。
+/// 旧定義は`release_start=0`でリリースが段0へ「後退」する形だったが、保持区間とリリース区間を
+/// `release_point`1本で分割する現行モデルでは表現できない（そもそも段が両区間に属する状態は
+/// グラフの二重描画の原因だった）。ノートオフでビブラートを止めて中心へ戻す方が意味も自然。
 fn vibrato_eg(delay_secs: f32, half_period_secs: f32) -> TimeEgParams {
     TimeEgParams {
         stages: stages(&[
             (delay_secs, 0, 0),
             (half_period_secs, 255, 1),
             (half_period_secs, 0, 1),
+            (half_period_secs, 0, 1),
         ]),
-        stage_count: 3,
+        stage_count: 4,
         loop_enabled: 1,
         loop_start: 1,
-        loop_end: 2,
-        release_start: 0,
+        release_point: 2,
     }
 }
 

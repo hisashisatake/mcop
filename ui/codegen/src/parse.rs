@@ -285,8 +285,21 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let tl = eg_field(el, ctx, "tl")?;
             let w = attr_f32_or(el, "width", style.time_eg_editor_size.w)?;
             let h = attr_f32_or(el, "height", style.time_eg_editor_size.h)?;
+            let min_stages: u8 = match el.attribute("min-stages") {
+                None => 2,
+                Some(v) => v
+                    .parse()
+                    .ok()
+                    .filter(|n| (1..=8).contains(n))
+                    .ok_or_else(|| "<time-eg-editor>のmin-stagesは1〜8で指定してください".to_string())?,
+            };
+            let terminal_level_zero = match el.attribute("terminal-level").unwrap_or("zero") {
+                "zero" => true,
+                "free" => false,
+                other => return Err(format!("<time-eg-editor>のterminal-levelはzero/freeのいずれかです: {other}")),
+            };
             (
-                Widget::TimeEgEditor { handle, mapping, tl },
+                Widget::TimeEgEditor { handle, mapping, tl, min_stages, terminal_level_zero },
                 "EG".to_string(),
                 "time-eg-editor".to_string(),
                 Size { w, h },
