@@ -135,7 +135,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
 
         let mut patch = op505_core::Op505Patch::default();
         for op in patch.operators.iter_mut() {

@@ -348,7 +348,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        }
+         ..Default::default()}
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let g = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert_eq!(g.points[0].x, g.points[1].x, "time=0は幅0(垂直)のはず");
     }
@@ -482,7 +482,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let g = time_eg_editor_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         assert_eq!(g.points[0].x, g.points[1].x, "エディタ用レイアウトでもtime=0は幅0(垂直)のはず");
     }

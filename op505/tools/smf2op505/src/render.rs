@@ -814,7 +814,7 @@ mod tests {
         // 段1(TimeStage::default()=time 0/level 0)はリリース用。OP EGは必ずレベル0へ着地させる。
         // 押している間は段0で静止するのでサステイン中の出力は変わらない。
         patch.operators[0].eg =
-            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 };
+            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()};
         PatchBank::from_patches(&[patch]).unwrap()
     }
 
@@ -833,7 +833,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let mut lfo_stages = [TimeStage::default(); MAX_STAGES];
         lfo_stages[0] = TimeStage { time: 40, level: 255, curve: 0 };
         lfo_stages[1] = TimeStage { time: 40, level: 0, curve: 0 };
@@ -845,7 +845,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 1,
-        };
+         ..Default::default()};
         patch.channel.pitch_fg.depth = 200; // 中立(128)からずらして揺れを出す
         PatchBank::from_patches(&[patch]).unwrap()
     }
@@ -1025,7 +1025,7 @@ mod tests {
         // 段1(TimeStage::default()=time 0/level 0)はリリース用。OP EGは必ずレベル0へ着地させる。
         // 押している間は段0で静止するのでサステイン中の出力は変わらない。
         patch.operators[0].eg =
-            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 };
+            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()};
         let bank = PatchBank::from_patches(&[patch]).unwrap();
         let sr = 8000.0;
         let tail_secs = 0.05;
@@ -1070,7 +1070,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let bank = PatchBank::from_patches(&[patch]).unwrap();
         let sr = 8000.0;
         let tail_secs = 0.03;

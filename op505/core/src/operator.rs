@@ -311,7 +311,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 2,
                 release_point: 2,
-            },
+             ..Default::default()},
             mul: 1,
             dt1: 128,
             ksr: 0,
@@ -334,7 +334,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point: 0,
-            },
+             ..Default::default()},
             waveform: wf,
             ..fast_params()
         }
@@ -386,7 +386,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 1,
                 release_point: 1,
-            },
+             ..Default::default()},
             ..fast_params()
         };
         let settle = |eg_shift: u8| -> f32 {
@@ -539,7 +539,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 2,
                 release_point: 2,
-            },
+             ..Default::default()},
             velocity_sensitivity: 0,
             eg_shift: 0,
             ..fast_params()
@@ -581,7 +581,7 @@ mod tests {
                 loop_enabled: 1,
                 loop_start: 1,
                 release_point: 2,
-            },
+             ..Default::default()},
             ..fast_params()
         };
         let mut op = Operator::new(params);

@@ -282,6 +282,7 @@ fn multirelease_eg() -> TimeEgParams {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 1, // stage1(decay到達点)で静止=サステイン、段2〜3がリリース
+        ..Default::default()
     }
 }
 
@@ -299,7 +300,7 @@ fn gate_gain_fg() -> TimeEgParams {
         loop_start: 0,
         // Gain FGなのでリリース区間が空（release_pointが最終段）でよい＝ゲートは閉じたまま終わる。
         release_point: 3,
-    }
+     ..Default::default()}
 }
 
 /// 非単調EG: attack→わずかなディップ→再上昇→sustain(loop_endで静止)→release。
@@ -316,7 +317,7 @@ fn nonmonotonic_eg() -> TimeEgParams {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 3,
-    }
+     ..Default::default()}
 }
 
 /// 音色ごとの試聴に適した基準音（CLIで音程を指定しなかった場合に使う）。

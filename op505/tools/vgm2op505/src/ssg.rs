@@ -258,7 +258,7 @@ fn ssg_op_eg(rr_time: u8) -> TimeEgParams {
     let mut stages = [TimeStage::default(); MAX_STAGES];
     stages[0] = TimeStage { time: 1, level: 255, curve: 0 };
     stages[1] = TimeStage { time: rr_time, level: 0, curve: 0 };
-    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 }
+    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
 }
 
 /// rr=255（実機最速、旧EGレート換算で≒8.71ms）に対応するtime値
@@ -304,13 +304,13 @@ fn ssg_channel(algorithm: u8) -> Op505ChannelParams {
     let pitch_cutoff_eg = |stage1_time: u8| {
         let mut stages = [TimeStage::default(); MAX_STAGES];
         stages[1] = TimeStage { time: stage1_time, level: 0, curve: 0 };
-        TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 }
+        TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
     };
     let gain_fg = {
         let mut stages = [TimeStage::default(); MAX_STAGES];
         stages[0] = TimeStage { time: 1, level: 255, curve: 0 };
         stages[1] = TimeStage { time: 0, level: 255, curve: 0 };
-        TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 }
+        TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
     };
     Op505ChannelParams {
         algorithm,

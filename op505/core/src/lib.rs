@@ -94,7 +94,7 @@ fn default_gain_fg() -> Op505GainFg {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 0,
-    }
+     ..Default::default()}
 }
 
 impl Default for Op505ChannelParams {
@@ -643,7 +643,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        }
+         ..Default::default()}
     }
 
     /// 全Opがアルゴリズム7（全並列）で即音量最大・サスティン無限のテスト用パッチ。
@@ -743,7 +743,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 1,
-        };
+         ..Default::default()};
         for op in patch.operators.iter_mut() {
             op.eg = eg;
         }
@@ -820,7 +820,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        };
+         ..Default::default()};
         let json = serde_json::to_string(&patch).expect("serialize");
         let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(patch, restored, "Op505Patch should round-trip through JSON unchanged");
