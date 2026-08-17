@@ -85,13 +85,15 @@
         <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
              解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
         <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
-        <!-- SYNC/NOTE/RETRIGはtime-eg-editorの下に新しい行を足すのではなく、既存のP.DEP±ノブと
+        <!-- SYNC/RATE/RETRIGはtime-eg-editorの下に新しい行を足すのではなく、既存のP.DEP±ノブと
              同じstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px固定サイズの
-             自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが伸びずグラフに重なる）。 -->
+             自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが伸びずグラフに重なる）。
+             <sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット（旧<enum label="NOTE">の
+             置き換え、100×70）。両者は同じsync_rateの2つの見え方なので互いに追従する。 -->
         <stack gap="spacing">
           <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
-          <enum label="NOTE" handle="params.pitch_fg.eg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="6"/>
+          <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
         </stack>
       </row>
@@ -106,7 +108,7 @@
         <stack gap="spacing">
           <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <enum label="NOTE" handle="params.cutoff_fg.eg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="8"/>
+          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
         </stack>
       </row>
@@ -123,7 +125,7 @@
         <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <stack gap="spacing">
           <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
-          <enum label="NOTE" handle="params.gain_fg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="10"/>
+          <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
           <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11"/>
         </stack>
       </row>

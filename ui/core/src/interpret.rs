@@ -28,7 +28,7 @@ use crate::layout;
 use crate::mapping::mul_fine_ratio;
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
-use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES};
+use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 
@@ -189,6 +189,7 @@ fn resolve_names(name: &str) -> &'static [&'static str] {
         "CHORUS_TYPE_NAMES" => &CHORUS_TYPE_NAMES,
         "LFO_WAVEFORM_NAMES" => &LFO_WAVEFORM_NAMES,
         "LFO_FADE_MODE_NAMES" => &LFO_FADE_MODE_NAMES,
+        "RETRIGGER_MODE_NAMES" => &RETRIGGER_MODE_NAMES,
         _ => &["?"],
     }
 }
@@ -321,6 +322,11 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let names_slice = resolve_names(names);
             let salt_n: usize = salt.parse().unwrap_or(0);
             enum_selector(ui, store.int(&key), label, names_slice, salt_n);
+        }
+        Widget::SyncRate { label, handle, salt } => {
+            let key = scoped(handle, idx);
+            let salt_n: usize = salt.parse().unwrap_or(0);
+            sync_rate_selector(ui, store.int(&key), label, salt_n);
         }
         Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => {
             let mapping_v = parse_eg_amplitude_mapping(mapping);

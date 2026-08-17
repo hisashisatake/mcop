@@ -56,7 +56,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -120,7 +120,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -184,7 +184,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -248,7 +248,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -325,7 +325,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -379,7 +379,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -432,7 +432,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -503,7 +503,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -567,7 +567,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -631,7 +631,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -695,7 +695,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -772,7 +772,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -826,7 +826,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -879,7 +879,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -950,7 +950,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1014,7 +1014,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1078,7 +1078,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1142,7 +1142,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1219,7 +1219,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -1273,7 +1273,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -1326,7 +1326,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -1397,7 +1397,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1461,7 +1461,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1525,7 +1525,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1589,7 +1589,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1666,7 +1666,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -1720,7 +1720,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -1773,7 +1773,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -1844,7 +1844,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1908,7 +1908,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -1972,7 +1972,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2036,7 +2036,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2113,7 +2113,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -2167,7 +2167,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -2220,7 +2220,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -2291,7 +2291,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2355,7 +2355,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2419,7 +2419,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2483,7 +2483,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2560,7 +2560,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -2614,7 +2614,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -2667,7 +2667,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -2738,7 +2738,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2802,7 +2802,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2866,7 +2866,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -2930,7 +2930,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3007,7 +3007,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -3061,7 +3061,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -3114,7 +3114,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -3185,7 +3185,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3249,7 +3249,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3313,7 +3313,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3377,7 +3377,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3454,7 +3454,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -3508,7 +3508,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -3561,7 +3561,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -3632,7 +3632,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3696,7 +3696,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3760,7 +3760,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3824,7 +3824,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -3901,7 +3901,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -3955,7 +3955,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -4008,7 +4008,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -4079,7 +4079,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4143,7 +4143,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4207,7 +4207,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4271,7 +4271,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4348,7 +4348,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -4402,7 +4402,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -4455,7 +4455,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {
@@ -4526,7 +4526,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4590,7 +4590,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4654,7 +4654,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4718,7 +4718,7 @@
               "loop_start": 2,
               "release_point": 2,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "mul": 1,
@@ -4795,7 +4795,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -4849,7 +4849,7 @@
               "loop_start": 0,
               "release_point": 0,
               "sync_enabled": 0,
-              "sync_note": 10,
+              "sync_rate": 134,
               "retrigger_mode": 0
             },
             "depth": 0
@@ -4902,7 +4902,7 @@
             "loop_start": 0,
             "release_point": 0,
             "sync_enabled": 0,
-            "sync_note": 10,
+            "sync_rate": 134,
             "retrigger_mode": 0
           },
           "texture_lfo": {

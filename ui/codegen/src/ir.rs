@@ -94,6 +94,9 @@ pub enum Widget {
     Checkbox { label: String, handle: String },
     Waveform { handle: String, index: String },
     Enum { label: String, handle: String, names: String, salt: String },
+    /// TimeEgのテンポ同期レート（連続ノブ＋音価ドロップダウンの複合ウィジェット）。
+    /// 候補名は`SYNC_NOTE_NAMES`固定なので`<enum>`と違い`names`属性を取らない。
+    SyncRate { label: String, handle: String, salt: String },
     #[allow(clippy::too_many_arguments)]
     EgPreview {
         mapping: String,

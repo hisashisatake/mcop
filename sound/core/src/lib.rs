@@ -27,9 +27,9 @@ pub use eg::{cc76_to_rate_scale, BipolarFg, Eg, EgParams, GainFg};
 
 pub mod time_eg;
 pub use time_eg::{
-    seconds_to_time, sync_note_beats, sync_region_seconds, tempo_speed_scale, time_to_seconds,
-    TimeEg, TimeEgParams, TimeStage, MAX_STAGES, RETRIGGER_MODE_CONTINUE, RETRIGGER_MODE_RESET,
-    SYNC_NOTE_COUNT,
+    nearest_sync_note, seconds_to_time, sync_note_anchor, sync_note_beats, sync_rate_beats,
+    sync_region_seconds, tempo_speed_scale, time_to_seconds, TimeEg, TimeEgParams, TimeStage,
+    MAX_STAGES, RETRIGGER_MODE_CONTINUE, RETRIGGER_MODE_RESET, SYNC_NOTE_COUNT,
 };
 
 pub mod vcf;

@@ -254,6 +254,19 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
                 Size { w: 100.0, h: 66.0 },
             )
         }
+        "sync-rate" => {
+            let label = req_attr(el, "label")?;
+            let handle = resolve_path(&req_attr(el, "handle")?, ctx);
+            let salt = el.attribute("salt").unwrap_or("0").to_string();
+            (
+                Widget::SyncRate { label: label.clone(), handle, salt },
+                label,
+                "sync-rate".to_string(),
+                // <enum>(100×66)の置き換え用。ノブ(28px)＋ComboBoxで縦は+4pxに収めてある
+                // （FGパネルの<stack>は<time-eg-editor>の固定高さ245pxが上限）。
+                Size { w: 100.0, h: 70.0 },
+            )
+        }
         "eg-preview" => {
             let mapping = el.attribute("mapping").unwrap_or("DbLinear").to_string();
             let widget = Widget::EgPreview {
