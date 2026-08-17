@@ -17,7 +17,7 @@ use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
 use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
-use crate::knob::{bool_checkbox, spin_control};
+use crate::knob::{bool_checkbox, spin_control, SPIN_WIDTH_DEFAULT};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
@@ -31,7 +31,7 @@ const HEADER_HEIGHT: f32 = 20.0;
 const SPIN_ROW_HEIGHT: f32 = 35.0;
 const GRAPH_PAD: f32 = 6.0;
 /// VALUEモードのTIME欄の数値欄幅（px）。ミリ秒表示は最大`300000`(6桁)になるため、
-/// 他の数値欄(24px、最大3桁の0〜255向け)より広く取る。見た目は実機確認で微調整する。
+/// 他の数値欄(`SPIN_WIDTH_DEFAULT`=4文字ぶん)より広く取る。見た目は実機確認で微調整する。
 const TIME_MS_SPIN_WIDTH: f32 = 56.0;
 
 /// ドラッグでlevelを0へスナップする、グラフ下端からの距離（px）。TL<255時、`DB_FLOOR`付近の
@@ -532,7 +532,7 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("STAGES").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, 24.0);
+            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
         });
         ui.add_enabled_ui(loop_enabled, |ui| {
             ui.vertical(|ui| {
@@ -543,13 +543,13 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
         ui.add_enabled_ui(loop_start_enabled, |ui| {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("L.START").size(8.0));
-                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart, profile), egui::TextStyle::Small, 24.0);
+                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
             });
         });
         ui.add_enabled_ui(rel_enabled, |ui| {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("REL").size(8.0));
-                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, 24.0);
+                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
             });
         });
     });
@@ -601,7 +601,7 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: 
                                 ui,
                                 &TimeEgFieldHandle::new(handle, TimeEgField::StageLevel(i), profile),
                                 egui::TextStyle::Small,
-                                24.0,
+                                SPIN_WIDTH_DEFAULT,
                             );
                         });
                         bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CV");

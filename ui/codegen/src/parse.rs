@@ -236,6 +236,9 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
                 Widget::Knob { label: label.clone(), handle, bipolar },
                 label,
                 "knob".to_string(),
+                // `ui_core::knob::KNOB_CELL_SIZE`と一致させること（ui-codegenはegui非依存で
+                // あちらの定数を参照できないため手で同期する）。幅62はスピン行の実幅
+                // （ボタン12×2＋間隔2×2＋数値欄32＝60）がちょうど収まる値。
                 Size { w: 62.0, h: 66.0 },
             )
         }

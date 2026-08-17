@@ -104,12 +104,70 @@ impl Widget for Knob<'_> {
     }
 }
 
-/// ラベル付きノブを1セル（幅62×高さ66）に配置する。
+/// 数値欄（`spin_control`の`desired_width`）の既定幅（px）。`TextStyle::Small`で4文字ぶん。
+///
+/// 3文字ぶん（24px）だったが、バイポーラノブ（`BipolarHandle`、`-128`〜`+127`）の導入で
+/// 符号込み4文字が入らず`+127`が見切れたため1文字ぶん広げた。0〜255の単極性パラメーターも
+/// 同じ幅を使い、横に並んだ数値欄の見た目を揃える（`TIME(m)`欄だけは6桁必要なので別枠）。
+pub const SPIN_WIDTH_DEFAULT: f32 = 32.0;
+
+/// スピンボタン（`repeat_button`）の一辺（px）。`ui.add_sized`で固定している値。
+const SPIN_BUTTON_SIZE: f32 = 12.0;
+/// `spin_control`内のウィジェット間隔（px）。
+const SPIN_ITEM_SPACING: f32 = 2.0;
+
+/// `spin_control`が実際に占める横幅（px）。
+///
+/// `TextEdit::desired_width`はテキスト領域ではなく**外形幅**（eguiは`allocate_width - margin`を
+/// 内側のテキスト領域に使う。egui 0.34の`text_edit/builder.rs`参照）なので、
+/// ボタン2個と間隔2個を足すだけで求まり、マージンを別途足してはいけない。
+pub const fn spin_control_width(desired_width: f32) -> f32 {
+    SPIN_BUTTON_SIZE * 2.0 + SPIN_ITEM_SPACING * 2.0 + desired_width
+}
+
+/// `knob`セル内のスピン行の実幅（px）。
+const SPIN_ROW_WIDTH: f32 = spin_control_width(SPIN_WIDTH_DEFAULT);
+
+/// ラベル付きノブ1セルの固定サイズ（px）。幅はスピン行(`SPIN_ROW_WIDTH`=60)がちょうど収まる値。
+///
+/// **`ui-codegen`の`parse.rs`にある`<knob>`の宣言サイズと一致させること**
+/// （ui-codegenはegui非依存でこの定数を参照できないため、手で同期する。`<checkbox>`等と同じ扱い）。
+pub const KNOB_CELL_SIZE: egui::Vec2 = egui::vec2(62.0, 66.0);
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    /// スピン行がセル幅を超えないこと。超えると隣のノブへはみ出して重なる。
+    /// 数値欄幅（`SPIN_WIDTH_DEFAULT`）を広げるときはここで気づけるようにしておく。
+    #[test]
+    fn spin_row_fits_in_knob_cell() {
+        assert!(
+            SPIN_ROW_WIDTH <= KNOB_CELL_SIZE.x,
+            "スピン行{SPIN_ROW_WIDTH}pxがセル幅{}pxを超えている。KNOB_CELL_SIZEとui-codegenのparse.rsを揃えて広げること",
+            KNOB_CELL_SIZE.x
+        );
+    }
+
+    /// ノブとスピン行の中心が一致すること（`knob`の`add_space`が入れる余白の検算）。
+    #[test]
+    fn knob_and_spin_row_share_horizontal_center() {
+        let pad = ((KNOB_CELL_SIZE.x - SPIN_ROW_WIDTH) * 0.5).max(0.0);
+        let knob_center = KNOB_CELL_SIZE.x * 0.5;
+        let spin_center = pad + SPIN_ROW_WIDTH * 0.5;
+        assert!(
+            (knob_center - spin_center).abs() < 0.01,
+            "ノブ中心{knob_center} と スピン行中心{spin_center} がずれている"
+        );
+    }
+}
+
+/// ラベル付きノブを1セル（`KNOB_CELL_SIZE`）に配置する。
 /// 名称をノブの左上に置き、ノブ・数値欄＋スピンを縦に並べる。
 /// セルを固定サイズ・固定レイアウトにすることで、横に並べたノブの高さが揃う。
 pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
     ui.allocate_ui_with_layout(
-        egui::vec2(62.0, 66.0),
+        KNOB_CELL_SIZE,
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             // 名称（左上）
@@ -118,8 +176,16 @@ pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
             ui.vertical_centered(|ui| {
                 ui.add(Knob::for_handle(handle).with_diameter(28.0));
             });
-            // 数値欄＋スピンボタン
-            spin_control(ui, handle, egui::TextStyle::Small, 24.0);
+            // 数値欄＋スピンボタン。ノブはセル幅の中央に置かれるので、スピン行を左寄せのまま
+            // にすると両者の中心が「(セル幅 - 行幅) / 2」だけずれる（実機で違和感として指摘された）。
+            // `vertical_centered`で包んでも中央寄せにはならない——`spin_control`は内部で
+            // `ui.horizontal`を使い、その子uiは利用可能幅いっぱいのmax_rectを左端から取るため。
+            // そこで差分の半分だけ明示的に空けて中心を揃える。
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(((KNOB_CELL_SIZE.x - SPIN_ROW_WIDTH) * 0.5).max(0.0));
+                spin_control(ui, handle, egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            });
         },
     );
 }
@@ -200,9 +266,10 @@ pub(crate) fn repeat_button(ui: &mut egui::Ui, label: &str) -> bool {
 /// - ＋−：長押しで連続増減（±1、`[min, max]`へクランプ）
 /// `text_style`は数値欄のフォントサイズ（ノブの並びでは`TextStyle::Small`、他のUI要素と大きさを
 /// 揃えたい単体使用では`TextStyle::Body`等を指定する）。`desired_width`は数値欄(px)。
-/// 桁数はハンドルごとに異なる（0〜255の3桁からミリ秒表示の6桁まで）ため、呼び出し側が
-/// 明示する（旧実装は`text_style`から24px/44pxの2択を自動選択していたが、TimeEgのTIME欄が
-/// 300000msまで表示するようになり2択では足りなくなったため呼び出し側指定へ変更）。
+/// 桁数はハンドルごとに異なる（バイポーラの符号込み4文字からミリ秒表示の6桁まで）ため、
+/// 呼び出し側が明示する（旧実装は`text_style`から24px/44pxの2択を自動選択していたが、
+/// TimeEgのTIME欄が300000msまで表示するようになり2択では足りなくなったため呼び出し側指定へ変更）。
+/// 特別な理由がなければ`SPIN_WIDTH_DEFAULT`を渡すこと。
 pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: egui::TextStyle, desired_width: f32) {
     let (min, max) = (handle.min(), handle.max());
     let set = |value: i32| {

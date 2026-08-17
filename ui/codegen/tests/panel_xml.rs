@@ -19,6 +19,9 @@ fn generates_without_error() {
 /// （eg-preview(130x105、EGプレビューグラフ実装で84x66から拡大済み) + LOOP/CURVEの`<stack>`
 /// (checkbox実測70x38+70x25を縦積み) + 17ウィジェットの`row_grow`均等割り付け(62x71)、
 /// うちwaveform+AMも`<stack>`(130x71+70x25)）と一致することを確認する。
+///
+/// ノブの宣言幅62は`ui_core::knob::KNOB_CELL_SIZE`と同期する値。バイポーラ表示（`-128`〜`+127`）で
+/// 数値欄を24→32pxへ広げてもスピン行の実幅は60pxに収まるため、この宣言幅は変わっていない。
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
