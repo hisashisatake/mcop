@@ -127,7 +127,7 @@ fn default_time_eg_params() -> TimeEgParams {
     let mut stages = [TimeStage::default(); MAX_STAGES];
     stages[0] = TimeStage { time: 60, level: 200, curve: 0 };
     stages[1] = TimeStage { time: 120, level: 0, curve: 0 };
-    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 }
+    TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
 }
 
 /// 解決済みハンドルパス文字列（例:`"op.tl"`、リピートパネル内は[`scoped`]で

@@ -49,7 +49,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -110,7 +113,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -171,7 +177,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -232,7 +241,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -306,7 +318,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "depth": 128
       },
@@ -357,7 +372,10 @@
           "stage_count": 2,
           "loop_enabled": 0,
           "loop_start": 0,
-          "release_point": 0
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_note": 10,
+          "retrigger_mode": 0
         },
         "depth": 128
       },
@@ -407,7 +425,10 @@
         "stage_count": 2,
         "loop_enabled": 0,
         "loop_start": 0,
-        "release_point": 0
+        "release_point": 0,
+        "sync_enabled": 0,
+        "sync_note": 10,
+        "retrigger_mode": 0
       },
       "texture_lfo": {
         "waveform": 0,

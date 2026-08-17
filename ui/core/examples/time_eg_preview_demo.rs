@@ -55,7 +55,7 @@ fn samples() -> Vec<Sample> {
                 loop_enabled: 1,
                 loop_start: 0,
                 release_point: 3,
-            },
+             ..Default::default()},
         },
         Sample {
             label: "Modulator Multi-stage (m2) — モジュレーターEGの多段ループ（DbLinear）",
@@ -69,7 +69,7 @@ fn samples() -> Vec<Sample> {
                 loop_enabled: 1,
                 loop_start: 0,
                 release_point: 3,
-            },
+             ..Default::default()},
         },
         Sample {
             label: "Pitch Steps (m3) — 階段状プラトー・8段ループ+速いリセット+リリース",
@@ -90,7 +90,7 @@ fn samples() -> Vec<Sample> {
                 loop_enabled: 1,
                 loop_start: 0,
                 release_point: 6,
-            },
+             ..Default::default()},
         },
         Sample {
             label: "One-shot（ループなし）— 3段ADSR風、curve=1で丸めた立ち上がり",
@@ -103,7 +103,7 @@ fn samples() -> Vec<Sample> {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point: 1,
-            },
+             ..Default::default()},
         },
         Sample {
             label: "多段リリース — リリース点の次から複数段を順に辿って無音へ",
@@ -115,7 +115,7 @@ fn samples() -> Vec<Sample> {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point: 1,
-            },
+             ..Default::default()},
         },
     ]
 }

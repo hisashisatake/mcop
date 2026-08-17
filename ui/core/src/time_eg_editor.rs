@@ -821,7 +821,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        }
+         ..Default::default()}
     }
 
     #[test]

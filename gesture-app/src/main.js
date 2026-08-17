@@ -159,6 +159,49 @@ let activeEngine = 0;
 })();
 
 // ─────────────────────────────────────────────
+// タップテンポ（MC-505のタップボタン相当）
+// TimeEgのテンポ同期（sync_enabled）が対象にするBPMを、ボタン連打の間隔から算出する。
+// 3回タップ（間隔2区間）でBPM確定、以降のタップは直近区間の移動平均で更新し続ける。
+// タップ間隔が2秒を超えたら系列をリセットする（別のテンポで叩き直したいときの意図を汲む）。
+// ─────────────────────────────────────────────
+(() => {
+  const tapBtn = document.getElementById('tap-tempo-btn');
+  const displayEl = document.getElementById('tempo-display');
+  const MIN_BPM = 40;
+  const MAX_BPM = 300;
+  const RESET_GAP_MS = 2000;
+  const MOVING_AVERAGE_WINDOW = 4; // 直近何区間を平均するか
+
+  let tapTimestamps = [];
+
+  function updateDisplay(bpm) {
+    displayEl.textContent = `${Math.round(bpm)} BPM`;
+  }
+
+  tapBtn.addEventListener('click', async () => {
+    const now = performance.now();
+    if (tapTimestamps.length > 0 && now - tapTimestamps[tapTimestamps.length - 1] > RESET_GAP_MS) {
+      tapTimestamps = [];
+    }
+    tapTimestamps.push(now);
+    if (tapTimestamps.length > MOVING_AVERAGE_WINDOW + 1) {
+      tapTimestamps.shift();
+    }
+    if (tapTimestamps.length < 3) {
+      return; // 3タップ（2区間）が揃うまではBPMを確定しない
+    }
+    const intervals = [];
+    for (let i = 1; i < tapTimestamps.length; i++) {
+      intervals.push(tapTimestamps[i] - tapTimestamps[i - 1]);
+    }
+    const avgIntervalMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    const bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, 60000 / avgIntervalMs));
+    updateDisplay(bpm);
+    await invoke('set_tempo', { bpm });
+  });
+})();
+
+// ─────────────────────────────────────────────
 // Canvas
 // ─────────────────────────────────────────────
 const canvas  = document.getElementById('canvas');

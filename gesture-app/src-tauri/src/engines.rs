@@ -81,6 +81,14 @@ impl Engines {
         self.ym38x6.note_off(channel);
         self.op505.note_off(channel);
     }
+
+    /// テンポ（BPM）を両エンジンへ設定する。TimeEgのテンポ同期はOP505のみが対象だが、
+    /// `Vco::set_tempo`の既定実装はno-opなので凍結中の38x6側へ送っても無害
+    /// （Vco共通APIとして両エンジンへ揃えて送る、note_offと同じ考え方）。
+    pub fn set_tempo(&mut self, bpm: f32) {
+        self.ym38x6.set_tempo(bpm);
+        self.op505.set_tempo(bpm);
+    }
 }
 
 #[cfg(test)]
@@ -135,7 +143,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
 
         let mut patch = op505_core::Op505Patch::default();
         for op in patch.operators.iter_mut() {

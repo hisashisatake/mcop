@@ -84,7 +84,7 @@ pub fn convert_eg_shape(
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
     };
     let ar_time_full = time_for_seconds(ar_sec, warnings, label, "attack(ar)");
 
@@ -106,7 +106,7 @@ pub fn convert_eg_shape(
                 loop_enabled: 1,
                 loop_start: 1,
                 release_point: 2,
-            };
+             ..Default::default()};
         }
         warnings.push(format!(
             "{label}: loop=1かつd1r=0（フリーズ）はループが成立しないため静止扱いに変換した"
@@ -125,7 +125,7 @@ pub fn convert_eg_shape(
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
     };
     let d1_time = time_for_seconds(d1r_sec * (1.0 - d1l as f32 / 255.0), warnings, label, "decay1(d1r)");
     stages[1] = TimeStage { time: d1_time, level: d1l, curve };
@@ -140,13 +140,13 @@ pub fn convert_eg_shape(
             loop_enabled: 0,
             loop_start: 1,
             release_point: 1,
-        };
+         ..Default::default()};
     };
     let d2_time = time_for_seconds(d2r_sec * (d1l as f32 / 255.0), warnings, label, "decay2(d2r)");
     stages[2] = TimeStage { time: d2_time, level: 0, curve };
     let rr_time = time_for_seconds(seconds_for_rr(rr), warnings, label, "release(rr)");
     stages[3] = TimeStage { time: rr_time, level: 0, curve };
-    TimeEgParams { stages, stage_count: 4, loop_enabled: 0, loop_start: 2, release_point: 2 }
+    TimeEgParams { stages, stage_count: 4, loop_enabled: 0, loop_start: 2, release_point: 2 , ..Default::default()}
 }
 
 /// 段の先頭にlevel=0のプラトー段を1つ挿入し、loop_start/release_pointを+1シフトする

@@ -584,6 +584,12 @@ impl Plugin for Op505Plugin {
             }
         }
 
+        // TimeEgのテンポ同期用BPM。ホストが未再生等でtempoを返さない場合は前回値を保持する
+        // （Op505Engine::set_tempoが0以下を無視するのと同じ防御）。
+        if let Some(tempo) = context.transport().tempo {
+            self.engine.set_tempo(tempo as f32);
+        }
+
         // Algorithm：DAWオートメーションで値が変化した場合のみ反映する（NRPN(0,9)はself.algorithmへ
         // 直接書き込まれ、ここでの値が前回と同じ間は上書きされない。差分検知方式）。
         let algorithm = self.params.algorithm.value() as u8;

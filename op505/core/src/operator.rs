@@ -9,7 +9,7 @@
 use sound_fm::mapping::*;
 use sound_fm::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
 use serde::{Deserialize, Serialize};
-use sound_core::{TimeEg, TimeEgParams, WaveTable};
+use sound_core::{tempo_speed_scale, TimeEg, TimeEgParams, WaveTable, RETRIGGER_MODE_RESET};
 
 /// オペレーター単位パラメーター一式。ym38x6の`ar/d1r/d1l/d2r/rr/floor/loop_enabled/curve`
 /// （8フィールド）を`eg: TimeEgParams`（N点折れ線＋ループ範囲＋多段リリース）1つに統合する。
@@ -147,11 +147,17 @@ impl Operator {
         self.env_amp_cache_valid = false;
     }
 
+    /// `params.eg.retrigger_mode`がRESETなら`note_on()`と同じく0からクリーンに再スタートし、
+    /// 既定のCONTINUEなら現在レベルを保ったまま段0へ向かう（実機OPMのKey-On挙動）。
     pub fn retrigger(&mut self, base_frequency: f32, velocity: u8) {
         self.frequency = base_frequency;
         self.velocity = velocity;
         self.phase = 0.0;
-        self.eg.retrigger();
+        if self.params.eg.retrigger_mode == RETRIGGER_MODE_RESET {
+            self.eg.note_on();
+        } else {
+            self.eg.retrigger();
+        }
         self.f_number_ratio = 1.0;
         self.noise_lfsr = 1;
         self.noise_accum = 0.0;
@@ -236,7 +242,9 @@ impl Operator {
     }
 
     /// `modulation`: FM変調入力（位相オフセット、0.0〜1.0スケール）
-    pub fn tick(&mut self, sample_rate: f32, wave: &WaveTable, modulation: f32, note: u8) -> f32 {
+    /// `tempo_bpm`: TimeEgのテンポ同期（`eg.sync_enabled`）が対象区間の速度を決めるのに使う
+    /// （`eg.sync_enabled=0`なら`tempo_speed_scale`が1.0を返すため無効時は無関係）。
+    pub fn tick(&mut self, sample_rate: f32, wave: &WaveTable, modulation: f32, note: u8, tempo_bpm: f32) -> f32 {
         if self.eg.is_idle() {
             return 0.0;
         }
@@ -249,7 +257,8 @@ impl Operator {
             self.cached_rate_scale_key = Some(rate_scale_key);
             v
         };
-        let env_level = self.eg.tick(sample_rate, self.params.eg, ksr_mul);
+        let tempo_scale = tempo_speed_scale(&self.params.eg, tempo_bpm);
+        let env_level = self.eg.tick(sample_rate, self.params.eg, ksr_mul * tempo_scale);
 
         let freq = self.effective_frequency();
         self.phase = (self.phase + freq / sample_rate).fract();
@@ -311,7 +320,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 2,
                 release_point: 2,
-            },
+             ..Default::default()},
             mul: 1,
             dt1: 128,
             ksr: 0,
@@ -334,7 +343,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point: 0,
-            },
+             ..Default::default()},
             waveform: wf,
             ..fast_params()
         }
@@ -346,9 +355,9 @@ mod tests {
         let mut op = Operator::new(noise_params(wf));
         op.note_on(440.0, 127);
         for _ in 0..16 {
-            op.tick(sr, &wave, 0.0, 69);
+            op.tick(sr, &wave, 0.0, 69, 120.0);
         }
-        (0..n).map(|_| op.tick(sr, &wave, 0.0, 69)).collect()
+        (0..n).map(|_| op.tick(sr, &wave, 0.0, 69, 120.0)).collect()
     }
 
     #[test]
@@ -386,17 +395,17 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 1,
                 release_point: 1,
-            },
+             ..Default::default()},
             ..fast_params()
         };
         let settle = |eg_shift: u8| -> f32 {
             let mut op = Operator::new(Op505OperatorParams { eg_shift, ..base });
             op.note_on(440.0, 127);
             for _ in 0..2000 {
-                op.tick(sr, &wave, 0.0, 69);
+                op.tick(sr, &wave, 0.0, 69, 120.0);
             }
             (0..512)
-                .map(|_| op.tick(sr, &wave, 0.0, 69).abs())
+                .map(|_| op.tick(sr, &wave, 0.0, 69, 120.0).abs())
                 .fold(0.0f32, f32::max)
         };
         let off = settle(0);
@@ -418,13 +427,13 @@ mod tests {
 
         let mut peak = 0.0f32;
         for _ in 0..50 {
-            peak = peak.max(op.tick(sr, &wave, 0.0, 69).abs());
+            peak = peak.max(op.tick(sr, &wave, 0.0, 69, 120.0).abs());
         }
         assert!(peak > 0.9, "expected attack to reach near-peak amplitude, got {peak}");
 
         let mut settled = 0.0f32;
         for _ in 0..2000 {
-            settled = op.tick(sr, &wave, 0.0, 69).abs();
+            settled = op.tick(sr, &wave, 0.0, 69, 120.0).abs();
         }
         assert!(!op.is_idle(), "should still be sounding (stage2 sticks at 0, not Idle)");
         assert!(settled < 1e-3, "expected amplitude to have decayed near 0, got {settled}");
@@ -433,7 +442,7 @@ mod tests {
         assert!(!op.is_idle(), "should not be idle immediately after note_off (Release just entered)");
         let mut became_idle = false;
         for _ in 0..200 {
-            op.tick(sr, &wave, 0.0, 69);
+            op.tick(sr, &wave, 0.0, 69, 120.0);
             if op.is_idle() {
                 became_idle = true;
                 break;
@@ -448,7 +457,7 @@ mod tests {
         let wave = gen_op_sine();
         let mut op = Operator::new(fast_params());
         assert!(op.is_idle());
-        assert_eq!(op.tick(sr, &wave, 0.0, 69), 0.0);
+        assert_eq!(op.tick(sr, &wave, 0.0, 69, 120.0), 0.0);
     }
 
     #[test]
@@ -521,7 +530,7 @@ mod tests {
 
         op.set_chip_lfo_modulation(0.0, 1.0);
         for _ in 0..10 {
-            assert_eq!(op.tick(sr, &wave, 0.0, 69), 0.0);
+            assert_eq!(op.tick(sr, &wave, 0.0, 69, 120.0), 0.0);
         }
     }
 
@@ -539,7 +548,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 2,
                 release_point: 2,
-            },
+             ..Default::default()},
             velocity_sensitivity: 0,
             eg_shift: 0,
             ..fast_params()
@@ -553,7 +562,7 @@ mod tests {
             if i == 8000 {
                 op.note_off();
             }
-            let out = op.tick(sr, &wave, 0.0, 69);
+            let out = op.tick(sr, &wave, 0.0, 69, 120.0);
             if op.is_idle() {
                 break;
             }
@@ -581,14 +590,14 @@ mod tests {
                 loop_enabled: 1,
                 loop_start: 1,
                 release_point: 2,
-            },
+             ..Default::default()},
             ..fast_params()
         };
         let mut op = Operator::new(params);
         op.note_on(440.0, 127);
 
         for _ in 0..40000 {
-            if op.tick(sr, &wave, 0.0, 69).abs() >= 0.99 {
+            if op.tick(sr, &wave, 0.0, 69, 120.0).abs() >= 0.99 {
                 break;
             }
         }
@@ -597,7 +606,7 @@ mod tests {
         let mut chunk_max = Vec::new();
         let mut cur_max = 0.0f32;
         for i in 0..40000 {
-            let sample = op.tick(sr, &wave, 0.0, 69).abs();
+            let sample = op.tick(sr, &wave, 0.0, 69, 120.0).abs();
             cur_max = cur_max.max(sample);
             if (i + 1) % WINDOW == 0 {
                 chunk_max.push(cur_max);

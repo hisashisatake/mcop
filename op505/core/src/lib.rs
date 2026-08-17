@@ -29,8 +29,9 @@ use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{
     apply_lfo_modulation, convert_wave_32, cutoff_to_hz, effective_cutoff, pitch_depth_cents,
-    volume_depth, cutoff_depth, FilterType, LfoDestination, PerformanceLfo, PerformanceLfoTarget,
-    Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
+    tempo_speed_scale, volume_depth, cutoff_depth, FilterType, LfoDestination, PerformanceLfo,
+    PerformanceLfoTarget, Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
+    RETRIGGER_MODE_RESET,
 };
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ fn default_gain_fg() -> Op505GainFg {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 0,
-    }
+     ..Default::default()}
 }
 
 impl Default for Op505ChannelParams {
@@ -215,9 +216,9 @@ impl Channel {
         }
     }
 
-    /// 残響レベルを保持したまま再キーオンする（実機OPMのKey-On挙動、ym38x6のretriggerと同じ
-    /// 使い分け：オペレーターは`retrigger()`で残響を保つが、FG群はym38x6と同じく`note_on()`で
-    /// クリーンに再スタートする）。
+    /// 各FGの`eg.retrigger_mode`がRESETなら`note_on()`と同じく0からクリーンに再スタートし、
+    /// 既定のCONTINUEなら現在レベルを保ったまま段0へ向かう（実機OPMのKey-On挙動、
+    /// オペレーターの`retrigger()`と同じ使い分け）。
     fn retrigger(&mut self, frequency: f32, velocity: u8, patch: Op505Patch) {
         let note = frequency_to_note(frequency);
         let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
@@ -230,9 +231,9 @@ impl Channel {
         self.note = note;
         self.base_frequency = frequency;
         self.velocity = velocity;
-        self.cutoff_fg_eg.note_on();
-        self.gain_fg_eg.note_on();
-        self.pitch_fg_eg.note_on();
+        retrigger_time_eg(&mut self.cutoff_fg_eg, &patch.channel.cutoff_fg.eg);
+        retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg);
+        retrigger_time_eg(&mut self.pitch_fg_eg, &patch.channel.pitch_fg.eg);
         self.perf_lfo.set_rate(patch.channel.texture_lfo.rate);
         self.perf_lfo.set_delay(patch.channel.texture_lfo.delay);
         self.perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
@@ -278,7 +279,7 @@ impl Channel {
         self.operators.iter().all(|op| op.is_idle())
     }
 
-    fn tick(&mut self, sample_rate: f32, wave_tables: &[Option<WaveTable>]) -> f32 {
+    fn tick(&mut self, sample_rate: f32, wave_tables: &[Option<WaveTable>], tempo_bpm: f32) -> f32 {
         if self.is_idle() {
             return 0.0;
         }
@@ -308,8 +309,10 @@ impl Channel {
         }
 
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。
+        // CC76由来の速度補正(pitch_fg_rate_scale)とテンポ同期(tempo_speed_scale)を乗算で共存させる。
         let pitch_fg = self.channel_params.pitch_fg;
-        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, self.pitch_fg_rate_scale);
+        let pitch_fg_speed = self.pitch_fg_rate_scale * tempo_speed_scale(&pitch_fg.eg, tempo_bpm);
+        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
         let pitch_fg_cents = pitch_fg_out * (pitch_fg.depth as f32 - 128.0) / 128.0 * 1200.0;
         for op in self.operators.iter_mut() {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
@@ -348,7 +351,7 @@ impl Channel {
                 modulation += fb_source * scale;
             }
             let wave = wave_table_for(wave_tables, self.operators[op_idx].params.waveform);
-            let out = self.operators[op_idx].tick(sample_rate, wave, modulation, self.note);
+            let out = self.operators[op_idx].tick(sample_rate, wave, modulation, self.note, tempo_bpm);
             op_outputs[op_idx] = out;
             if op_idx == algo.feedback_op {
                 self.feedback_buffer2 = self.feedback_buffer;
@@ -378,7 +381,8 @@ impl Channel {
         let cp = &self.channel_params;
         let modulated_cutoff =
             (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
-        let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, 1.0);
+        let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
+        let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
         let cutoff = effective_cutoff(modulated_cutoff, cutoff_level, cp.cutoff_fg.depth);
         let cutoff_hz = cutoff_to_hz(cutoff);
         let filtered = self.svf.process(
@@ -391,8 +395,19 @@ impl Channel {
         );
 
         // VCA：Gain FG（TimeEg）をtickしてゲイン乗算するだけ（VoiceAmpの実体と同じ1行）。
-        let gain = self.gain_fg_eg.tick(sample_rate, cp.gain_fg, 1.0);
+        let gain_fg_speed = tempo_speed_scale(&cp.gain_fg, tempo_bpm);
+        let gain = self.gain_fg_eg.tick(sample_rate, cp.gain_fg, gain_fg_speed);
         filtered * gain
+    }
+}
+
+/// FGの`eg.retrigger_mode`に応じてretrigger()/note_on()を使い分ける
+/// （`Operator::retrigger()`と同じ分岐をChannel側の3FGへ揃える）。
+fn retrigger_time_eg(eg: &mut TimeEg, params: &TimeEgParams) {
+    if params.retrigger_mode == RETRIGGER_MODE_RESET {
+        eg.note_on();
+    } else {
+        eg.retrigger();
     }
 }
 
@@ -432,6 +447,9 @@ pub struct Op505Engine {
     current_patch: Op505Patch,
     max_voices: usize,
     mix_buf: Vec<f32>,
+    /// TimeEgのテンポ同期（`sync_enabled`）に使うBPM。ホストDAWのTransport（VST）や
+    /// タップテンポ（gesture-app）から`set_tempo()`経由で設定される。既定120。
+    tempo_bpm: f32,
 }
 
 impl Op505Engine {
@@ -447,6 +465,7 @@ impl Op505Engine {
             current_patch: Op505Patch::default(),
             max_voices: DEFAULT_MAX_VOICES,
             mix_buf: Vec::new(),
+            tempo_bpm: 120.0,
         }
     }
 
@@ -594,10 +613,19 @@ impl Vco for Op505Engine {
         }
     }
 
+    /// TimeEgのテンポ同期（`sync_enabled`）に使うBPMを更新する。0以下は無視する
+    /// （ホストDAWのTransportが未再生等で`tempo`を返さない場合の防御、既存値を保持する）。
+    fn set_tempo(&mut self, bpm: f32) {
+        if bpm > 0.0 {
+            self.tempo_bpm = bpm;
+        }
+    }
+
     fn render(&mut self, output: &mut [f32], num_channels: usize) {
         let num_channels = num_channels.max(1);
         let sample_rate = self.sample_rate;
         let wave_tables = &self.wave_tables;
+        let tempo_bpm = self.tempo_bpm;
         let frames = output.len().div_ceil(num_channels);
         self.mix_buf.clear();
         self.mix_buf.resize(frames, 0.0);
@@ -606,7 +634,7 @@ impl Vco for Op505Engine {
                 if ch.is_idle() {
                     break;
                 }
-                *mix += ch.tick(sample_rate, wave_tables);
+                *mix += ch.tick(sample_rate, wave_tables, tempo_bpm);
             }
         }
         for (frame, &mix) in output.chunks_mut(num_channels).zip(self.mix_buf.iter()) {
@@ -643,7 +671,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        }
+         ..Default::default()}
     }
 
     /// 全Opがアルゴリズム7（全並列）で即音量最大・サスティン無限のテスト用パッチ。
@@ -743,7 +771,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 1,
-        };
+         ..Default::default()};
         for op in patch.operators.iter_mut() {
             op.eg = eg;
         }
@@ -820,7 +848,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        };
+         ..Default::default()};
         let json = serde_json::to_string(&patch).expect("serialize");
         let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(patch, restored, "Op505Patch should round-trip through JSON unchanged");

@@ -110,7 +110,36 @@ pub struct TimeEgParams {
     /// （旧`release_start`フィールドは`deny_unknown_fields`未使用のため自動的に無視される）。
     #[serde(alias = "loop_end")]
     pub release_point: u8,
+    /// テンポ同期の有効/無効。0=無効（`time`の絶対秒数をそのまま使う）／1=有効
+    /// （`tempo_speed_scale()`で同期対象区間を`sync_note`の音価ちょうどへ伸縮する）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（無効）にする。
+    #[serde(default)]
+    pub sync_enabled: u8,
+    /// 同期先の音価（`sync_note_beats()`のindex、0〜19）。所要時間の昇順に並んだテーブルで、
+    /// index 10 = 1/4（1拍）が既定。`sync_enabled=0`のときは無視される。
+    #[serde(default = "default_sync_note")]
+    pub sync_note: u8,
+    /// retrigger()時（ボイス使い回しの再キーオン）のFGレベルの扱い。
+    /// 0=Continue（既定・現在レベルを保ったまま段0へ向かう、`TimeEg::retrigger()`相当）／
+    /// 1=Reset（`TimeEg::note_on()`相当、常に0から）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（Continue）にする
+    /// （実バンク調査の結果、Pitch FGは324プリセット中0件が非平坦、影響があるのはGain FG 1件
+    /// （継承で改善）とCutoff FG 1件（継承で再アタックが弱まる、パッチ側でResetを選べる）のみ
+    /// だった。詳細はmemory `project_timeeg_tempo_sync_and_retrigger_mode.md`参照）。
+    #[serde(default)]
+    pub retrigger_mode: u8,
 }
+
+/// `sync_note`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
+/// この値自体は無視されるが、UIで初めてSYNCをONにしたときに1/4から始まるよう10にしておく。
+fn default_sync_note() -> u8 {
+    10
+}
+
+/// retrigger_modeの意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
+/// 呼び出し側の可読性のためにここへ集約する）。
+pub const RETRIGGER_MODE_CONTINUE: u8 = 0;
+pub const RETRIGGER_MODE_RESET: u8 = 1;
 
 /// 既定は「保持1段＋リリース1段」の2段（全段time=0/level=0＝無音）。
 ///
@@ -128,6 +157,9 @@ impl Default for TimeEgParams {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
+            sync_enabled: 0,
+            sync_note: default_sync_note(),
+            retrigger_mode: RETRIGGER_MODE_CONTINUE,
         }
     }
 }
@@ -138,6 +170,104 @@ fn level_of(stage: &TimeStage) -> f32 {
 
 fn clamp_stage_count(stage_count: u8) -> usize {
     (stage_count as usize).clamp(1, MAX_STAGES)
+}
+
+// ---------------------------------------------------------------------------
+// テンポ同期
+//
+// LFOのテンポ同期（1周＝指定音価）と同じ考え方をTimeEgへ適用する（方式A）。
+// ループ有効なら`loop_start..=release_point`の1周、無効なら`0..=release_point`の
+// 保持区間全体を対象に、その素の所要時間を指定音価ちょうどへ伸縮する`speed_scale`倍率を返す。
+// アタックやリリースも同じ比率で一緒に伸縮する（対象区間より外は同期の管轄外）ため、
+// 「ビブラートだけ同期してアタックは固定秒数」という表現はできない
+// （区間ごとに速度を分けるにはtick()自体の再設計が要る、次善は将来課題）。
+// ---------------------------------------------------------------------------
+
+/// 同期音価テーブルの段数。付点・3連を含み、所要時間の昇順（index 0が最短）。
+pub const SYNC_NOTE_COUNT: usize = 20;
+
+/// 同期音価テーブル。値は拍数（4分音符=1.0）。所要時間の昇順に並べてあるため、
+/// ノブ/セレクタでindexを増やすと単調に長くなる。index 10 = 1/4（1拍、既定）。
+///
+/// | index | 音価 | 拍数 |
+/// |---|---|---|
+/// | 0 | 1/32T | 0.0833 |
+/// | 1 | 1/32 | 0.125 |
+/// | 2 | 1/16T | 0.1667 |
+/// | 3 | 1/32D | 0.1875 |
+/// | 4 | 1/16 | 0.25 |
+/// | 5 | 1/8T | 0.3333 |
+/// | 6 | 1/16D | 0.375 |
+/// | 7 | 1/8 | 0.5 |
+/// | 8 | 1/4T | 0.6667 |
+/// | 9 | 1/8D | 0.75 |
+/// | 10 | 1/4（既定） | 1.0 |
+/// | 11 | 1/2T | 1.3333 |
+/// | 12 | 1/4D | 1.5 |
+/// | 13 | 1/2 | 2.0 |
+/// | 14 | 1/1T | 2.6667 |
+/// | 15 | 1/2D | 3.0 |
+/// | 16 | 1/1（1小節） | 4.0 |
+/// | 17 | 1/1D | 6.0 |
+/// | 18 | 2/1（2小節） | 8.0 |
+/// | 19 | 4/1（4小節） | 16.0 |
+const SYNC_NOTE_BEATS: [f32; SYNC_NOTE_COUNT] = [
+    1.0 / 32.0 * (2.0 / 3.0),
+    1.0 / 32.0,
+    1.0 / 16.0 * (2.0 / 3.0),
+    1.0 / 32.0 * 1.5,
+    1.0 / 16.0,
+    1.0 / 8.0 * (2.0 / 3.0),
+    1.0 / 16.0 * 1.5,
+    1.0 / 8.0,
+    1.0 / 4.0 * (2.0 / 3.0),
+    1.0 / 8.0 * 1.5,
+    1.0 / 4.0,
+    1.0 / 2.0 * (2.0 / 3.0),
+    1.0 / 4.0 * 1.5,
+    1.0 / 2.0,
+    1.0 * (2.0 / 3.0),
+    1.0 / 2.0 * 1.5,
+    1.0,
+    1.0 * 1.5,
+    2.0,
+    4.0,
+];
+
+/// 同期音価テーブルのindex(0〜19)→拍数（4分音符=1.0）。範囲外はクランプする。
+pub fn sync_note_beats(index: u8) -> f32 {
+    SYNC_NOTE_BEATS[(index as usize).min(SYNC_NOTE_COUNT - 1)]
+}
+
+/// テンポ同期の対象区間（ループ有効なら`loop_start..=release_point`のループ1周、
+/// 無効なら`0..=release_point`の保持区間全体）の、同期前（素の`time`値どおり）の合計秒数。
+pub fn sync_region_seconds(params: &TimeEgParams) -> f32 {
+    let stage_count = clamp_stage_count(params.stage_count);
+    let release_point = (params.release_point as usize).min(stage_count - 1);
+    let start = if params.loop_enabled != 0 {
+        (params.loop_start as usize).min(release_point)
+    } else {
+        0
+    };
+    (start..=release_point)
+        .map(|i| time_to_seconds(params.stages[i].time))
+        .sum()
+}
+
+/// テンポ同期が有効なときに`tick()`の`speed_scale`へ乗算する倍率。
+/// `対象区間の素の秒数 ÷ 指定音価の秒数`で、対象区間ちょうどが音価どおりの長さになるよう
+/// 時間軸を伸縮する。同期無効・対象区間が実質0秒・bpmが0以下のいずれかなら1.0（無補正）を返す
+/// （既存のCC76由来速度補正等、他の`speed_scale`要因と乗算で共存できる設計）。
+pub fn tempo_speed_scale(params: &TimeEgParams, bpm: f32) -> f32 {
+    if params.sync_enabled == 0 || bpm <= 0.0 {
+        return 1.0;
+    }
+    let region = sync_region_seconds(params);
+    if region <= f32::EPSILON {
+        return 1.0;
+    }
+    let target_seconds = sync_note_beats(params.sync_note) * 60.0 / bpm;
+    region / target_seconds
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +552,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point: 0,
-            };
+             ..Default::default()};
             let mut eg = TimeEg::new();
             eg.note_on();
             let target = lvl as f32 / 255.0;
@@ -447,7 +577,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 1,
             release_point: 2,
-        };
+         ..Default::default()};
         // time値ごとの実秒数から、attack＋複数ループ分のサンプル予算を実測ベースで組み立てる
         // （time=200のような大きな生値は数秒スケールになりうるため、固定回数の決め打ちは避ける）。
         let attack_secs = time_to_seconds(80) as f64;
@@ -483,7 +613,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 1,
             release_point: 1,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         let mut level = 0.0;
@@ -503,7 +633,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 1,
             release_point: 1,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         for _ in 0..10_000 {
@@ -535,7 +665,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let seconds = time_to_seconds(180);
         let expected_1x = (seconds * sr).round() as i64;
         let expected_2x = (seconds * sr / 2.0).round() as i64;
@@ -567,7 +697,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 1,
             release_point: 1,
-        };
+         ..Default::default()};
 
         let ticks_to_sustain = |params: TimeEgParams| -> i64 {
             let mut eg = TimeEg::new();
@@ -599,7 +729,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         let mut level = 0.0;
@@ -629,7 +759,7 @@ mod tests {
             loop_enabled: 0,
             loop_start: 0,
             release_point: 1,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         let mut level = 0.0;
@@ -677,7 +807,7 @@ mod tests {
                 loop_enabled: 0,
                 loop_start: 0,
                 release_point,
-            };
+             ..Default::default()};
             let mut eg = TimeEg::new();
             eg.note_on();
             let mut level = 0.0;
@@ -721,7 +851,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 1,
             release_point: 1,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         // アタック(段0)を抜けて定常のノコギリに入るまで進める。
@@ -751,7 +881,7 @@ mod tests {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 0,
-        };
+         ..Default::default()};
         let mut eg = TimeEg::new();
         eg.note_on();
         let cycle = (time_to_seconds(80) as f64 * sr as f64) as usize;

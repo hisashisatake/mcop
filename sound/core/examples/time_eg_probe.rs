@@ -75,7 +75,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 1,
             release_point: 2,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -106,7 +106,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 1,
-        },
+         ..Default::default()},
         1.0,
     );
     // b3: TimeEg、階段状ループ（4点3段の上りに、速いリセットを1段添えた形）。
@@ -123,7 +123,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -146,7 +146,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 1,
-        },
+         ..Default::default()},
         c1_scale,
     );
     // c2: 同じ形のまま、1周=0.5秒（4分音符）へ。speed_scaleだけを変えている。
@@ -158,7 +158,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 1,
-        },
+         ..Default::default()},
         c2_scale,
     );
 
@@ -182,7 +182,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 6,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -204,7 +204,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 6,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -226,7 +226,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 6,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -250,7 +250,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 6,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -269,7 +269,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -291,7 +291,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 5,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -309,7 +309,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        },
+         ..Default::default()},
         1.0,
     );
 
@@ -328,7 +328,7 @@ fn main() {
             loop_enabled: 1,
             loop_start: 0,
             release_point: 3,
-        },
+         ..Default::default()},
         1.0,
     );
 

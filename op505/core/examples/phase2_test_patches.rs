@@ -39,7 +39,7 @@ fn transparent_gain_fg() -> TimeEgParams {
         loop_start: 0,
         // release_point=最終段＝リリース区間が空。note-offで何も起きずゲートは開いたまま。
         release_point: 0,
-    }
+     ..Default::default()}
 }
 
 /// バイポーラFGの「無効化」状態（中心128＝変調なし、EGは動いても効果ゼロ）。
@@ -59,6 +59,7 @@ fn ad_sustain_release_eg(decay_level: u8, release_secs: f32) -> TimeEgParams {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 1, // stage1(Decay到達点)で静止=サステイン
+        ..Default::default()
     }
 }
 
@@ -71,7 +72,7 @@ fn pluck_eg(decay_secs: f32) -> TimeEgParams {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 1,
-    }
+     ..Default::default()}
 }
 
 /// Pitch FG用のディレイ付きビブラートEG（stage0=遅延(level=0、CC78の相対補正対象)→
@@ -94,7 +95,7 @@ fn vibrato_eg(delay_secs: f32, half_period_secs: f32) -> TimeEgParams {
         loop_enabled: 1,
         loop_start: 1,
         release_point: 2,
-    }
+     ..Default::default()}
 }
 
 fn test_lead() -> Op505Patch {

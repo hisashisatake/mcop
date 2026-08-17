@@ -29,7 +29,7 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
         loop_enabled: 0,
         loop_start: 0,
         release_point: 0,
-    }
+     ..Default::default()}
 }
 
 /// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝8段×3(time/level/curve)+

@@ -233,6 +233,13 @@ fn get_active_engine(engine: tauri::State<'_, Arc<Mutex<Engines>>>) -> u8 {
     engine.lock().unwrap().active.to_u8()
 }
 
+/// テンポ（BPM）を両エンジンへ設定する。TimeEgのテンポ同期（`sync_enabled`）が対象区間の
+/// 速度を決めるのに使う。フロントエンドのタップテンポUIから呼ばれる（`main.js`参照）。
+#[tauri::command]
+fn set_tempo(engine: tauri::State<'_, Arc<Mutex<Engines>>>, bpm: f32) {
+    engine.lock().unwrap().set_tempo(bpm);
+}
+
 /// OP505のカレントパッチを設定し、発音中のチャンネルへも即座に反映する
 /// （`ym38x6_set_patch`のOP505版。音色エディタのノブ操作向け）。
 /// `Op505Patch`は専用DTOを介さず直接シリアライズする（op505-coreの型が既にserde対応で、
@@ -533,6 +540,7 @@ fn main() {
             ym38x6_set_performance_lfo,
             set_active_engine,
             get_active_engine,
+            set_tempo,
             op505_set_patch,
             op505_get_current_patch,
             op505_set_program,
