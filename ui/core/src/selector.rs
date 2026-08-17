@@ -12,6 +12,14 @@ pub const CHORUS_TYPE_NAMES: [&str; 8] = [
 pub const LFO_WAVEFORM_NAMES: [&str; 5] = ["Square", "Trapezoid", "S&H", "Random", "Chaos"];
 /// 質感LFOのFadeモード名（宣言順=NRPN(0,22)値0〜3、ym38x6-core LfoFadeModeに対応）。
 pub const LFO_FADE_MODE_NAMES: [&str; 4] = ["ON-IN", "ON-OUT", "OFF-IN", "OFF-OUT"];
+/// TimeEgのテンポ同期音価名（宣言順=`sound_core::sync_note_beats`のindex0〜19、所要時間の昇順）。
+/// index10="1/4"が既定。付点はD、3連はTのサフィックス。
+pub const SYNC_NOTE_NAMES: [&str; sound_core::SYNC_NOTE_COUNT] = [
+    "1/32T", "1/32", "1/16T", "1/32D", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4",
+    "1/2T", "1/4D", "1/2", "1/1T", "1/2D", "1/1", "1/1D", "2/1", "4/1",
+];
+/// TimeEgのretrigger_mode名（宣言順=0/1、`sound_core::RETRIGGER_MODE_*`に対応）。
+pub const RETRIGGER_MODE_NAMES: [&str; 2] = ["Continue", "Reset"];
 
 /// 固定候補名一覧から1つを選ぶ汎用コンボボックス。Reverb/Chorus Type等の
 /// enum的パラメーター(0〜names.len()-1)向け。`salt`はウィジェットごとにIDを一意にする値。

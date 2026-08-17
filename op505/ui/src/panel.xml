@@ -82,8 +82,15 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255"/>
+        <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
+             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <knob label="P.DEP±" handle="params.pitch_fg.depth"/>
+      </row>
+      <row justify="start" gap="spacing">
+        <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
+        <enum label="NOTE" handle="params.pitch_fg.eg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="6"/>
+        <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
       </row>
     </panel>
     <panel title="CUTOFF FG" span="4">
@@ -92,8 +99,13 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255"/>
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <knob label="F.DEP±" handle="params.cutoff_fg.depth"/>
+      </row>
+      <row justify="start" gap="spacing">
+        <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
+        <enum label="NOTE" handle="params.cutoff_fg.eg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="8"/>
+        <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
       </row>
     </panel>
     <panel title="GAIN FG" span="4">
@@ -106,6 +118,11 @@
              関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
              （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
         <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
+      </row>
+      <row justify="start" gap="spacing">
+        <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
+        <enum label="NOTE" handle="params.gain_fg.sync_note_handle()" names="SYNC_NOTE_NAMES" salt="10"/>
+        <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11"/>
       </row>
     </panel>
   </panels>

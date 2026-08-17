@@ -2,7 +2,10 @@ use crate::algorithm_diagram::algorithm_diagram;
 use crate::knob::{bool_checkbox, knob};
 use crate::layout::{self, leaf, row, row_grow, stack, stack_grow, Justify};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use crate::selector::{enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES};
+use crate::selector::{
+    enum_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES,
+    RETRIGGER_MODE_NAMES, SYNC_NOTE_NAMES,
+};
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 use ui_core::mapping::mul_fine_ratio;
