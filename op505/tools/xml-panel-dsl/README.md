@@ -324,6 +324,7 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 | `<checkbox>` | `label`, `handle` | 単体、または`<stack>`直下 |
 | `<waveform>` | `handle` | `index`（省略時0） |
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
+| `<sync-rate>` | `label`, `handle`（TimeEgの`sync_rate_handle()`） | `salt`（省略時0）。連続ノブ＋音価ドロップダウンの複合ウィジェット（100×70、下記） |
 | `<eg-preview>` | `mapping`(`DbLinear`/`AmplitudeLinear`) + 各EGParamsフィールド | 各フィールドは`{field}="handle"`か`{field}-value="リテラル"`のどちらか。フィールド: `tl`,`ar`,`d1r`,`d1l`,`d2r`,`rr`,`floor`,`loop`(→`loop_enabled`),`curve`,`delay` |
 | `<algorithm-diagram>` | `handle` | `width`/`height`で個別サイズ上書き（`<style>`既定は150×100） |
 | `<time-eg-editor>` | `handle`（`TimeEgHandle`実装） | `mapping`（省略時`DbLinear`）、`tl`/`tl-value`、`width`/`height`（`<style>`既定は260×245）、`min-stages`・`terminal-level`（下記） |
@@ -331,6 +332,20 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 
 全leafウィジェット共通で`margin="..."`属性が使える（`<style>`の既定値・タグ別上書きをさらに上書きする、前節参照）。
 `<eg-preview>`は`width`/`height`で個別サイズ上書きも可能（`<style>`既定は84×66）。
+
+#### `<sync-rate>`（TimeEgのテンポ同期レート）
+
+`TimeEgParams::sync_rate`(0〜255)を、**連続ノブと音価ドロップダウンの2つの見え方**で1セルに
+まとめたウィジェット。値が1つしかないため、ノブを回すとドロップダウンの表示が最寄り音価へ
+追従し（アンカーから外れていれば`~1/8`のようにチルダ付き）、ドロップダウンで音価を選ぶと
+ノブがその音価のアンカー値へ飛ぶ。両者がずれることは構造的に起こらない。
+
+候補名は`SYNC_NOTE_NAMES`固定なので`<enum>`と違い`names`属性は取らない。
+宣言サイズは100×70で、これは`<enum>`(100×66)を置き換えても`<time-eg-editor>`の固定高さ245pxに
+収まる（FGパネルの`<stack>`は`5+66(DEP) + 5+20(SYNC) + 5+70(RATE) + 5+66(RETRIG) = 242px`）。
+
+20音価が`sound_core::sync_note_anchor()`のアンカー値へ厳密に乗る仕組み（理論値アンカー＋
+指数補間）は`sound/core/src/time_eg.rs`のコメント参照。
 
 #### `<time-eg-editor>`のEG種別制約（`min-stages` / `terminal-level`）
 

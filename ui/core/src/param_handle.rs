@@ -53,9 +53,10 @@ pub trait TimeEgHandle {
         Box::new(TimeEgSyncEnabledHandle { eg: self })
     }
 
-    /// 同期先の音価（`sync_note`、`sound_core::SYNC_NOTE_COUNT`段階）へのハンドル。
-    fn sync_note_handle(&self) -> Box<dyn IntParamHandle + '_> {
-        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::SyncNote })
+    /// 同期先の連続レート（`sync_rate`、0〜255）へのハンドル。20音価は
+    /// `sound_core::sync_note_anchor()`のアンカー値へ厳密に乗る。
+    fn sync_rate_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::SyncRate })
     }
 
     /// retrigger()時のFGレベル継承モード（`retrigger_mode`、0=Continue/1=Reset）へのハンドル。
@@ -86,7 +87,7 @@ impl<'a, T: TimeEgHandle + ?Sized> BoolParamHandle for TimeEgSyncEnabledHandle<'
 }
 
 enum TimeEgIntField {
-    SyncNote,
+    SyncRate,
     RetriggerMode,
 }
 
@@ -99,7 +100,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
     fn value(&self) -> i32 {
         let p = self.eg.params();
         match self.field {
-            TimeEgIntField::SyncNote => p.sync_note as i32,
+            TimeEgIntField::SyncRate => p.sync_rate as i32,
             TimeEgIntField::RetriggerMode => p.retrigger_mode as i32,
         }
     }
@@ -108,22 +109,30 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
     }
     fn max(&self) -> i32 {
         match self.field {
-            TimeEgIntField::SyncNote => sound_core::SYNC_NOTE_COUNT as i32 - 1,
+            TimeEgIntField::SyncRate => 255,
             TimeEgIntField::RetriggerMode => 1,
         }
     }
     fn default(&self) -> i32 {
         match self.field {
-            TimeEgIntField::SyncNote => 10,
+            TimeEgIntField::SyncRate => sound_core::sync_note_anchor(10) as i32,
             TimeEgIntField::RetriggerMode => sound_core::RETRIGGER_MODE_CONTINUE as i32,
         }
     }
     fn name(&self) -> String {
         let suffix = match self.field {
-            TimeEgIntField::SyncNote => "Sync Note",
+            TimeEgIntField::SyncRate => "Sync Rate",
             TimeEgIntField::RetriggerMode => "Retrigger",
         };
         format!("{} {}", self.eg.name(), suffix)
+    }
+    /// `sync_rate`は生の0〜255ではなく音価名で見せる（ノブのツールチップ／数値欄用）。
+    /// アンカーから外れているときは`~1/8`のようにチルダを付けて近似であることを示す。
+    fn display(&self) -> String {
+        match self.field {
+            TimeEgIntField::SyncRate => crate::selector::sync_rate_display(self.value() as u8),
+            TimeEgIntField::RetriggerMode => self.value().to_string(),
+        }
     }
     fn begin_edit(&self) {
         self.eg.begin_edit();
@@ -131,8 +140,8 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
     fn set(&self, value: i32) {
         let mut params = self.eg.params();
         match self.field {
-            TimeEgIntField::SyncNote => {
-                params.sync_note = value.clamp(0, sound_core::SYNC_NOTE_COUNT as i32 - 1) as u8;
+            TimeEgIntField::SyncRate => {
+                params.sync_rate = value.clamp(0, 255) as u8;
             }
             TimeEgIntField::RetriggerMode => {
                 params.retrigger_mode = value.clamp(0, 1) as u8;

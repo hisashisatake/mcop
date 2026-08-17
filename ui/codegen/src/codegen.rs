@@ -87,6 +87,9 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
         Widget::Enum { label, handle, names, salt } => {
             format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt});")
         }
+        Widget::SyncRate { label, handle, salt } => {
+            format!("sync_rate_selector(ui, &*{handle}, \"{label}\", {salt});")
+        }
         Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => format!(
             "eg_preview(ui, egui::vec2({}, {}), EgAmplitudeMapping::{mapping}, {}, EgParams {{ ar: {}, d1r: {}, d1l: {}, d2r: {}, rr: {}, floor: {}, loop_enabled: {}, curve: {}, delay: {} }});",
             fmt_num(size.w),

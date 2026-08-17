@@ -111,14 +111,22 @@ pub struct TimeEgParams {
     #[serde(alias = "loop_end")]
     pub release_point: u8,
     /// テンポ同期の有効/無効。0=無効（`time`の絶対秒数をそのまま使う）／1=有効
-    /// （`tempo_speed_scale()`で同期対象区間を`sync_note`の音価ちょうどへ伸縮する）。
+    /// （`tempo_speed_scale()`で同期対象区間を`sync_rate`の長さちょうどへ伸縮する）。
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（無効）にする。
     #[serde(default)]
     pub sync_enabled: u8,
-    /// 同期先の音価（`sync_note_beats()`のindex、0〜19）。所要時間の昇順に並んだテーブルで、
-    /// index 10 = 1/4（1拍）が既定。`sync_enabled=0`のときは無視される。
-    #[serde(default = "default_sync_note")]
-    pub sync_note: u8,
+    /// 同期先の長さを表す連続レート（0〜255、`sync_rate_beats()`で拍数へ写す）。
+    /// 1/32T〜4/1の192倍レンジを1バイトで無段階に刻む。20個の音価は
+    /// `sync_note_anchor()`のアンカー値へ**厳密に**乗るため、UIのドロップダウンで音価を
+    /// 選べば同期は正確なまま、ノブで回せばその間を連続的に動かせる。既定134＝1/4（1拍）。
+    /// `sync_enabled=0`のときは無視される。
+    ///
+    /// 旧フィールド`sync_note`（0〜19のindex）からの意味変更。`deny_unknown_fields`未使用のため
+    /// 旧キーは自動的に無視され、旧バンクは既定の1/4へフォールバックする（移行はしない方針。
+    /// テンポ同期は1日前に入ったばかりの機能で、同時に入れた4倍バグ修正でどのみち選び直しに
+    /// なるため。詳細はmemory `project_timeeg_sync_rate_knob.md`参照）。
+    #[serde(default = "default_sync_rate")]
+    pub sync_rate: u8,
     /// retrigger()時（ボイス使い回しの再キーオン）のFGレベルの扱い。
     /// 0=Continue（既定・現在レベルを保ったまま段0へ向かう、`TimeEg::retrigger()`相当）／
     /// 1=Reset（`TimeEg::note_on()`相当、常に0から）。
@@ -130,10 +138,11 @@ pub struct TimeEgParams {
     pub retrigger_mode: u8,
 }
 
-/// `sync_note`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
-/// この値自体は無視されるが、UIで初めてSYNCをONにしたときに1/4から始まるよう10にしておく。
-fn default_sync_note() -> u8 {
-    10
+/// `sync_rate`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
+/// この値自体は無視されるが、UIで初めてSYNCをONにしたときに1/4から始まるよう
+/// index 10（1/4）のアンカー値にしておく。
+fn default_sync_rate() -> u8 {
+    SYNC_NOTE_ANCHORS[10]
 }
 
 /// retrigger_modeの意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
@@ -158,7 +167,7 @@ impl Default for TimeEgParams {
             loop_start: 0,
             release_point: 0,
             sync_enabled: 0,
-            sync_note: default_sync_note(),
+            sync_rate: default_sync_rate(),
             retrigger_mode: RETRIGGER_MODE_CONTINUE,
         }
     }
@@ -177,7 +186,8 @@ fn clamp_stage_count(stage_count: u8) -> usize {
 //
 // LFOのテンポ同期（1周＝指定音価）と同じ考え方をTimeEgへ適用する（方式A）。
 // ループ有効なら`loop_start..=release_point`の1周、無効なら`0..=release_point`の
-// 保持区間全体を対象に、その素の所要時間を指定音価ちょうどへ伸縮する`speed_scale`倍率を返す。
+// 保持区間全体を対象に、その素の所要時間を指定レートちょうどへ伸縮する`speed_scale`倍率を返す。
+// 同期先は`sync_rate`(0〜255)の連続値で、20音価がアンカーとして厳密に踏める（下記参照）。
 // アタックやリリースも同じ比率で一緒に伸縮する（対象区間より外は同期の管轄外）ため、
 // 「ビブラートだけ同期してアタックは固定秒数」という表現はできない
 // （区間ごとに速度を分けるにはtick()自体の再設計が要る、次善は将来課題）。
@@ -188,6 +198,12 @@ pub const SYNC_NOTE_COUNT: usize = 20;
 
 /// 同期音価テーブル。値は拍数（4分音符=1.0）。所要時間の昇順に並べてあるため、
 /// ノブ/セレクタでindexを増やすと単調に長くなる。index 10 = 1/4（1拍、既定）。
+///
+/// **注意（2026-08-17修正）**: 初版は音符の分数そのもの（1/4→`1.0/4.0`、1/1→`1.0`）を
+/// 入れており、拍数の1/4しかなかった。`tempo_speed_scale()`が`* 60.0 / bpm`（＝1拍の秒数）を
+/// 掛けるため、全音価が**4倍速い**状態だった（BPM120の「1/4」が0.125秒）。
+/// テーブル名・関数名・下の表がいずれも「拍数」と言っているのに配列だけが分数だった、
+/// という意味論の不一致。`sync_note_beats_matches_documented_table`テストで再発を防ぐ。
 ///
 /// | index | 音価 | 拍数 |
 /// |---|---|---|
@@ -212,31 +228,104 @@ pub const SYNC_NOTE_COUNT: usize = 20;
 /// | 18 | 2/1（2小節） | 8.0 |
 /// | 19 | 4/1（4小節） | 16.0 |
 const SYNC_NOTE_BEATS: [f32; SYNC_NOTE_COUNT] = [
-    1.0 / 32.0 * (2.0 / 3.0),
-    1.0 / 32.0,
-    1.0 / 16.0 * (2.0 / 3.0),
-    1.0 / 32.0 * 1.5,
-    1.0 / 16.0,
-    1.0 / 8.0 * (2.0 / 3.0),
-    1.0 / 16.0 * 1.5,
-    1.0 / 8.0,
-    1.0 / 4.0 * (2.0 / 3.0),
-    1.0 / 8.0 * 1.5,
-    1.0 / 4.0,
-    1.0 / 2.0 * (2.0 / 3.0),
-    1.0 / 4.0 * 1.5,
-    1.0 / 2.0,
-    1.0 * (2.0 / 3.0),
-    1.0 / 2.0 * 1.5,
-    1.0,
-    1.0 * 1.5,
-    2.0,
+    4.0 / 32.0 * (2.0 / 3.0),
+    4.0 / 32.0,
+    4.0 / 16.0 * (2.0 / 3.0),
+    4.0 / 32.0 * 1.5,
+    4.0 / 16.0,
+    4.0 / 8.0 * (2.0 / 3.0),
+    4.0 / 16.0 * 1.5,
+    4.0 / 8.0,
+    4.0 / 4.0 * (2.0 / 3.0),
+    4.0 / 8.0 * 1.5,
+    4.0 / 4.0,
+    4.0 / 2.0 * (2.0 / 3.0),
+    4.0 / 4.0 * 1.5,
+    4.0 / 2.0,
+    4.0 * (2.0 / 3.0),
+    4.0 / 2.0 * 1.5,
     4.0,
+    4.0 * 1.5,
+    8.0,
+    16.0,
 ];
 
 /// 同期音価テーブルのindex(0〜19)→拍数（4分音符=1.0）。範囲外はクランプする。
 pub fn sync_note_beats(index: u8) -> f32 {
     SYNC_NOTE_BEATS[(index as usize).min(SYNC_NOTE_COUNT - 1)]
+}
+
+// ---------------------------------------------------------------------------
+// 連続レート（音価アンカー＋指数補間）
+//
+// `sync_rate`(0〜255)は、上の20音価を「アンカー」として正確に踏みながら、その間を
+// 幾何補間で無段階に埋める。単純な指数マッピング（min〜maxを255等分）だと1目盛り約2.1%で、
+// ドロップダウンから「1/4」を選んでも最寄りの目盛りが1%程度ズレ、同期がじわじわ狂ってしまう。
+// アンカー方式ならドロップダウン選択は厳密に音価どおり、ノブは連続、という両立ができる。
+// （このリポジトリで実績のある「理論値アンカー＋指数補間」パターン。AR/D1R/FB/KSRでも採用）
+// ---------------------------------------------------------------------------
+
+/// 音価index(0〜19)→`sync_rate`のアンカー値。`round(i * 255 / 19)`を展開したもの
+/// （constで`round()`が使えないため定数畳み込み済みの実値を置く。両端が0/255になり、
+/// 間隔は13〜14で概ね均等）。
+const SYNC_NOTE_ANCHORS: [u8; SYNC_NOTE_COUNT] = [
+    0, 13, 27, 40, 54, 67, 81, 94, 107, 121, 134, 148, 161, 175, 188, 201, 215, 228, 242, 255,
+];
+
+/// 音価index(0〜19)→その音価にぴったり乗る`sync_rate`値。範囲外はクランプする。
+/// UIのドロップダウンで音価を選んだときに、この値をノブへ書き込む。
+pub fn sync_note_anchor(index: u8) -> u8 {
+    SYNC_NOTE_ANCHORS[(index as usize).min(SYNC_NOTE_COUNT - 1)]
+}
+
+/// `sync_rate`(0〜255)→拍数の256要素テーブルを構築する。
+/// アンカー上では`SYNC_NOTE_BEATS`と厳密に一致し、アンカー間は幾何補間（比が指数的に動く）。
+fn build_sync_rate_beats_table() -> [f32; 256] {
+    let mut table = [0.0f32; 256];
+    for seg in 0..SYNC_NOTE_COUNT - 1 {
+        let (lo, hi) = (SYNC_NOTE_ANCHORS[seg] as usize, SYNC_NOTE_ANCHORS[seg + 1] as usize);
+        let (b_lo, b_hi) = (SYNC_NOTE_BEATS[seg], SYNC_NOTE_BEATS[seg + 1]);
+        for (rate, slot) in table.iter_mut().enumerate().take(hi + 1).skip(lo) {
+            // 端点はアンカー値をそのまま代入し、powf()の丸め誤差が乗らないようにする
+            // （ドロップダウン選択が「厳密に音価どおり」であることをテストで保証するため）。
+            *slot = if rate == lo {
+                b_lo
+            } else if rate == hi {
+                b_hi
+            } else {
+                let t = (rate - lo) as f32 / (hi - lo) as f32;
+                b_lo * (b_hi / b_lo).powf(t)
+            };
+        }
+    }
+    table
+}
+
+fn sync_rate_beats_table() -> &'static [f32; 256] {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    TABLE.get_or_init(build_sync_rate_beats_table)
+}
+
+/// `sync_rate`(0〜255)→拍数（4分音符=1.0）。`tempo_speed_scale()`が毎サンプル呼ばれるため
+/// `powf()`は初回のテーブル構築時のみ実行する（`time_to_seconds`と同じOnceLockパターン）。
+pub fn sync_rate_beats(rate: u8) -> f32 {
+    sync_rate_beats_table()[rate as usize]
+}
+
+/// `sync_rate`に最も近い音価indexと、それがアンカーへ厳密に乗っているか否かを返す。
+/// UIのドロップダウンが「今どのあたりか」を表示するのに使う（乗っていなければ`~1/8`のように
+/// 近似表示する）。
+pub fn nearest_sync_note(rate: u8) -> (u8, bool) {
+    let mut best = 0usize;
+    let mut best_dist = u16::MAX;
+    for (i, anchor) in SYNC_NOTE_ANCHORS.iter().enumerate() {
+        let dist = (*anchor as i16 - rate as i16).unsigned_abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    (best as u8, best_dist == 0)
 }
 
 /// テンポ同期の対象区間（ループ有効なら`loop_start..=release_point`のループ1周、
@@ -255,8 +344,9 @@ pub fn sync_region_seconds(params: &TimeEgParams) -> f32 {
 }
 
 /// テンポ同期が有効なときに`tick()`の`speed_scale`へ乗算する倍率。
-/// `対象区間の素の秒数 ÷ 指定音価の秒数`で、対象区間ちょうどが音価どおりの長さになるよう
-/// 時間軸を伸縮する。同期無効・対象区間が実質0秒・bpmが0以下のいずれかなら1.0（無補正）を返す
+/// `対象区間の素の秒数 ÷ 指定レートの秒数`で、対象区間ちょうどが`sync_rate`どおりの長さに
+/// なるよう時間軸を伸縮する。同期無効・対象区間が実質0秒・bpmが0以下のいずれかなら
+/// 1.0（無補正）を返す
 /// （既存のCC76由来速度補正等、他の`speed_scale`要因と乗算で共存できる設計）。
 pub fn tempo_speed_scale(params: &TimeEgParams, bpm: f32) -> f32 {
     if params.sync_enabled == 0 || bpm <= 0.0 {
@@ -266,7 +356,7 @@ pub fn tempo_speed_scale(params: &TimeEgParams, bpm: f32) -> f32 {
     if region <= f32::EPSILON {
         return 1.0;
     }
-    let target_seconds = sync_note_beats(params.sync_note) * 60.0 / bpm;
+    let target_seconds = sync_rate_beats(params.sync_rate) * 60.0 / bpm;
     region / target_seconds
 }
 
@@ -916,5 +1006,119 @@ mod tests {
         assert_eq!(params.stage_count, 4);
         assert_eq!(params.loop_start, 2);
         assert_eq!(params.release_point, 2, "release_point should adopt the legacy loop_end value");
+    }
+
+    // -----------------------------------------------------------------------
+    // テンポ同期
+    // -----------------------------------------------------------------------
+
+    /// テーブルの値が「拍数」というdoc/関数名の宣言どおりであることを固定する。
+    /// 初版は音符の分数（1/4→0.25）が入っており、全音価が4倍速かった。
+    #[test]
+    fn sync_note_beats_matches_documented_table() {
+        assert_eq!(sync_note_beats(10), 1.0, "1/4は1拍");
+        assert_eq!(sync_note_beats(13), 2.0, "1/2は2拍");
+        assert_eq!(sync_note_beats(16), 4.0, "1/1（1小節）は4拍");
+        assert_eq!(sync_note_beats(19), 16.0, "4/1（4小節）は16拍");
+        assert_eq!(sync_note_beats(1), 0.125, "1/32は0.125拍");
+        // 昇順に並んでいること（UIでindexを増やすと単調に長くなる前提）
+        for i in 1..SYNC_NOTE_COUNT {
+            assert!(
+                sync_note_beats(i as u8) > sync_note_beats(i as u8 - 1),
+                "index {i} が単調増加していない"
+            );
+        }
+    }
+
+    /// 同期対象区間が、指定した音価ちょうどの実時間になること。
+    /// BPM120・1/4（＝0.5秒）に対し素の区間が2.0秒なら、時間軸を4倍速で回せばよい。
+    #[test]
+    fn tempo_speed_scale_makes_region_take_exactly_one_note() {
+        let params = TimeEgParams {
+            stages: stages_with(&[(seconds_to_time(2.0), 255, 0), (0, 0, 0)]),
+            stage_count: 2,
+            release_point: 0,
+            sync_enabled: 1,
+            sync_rate: sync_note_anchor(10), // 1/4
+            ..Default::default()
+        };
+        let region = sync_region_seconds(&params);
+        assert!((region - 2.0).abs() < 0.02, "region={region}");
+
+        let scale = tempo_speed_scale(&params, 120.0);
+        // 区間の実時間 = region / scale が、1拍＝0.5秒になること
+        let actual_seconds = region / scale;
+        assert!((actual_seconds - 0.5).abs() < 0.005, "actual={actual_seconds}");
+
+        // BPMが半分なら1拍は倍の長さになる
+        let slow = region / tempo_speed_scale(&params, 60.0);
+        assert!((slow - 1.0).abs() < 0.01, "slow={slow}");
+    }
+
+    /// ドロップダウンで音価を選んだとき（＝アンカー値をノブへ書いたとき）、
+    /// 連続レートが音価テーブルの値と**厳密に**一致すること。ここがズレると同期が狂う。
+    #[test]
+    fn sync_rate_anchors_hit_note_values_exactly() {
+        for i in 0..SYNC_NOTE_COUNT as u8 {
+            let rate = sync_note_anchor(i);
+            assert_eq!(
+                sync_rate_beats(rate),
+                sync_note_beats(i),
+                "index {i} (rate={rate}) がアンカー上で一致しない"
+            );
+        }
+        // 両端がテーブルの端に対応していること
+        assert_eq!(sync_note_anchor(0), 0);
+        assert_eq!(sync_note_anchor(SYNC_NOTE_COUNT as u8 - 1), 255);
+    }
+
+    /// ノブを右に回すと必ず長くなること（アンカー間の補間も含めて単調）。
+    #[test]
+    fn sync_rate_is_monotonic() {
+        for rate in 1..=255u8 {
+            assert!(
+                sync_rate_beats(rate) > sync_rate_beats(rate - 1),
+                "rate {rate} で単調増加していない: {} <= {}",
+                sync_rate_beats(rate),
+                sync_rate_beats(rate - 1)
+            );
+        }
+    }
+
+    /// ドロップダウン表示用の逆引き。アンカー上では厳密一致フラグが立ち、
+    /// 途中の値では最寄りの音価が返る。
+    #[test]
+    fn nearest_sync_note_round_trips_anchors() {
+        for i in 0..SYNC_NOTE_COUNT as u8 {
+            let (index, exact) = nearest_sync_note(sync_note_anchor(i));
+            assert_eq!(index, i, "index {i} のアンカーが逆引きできない");
+            assert!(exact, "index {i} のアンカーが厳密一致と判定されない");
+        }
+        // アンカー(134=1/4)から1目盛りずらすと、最寄りは1/4のままだが厳密一致ではなくなる
+        let (index, exact) = nearest_sync_note(135);
+        assert_eq!(index, 10);
+        assert!(!exact);
+    }
+
+    /// 同期が無効／BPM未確定のときは補正しない（他の`speed_scale`要因を素通しする）。
+    #[test]
+    fn tempo_speed_scale_is_neutral_when_disabled() {
+        let mut params = TimeEgParams {
+            stages: stages_with(&[(seconds_to_time(2.0), 255, 0), (0, 0, 0)]),
+            stage_count: 2,
+            release_point: 0,
+            sync_enabled: 0,
+            sync_rate: sync_note_anchor(10),
+            ..Default::default()
+        };
+        assert_eq!(tempo_speed_scale(&params, 120.0), 1.0, "sync_enabled=0なら無補正");
+
+        params.sync_enabled = 1;
+        assert_eq!(tempo_speed_scale(&params, 0.0), 1.0, "bpm=0なら無補正");
+        assert_eq!(tempo_speed_scale(&params, -1.0), 1.0, "bpm<0なら無補正");
+
+        // 対象区間が実質0秒（全段time=0）でも0除算せず無補正
+        let empty = TimeEgParams { sync_enabled: 1, ..Default::default() };
+        assert_eq!(tempo_speed_scale(&empty, 120.0), 1.0);
     }
 }
