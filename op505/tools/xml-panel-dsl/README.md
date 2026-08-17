@@ -320,7 +320,7 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 
 | 要素 | 必須属性 | 備考 |
 |---|---|---|
-| `<knob>` | `label`, `handle` | `enabled-if="[!]<述語名>"`で`ui.add_enabled_ui`ラップ |
+| `<knob>` | `label`, `handle` | `enabled-if="[!]<述語名>"`で`ui.add_enabled_ui`ラップ／`bipolar="true"`で符号付き表示（下記） |
 | `<checkbox>` | `label`, `handle` | 単体、または`<stack>`直下 |
 | `<waveform>` | `handle` | `index`（省略時0） |
 | `<enum>` | `label`, `handle`, `names`（Rust定数名） | `salt`（省略時0） |
@@ -332,6 +332,31 @@ variantを追加し、`codegen.rs`の`compute_expr`にマッチ節を足す（�
 
 全leafウィジェット共通で`margin="..."`属性が使える（`<style>`の既定値・タグ別上書きをさらに上書きする、前節参照）。
 `<eg-preview>`は`width`/`height`で個別サイズ上書きも可能（`<style>`既定は84×66）。
+
+#### `<knob bipolar="true">`（中央128のバイポーラパラメーター）
+
+このプロジェクトのバイポーラパラメーターは0〜255の**オフセットバイナリ**（下駄履き表現）で、
+`(生値 - 128) / 128` を係数として使う。2の補数ではないため生値は0〜255で単調増加し、
+途中で符号が折り返さない。`bipolar="true"` を付けると `ui_core::BipolarHandle` を挟み、
+ノブの数値欄・ツールチップ・直接入力が **-128〜+127の符号付き**（0が変調なし）になる。
+
+現在の対象は `P.DEP±` / `F.DEP±` / `DT1` / `FINE` / `TX.OFS` の5つ。判定基準は
+「sound-core・sound-fm側の換算式が `(v - 128) / 128` の形をしているか」で、
+`dt1_to_cents` / `op_fine_tune_to_cents` / `lfo_offset_from_param` / `effective_cutoff` /
+Pitch FGのセント換算がこれに該当する。
+
+`display()` だけを差し替える実装は取れない。`spin_control` は表示文字列とは独立に入力を生値として
+パースし `min()`/`max()` でクランプするため、表示が `-40` でも min=0 なら入力した瞬間に0へ丸められる。
+`BipolarHandle` は `value()`/`min()`/`max()`/`default()`/`set()` をまとめてオフセットするので、
+ノブの指針位置は変わらない（`(value-min)/(max-min)` でオフセットが打ち消え `生値/255` に戻る。
+`param_handle.rs` の `bipolar_preserves_knob_needle_position` テストで固定済み）。
+
+レンジが `±127` ではなく `-128〜+127` の非対称になるのは意図的。生値0でちょうど-1.0（フルスケール）に
+届く一方、生値255では+127/128=0.9922止まりで、どちらかが必ず1目盛り損をするため、
+「全開の逆方向」を正確に出せる側を負に割り当ててある。
+
+DAWのオートメーション表示も揃えること（`op505/vst/src/params.rs` の `bipolar_int()`）。
+片方だけ変えると**同じノブがUIとDAWで違う数字を出す**。
 
 #### `<sync-rate>`（TimeEgのテンポ同期レート）
 

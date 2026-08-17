@@ -12,6 +12,26 @@ pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
 pub(crate) const DEFAULT_REVERB_TYPE: u8 = 3;
 pub(crate) const DEFAULT_CHORUS_TYPE: u8 = 0;
 
+/// 中央128のバイポーラパラメーター（0〜255のオフセットバイナリ）を、DAWのオートメーション表示でも
+/// -128〜+127の符号付きで見せる。エディタ側は`ui_core::BipolarHandle`が同じ写像を行うので、
+/// **同じノブがUIとDAWで違う数字を出す**という不整合を防ぐためにここでも揃える。
+/// 対象は`(生値 - 128) / 128`を係数として使うもの（P.DEP±/F.DEP±/DT1/FINE/TX.OFS）。
+fn bipolar_int(param: IntParam) -> IntParam {
+    param
+        .with_value_to_string(Arc::new(|v| {
+            let centered = v - 128;
+            if centered == 0 {
+                "0".to_string()
+            } else {
+                format!("{centered:+}")
+            }
+        }))
+        .with_string_to_value(Arc::new(|s| {
+            // Rustのi32パースは先頭の'+'をそのまま受け付けるため、符号の前処理は不要。
+            s.trim().parse::<i32>().ok().map(|centered| (centered + 128).clamp(0, 255))
+        }))
+}
+
 /// キーオンから即座にフルレベルへ達しサステインし、キーオフでレベル0へ落ちる2段EG。
 /// DAWパラメーターに載らないpersist状態のEG群（`Op505EgBank`）の既定値に使う。
 /// `TimeEgParams::default()`（全段time=0/level=0=無音）をそのまま使うとプラグイン挿入直後に
@@ -89,11 +109,11 @@ impl Default for OperatorVstParams {
         Self {
             tl: IntParam::new("TL", 200, IntRange::Linear { min: 0, max: 255 }),
             mul: IntParam::new("MUL", 1, IntRange::Linear { min: 0, max: 15 }),
-            dt1: IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 }),
+            dt1: bipolar_int(IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 })),
             ksr: IntParam::new("KSR", 64, IntRange::Linear { min: 0, max: 255 }),
             ame: BoolParam::new("AM Enable", false),
             vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
-            op_fine_tune: IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 }),
+            op_fine_tune: bipolar_int(IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 })),
             waveform: IntParam::new("Waveform", 0, IntRange::Linear { min: 0, max: 255 }),
             eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
             level_scale: IntParam::new("Op Level Scale", 0, IntRange::Linear { min: 0, max: 255 }),
@@ -198,15 +218,15 @@ impl Default for Op505VstParams {
             resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_type: IntParam::new("Filter Type", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
-            pitch_fg_depth: IntParam::new("Pitch FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
-            cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 128, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_depth: bipolar_int(IntParam::new("Pitch FG Depth", 128, IntRange::Linear { min: 0, max: 255 })),
+            cutoff_fg_depth: bipolar_int(IntParam::new("Cutoff FG Depth", 128, IntRange::Linear { min: 0, max: 255 })),
             texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_waveform: IntParam::new("Texture LFO Waveform", 0, IntRange::Linear { min: 0, max: 4 }),
             texture_lfo_fade_mode: IntParam::new("Texture LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
             texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
-            texture_lfo_offset: IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
+            texture_lfo_offset: bipolar_int(IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 })),
             texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
             operators: Default::default(),
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),

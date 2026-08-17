@@ -37,6 +37,21 @@ fn req_attr(el: Node, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("<{}> に {} 属性が必要です", el.tag_name().name(), name))
 }
 
+/// 真偽属性を読む。省略時は`default`。`grow`/`match-height`は`== Some("true")`の素朴な比較だが、
+/// こちらは`terminal-level`と同様に不正値をエラーにする（表示の正しさに関わる属性でタイポが
+/// 黙って無視されると、ノブの数値だけが期待と違うという追いにくい症状になるため）。
+fn attr_bool_or(el: Node, name: &str, default: bool) -> Result<bool, String> {
+    match el.attribute(name) {
+        None => Ok(default),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(format!(
+            "<{}>の{name}はtrue/falseで指定してください: {other}",
+            el.tag_name().name()
+        )),
+    }
+}
+
 /// `width`/`height`属性を数値として読む。省略時は`default`を使う。
 fn attr_f32_or(el: Node, name: &str, default: f32) -> Result<f32, String> {
     match el.attribute(name) {
@@ -216,7 +231,13 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
         "knob" => {
             let label = req_attr(el, "label")?;
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
-            (Widget::Knob { label: label.clone(), handle }, label, "knob".to_string(), Size { w: 62.0, h: 66.0 })
+            let bipolar = attr_bool_or(el, "bipolar", false)?;
+            (
+                Widget::Knob { label: label.clone(), handle, bipolar },
+                label,
+                "knob".to_string(),
+                Size { w: 62.0, h: 66.0 },
+            )
         }
         "checkbox" => {
             let label = req_attr(el, "label")?;

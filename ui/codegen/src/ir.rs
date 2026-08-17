@@ -90,7 +90,9 @@ pub enum EgField {
 /// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）の種別・構造化記述子。
 #[derive(Clone, Debug)]
 pub enum Widget {
-    Knob { label: String, handle: String },
+    /// `bipolar`は中央128のパラメーターを-128〜+127の符号付き表示にする
+    /// （`ui_core::BipolarHandle`を挟む。P.DEP±/F.DEP±/DT1/FINE/TX.OFS向け）。
+    Knob { label: String, handle: String, bipolar: bool },
     Checkbox { label: String, handle: String },
     Waveform { handle: String, index: String },
     Enum { label: String, handle: String, names: String, salt: String },

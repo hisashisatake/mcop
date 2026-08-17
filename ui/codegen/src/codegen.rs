@@ -81,7 +81,13 @@ fn eg_field_expr(f: &EgField) -> String {
 /// 可変サイズを描画関数へ渡すために使う。
 fn gen_widget_stmt(w: &Widget, size: Size) -> String {
     match w {
-        Widget::Knob { label, handle } => format!("knob(ui, &*{handle}, \"{label}\");"),
+        Widget::Knob { label, handle, bipolar } => {
+            if *bipolar {
+                format!("knob(ui, &BipolarHandle::new(&*{handle}), \"{label}\");")
+            } else {
+                format!("knob(ui, &*{handle}, \"{label}\");")
+            }
+        }
         Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
         Widget::Waveform { handle, index } => format!("waveform_selector(ui, &*{handle}, ({index}) as usize);"),
         Widget::Enum { label, handle, names, salt } => {

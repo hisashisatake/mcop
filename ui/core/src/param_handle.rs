@@ -21,6 +21,75 @@ pub trait IntParamHandle {
     fn end_edit(&self);
 }
 
+/// 中央値（バイポーラパラメーターで「変調なし」を表す生値）。
+///
+/// このプロジェクトのバイポーラパラメーターは0〜255の**オフセットバイナリ**（下駄履き表現）で、
+/// `(生値 - 128) / 128` を係数として使う（`dt1_to_cents`・`op_fine_tune_to_cents`・
+/// `lfo_offset_from_param`・`effective_cutoff`・Pitch FGのセント換算がすべてこの形）。
+/// 2の補数ではないので生値は0〜255で単調増加し、途中で符号が折り返さない。
+pub const BIPOLAR_CENTER: i32 = 128;
+
+/// 中央128のバイポーラパラメーターを、0〜255の生値ではなく**-128〜+127の符号付き整数**として
+/// 見せるアダプタ。`P.DEP±`/`F.DEP±`/`DT1`/`FINE`/`TX.OFS`のように「0が変調なし」の
+/// パラメーターで、ノブの数値欄・ツールチップ・直接入力をすべて符号付きに揃えるために挟む。
+///
+/// `display()`だけを書き換える方法は取れない。`spin_control`は表示文字列とは独立に入力を
+/// 生値としてパースし`min()`/`max()`でクランプするため、表示が`-40`なのにmin=0だと
+/// ユーザーが`-40`と打った瞬間に0へ丸められてしまう。`value()`/`min()`/`max()`/`default()`/
+/// `set()`をまとめてオフセットするこの方式なら、ノブの指針位置・±ボタン・直接入力が
+/// **すべて無改造で正しくなる**（`Knob::normalized()`は`(value-min)/(max-min)`なので
+/// `(生値-128+128)/255 = 生値/255`となり、オフセット前と完全に同一の値になる）。
+///
+/// 負側が1目盛り広い非対称レンジ（-128〜+127）になるのは意図的。`(生値-128)/128`は生値0で
+/// ちょうど-1.0（フルスケール）に届くが、生値255では+127/128=0.9922止まりで、
+/// どちらかが必ず1目盛り損をする。「全開の逆方向」を正確に出せる側を負に割り当ててある
+/// （`sound_core::lfo_offset_from_param`のテストが同じ性質を「このプロジェクト共通の性質」として固定済み）。
+pub struct BipolarHandle<'a> {
+    inner: &'a dyn IntParamHandle,
+}
+
+impl<'a> BipolarHandle<'a> {
+    pub fn new(inner: &'a dyn IntParamHandle) -> Self {
+        Self { inner }
+    }
+}
+
+impl IntParamHandle for BipolarHandle<'_> {
+    fn value(&self) -> i32 {
+        self.inner.value() - BIPOLAR_CENTER
+    }
+    fn min(&self) -> i32 {
+        self.inner.min() - BIPOLAR_CENTER
+    }
+    fn max(&self) -> i32 {
+        self.inner.max() - BIPOLAR_CENTER
+    }
+    fn default(&self) -> i32 {
+        self.inner.default() - BIPOLAR_CENTER
+    }
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+    /// 0以外は符号を明示する（`+40`／`-40`）。0だけは`+0`が不自然なので符号を付けない。
+    fn display(&self) -> String {
+        let v = self.value();
+        if v == 0 {
+            "0".to_string()
+        } else {
+            format!("{v:+}")
+        }
+    }
+    fn begin_edit(&self) {
+        self.inner.begin_edit();
+    }
+    fn set(&self, value: i32) {
+        self.inner.set(value + BIPOLAR_CENTER);
+    }
+    fn end_edit(&self) {
+        self.inner.end_edit();
+    }
+}
+
 /// 真偽パラメーターへのハンドル。
 pub trait BoolParamHandle {
     fn value(&self) -> bool;
@@ -151,5 +220,102 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
     }
     fn end_edit(&self) {
         self.eg.end_edit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// 0〜255・中央128の生パラメーター（P.DEP±等のホスト実装に相当）。
+    struct RawParam {
+        value: Cell<i32>,
+    }
+
+    impl IntParamHandle for RawParam {
+        fn value(&self) -> i32 {
+            self.value.get()
+        }
+        fn min(&self) -> i32 {
+            0
+        }
+        fn max(&self) -> i32 {
+            255
+        }
+        fn default(&self) -> i32 {
+            128
+        }
+        fn name(&self) -> String {
+            "F.DEP±".to_string()
+        }
+        fn begin_edit(&self) {}
+        fn set(&self, value: i32) {
+            self.value.set(value.clamp(0, 255));
+        }
+        fn end_edit(&self) {}
+    }
+
+    fn raw(value: i32) -> RawParam {
+        RawParam { value: Cell::new(value) }
+    }
+
+    #[test]
+    fn bipolar_shifts_range_to_signed() {
+        let inner = raw(128);
+        let b = BipolarHandle::new(&inner);
+        assert_eq!(b.value(), 0, "生値128は0");
+        assert_eq!(b.min(), -128);
+        assert_eq!(b.max(), 127, "負側が1目盛り広い非対称レンジ（オフセットバイナリの性質）");
+        assert_eq!(b.default(), 0);
+        assert_eq!(b.name(), "F.DEP±", "名前は素通し");
+    }
+
+    #[test]
+    fn bipolar_set_writes_offset_raw_value() {
+        let inner = raw(128);
+        for (input, expected_raw) in [(-128, 0), (0, 128), (127, 255)] {
+            BipolarHandle::new(&inner).set(input);
+            assert_eq!(inner.value(), expected_raw, "set({input})");
+        }
+    }
+
+    #[test]
+    fn bipolar_display_shows_sign_except_zero() {
+        for (raw_value, expected) in [(128, "0"), (168, "+40"), (88, "-40"), (0, "-128"), (255, "+127")] {
+            let inner = raw(raw_value);
+            assert_eq!(BipolarHandle::new(&inner).display(), expected, "生値{raw_value}");
+        }
+    }
+
+    /// バイポーラ化してもノブの指針位置が一切動かないこと。`Knob::normalized()`は
+    /// `(value - min) / (max - min)`なので、オフセットが分子と分母で打ち消えて`生値/255`に戻る。
+    /// ここが崩れると「表示を変えただけでノブの位置がずれる」という最悪の回帰になる。
+    #[test]
+    fn bipolar_preserves_knob_needle_position() {
+        for raw_value in 0..=255 {
+            let inner = raw(raw_value);
+            let b = BipolarHandle::new(&inner);
+            let plain = (inner.value() - inner.min()) as f32 / (inner.max() - inner.min()) as f32;
+            let shifted = (b.value() - b.min()) as f32 / (b.max() - b.min()) as f32;
+            assert_eq!(shifted, plain, "生値{raw_value}で指針位置がずれた");
+        }
+    }
+
+    /// `spin_control`の直接入力経路（表示文字列→パース→set）が往復すること。
+    /// 表示だけをバイポーラにする実装だと、ここで`-40`がmin(0)へクランプされて0になり壊れる。
+    #[test]
+    fn bipolar_display_round_trips_through_set() {
+        for raw_value in 0..=255 {
+            let shown = {
+                let probe = raw(raw_value);
+                BipolarHandle::new(&probe).display()
+            };
+            let parsed: i32 = shown.parse().expect("符号付き整数としてパースできること");
+            let inner = raw(128);
+            let b = BipolarHandle::new(&inner);
+            b.set(parsed.clamp(b.min(), b.max()));
+            assert_eq!(inner.value(), raw_value, "表示{shown}が生値{raw_value}へ戻らない");
+        }
     }
 }

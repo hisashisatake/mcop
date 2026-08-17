@@ -26,7 +26,7 @@ use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
 use crate::knob::{bool_checkbox, knob};
 use crate::layout;
 use crate::mapping::mul_fine_ratio;
-use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
+use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
 use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
@@ -304,9 +304,14 @@ fn draw_raw_placeholder(ui: &mut egui::Ui, size: egui::Vec2) {
 
 fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx: Option<usize>) {
     match &leaf.widget {
-        Widget::Knob { label, handle } => {
+        Widget::Knob { label, handle, bipolar } => {
             let key = scoped(handle, idx);
-            knob(ui, store.int(&key), label);
+            let h = store.int(&key);
+            if *bipolar {
+                knob(ui, &BipolarHandle::new(h), label);
+            } else {
+                knob(ui, h, label);
+            }
         }
         Widget::Checkbox { label, handle } => {
             let key = scoped(handle, idx);

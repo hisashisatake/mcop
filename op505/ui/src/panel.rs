@@ -1,7 +1,7 @@
 use crate::algorithm_diagram::algorithm_diagram;
 use crate::knob::{bool_checkbox, knob};
 use crate::layout::{self, leaf, row, row_grow, stack, stack_grow, Justify};
-use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
+use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::selector::{
     enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES,
     REVERB_TYPE_NAMES, RETRIGGER_MODE_NAMES,
