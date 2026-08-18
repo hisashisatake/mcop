@@ -328,7 +328,7 @@
               "sync_rate": 134,
               "retrigger_mode": 0
             },
-            "depth": 0
+            "depth": 128
           },
           "cutoff_fg": {
             "eg": {
@@ -382,7 +382,7 @@
               "sync_rate": 134,
               "retrigger_mode": 0
             },
-            "depth": 0
+            "depth": 128
           },
           "gain_fg": {
             "stages": [

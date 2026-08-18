@@ -39,10 +39,18 @@ use sound_core::{
 // ---------------------------------------------------------------------------
 
 /// Pitch/Cutoff FG：バイポーラDepth(中心128)＋TimeEgParams。ym38x6の`BipolarFg`のTimeEg版。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Op505BipolarFg {
     pub eg: TimeEgParams,
     pub depth: u8,
+}
+
+impl Default for Op505BipolarFg {
+    /// `#[derive(Default)]`だと`depth`が0（バイポーラ中心128からもっとも外れた値）になり、
+    /// 新規パッチのP.DEP±/F.DEP±ノブが最大逆方向で始まってしまうため明示する。
+    fn default() -> Self {
+        Self { eg: TimeEgParams::default(), depth: 128 }
+    }
 }
 
 /// Gain FG：Depthなし、TimeEgParamsそのもの（ym38x6の`GainFg`のTimeEg版）。

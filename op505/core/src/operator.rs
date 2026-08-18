@@ -52,7 +52,7 @@ impl Default for Op505OperatorParams {
             tl: 0,
             eg: TimeEgParams::default(),
             mul: 0,
-            dt1: 0,
+            dt1: 128, // バイポーラ中心（±0セント）。0のままだと新規パッチが-50セント検出された状態で始まる
             ksr: 0,
             am_enable: false,
             velocity_sensitivity: 0,
