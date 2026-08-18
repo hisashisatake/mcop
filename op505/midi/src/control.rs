@@ -8,6 +8,12 @@ use crate::rpn::RpnSelection;
 /// コンパイルエラーになり「片方だけ実装して解釈がすれる」が構造的に起きなくなる。
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ControlTarget {
+    /// 未割り当てのRPN/NRPN、または選択解除中。
+    /// discriminant=0（先頭）に置く。この値自体はシリアライズされず`control_target()`が
+    /// 毎回その場で計算する内部ディスパッチ用の値なので数値に意味は無いが、将来
+    /// バリアントを追加する際に「無効値が末尾にある」形（2026-08-18に`FmLfoDestination`で
+    /// 実際に問題になった並び）を再現しないよう、先頭へ寄せてある。
+    Unassigned,
     /// RPN(0,0): Pitch Bend Sensitivity（半音）
     PitchBendRange,
     /// RPN(0,5): Modulation Depth Range
@@ -63,8 +69,6 @@ pub enum ControlTarget {
     Cc2Destination,
     /// NRPN(0,35): CC4(フット)Destination
     Cc4Destination,
-    /// 未割り当てのRPN/NRPN、または選択解除中
-    Unassigned,
 }
 
 /// RPN/NRPN選択状態から制御対象を解決する。
@@ -109,7 +113,8 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
 pub fn needs_voice_update(target: ControlTarget) -> bool {
     match target {
         ControlTarget::OperatorFNumber(_) => true,
-        ControlTarget::PitchBendRange
+        ControlTarget::Unassigned
+        | ControlTarget::PitchBendRange
         | ControlTarget::ModulationDepthRange
         | ControlTarget::TextureLfoDestination
         | ControlTarget::TextureLfoWaveform
@@ -134,8 +139,7 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::TextureLfoOffset
         | ControlTarget::ReservedFgLoopCurve
         | ControlTarget::Cc2Destination
-        | ControlTarget::Cc4Destination
-        | ControlTarget::Unassigned => false,
+        | ControlTarget::Cc4Destination => false,
     }
 }
 

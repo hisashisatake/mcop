@@ -227,6 +227,8 @@ impl Default for Op505VstParams {
             texture_lfo_fade_mode: IntParam::new("Texture LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
             texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_offset: bipolar_int(IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 })),
+            // 0 = FmLfoDestination::Unplugged（新規挿入時は「どこにも接続されていない」が既定。
+            // 2026-08-18並べ替え後、Unplugged=0）。
             texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
             operators: Default::default(),
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),

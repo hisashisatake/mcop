@@ -2,19 +2,29 @@ use egui::{self, Color32, Id, LayerId, Order, Painter, Pos2, Rect, Sense, Stroke
 
 use crate::param_handle::IntParamHandle;
 
-/// 質感LFO Destination（0=Pitch/1=Volume/2=TL/3=Cutoff、`Ym38x6LfoDestination`と同じ並び）。
-const DEST_COLORS: [Color32; 4] = [
+/// 質感LFO Destination（0=未接続/1=Pitch/2=Volume/3=TL/4=Cutoff、`FmLfoDestination`と同じ並び、
+/// 2026-08-18並べ替え後）。`dest_index`は配列添字ではなく**destination値そのもの**として
+/// 使われる（`texture_lfo_dest_jack`が`handle.set(dest_index as i32)`で直接書き込み、
+/// `finish_texture_lfo_patchbay`が`layout.dests.get(current)`で値そのまま引く）。
+/// index 0（Unplugged）には専用ジャックが無いため、この配列のindex 0は未使用のダミー。
+const DEST_COLORS: [Color32; 5] = [
+    Color32::from_rgb(0x40, 0x40, 0x40), // UNPLUGGED: 未使用（専用ジャックが無いため参照されない）
     Color32::from_rgb(0xE8, 0x6A, 0x5C), // PITCH: 赤
     Color32::from_rgb(0x5C, 0xB8, 0xE8), // VOLUME: 青
     Color32::from_rgb(0xE8, 0xC7, 0x5C), // TL: 黄
     Color32::from_rgb(0x7C, 0xD8, 0x7C), // CUTOFF: 緑
 ];
 
-/// どこにも接続されていない状態を表すdestination値。`Ym38x6LfoDestination::Unplugged`
-/// （ym38x6-core、discriminant=4）と一致させること。4個の行き先ジャックのような専用の
+/// どこにも接続されていない状態を表すdestination値。`FmLfoDestination::Unplugged`
+/// （sound-fm、discriminant=0）と一致させること。4個の行き先ジャックのような専用の
 /// 描画は持たず、ケーブルをTEXTURE LFOパネル自身（`source_panel_rect`）へドロップすることで
 /// この状態に遷移する。
-const UNPLUGGED: usize = 4;
+const UNPLUGGED: usize = 0;
+
+/// destinationの最大値（Cutoff）。`handle.value()`をクランプする上限に使う
+/// （`UNPLUGGED`が0になったため、こちらは別定数として持つ必要がある。
+/// 誤って`UNPLUGGED`を上限クランプに使うと全値が0へ潰れ、パッチベイが常時未接続になる）。
+const DEST_MAX: usize = 4;
 
 const JACK_RADIUS: f32 = 9.0;
 /// クリック当たり判定・ドラッグ着地判定に使う半径（描画より広めに取る）。
@@ -39,7 +49,9 @@ pub struct JackLayout {
     /// TEXTURE LFOパネル自体の外形矩形（呼び出し側の`draw_panel`/`gen_panel`が
     /// `set_source_panel_rect`で埋める）。ここへケーブルをドロップすると未接続化する。
     source_panel_rect: Option<Rect>,
-    dests: [Option<Pos2>; 4],
+    /// index 0（Unplugged）は専用ジャックが無いため常に`None`のまま
+    /// （`DEST_COLORS`と同じ「index 0はダミー」規約）。
+    dests: [Option<Pos2>; 5],
     drag_live_pos: Option<Pos2>,
     drag_release_pos: Option<Pos2>,
 }
@@ -159,7 +171,7 @@ pub fn texture_lfo_dest_jack(
     label: &str,
     layout: &mut JackLayout,
 ) {
-    let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
+    let current = handle.value().clamp(0, DEST_MAX as i32) as usize;
     let active = current == dest_index;
     let color = DEST_COLORS[dest_index];
 
@@ -226,7 +238,7 @@ pub fn texture_lfo_dest_jack(
 /// 合わせるため、スクロールで隠れた領域まで描画がはみ出すことはない。
 pub fn finish_texture_lfo_patchbay(ui: &mut egui::Ui, handle: &dyn IntParamHandle, layout: JackLayout) {
     if let Some(release_pos) = layout.drag_release_pos {
-        let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
+        let current = handle.value().clamp(0, DEST_MAX as i32) as usize;
         // TEXTURE LFOパネル自身（ケーブルの出所）へドロップした場合は無条件に未接続化する。
         // 行き先ジャックはこのパネルの外にあるため、他の候補と競合することはない。
         let dropped_on_source_panel = layout.source_panel_rect.is_some_and(|r| r.contains(release_pos));
@@ -272,12 +284,29 @@ pub fn finish_texture_lfo_patchbay(ui: &mut egui::Ui, handle: &dyn IntParamHandl
         // 追従ケーブルを描く（行き先ジャック側からのドラッグと同じ見た目にする）。
         draw_cable(&painter, source, live, Color32::GRAY, Vec2::ZERO);
     } else {
-        let current = handle.value().clamp(0, UNPLUGGED as i32) as usize;
-        // 未接続（current==UNPLUGGED）時は`dests`の範囲外になり`None`が返るため、
-        // 確定済みケーブルは描かない。
+        let current = handle.value().clamp(0, DEST_MAX as i32) as usize;
+        // 未接続（current==UNPLUGGED==0）時は`dests[0]`が常に`None`（専用ジャックが無いため
+        // 一度も書き込まれない）なので、確定済みケーブルは描かない。
         if let Some(settled) = layout.dests.get(current).copied().flatten() {
             let sway = wobble_offset(ui);
             draw_cable(&painter, source, settled, DEST_COLORS[current], sway);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `UNPLUGGED`(0)/`DEST_MAX`(4、Cutoff)/`DEST_COLORS`(5要素)/`JackLayout::dests`(5要素)の
+    /// 整合を固定する。ここがずれると`clamp(0, UNPLUGGED as i32)`のような書き方へ先祖返りして
+    /// 全destinationが0へ潰れる、あるいは`DEST_COLORS[dest_index]`が範囲外パニックする
+    /// （2026-08-18のFmLfoDestination並べ替えで実際に踏んだ設計判断）。
+    #[test]
+    fn unplugged_and_dest_max_are_consistent_with_color_table() {
+        assert_eq!(UNPLUGGED, 0, "UNPLUGGEDはFmLfoDestination::Unplugged(discriminant=0)と一致させること");
+        assert_eq!(DEST_MAX, 4, "DEST_MAXはFmLfoDestination::Cutoff(discriminant=4、最大値)と一致させること");
+        assert_eq!(DEST_COLORS.len(), DEST_MAX + 1, "DEST_COLORSは0..=DEST_MAXの全destination値を添字で引ける長さが必要");
+        assert_eq!(JackLayout::new().dests.len(), DEST_MAX + 1, "destsもDEST_COLORSと同じ長さが必要");
     }
 }

@@ -392,9 +392,11 @@ fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: 
             st.pitch_fg_rpn0_5 = cc_to_u7(value);
             true
         }
-        // NRPN(0,0): 質感LFO Destination（0=Pitch/1=Volume/2=TLキャリア/3=Cutoff）。
+        // NRPN(0,0): 質感LFO Destination（0=未接続/1=Pitch/2=Volume/3=TLキャリア/4=Cutoff、
+        // 2026-08-18並べ替え後）。`.min(4)`は「範囲外の値はUnplugged(0)へではなく最後の実行き先
+        // Cutoff(4)へ丸める」という元の意図（旧仕様の`.min(3)`＝旧Cutoffが上限）をそのまま踏襲。
         RpnSelection::Nrpn(0, 0) => {
-            st.texture_lfo_destination = Some(cc_to_u7(value).min(3));
+            st.texture_lfo_destination = Some(cc_to_u7(value).min(4));
             true
         }
         // NRPN(0,1): 質感LFO Waveform（0〜4）。

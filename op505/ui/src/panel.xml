@@ -18,7 +18,7 @@
   <panels match-height="true">
     <panel span="4" title="CHANNEL">
       <header>
-        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
+        <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="between" gap="spacing">
@@ -79,7 +79,7 @@
   <panels>
     <panel title="PITCH FG" span="4">
       <header>
-        <jack kind="dest" dest-index="0" label="TX LFO" handle="texture_lfo_destination"/>
+        <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
@@ -101,7 +101,7 @@
     </panel>
     <panel title="CUTOFF FG" span="4">
       <header>
-        <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
+        <jack kind="dest" dest-index="4" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
@@ -116,7 +116,7 @@
     </panel>
     <panel title="GAIN FG" span="4">
       <header>
-        <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
+        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">

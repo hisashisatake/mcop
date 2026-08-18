@@ -208,7 +208,9 @@ impl Default for Op505Plugin {
             last_filter_self_oscillation_param: true,
             operator_waveforms: [0; 4],
             last_operator_waveforms: [0; 4],
-            texture_lfo_destination: FmLfoDestination::Pitch,
+            // 新規挿入時の既定は「どこにも接続されていない」。FmLfoDestination::Unplugged=0
+            // （2026-08-18並べ替え後）で、TextureLfo::default()のdestination:0と自然に一致する。
+            texture_lfo_destination: FmLfoDestination::Unplugged,
             texture_lfo_waveform: 0,
             texture_lfo_fade_mode: LfoFadeMode::default(),
             texture_lfo_rate: 0,
@@ -216,7 +218,8 @@ impl Default for Op505Plugin {
             texture_lfo_delay: 0,
             texture_lfo_fade_time: 0,
             texture_lfo_offset: 128,
-            last_texture_lfo_destination_param: 0,
+            last_texture_lfo_destination_param: 0, // Unplugged=0
+
             last_texture_lfo_waveform_param: 0,
             last_texture_lfo_fade_mode_param: 0,
             last_texture_lfo_rate_param: 0,
@@ -367,7 +370,7 @@ impl Op505Plugin {
             ControlTarget::ModulationDepthRange => {
                 self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
-            // NRPN(0,0): 質感LFO Destination（0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff/4=未接続）。
+            // NRPN(0,0): 質感LFO Destination（0=未接続/1=Pitch/2=Volume/3=TLキャリア一括/4=Cutoff）。
             // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
             // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
             ControlTarget::TextureLfoDestination => {
@@ -514,7 +517,7 @@ impl Plugin for Op505Plugin {
     fn reset(&mut self) {
         self.engine = Op505Engine::new(self.sample_rate);
         self.effects = MasterEffects::new(self.sample_rate);
-        self.texture_lfo_destination = FmLfoDestination::Pitch;
+        self.texture_lfo_destination = FmLfoDestination::Unplugged;
         self.texture_lfo_waveform = 0;
         self.texture_lfo_fade_mode = LfoFadeMode::default();
         self.texture_lfo_rate = 0;

@@ -218,7 +218,8 @@ impl Default for Ym38x6Plugin {
             filter_self_oscillation: true,
             operator_waveforms: [0; 4],
             last_operator_waveforms: [0; 4],
-            texture_lfo_destination: Ym38x6LfoDestination::Pitch,
+            // Unplugged=0（2026-08-18並べ替え後）。新規挿入時は「どこにも接続されていない」。
+            texture_lfo_destination: Ym38x6LfoDestination::Unplugged,
             texture_lfo_waveform: 0,
             texture_lfo_fade_mode: LfoFadeMode::default(),
             texture_lfo_rate: 0,
@@ -226,7 +227,8 @@ impl Default for Ym38x6Plugin {
             texture_lfo_delay: 0,
             texture_lfo_fade_time: 0,
             texture_lfo_offset: 128,
-            last_texture_lfo_destination_param: 0,
+            last_texture_lfo_destination_param: 0, // Unplugged=0
+
             last_texture_lfo_waveform_param: 0,
             last_texture_lfo_fade_mode_param: 0,
             last_texture_lfo_rate_param: 0,
@@ -477,18 +479,17 @@ impl Ym38x6Plugin {
             RpnSelection::Rpn(0, 5) => {
                 self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
-            // NRPN(0,0): 質感LFO Destination（38x6拡張：2=TLキャリア一括、3=Cutoff/オートワウ、
-            // 4以上=未接続。質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップした状態）。
-            // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
-            // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
+            // NRPN(0,0): 質感LFO Destination（38x6拡張：0=未接続、1=Pitch、2=Volume、
+            // 3=TLキャリア一括、4=Cutoff/オートワウ。質感LFOパッチベイでケーブルをTEXTURE LFO
+            // パネル自身へドロップすると未接続になる）。build_patch()が毎ブロック
+            // texture_lfo.destinationへ詰め替え、set_channel_paramsの定期伝播に乗るため、
+            // 明示的な即時反映呼び出しは不要。
+            // `Ym38x6LfoDestination::from_u8`（`sound_fm::FmLfoDestination`の再エクスポート）に
+            // 委譲する。以前はここに同じ変換をmatchで書き下していたが、op505側（FmLfoDestination
+            // を直接使う側）と二重実装になっており、2026-08-18のdiscriminant並べ替えで
+            // 片方だけ直し忘れる事故の温床だったため統一した。
             RpnSelection::Nrpn(0, 0) => {
-                self.texture_lfo_destination = match cc_to_u7(value) {
-                    0 => Ym38x6LfoDestination::Pitch,
-                    1 => Ym38x6LfoDestination::Volume,
-                    2 => Ym38x6LfoDestination::TlCarrier,
-                    3 => Ym38x6LfoDestination::Cutoff,
-                    _ => Ym38x6LfoDestination::Unplugged,
-                };
+                self.texture_lfo_destination = Ym38x6LfoDestination::from_u8(cc_to_u7(value));
             }
             // NRPN(0,1): 質感LFO Waveform（0〜4、質感LFOの5波形パレットへ直接対応）。
             RpnSelection::Nrpn(0, 1) => {
@@ -659,7 +660,7 @@ impl Plugin for Ym38x6Plugin {
     fn reset(&mut self) {
         self.engine = Ym38x6Engine::new(self.sample_rate);
         self.effects = MasterEffects::new(self.sample_rate);
-        self.texture_lfo_destination = Ym38x6LfoDestination::Pitch;
+        self.texture_lfo_destination = Ym38x6LfoDestination::Unplugged;
         self.texture_lfo_waveform = 0;
         self.texture_lfo_fade_mode = LfoFadeMode::default();
         self.texture_lfo_rate = 0;

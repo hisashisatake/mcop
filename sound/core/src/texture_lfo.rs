@@ -32,6 +32,7 @@ pub struct TextureLfo {
 
 impl Default for TextureLfo {
     /// 既定Depth=0で鳴らない（旧パッチ挙動と互換の「無効」状態）。
+    /// destination=0は`FmLfoDestination::Unplugged`（未接続、2026-08-18並べ替え後）。
     fn default() -> Self {
         Self { waveform: 0, destination: 0, rate: 0, depth: 0, delay: 0, fade_mode: 0, fade_time: 0, offset: 128 }
     }

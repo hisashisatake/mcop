@@ -1557,6 +1557,8 @@ mod tests {
         assert_eq!(params.texture_lfo.fade_mode, 0);
         assert_eq!(params.texture_lfo.fade_time, 40);
         assert_eq!(params.texture_lfo.offset, 128);
+        // destination=0は`FmLfoDestination::Unplugged`（未接続、2026-08-18並べ替え後）。
+        // 並べ替え前はPitchだったが、depth=0（下記）で無効な点は変わらない。
         assert_eq!(params.texture_lfo.destination, 0);
         assert_eq!(params.texture_lfo.rate, 0);
         assert_eq!(params.texture_lfo.depth, 0);

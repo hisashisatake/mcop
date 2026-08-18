@@ -655,7 +655,7 @@ FMチップに内蔵された「音作り」用のLFO（プリセット・NRPN�
 | 項目 | 値域 | 既定 | 備考 |
 |------|------|------|------|
 | Waveform | 0〜4（5種） | 0=矩形波 | 下記Waveform enum |
-| Destination | 0〜4 | 0=Pitch | 下記Destination enum |
+| Destination | 0〜4 | 0=未接続 | 下記Destination enum |
 | Rate | 0〜255 | 0 | 0.01Hz〜20Hz（指数） |
 | Depth | 0〜255 | 0 | 揺れ量（既定0＝鳴らない） |
 | Delay | 0〜255 | 0 | キーオンから効果開始までの遅延。0〜10秒（線形）。Fadeとは独立 |
@@ -677,20 +677,26 @@ FMチップに内蔵された「音作り」用のLFO（プリセット・NRPN�
 
 **Destination enum：**
 
+`FmLfoDestination`のdiscriminantは、Rust内部表現であると同時に**NRPN(0,0)の生値**であり
+**`.op505`/`.38x6`ファイルの`destination`フィールドとしてシリアライズされる値**でもある
+（2026-08-18、Unplugged=0起点へ並べ替え。並べ替えると既存データ・DAWオートメーション・
+SMF内のNRPNデータエントリの意味が変わるため、変更する際は影響範囲を洗い出すこと）。
+
 | 値 | 宛先 | 適用点 |
 |---|---|---|
-| 0（デフォルト） | Pitch | F-Number全Op |
-| 1 | Volume | **Vcaゲイン乗算合流・VCF後** |
-| 2 | TL（キャリア一括） | TL（VCF前）・38x6拡張のみ |
-| 3 | Cutoff | Cutoff（VCF前）・38x6拡張のみ |
-| 4 | 未接続（Unplugged） | どこにも適用されない・38x6拡張のみ |
+| 0（デフォルト） | 未接続（Unplugged） | どこにも適用されない・38x6拡張のみ |
+| 1 | Pitch | F-Number全Op |
+| 2 | Volume | **Vcaゲイン乗算合流・VCF後** |
+| 3 | TL（キャリア一括） | TL（VCF前）・38x6拡張のみ |
+| 4 | Cutoff | Cutoff（VCF前）・38x6拡張のみ |
 
 各行き先ではFG・チップ内LFOと**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が
-積み重なる）。Volume（Destination=1）は`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`でVca段（VCF後）へ乗算合流、
-TL（Destination=2）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
+積み重なる）。Volume（Destination=2）は`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`でVca段（VCF後）へ乗算合流、
+TL（Destination=3）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
 （質感LFOは焼き込み専用のためCCによる加算補正はなく、演奏系CC1/76/77/78はPitch FGへ行く）。
-未接続（Destination=4）はLFO自体は`tick`し続けるがどのターゲットへも出力しない。ym38x6-uiの質感LFO
-パッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、直前の行き先から未接続へ切り替わる。
+未接続（Destination=0）はLFO自体は`tick`し続けるがどのターゲットへも出力しない。新規パッチの既定状態でもある。
+ym38x6-ui/op505-uiの質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、
+直前の行き先から未接続へ切り替わる。
 
 **Fade Mode enum：**
 
@@ -1041,7 +1047,7 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| 質感LFO Destination | 0, 0 | 0=Pitch / 1=Volume / 2=TL（キャリア一括、38x6拡張のみ） / 3=Cutoff（38x6拡張のみ） / 4=未接続（38x6拡張のみ） |
+| 質感LFO Destination | 0, 0 | 0=未接続 / 1=Pitch / 2=Volume / 3=TL（キャリア一括、38x6拡張のみ） / 4=Cutoff（38x6拡張のみ） |
 | 質感LFO Waveform | 0, 1 | 0=矩形波 / 1=台形波 / 2=S&H / 3=Random / 4=Chaos |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |
@@ -1144,7 +1150,7 @@ Destination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/(0,5)はグローバ
 
 **手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
 フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。
-チップ内LFOのCutoff行先（質感LFO Destination=3、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
+チップ内LFOのCutoff行先（質感LFO Destination=4、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
 「オートワウ」（自動で周期的に開閉）とは独立して積み重なり、演奏者がリアルタイムに手で
 ワウ効果を制御しつつ、パッチ側の自動オートワウも同時に効かせられる。
 

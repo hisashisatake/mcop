@@ -32,10 +32,10 @@ fn texture_lfo_volume_destination_modulates_amplitude() {
     let ch = 0;
     // 矩形波（waveform=3）は振幅が常に±1付近なので、振幅変動はLFOの効果として観測できる。
     let mut patch = waveform_memory_patch(3, sustained_adsr());
-    // 質感LFO波形も矩形(0)、destination=1(Volume)、rate=255（20Hz、最速）でバッファ内に
-    // 複数周期が収まるようにし、depth=255（最大）で振幅を大きく揺らす。
+    // 質感LFO波形も矩形(0)、destination=2(Volume、2026-08-18並べ替え後)、rate=255（20Hz、最速）で
+    // バッファ内に複数周期が収まるようにし、depth=255（最大）で振幅を大きく揺らす。
     patch.channel.texture_lfo =
-        TextureLfo { waveform: 0, destination: 1, rate: 255, depth: 255, ..TextureLfo::default() };
+        TextureLfo { waveform: 0, destination: 2, rate: 255, depth: 255, ..TextureLfo::default() };
     engine.set_patch(patch);
     engine.note_on(ch, 220.0, 127);
 
@@ -192,8 +192,9 @@ fn texture_lfo_pitch_destination_shifts_output() {
     let sample_rate = 44100.0;
 
     let mut patch = waveform_memory_patch(0, sustained_adsr());
+    // destination=1(Pitch、2026-08-18並べ替え後)。
     patch.channel.texture_lfo =
-        TextureLfo { waveform: 0, destination: 0, rate: 220, depth: 0, ..TextureLfo::default() };
+        TextureLfo { waveform: 0, destination: 1, rate: 220, depth: 0, ..TextureLfo::default() };
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
     engine_flat.set_patch(patch);
@@ -227,8 +228,9 @@ fn texture_lfo_cutoff_destination_shifts_output() {
 
     let mut patch = waveform_memory_patch(3, sustained_adsr());
     patch.channel.filter_cutoff = 80;
+    // destination=4(Cutoff、2026-08-18並べ替え後)。
     patch.channel.texture_lfo =
-        TextureLfo { waveform: 0, destination: 3, rate: 220, depth: 0, ..TextureLfo::default() };
+        TextureLfo { waveform: 0, destination: 4, rate: 220, depth: 0, ..TextureLfo::default() };
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
     engine_flat.set_patch(patch);
@@ -253,7 +255,7 @@ fn texture_lfo_cutoff_destination_shifts_output() {
     assert!(differs, "カットオフLFO変調（オートワウ）により出力波形が変化するはず");
 }
 
-/// Destination=4（未接続）は、質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へ
+/// Destination=0（未接続、2026-08-18並べ替え後）は、質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へ
 /// ドロップした状態を表す。Depthをいくら上げてもどの変調ターゲットにも出力されないため、
 /// Depth=0とDepth=255で出力波形が一致するはず（前段のPitch/Cutoffテストとは逆に「一致」を確認する）。
 #[test]
@@ -261,8 +263,9 @@ fn texture_lfo_unplugged_destination_produces_no_modulation() {
     let sample_rate = 44100.0;
 
     let mut patch = waveform_memory_patch(0, sustained_adsr());
+    // destination=0(Unplugged、2026-08-18並べ替え後)。
     patch.channel.texture_lfo =
-        TextureLfo { waveform: 0, destination: 4, rate: 220, depth: 0, ..TextureLfo::default() };
+        TextureLfo { waveform: 0, destination: 0, rate: 220, depth: 0, ..TextureLfo::default() };
 
     let mut engine_flat = Ym38x6Engine::new(sample_rate);
     engine_flat.set_patch(patch);

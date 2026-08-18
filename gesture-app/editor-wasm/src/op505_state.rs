@@ -275,6 +275,8 @@ impl Op505State {
             texture_lfo_fade_mode: tlfo!(fade_mode, "Texture LFO Fade Mode", 0, 3, 0),
             texture_lfo_fade_time: tlfo!(fade_time, "Texture LFO Fade Time", 0, 255, 0),
             texture_lfo_offset: tlfo!(offset, "Texture LFO Offset", 0, 255, 128),
+            // default=0はFmLfoDestination::Unplugged（ダブルクリック/Ctrl+クリックでのリセット先。
+            // 2026-08-18並べ替え後、Unplugged=0）。
             texture_lfo_destination: tlfo!(destination, "Texture LFO Destination", 0, 4, 0),
             cutoff: ch!(filter_cutoff, "Filter Cutoff", 0, 255, 255),
             resonance: ch!(filter_resonance, "Filter Resonance", 0, 255, 0),

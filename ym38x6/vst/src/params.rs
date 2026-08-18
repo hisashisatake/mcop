@@ -259,7 +259,8 @@ impl Default for Ym38x6Params {
             texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
             // 中心128＝オフセットなし（op_fine_tune等と同じ中心128の慣習）。
             texture_lfo_offset: IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 }),
-            // 0=Pitch/1=Volume/2=TL/3=Cutoff/4=未接続。既定0＝Pitch（NRPN(0,0)の既定と一致）。
+            // 0=未接続/1=Pitch/2=Volume/3=TL/4=Cutoff。既定0＝Unplugged（NRPN(0,0)の既定と一致、
+            // 2026-08-18並べ替え後）。
             texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
 
             chip_lfo_freq: IntParam::new("Chip LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),

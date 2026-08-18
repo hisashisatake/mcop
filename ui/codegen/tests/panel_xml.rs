@@ -85,9 +85,10 @@ fn header_title_from_attr_resolves() {
         .iter()
         .position(|l| *l == "ui.label(egui::RichText::new(\"PITCH FG\").strong());")
         .expect("PITCH FGの見出し行が見つかりません");
+    // dest-index=1（Pitch、2026-08-18のFmLfoDestination並べ替え後。旧0=Pitch→新1=Pitch）。
     assert_eq!(
         lines[idx - 1],
-        "crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, 0, \"TX LFO\", &mut tx_jacks);"
+        "crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, 1, \"TX LFO\", &mut tx_jacks);"
     );
     assert_eq!(lines[idx - 2], "ui.horizontal(|ui| {");
     assert_eq!(lines[idx + 1], "});");
