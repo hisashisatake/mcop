@@ -552,6 +552,51 @@ struct SaveAsArgs<P> {
     default_file_name: String,
 }
 
+/// ym38x6の`EditorState`から、PITCH FG/CUTOFF FG/GAIN FGに属するフィールドだけを
+/// 抜き出したスナップショット（`load_preset`の`keep_fg`用）。
+struct SavedFgYm38x6 {
+    pitch_fg_ar: i32, pitch_fg_d1r: i32, pitch_fg_d1l: i32, pitch_fg_d2r: i32, pitch_fg_rr: i32,
+    pitch_fg_depth: i32, pitch_fg_floor: i32, pitch_fg_delay: i32, pitch_fg_loop: bool, pitch_fg_curve: bool,
+    cutoff_fg_ar: i32, cutoff_fg_d1r: i32, cutoff_fg_d1l: i32, cutoff_fg_d2r: i32, cutoff_fg_rr: i32,
+    cutoff_fg_depth: i32, cutoff_fg_floor: i32, cutoff_fg_delay: i32, cutoff_fg_loop: bool, cutoff_fg_curve: bool,
+    gain_fg_ar: i32, gain_fg_d1r: i32, gain_fg_d1l: i32, gain_fg_d2r: i32, gain_fg_rr: i32,
+    gain_fg_floor: i32, gain_fg_delay: i32, gain_fg_loop: bool, gain_fg_curve: bool,
+}
+
+impl SavedFgYm38x6 {
+    fn capture(s: &EditorState) -> Self {
+        Self {
+            pitch_fg_ar: s.pitch_fg_ar, pitch_fg_d1r: s.pitch_fg_d1r, pitch_fg_d1l: s.pitch_fg_d1l,
+            pitch_fg_d2r: s.pitch_fg_d2r, pitch_fg_rr: s.pitch_fg_rr, pitch_fg_depth: s.pitch_fg_depth,
+            pitch_fg_floor: s.pitch_fg_floor, pitch_fg_delay: s.pitch_fg_delay,
+            pitch_fg_loop: s.pitch_fg_loop, pitch_fg_curve: s.pitch_fg_curve,
+            cutoff_fg_ar: s.cutoff_fg_ar, cutoff_fg_d1r: s.cutoff_fg_d1r, cutoff_fg_d1l: s.cutoff_fg_d1l,
+            cutoff_fg_d2r: s.cutoff_fg_d2r, cutoff_fg_rr: s.cutoff_fg_rr, cutoff_fg_depth: s.cutoff_fg_depth,
+            cutoff_fg_floor: s.cutoff_fg_floor, cutoff_fg_delay: s.cutoff_fg_delay,
+            cutoff_fg_loop: s.cutoff_fg_loop, cutoff_fg_curve: s.cutoff_fg_curve,
+            gain_fg_ar: s.gain_fg_ar, gain_fg_d1r: s.gain_fg_d1r, gain_fg_d1l: s.gain_fg_d1l,
+            gain_fg_d2r: s.gain_fg_d2r, gain_fg_rr: s.gain_fg_rr,
+            gain_fg_floor: s.gain_fg_floor, gain_fg_delay: s.gain_fg_delay,
+            gain_fg_loop: s.gain_fg_loop, gain_fg_curve: s.gain_fg_curve,
+        }
+    }
+
+    fn restore(self, s: &mut EditorState) {
+        s.pitch_fg_ar = self.pitch_fg_ar; s.pitch_fg_d1r = self.pitch_fg_d1r; s.pitch_fg_d1l = self.pitch_fg_d1l;
+        s.pitch_fg_d2r = self.pitch_fg_d2r; s.pitch_fg_rr = self.pitch_fg_rr; s.pitch_fg_depth = self.pitch_fg_depth;
+        s.pitch_fg_floor = self.pitch_fg_floor; s.pitch_fg_delay = self.pitch_fg_delay;
+        s.pitch_fg_loop = self.pitch_fg_loop; s.pitch_fg_curve = self.pitch_fg_curve;
+        s.cutoff_fg_ar = self.cutoff_fg_ar; s.cutoff_fg_d1r = self.cutoff_fg_d1r; s.cutoff_fg_d1l = self.cutoff_fg_d1l;
+        s.cutoff_fg_d2r = self.cutoff_fg_d2r; s.cutoff_fg_rr = self.cutoff_fg_rr; s.cutoff_fg_depth = self.cutoff_fg_depth;
+        s.cutoff_fg_floor = self.cutoff_fg_floor; s.cutoff_fg_delay = self.cutoff_fg_delay;
+        s.cutoff_fg_loop = self.cutoff_fg_loop; s.cutoff_fg_curve = self.cutoff_fg_curve;
+        s.gain_fg_ar = self.gain_fg_ar; s.gain_fg_d1r = self.gain_fg_d1r; s.gain_fg_d1l = self.gain_fg_d1l;
+        s.gain_fg_d2r = self.gain_fg_d2r; s.gain_fg_rr = self.gain_fg_rr;
+        s.gain_fg_floor = self.gain_fg_floor; s.gain_fg_delay = self.gain_fg_delay;
+        s.gain_fg_loop = self.gain_fg_loop; s.gain_fg_curve = self.gain_fg_curve;
+    }
+}
+
 /// 指定のbank/programをレジストリから読み込んで`target`へ書き込み、`target`のdirtyを立てる
 /// （次フレームの`send_patch()`/`send_op505_patch()`でエンジンへも反映される。エンジン側へ直接
 /// `ym38x6_set_program`/`op505_set_program`は呼ばない。`target`を単一の真実の情報源に保つことで、
@@ -561,12 +606,20 @@ struct SaveAsArgs<P> {
 /// クリック・エンジン切替の全経路がこれを呼ぶ（レジストリがOpen/Save/Save Asで正しく
 /// 更新されているため、常にこれだけで一貫した結果になる）。戻り値の`bank`/`program`は
 /// 常に問い合わせた値をそのまま返す（見つからなくても、ユーザーが指定した値を表示に反映するため）。
-pub async fn load_preset(target: &PatchTarget, bank: u16, program: u8) -> Option<PatchIdentity> {
+///
+/// `keep_fg=true`（PRESETSリストをShift+クリックしたとき）なら、読み込む前の
+/// PITCH FG/CUTOFF FG/GAIN FGを保ったまま、それ以外（オペレーター・アルゴリズム等）だけを
+/// 新しいプリセットの値へ差し替える（お気に入りのFG設定を保ったまま音色だけ切り替えたい用途）。
+pub async fn load_preset(target: &PatchTarget, bank: u16, program: u8, keep_fg: bool) -> Option<PatchIdentity> {
     match target {
         PatchTarget::Ym38x6 { state, dirty } => {
             let loaded =
                 invoke_query::<LoadedPatchDto<PatchDto>>("get_bank_program", &PresetPatchArgs { bank, program }).await?;
+            let saved_fg = keep_fg.then(|| SavedFgYm38x6::capture(&state.borrow()));
             loaded.patch.apply_to(&mut state.borrow_mut());
+            if let Some(saved_fg) = saved_fg {
+                saved_fg.restore(&mut state.borrow_mut());
+            }
             dirty.set(true);
             Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
         }
@@ -576,7 +629,14 @@ pub async fn load_preset(target: &PatchTarget, bank: u16, program: u8) -> Option
                 &PresetPatchArgs { bank, program },
             )
             .await?;
-            *patch.borrow_mut() = loaded.patch;
+            let mut new_patch = loaded.patch;
+            if keep_fg {
+                let current = patch.borrow();
+                new_patch.channel.pitch_fg = current.channel.pitch_fg;
+                new_patch.channel.cutoff_fg = current.channel.cutoff_fg;
+                new_patch.channel.gain_fg = current.channel.gain_fg;
+            }
+            *patch.borrow_mut() = new_patch;
             dirty.set(true);
             Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
         }
