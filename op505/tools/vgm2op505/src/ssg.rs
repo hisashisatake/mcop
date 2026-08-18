@@ -301,9 +301,14 @@ fn noise_op(tl: u8, np: u8) -> Op505OperatorParams {
 /// チャンネル共通のFG既定値。`Ym38x6Patch::default()`由来のビット表現をそのまま焼き込む
 /// （`Op505ChannelParams::default()`とは値が異なるが音は同一。モジュールdocコメント参照）。
 fn ssg_channel(algorithm: u8) -> Op505ChannelParams {
+    // Pitch/Cutoff FGは変調を一切かけない（SSG人工パッチには不要）。バイポーラレベル方式では
+    // 「無変調」は Depth=0 かつ全段レベル=中央128 であり、**旧表現の levels=0 は
+    // 「全開マイナス」を意味してしまう**（旧方式はDepth=128が中立だったため levels=0 が無害だった）。
+    // `stage1_time`は旧ビット表現の名残で、無変調なので音には影響しない。
     let pitch_cutoff_eg = |stage1_time: u8| {
-        let mut stages = [TimeStage::default(); MAX_STAGES];
-        stages[1] = TimeStage { time: stage1_time, level: 0, curve: 0 };
+        let neutral = TimeStage { time: 0, level: sound_core::BIPOLAR_NEUTRAL_RAW, curve: 0 };
+        let mut stages = [neutral; MAX_STAGES];
+        stages[1] = TimeStage { time: stage1_time, ..neutral };
         TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
     };
     let gain_fg = {
@@ -314,8 +319,8 @@ fn ssg_channel(algorithm: u8) -> Op505ChannelParams {
     };
     Op505ChannelParams {
         algorithm,
-        pitch_fg: Op505BipolarFg { eg: pitch_cutoff_eg(54), depth: 128 },
-        cutoff_fg: Op505BipolarFg { eg: pitch_cutoff_eg(255), depth: 128 },
+        pitch_fg: Op505BipolarFg { eg: pitch_cutoff_eg(54), depth: 0 },
+        cutoff_fg: Op505BipolarFg { eg: pitch_cutoff_eg(255), depth: 0 },
         gain_fg,
         ..Op505ChannelParams::default()
     }

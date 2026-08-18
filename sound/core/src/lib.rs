@@ -27,13 +27,17 @@ pub use eg::{cc76_to_rate_scale, BipolarFg, Eg, EgParams, GainFg};
 
 pub mod time_eg;
 pub use time_eg::{
-    nearest_sync_note, seconds_to_time, sync_note_anchor, sync_note_beats, sync_rate_beats,
-    sync_region_seconds, tempo_speed_scale, time_to_seconds, TimeEg, TimeEgParams, TimeStage,
-    MAX_STAGES, RETRIGGER_MODE_CONTINUE, RETRIGGER_MODE_RESET, SYNC_NOTE_COUNT,
+    bipolar_level, nearest_sync_note, seconds_to_time, sync_note_anchor, sync_note_beats,
+    sync_rate_beats, sync_region_seconds, tempo_speed_scale, time_to_seconds, TimeEg, TimeEgParams,
+    TimeStage, BIPOLAR_NEUTRAL_LEVEL, BIPOLAR_NEUTRAL_RAW, MAX_STAGES, RETRIGGER_MODE_CONTINUE,
+    RETRIGGER_MODE_RESET, SYNC_NOTE_COUNT,
 };
 
 pub mod vcf;
-pub use vcf::{cutoff_to_hz, effective_cutoff, FilterType, Svf, Vcf, VoiceFilter};
+pub use vcf::{
+    cutoff_to_hz, effective_cutoff, effective_cutoff_bipolar_level, FilterType, Svf, Vcf,
+    VoiceFilter,
+};
 
 pub mod vca;
 pub use vca::{Vca, VoiceAmp};

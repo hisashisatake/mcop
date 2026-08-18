@@ -60,6 +60,9 @@ const EDITOR_DOT_RADIUS_PX: f32 = crate::time_eg_preview::DOT_RADIUS * 2.5;
 const COLOR_LOOP_BAND: egui::Color32 = egui::Color32::from_rgba_premultiplied(20, 46, 22, 0);
 /// ループ区間マーカー（三角形）を描く、グラフ下端からのオフセット（px）。
 const LOOP_MARKER_OFFSET: f32 = 6.0;
+/// バイポーラFG（Pitch/Cutoff）の「無変調」基準線の色。折れ線（緑/赤）より控えめにして
+/// 目盛りとして背景に沈ませる。
+const COLOR_NEUTRAL_BASELINE: egui::Color32 = egui::Color32::from_gray(110);
 /// ループ区間マーカー（三角形）の半径（px）。
 const LOOP_MARKER_RADIUS: f32 = 4.0;
 
@@ -419,6 +422,30 @@ fn y_to_level(mapping: EgAmplitudeMapping, tl: u8, inner: Rect, y: f32) -> u8 {
     (level_linear.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// バイポーラFG（Pitch/Cutoff）のグラフに「無変調」の基準線を引く。
+///
+/// レベル中央(128)がこの線で、上へ振れれば正方向・下へ振れれば負方向の変調になる。
+/// 振幅系（OP EG／VCA／FILTER）は下端が無音で自明なため何も描かない。
+/// Y座標は`layout_impl`の`db_to_y`と同じ式で求める（別式にすると折れ線と基準線が
+/// 微妙にずれ、「中央に置いたはずの点が線に乗らない」という形で破綻する）。
+fn draw_neutral_baseline(painter: &egui::Painter, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) {
+    if mapping != EgAmplitudeMapping::RawLinear {
+        return;
+    }
+    let floor = crate::time_eg_preview::axis_floor_db(mapping);
+    let db = crate::time_eg_preview::stage_target_db(
+        mapping,
+        floor,
+        tl_to_db(tl),
+        crate::time_eg_preview::neutral_start_level(mapping),
+    );
+    let y = inner.bottom() - ((db.max(floor) - floor) / -floor) * inner.height();
+    painter.add(Shape::line(
+        vec![Pos2::new(inner.left(), y), Pos2::new(inner.right(), y)],
+        Stroke::new(1.0, COLOR_NEUTRAL_BASELINE),
+    ));
+}
+
 /// GRAPHモードの横幅(px)をtime値(0〜255)へ逆写像する（Step Dのドラッグ編集が使う）。
 /// `scale`は`time_eg_editor_layout`計算時の`width/drawn_count`（1段あたりのピクセル数）。
 /// `time_eg_preview.rs`の`log_width`と同じレンジ（`TIME_MIN_SECONDS`〜`TIME_MAX_SECONDS`）を
@@ -658,6 +685,10 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     let inner = rect.shrink(GRAPH_PAD);
     painter.rect_filled(inner, 2.0, COLOR_PANEL);
     let geometry = time_eg_editor_layout(&params, inner, mapping, tl);
+
+    // バイポーラFG（Pitch/Cutoff）は中央が「無変調」を意味するので、基準線を1本引いて
+    // どちらが上げ方向でどちらが下げ方向かを読めるようにする（振幅系は下端=無音が自明なので不要）。
+    draw_neutral_baseline(painter, inner, mapping, tl);
 
     let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
     let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;

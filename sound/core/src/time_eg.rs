@@ -18,6 +18,27 @@ use serde::{Deserialize, Serialize};
 /// 段の最大数。CZ-101の8段に準拠。4点T/Lは`stage_count=4`で表現する。
 pub const MAX_STAGES: usize = 8;
 
+/// バイポーラ解釈するEGの「無変調」を表す生レベル値。DT1・op_fine_tune等このプロジェクトの
+/// 他のバイポーラパラメーターと同じ中心128（`(v-128)/128`慣例）に揃えてある。
+pub const BIPOLAR_NEUTRAL_RAW: u8 = 128;
+
+/// `BIPOLAR_NEUTRAL_RAW`を`tick()`の出力空間（`level/255`の0.0〜1.0）で表したもの。
+pub const BIPOLAR_NEUTRAL_LEVEL: f32 = BIPOLAR_NEUTRAL_RAW as f32 / 255.0;
+
+/// `tick()`の出力（0.0〜1.0）を、中心128を0とするバイポーラ値（-1.0〜+127/128）へ写す。
+///
+/// Pitch FG／Cutoff FGはこの値にDepth（符号を持たない強度0〜255）を掛けて変調量にする。
+/// 「符号はレベル側の波形が持ち、Depthは振れ幅の倍率」という役割分担のため、1音の中で
+/// 上下対称に振れるサイクル（三角波・パルス等）をFGの形だけで表現できる
+/// （旧方式は`level(0〜1) × (depth-128)/128`で、符号が常にDepth1個に固定されていたため
+/// 谷が必ずベース値へ張り付き、片側にしか振れなかった）。
+///
+/// 正側の最大が`127/128`で頭打ちになるのは`(v-128)/128`慣例の帰結で、DT1等と同じ
+/// （`lfo.rs`の`lfo_offset_from_param`にも同じ非対称性がある）。
+pub fn bipolar_level(tick_output: f32) -> f32 {
+    (tick_output * 255.0 - BIPOLAR_NEUTRAL_RAW as f32) / BIPOLAR_NEUTRAL_RAW as f32
+}
+
 // ---------------------------------------------------------------------------
 // 時間テーブル（`eg::build_rate_seconds_table`と同じOnceLockテーブル化パターン）
 //
@@ -388,28 +409,47 @@ pub struct TimeEg {
     /// `params`から解決できていない状態（pending_startと同じ遅延初期化パターン）。
     release_pending: bool,
     idle: bool,
+    /// キーオン起点および1段ループの跳ね戻し先に使う「無変調」レベル。
+    ///
+    /// 振幅系（OP EG／Gain FG）は0.0＝無音が無変調なので既定のまま。Pitch FG／Cutoff FGの
+    /// ようにレベルをバイポーラ解釈する用途では、0.0は「無変調」ではなく「全開マイナス」を
+    /// 意味してしまうため、`new_bipolar()`で`BIPOLAR_NEUTRAL_LEVEL`を入れる
+    /// （さもないと段0のtimeが0でない限り、キーオン直後に全開マイナスからの
+    /// スイープが必ず入ってしまう）。
+    neutral_level: f32,
 }
 
 impl TimeEg {
     pub fn new() -> Self {
+        Self::with_neutral_level(0.0)
+    }
+
+    /// レベルをバイポーラ（中心128＝無変調）として扱う用途向けのコンストラクタ。
+    /// Pitch FG／Cutoff FGが使う。振幅系は`new()`のまま。
+    pub fn new_bipolar() -> Self {
+        Self::with_neutral_level(BIPOLAR_NEUTRAL_LEVEL)
+    }
+
+    fn with_neutral_level(neutral_level: f32) -> Self {
         Self {
             stage_index: 0,
-            level: 0.0,
-            segment_start: 0.0,
-            segment_end: 0.0,
+            level: neutral_level,
+            segment_start: neutral_level,
+            segment_end: neutral_level,
             elapsed: 0.0,
             releasing: false,
             pending_start: PendingStart::None,
             release_pending: false,
             idle: true,
+            neutral_level,
         }
     }
 
     pub fn note_on(&mut self) {
-        self.level = 0.0;
+        self.level = self.neutral_level;
         self.stage_index = 0;
-        self.segment_start = 0.0;
-        self.segment_end = 0.0;
+        self.segment_start = self.neutral_level;
+        self.segment_end = self.neutral_level;
         self.elapsed = 0.0;
         self.releasing = false;
         self.release_pending = false;
@@ -477,7 +517,7 @@ impl TimeEg {
             }
         } else if self.pending_start != PendingStart::None {
             let start_level = match self.pending_start {
-                PendingStart::Fresh => 0.0,
+                PendingStart::Fresh => self.neutral_level,
                 PendingStart::Retrigger => self.level,
                 PendingStart::None => unreachable!(),
             };
@@ -541,13 +581,17 @@ impl TimeEg {
             // （`eg::Eg`のD2R=0フリーズに相当）。ここから先はnote-offでしか進まない。
             if params.loop_enabled != 0 {
                 // 1段ループ（`loop_start == release_point`）だけは、その段の**入口レベル**
-                // （直前段の終端レベル、段0なら0.0）へ跳ね戻してからやり直す。
+                // （直前段の終端レベル、段0なら`neutral_level`）へ跳ね戻してからやり直す。
                 // レベル連続のままだと「自分の終端レベルから自分の終端レベルへ」向かうことになり
                 // 完全に平坦で音として何も起きない。跳ね戻すことで1段だけでノコギリ波を表現できる。
                 // 多段ループ（`loop_start < release_point`）は従来どおりレベル連続で周回する
                 // （区間の両端を行き来する三角波的な動きになる）。
                 if loop_start == release_point {
-                    self.level = if loop_start == 0 { 0.0 } else { level_of(&params.stages[loop_start - 1]) };
+                    self.level = if loop_start == 0 {
+                        self.neutral_level
+                    } else {
+                        level_of(&params.stages[loop_start - 1])
+                    };
                 }
                 self.enter_stage(params, loop_start, overflow);
             } else {
@@ -606,6 +650,48 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "actual={actual} expected={expected} tolerance={tolerance}"
         );
+    }
+
+    /// バイポーラ写像の要： 生値128がぴったり0（無変調）になること。
+    /// ここがずれると「DEPTHを上げただけで音がずれる」という形で表面化する。
+    #[test]
+    fn bipolar_level_maps_raw_128_to_zero() {
+        assert_eq!(bipolar_level(BIPOLAR_NEUTRAL_LEVEL), 0.0);
+        assert_eq!(bipolar_level(0.0), -1.0);
+        // 正側は`(v-128)/128`慣例により127/128で頭打ち（DT1等と同じ非対称性）。
+        assert!((bipolar_level(1.0) - 127.0 / 128.0).abs() < 1e-6, "{}", bipolar_level(1.0));
+    }
+
+    /// `new_bipolar()`のキーオン起点が中央（無変調）であること。
+    /// `new()`の0.0起点のままだと、段0のtimeが0でない限りキーオン直後に
+    /// 全開マイナスからのスイープが必ず入ってしまう。
+    #[test]
+    fn bipolar_time_eg_starts_from_neutral_not_zero() {
+        let sr = 44100.0;
+        // 段0: 中央(128)へ向かって時間をかけて進む形。起点が中央なら終始無変調のまま。
+        let params = TimeEgParams {
+            stages: stages_with(&[(200, BIPOLAR_NEUTRAL_RAW, 0), (0, BIPOLAR_NEUTRAL_RAW, 0)]),
+            stage_count: 2,
+            release_point: 0,
+            ..Default::default()
+        };
+
+        let mut bipolar = TimeEg::new_bipolar();
+        bipolar.note_on();
+        for _ in 0..64 {
+            let out = bipolar.tick(sr, params, 1.0);
+            assert!(
+                bipolar_level(out).abs() < 1e-6,
+                "バイポーラEGはキーオン直後から無変調であるべき: {}",
+                bipolar_level(out)
+            );
+        }
+
+        // 従来の`new()`は0.0起点のまま（振幅系の意味論は変えない）。
+        let mut unipolar = TimeEg::new();
+        unipolar.note_on();
+        let first = unipolar.tick(sr, params, 1.0);
+        assert!(first < BIPOLAR_NEUTRAL_LEVEL, "振幅系EGは従来どおり0.0から立ち上がる: {first}");
     }
 
     #[test]

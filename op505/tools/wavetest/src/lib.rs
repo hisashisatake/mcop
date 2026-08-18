@@ -457,10 +457,12 @@ pub fn build_filter_demo(
     patch.channel.filter_cutoff = demo.cutoff;
     patch.channel.filter_resonance = demo.resonance;
     patch.channel.filter_self_oscillation = demo.self_osc;
-    // 旧unipolar Filter EG Depth(0〜255) → 新bipolar Cutoff FG Depth(中心128)への変換
-    // （常に開く方向として保つ）。
-    patch.channel.cutoff_fg.depth = (128.0 + demo.eg_depth as f32 * 128.0 / 255.0).clamp(0.0, 255.0) as u8;
-    patch.channel.cutoff_fg.eg = convert_eg_shape(a, d, s, 0, r, 0, 0, 0, &mut warnings, "wavetest-filter");
+    // レガシーのunipolar Filter EG Depth(0〜255)はそのまま振れ幅の倍率になる。
+    // 向き（常に開く方向）はDepthではなくEGのレベル側が持つため、レベルを上げ方向へ畳み込む。
+    patch.channel.cutoff_fg.depth = demo.eg_depth;
+    let mut cutoff_eg = convert_eg_shape(a, d, s, 0, r, 0, 0, 0, &mut warnings, "wavetest-filter");
+    op505_core::bipolar_fg_levels_from_magnitude(&mut cutoff_eg, true);
+    patch.channel.cutoff_fg.eg = cutoff_eg;
 
     let freq =
         override_freq.unwrap_or_else(|| note_to_freq(demo.octave, demo.note).expect("内蔵の基準音は常に有効"));

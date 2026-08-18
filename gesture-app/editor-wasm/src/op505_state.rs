@@ -138,7 +138,8 @@ fn bipolar_fg_panel_params(
             set: set_depth,
             min: 0,
             max: 255,
-            default: 128,
+            // 符号を持たない振れ幅の倍率。0＝変調なし（符号はFGのレベル波形側が持つ）。
+            default: 0,
             name: depth_name,
         }) as Box<dyn IntParamHandle>,
     }

@@ -68,9 +68,10 @@ def make_channel(*, algorithm: int, feedback: int = 0,
 
     - `tone_lfo_*` → `chip_lfo_*`（直接リネームのみ、値は同じ意味）。
     - `filter_eg_*`（unipolar Filter EG、`ar/d1r/d1l/rr` + `depth`0〜255）→ op505の
-      `cutoff_fg`（bipolar、`eg: TimeEgParams` + `depth`中心128）へ変換する。
-      `depth`の単極性→双極性変換式は`wavetest`の`build_filter_demo`と同じ
-      （常に「開く」方向として保つ）。
+      `cutoff_fg`（**レベルがバイポーラ**中心128・Depthは符号なしの振れ幅倍率）へ変換する。
+      `_time_eg_json`が返すレベルは0〜1の大きさ（unipolar）なので、常に「開く」方向（正側）へ
+      畳み込む（`op505_core::bipolar_fg_levels_from_magnitude(eg, positive=true)`と同じ式）。
+      Depthはそのまま振れ幅として使う（旧方式の「中心128からのオフセット」ではない）。
     - `pitch_fg`/`gain_fg`/`texture_lfo`は`default_channel()`の中立値のまま
       （旧スキーマにはこれらに相当するノブが無かったため）。
     """
@@ -90,9 +91,11 @@ def make_channel(*, algorithm: int, feedback: int = 0,
         filter_self_oscillation=filter_self_oscillation,
     )
     cutoff_eg = json.loads(_time_eg_json(filter_eg_ar, filter_eg_d1r, filter_eg_d1l, 0, filter_eg_rr))
+    for stage in cutoff_eg["stages"]:
+        stage["level"] = max(0, min(255, round(128 + stage["level"] * 128 / 255)))
     ch["cutoff_fg"] = {
         "eg": cutoff_eg,
-        "depth": max(0, min(255, round(128 + filter_eg_depth * 128 / 255))),
+        "depth": max(0, min(255, filter_eg_depth)),
     }
     ch.update(extra)
     return ch

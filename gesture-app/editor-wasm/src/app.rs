@@ -194,8 +194,9 @@ impl Identity {
 /// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・エンジン切替・
 /// 起動直後の初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく
 /// 更新されているため、「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
-async fn handle_navigate(target: ipc::PatchTarget, identity: Identity, bank: u16, program: u8) {
-    if let Some(loaded) = ipc::load_preset(&target, bank, program).await {
+/// `keep_fg`は`ipc::load_preset`参照（PRESETSリストのShift+クリック専用、他の呼び出し元は常にfalse）。
+async fn handle_navigate(target: ipc::PatchTarget, identity: Identity, bank: u16, program: u8, keep_fg: bool) {
+    if let Some(loaded) = ipc::load_preset(&target, bank, program, keep_fg).await {
         identity.apply(loaded);
     }
 }
@@ -231,7 +232,7 @@ impl ym38x6_ui::IntParamHandle for BankField {
     fn set(&self, value: i32) {
         let bank = value.clamp(0, 16383) as u16;
         self.current_bank.set(bank);
-        wasm_bindgen_futures::spawn_local(handle_navigate(self.target.clone(), self.identity.clone(), bank, self.current_program.get()));
+        wasm_bindgen_futures::spawn_local(handle_navigate(self.target.clone(), self.identity.clone(), bank, self.current_program.get(), false));
     }
     fn end_edit(&self) {}
 }
@@ -336,7 +337,7 @@ impl EditorApp {
             target: target.clone(),
         };
         let (initial_bank, initial_program) = ipc::read_program_fields();
-        wasm_bindgen_futures::spawn_local(handle_navigate(target, identity, initial_bank, initial_program));
+        wasm_bindgen_futures::spawn_local(handle_navigate(target, identity, initial_bank, initial_program, false));
 
         Self {
             state,
@@ -385,7 +386,7 @@ impl eframe::App for EditorApp {
         // `project_op505_editor_state_stale_on_demo_switch`の後継設計）。
         if crate::engine_sync::take_selection_stale() {
             let (bank, program) = ipc::read_program_fields();
-            wasm_bindgen_futures::spawn_local(handle_navigate(self.patch_target(), self.identity(), bank, program));
+            wasm_bindgen_futures::spawn_local(handle_navigate(self.patch_target(), self.identity(), bank, program, false));
         }
 
         // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
@@ -482,6 +483,9 @@ impl eframe::App for EditorApp {
                         let label = format!("{:03} {}", preset.program, preset.name);
                         let selected = preset.program == self.current_program.get();
                         if ui.selectable_label(selected, &label).clicked() {
+                            // Shift+クリックなら、PITCH FG/CUTOFF FG/GAIN FGは今の設定を保ったまま
+                            // それ以外だけ差し替える（`ipc::load_preset`の`keep_fg`参照）。
+                            let keep_fg = ui.input(|i| i.modifiers.shift);
                             // レジストリを引くだけ（ディスク再検索なし）。今のbankのまま
                             // programだけ切り替える＝別ファイルへは飛ばない（handle_navigate参照）。
                             self.current_program.set(preset.program);
@@ -490,6 +494,7 @@ impl eframe::App for EditorApp {
                                 self.identity(),
                                 self.current_bank.get(),
                                 preset.program,
+                                keep_fg,
                             ));
                         }
                     }

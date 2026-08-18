@@ -92,7 +92,9 @@
              <sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット（旧<enum label="NOTE">の
              置き換え、100×70）。両者は同じsync_rateの2つの見え方なので互いに追従する。 -->
         <stack gap="spacing">
-          <knob label="P.DEP±" handle="params.pitch_fg.depth" bipolar="true"/>
+          <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
+               持つため、バイポーラ表示（±）にはしない。 -->
+          <knob label="P.DEPTH" handle="params.pitch_fg.depth"/>
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
@@ -107,7 +109,8 @@
       <row justify="start" gap="spacing">
         <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <stack gap="spacing">
-          <knob label="F.DEP±" handle="params.cutoff_fg.depth" bipolar="true"/>
+          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
+          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
