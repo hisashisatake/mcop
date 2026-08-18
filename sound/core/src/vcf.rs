@@ -31,12 +31,30 @@ pub fn cutoff_to_hz(cutoff: u8) -> f32 {
 
 /// 実効Cutoff = clamp(Cutoffベース値 + Cutoff FG出力 × (Depth-128)/128 × 255, 0, 255)
 ///
-/// Depthはバイポーラ（0〜255、中心128＝変調なし）。Depth=255で最大+255（全域を開く方向）、
-/// Depth=0で最大-255（全域を閉じる方向）まで振れる、旧unipolar式（`eg_output(0〜1) ×
-/// depth(0〜255)`、最大255）と同じ振れ幅を維持する係数。
+/// **レベルはユニポーラ（0〜1の大きさ）・Depthがバイポーラ（中心128）**という旧来の役割分担。
+/// `ym38x6-core`のVCF（レート方式Filter EG、[`VoiceFilter`]経由）が使う。ym38x6は凍結中の
+/// ため、この関数の数値挙動は変更しないこと。
+///
+/// op505のCutoff FGは役割を入れ替えた[`effective_cutoff_bipolar_level`]を使う。
 pub fn effective_cutoff(base_cutoff: u8, eg_output: f32, depth: u8) -> u8 {
     let bipolar = (depth as f32 - 128.0) / 128.0;
     (base_cutoff as f32 + eg_output * bipolar * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+/// 実効Cutoff = clamp(Cutoffベース値 + bipolar_level(Cutoff FG出力) × Depth, 0, 255)
+///
+/// **符号はFGのレベル波形が持ち、Depthは振れ幅の倍率**（0〜255、0＝変調なし）。
+/// レベル生値128が無変調の中心で、255側が開く方向・0側が閉じる方向へ振れる。
+/// FGの形だけで上下対称のサイクル（三角波・パルス等）を描けるのが要点で、op505の
+/// Cutoff FGが使う。
+///
+/// [`effective_cutoff`]（ym38x6の旧方式）は符号を1音中不変のDepthだけが持っていたため、
+/// レベルが常に非負＝谷が必ずベース値へ張り付き片側にしか振れなかった。
+/// 振れ幅の最大（±255相当）は両者同じ。
+pub fn effective_cutoff_bipolar_level(base_cutoff: u8, eg_output: f32, depth: u8) -> u8 {
+    (base_cutoff as f32 + crate::time_eg::bipolar_level(eg_output) * depth as f32)
         .round()
         .clamp(0.0, 255.0) as u8
 }
@@ -231,6 +249,11 @@ mod tests {
         assert!(cutoff_to_hz(255) > cutoff_to_hz(0));
     }
 
+    /// EG出力空間での中央（生値128）。テストの可読性のため名前を付ける。
+    const MID: f32 = crate::time_eg::BIPOLAR_NEUTRAL_LEVEL;
+
+    // --- 旧方式（ym38x6のVoiceFilterが使う。凍結中につき挙動を変えないこと） ---
+
     #[test]
     fn effective_cutoff_bipolar_depth_center_is_no_op() {
         // depth=128（中心）はEG出力に関わらず無変調。
@@ -253,6 +276,55 @@ mod tests {
         assert_eq!(effective_cutoff(0, 0.0, 255), 0);
         assert_eq!(effective_cutoff(100, 1.0, 0), 0);
         assert_eq!(effective_cutoff(0, -1.0, 255), 0);
+    }
+
+    /// 旧方式は「レベルが非負ゆえ谷がベース値へ張り付き片側にしか振れない」性質を持つ。
+    /// これはym38x6の凍結された仕様なので、退行検知のため明示的に固定しておく
+    /// （op505側の新方式と取り違えて共通化してしまう事故を防ぐ）。
+    #[test]
+    fn effective_cutoff_legacy_is_one_sided() {
+        let base = 128;
+        for depth in [0u8, 60, 200, 255] {
+            let at_level_zero = effective_cutoff(base, 0.0, depth);
+            assert_eq!(at_level_zero, base, "旧方式はレベル0で常にベース値（谷が張り付く）");
+        }
+    }
+
+    // --- 新方式（op505のCutoff FGが使う） ---
+
+    #[test]
+    fn effective_cutoff_bipolar_level_depth_zero_is_no_op() {
+        // Depth=0（振れ幅ゼロ）はレベルに関わらず無変調。
+        assert_eq!(effective_cutoff_bipolar_level(100, 1.0, 0), 100);
+        assert_eq!(effective_cutoff_bipolar_level(100, 0.0, 0), 100);
+    }
+
+    #[test]
+    fn effective_cutoff_bipolar_level_neutral_level_is_no_op() {
+        // レベル中央（生値128）はDepthに関わらず無変調。
+        assert_eq!(effective_cutoff_bipolar_level(100, MID, 255), 100);
+        assert_eq!(effective_cutoff_bipolar_level(100, MID, 100), 100);
+    }
+
+    /// 新方式の核心：1つのDepthのまま、レベル波形が中央をまたぐだけで上下**両方向**へ振れること。
+    #[test]
+    fn effective_cutoff_bipolar_level_carries_sign_both_ways() {
+        let base = 128u8;
+        let depth = 100u8;
+        let up = effective_cutoff_bipolar_level(base, 1.0, depth); // レベル上端 → 開く
+        let down = effective_cutoff_bipolar_level(base, 0.0, depth); // レベル下端 → 閉じる
+        assert!(up > base, "レベル上端は開く方向へ振れるべき: {up}");
+        assert!(down < base, "レベル下端は閉じる方向へ振れるべき: {down}");
+        // 中央対称（正側は127/128慣例で1だけ浅い）。
+        assert_eq!(base - down, depth);
+        assert_eq!(up - base, (depth as f32 * 127.0 / 128.0).round() as u8);
+    }
+
+    #[test]
+    fn effective_cutoff_bipolar_level_clamps() {
+        assert_eq!(effective_cutoff_bipolar_level(200, 1.0, 255), 255);
+        assert_eq!(effective_cutoff_bipolar_level(0, MID, 255), 0);
+        assert_eq!(effective_cutoff_bipolar_level(100, 0.0, 255), 0);
     }
 
     #[test]

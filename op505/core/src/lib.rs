@@ -15,6 +15,13 @@ pub mod preset;
 pub use operator::Op505OperatorParams;
 pub use preset::{op505_presets_dir, Op505Preset, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
 
+/// バイポーラFG（Pitch/Cutoff）の無変調レベル。`sound-core`の同名定数の再エクスポート。
+///
+/// `op505-midi`は依存を`op505-core`/`sound-fm`の2本に絞る規約（`.claude/rules`参照）のため
+/// `sound-core`を直接見に行けない。CC78のDelay判定で「無変調の待ち段」を識別するのに必要なので
+/// ここから供給する。
+pub use sound_core::BIPOLAR_NEUTRAL_RAW;
+
 use std::collections::BTreeMap;
 
 use sound_fm::algorithm::ALGORITHMS;
@@ -28,8 +35,9 @@ use sound_fm::{texture_lfo_to_shape, FmLfoDestination, TextureLfo};
 use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{
-    apply_lfo_modulation, convert_wave_32, cutoff_to_hz, effective_cutoff, pitch_depth_cents,
-    tempo_speed_scale, volume_depth, cutoff_depth, FilterType, LfoDestination, PerformanceLfo,
+    apply_lfo_modulation, bipolar_level, convert_wave_32, cutoff_to_hz,
+    effective_cutoff_bipolar_level, pitch_depth_cents, tempo_speed_scale, volume_depth,
+    cutoff_depth, FilterType, LfoDestination, PerformanceLfo,
     PerformanceLfoTarget, Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
     RETRIGGER_MODE_RESET,
 };
@@ -38,18 +46,56 @@ use sound_core::{
 // パッチ（チャンネル + オペレーター4個分のパラメーター一式）
 // ---------------------------------------------------------------------------
 
-/// Pitch/Cutoff FG：バイポーラDepth(中心128)＋TimeEgParams。ym38x6の`BipolarFg`のTimeEg版。
+/// Pitch/Cutoff FG：**バイポーラレベル**のTimeEgParams ＋ 符号を持たない強度Depth。
+///
+/// 変調量は `bipolar_level(EG出力) × depth` で、**符号はEGのレベル波形が持ち、Depthは
+/// 振れ幅の倍率**（0＝変調なし）。レベル生値128が無変調の中心。この役割分担により、
+/// FGの形だけで上下対称のサイクル（三角波・パルス等）を1つのDepthで描ける。
+///
+/// 旧方式（〜2026-08-18）は逆に「レベル＝0〜1の大きさ／Depth＝バイポーラ(中心128)」で、
+/// 符号を1音中不変のDepthだけが持っていたため、谷が必ずベース値へ張り付き片側にしか
+/// 振れなかった。未リリースのため`.op505`にバージョン互換層は設けず、既存バンクは
+/// 変換ツール群で作り直す方針。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Op505BipolarFg {
     pub eg: TimeEgParams,
+    /// 振れ幅の倍率（0〜255）。0＝変調なし。符号は持たない（EGのレベル側が持つ）。
     pub depth: u8,
 }
 
 impl Default for Op505BipolarFg {
-    /// `#[derive(Default)]`だと`depth`が0（バイポーラ中心128からもっとも外れた値）になり、
-    /// 新規パッチのP.DEP±/F.DEP±ノブが最大逆方向で始まってしまうため明示する。
+    /// 無変調の新規パッチ：Depth=0（振れ幅ゼロ）かつEGレベルは中央(128)。
+    /// レベルを`TimeEgParams::default()`の0のままにすると、バイポーラ解釈では
+    /// 「全開マイナス」を意味してしまうため`neutral_bipolar_eg()`を使う。
     fn default() -> Self {
-        Self { eg: TimeEgParams::default(), depth: 128 }
+        Self { eg: neutral_bipolar_eg(), depth: 0 }
+    }
+}
+
+/// バイポーラFG（Pitch/Cutoff）の無変調EG：全段が中央レベル(128)の2段。
+///
+/// 段数2なのは`TimeEgParams::default()`と同じ理由（1段だとリリース区間が空になる）。
+/// 全段が中央なのでキーオンからリリースまで一貫して変調量0になる。
+pub fn neutral_bipolar_eg() -> TimeEgParams {
+    let neutral = TimeStage { time: 0, level: sound_core::BIPOLAR_NEUTRAL_RAW, curve: 0 };
+    TimeEgParams { stages: [neutral; sound_core::MAX_STAGES], ..TimeEgParams::default() }
+}
+
+/// レベルが「0〜255の大きさ」として組まれたEG（振幅系の形・レガシー実機からの変換結果など）を、
+/// バイポーラFGのレベル（中心128）へ`direction`方向で読み替える。
+///
+/// `level → 128 ± level×128/255` の写像で、大きさ0が中央（無変調）・大きさ255が片側の端になる。
+/// `positive=true`なら上げ方向（ピッチ上昇／カットオフを開く）、falseなら下げ方向。
+///
+/// レガシーFM音源の Filter EG や Pitch EG は「深さ＋向き」で表現されているため、
+/// 変換ツールはこの関数で向きをレベル側へ畳み込み、Depthには大きさだけを渡す。
+/// 分解能は片側128段階になる（`(v-128)/128`慣例の帰結、DT1等と同じ）。
+pub fn bipolar_fg_levels_from_magnitude(eg: &mut TimeEgParams, positive: bool) {
+    let sign = if positive { 1.0 } else { -1.0 };
+    for stage in eg.stages.iter_mut() {
+        let centered = sound_core::BIPOLAR_NEUTRAL_RAW as f32
+            + sign * stage.level as f32 * sound_core::BIPOLAR_NEUTRAL_RAW as f32 / 255.0;
+        stage.level = centered.round().clamp(0.0, 255.0) as u8;
     }
 }
 
@@ -188,9 +234,12 @@ impl Channel {
             op.note_on(frequency, velocity);
             op
         });
-        let mut pitch_fg_eg = TimeEg::new();
+        // Pitch/Cutoff FGはレベルをバイポーラ解釈するため、キーオン起点を中央(128)にする
+        // （`TimeEg::new()`の0.0起点だと「全開マイナスからのスイープ」で始まってしまう）。
+        // Gain FGは振幅系なので従来どおり0.0起点。
+        let mut pitch_fg_eg = TimeEg::new_bipolar();
         pitch_fg_eg.note_on();
-        let mut cutoff_fg_eg = TimeEg::new();
+        let mut cutoff_fg_eg = TimeEg::new_bipolar();
         cutoff_fg_eg.note_on();
         let mut gain_fg_eg = TimeEg::new();
         gain_fg_eg.note_on();
@@ -318,10 +367,13 @@ impl Channel {
 
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。
         // CC76由来の速度補正(pitch_fg_rate_scale)とテンポ同期(tempo_speed_scale)を乗算で共存させる。
+        // レベルはバイポーラ（生値128＝無変調の中心）で符号を持ち、Depthは振れ幅の倍率。
+        // これにより1つのDepthのままFGの形だけで上下対称のビブラートが描ける。
         let pitch_fg = self.channel_params.pitch_fg;
         let pitch_fg_speed = self.pitch_fg_rate_scale * tempo_speed_scale(&pitch_fg.eg, tempo_bpm);
         let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
-        let pitch_fg_cents = pitch_fg_out * (pitch_fg.depth as f32 - 128.0) / 128.0 * 1200.0;
+        let pitch_fg_cents =
+            bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0;
         for op in self.operators.iter_mut() {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
         }
@@ -391,7 +443,8 @@ impl Channel {
             (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
         let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
         let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
-        let cutoff = effective_cutoff(modulated_cutoff, cutoff_level, cp.cutoff_fg.depth);
+        let cutoff =
+            effective_cutoff_bipolar_level(modulated_cutoff, cutoff_level, cp.cutoff_fg.depth);
         let cutoff_hz = cutoff_to_hz(cutoff);
         let filtered = self.svf.process(
             dry,

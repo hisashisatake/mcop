@@ -86,6 +86,20 @@ pub(crate) fn axis_floor_db(mapping: EgAmplitudeMapping) -> f32 {
     }
 }
 
+/// キーオン起点および1段ループの跳ね戻し先に使う「無変調」レベル（生値）。
+///
+/// `sound_core::TimeEg`の`neutral_level`と必ず一致させること（`TimeEg::new_bipolar()`は
+/// `BIPOLAR_NEUTRAL_RAW`、`TimeEg::new()`は0）。ずれるとグラフの開始点だけが実際の音と
+/// 食い違い、「一番下から始まっているように見えるのに音は中央から始まる」という形で表面化する。
+pub(crate) fn neutral_start_level(mapping: EgAmplitudeMapping) -> u8 {
+    match mapping {
+        // Pitch FG／Cutoff FG：レベルはバイポーラで、中央128が無変調。
+        EgAmplitudeMapping::RawLinear => sound_core::BIPOLAR_NEUTRAL_RAW,
+        // 振幅系（OP EG／VCA／FILTER）：0が無音＝無変調。
+        EgAmplitudeMapping::DbLinear | EgAmplitudeMapping::AmplitudeLinear => 0,
+    }
+}
+
 /// TL(0〜255)とTimeEgの1段(level)からターゲットdBを求める。`level_contribution_db`は
 /// 「TLからの相対減衰」を返すため、`tl_db`に加算し`floor`（`axis_floor_db`参照）で下限クランプする
 /// （`eg_preview::eg_preview`のTL→SL算出と同じ式。TimeEgは全段が同じ式で求まる——
@@ -169,7 +183,8 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     let loop_active = params.loop_enabled != 0;
     // 1段ループは周回のたびにレベルが不連続に跳ぶ。その跳ね先（段の入口レベル）。
     let single_stage_loop = loop_active && loop_start == release_point;
-    let loop_entry_level = if loop_start == 0 { 0 } else { params.stages[loop_start - 1].level };
+    let loop_entry_level =
+        if loop_start == 0 { neutral_start_level(mapping) } else { params.stages[loop_start - 1].level };
 
     // 保持区間で辿る段indexの列: 0..=release_point（1周目）。ループ有効かつ2周描画モードなら
     // loop_start..=release_pointをもう1周（実機は無限に繰り返すが、プレビューは「ここが繰り返す」と
@@ -199,8 +214,9 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     let right_edge = x0 + width;
     let db_to_y = |db: f32| inner.bottom() - ((db.max(floor) - floor) / -floor) * inner.height();
 
-    // note-onは常にlevel=0.0から始まる（TimeEg::note_on参照）。
-    let start_db = stage_target_db(mapping, floor, tl_db, 0);
+    // note-onの起点はパネル種別で決まる（TimeEg::note_onの`neutral_level`と対応）。
+    // 振幅系は0（無音）、バイポーラのPitch/Cutoff FGは中央128（無変調）。
+    let start_db = stage_target_db(mapping, floor, tl_db, neutral_start_level(mapping));
     let mut points = vec![Pos2::new(x0, db_to_y(start_db))];
     let mut stage_of_point = vec![*held_sequence.first().unwrap_or(&0)];
     let mut x = x0;

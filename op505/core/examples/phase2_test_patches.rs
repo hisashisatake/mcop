@@ -42,9 +42,9 @@ fn transparent_gain_fg() -> TimeEgParams {
      ..Default::default()}
 }
 
-/// バイポーラFGの「無効化」状態（中心128＝変調なし、EGは動いても効果ゼロ）。
+/// バイポーラFGの「無効化」状態（Depth=0＝振れ幅ゼロ、レベルは全段中央128）。
 fn neutral_bipolar_fg() -> Op505BipolarFg {
-    Op505BipolarFg { eg: TimeEgParams::default(), depth: 128 }
+    Op505BipolarFg { eg: op505_core::neutral_bipolar_eg(), depth: 0 }
 }
 
 /// アタック→ディケイ→サステイン(release_pointで静止)→ノートオフでリリースの標準的なオペレーターEG。
@@ -75,21 +75,23 @@ fn pluck_eg(decay_secs: f32) -> TimeEgParams {
      ..Default::default()}
 }
 
-/// Pitch FG用のディレイ付きビブラートEG（stage0=遅延(level=0、CC78の相対補正対象)→
-/// stage1/2をピンポンループ）。CC78テストは「ノートオンからビブラートが始まるまでの時間」
-/// として聴こえるようにするため、`build_patch()`のCC78補正条件（第0段level==0）に
-/// 合わせてstage0をlevel=0の待ち段にしてある。
-/// 段3はノートオフでピッチを中心(level=0＝変調量ゼロ)へ戻すリリース段。
+/// Pitch FG用のディレイ付きビブラートEG（stage0=遅延(level=128＝中央/無変調、CC78の相対補正対象)→
+/// stage1(255=上方向いっぱい)/stage2(0=下方向いっぱい)をピンポンループし、ピッチが上下**両方向**へ
+/// 振れる本来のビブラートを作る）。CC78テストは「ノートオンからビブラートが始まるまでの時間」
+/// として聴こえるようにするため、`build_patch()`のCC78補正条件（第0段level==中央128）に
+/// 合わせてstage0を無変調の待ち段にしてある。
+/// 段3はノートオフでピッチを中心(level=128＝変調量ゼロ)へ戻すリリース段。
 /// 旧定義は`release_start=0`でリリースが段0へ「後退」する形だったが、保持区間とリリース区間を
 /// `release_point`1本で分割する現行モデルでは表現できない（そもそも段が両区間に属する状態は
 /// グラフの二重描画の原因だった）。ノートオフでビブラートを止めて中心へ戻す方が意味も自然。
 fn vibrato_eg(delay_secs: f32, half_period_secs: f32) -> TimeEgParams {
+    const NEUTRAL: u8 = sound_core::BIPOLAR_NEUTRAL_RAW;
     TimeEgParams {
         stages: stages(&[
-            (delay_secs, 0, 0),
+            (delay_secs, NEUTRAL, 0),
             (half_period_secs, 255, 1),
             (half_period_secs, 0, 1),
-            (half_period_secs, 0, 1),
+            (half_period_secs, NEUTRAL, 1),
         ]),
         stage_count: 4,
         loop_enabled: 1,
@@ -129,7 +131,7 @@ fn test_lead() -> Op505Patch {
         filter_resonance: 50,
         filter_type: 0, // LP
         filter_self_oscillation: false,
-        pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 136 }, // 0.15s遅延、~5.5Hz、控えめな深さ
+        pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 16 }, // 0.15s遅延、~5.5Hz、控えめな深さ(片振幅≈75セント)
         cutoff_fg: neutral_bipolar_fg(),
         gain_fg: transparent_gain_fg(),
         texture_lfo: TextureLfo::default(),
@@ -140,8 +142,9 @@ fn test_lead() -> Op505Patch {
 
 /// CC1/76/77/78の効果を誰の耳にも一目瞭然にするための単純な検証専用パッチ。Test Leadは
 /// Algorithm4のFM+フィードバックで音色自体が複雑なため、ピッチの揺れが音色変化に埋もれやすい。
-/// こちらは単一サイン波・フィードバック無し・大きめのPitch FG Depth(220、中心128からの差92/128*1200
-/// ≈862セント≈7.2半音)にして、ビブラートの深さ/速さの変化を最大限聴き取りやすくする。
+/// こちらは単一サイン波・フィードバック無し・大きめのPitch FG Depth(183、片振幅183/255*1200
+/// ≈862セント≈7.2半音、上下で計約14半音のスイング)にして、ビブラートの深さ/速さの変化を
+/// 最大限聴き取りやすくする。
 fn test_vibrato() -> Op505Patch {
     let eg = ad_sustain_release_eg(255, 1.0); // 減衰させずサステインをTLそのままにする(揺れに集中)
     let carrier = Op505OperatorParams {
@@ -174,7 +177,7 @@ fn test_vibrato() -> Op505Patch {
         filter_resonance: 0,
         filter_type: 0,
         filter_self_oscillation: false,
-        pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 220 },
+        pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 183 },
         cutoff_fg: neutral_bipolar_fg(),
         gain_fg: transparent_gain_fg(),
         texture_lfo: TextureLfo::default(),

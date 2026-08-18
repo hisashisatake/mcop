@@ -25,7 +25,7 @@ use op505_core::{
     Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch, Op505PresetEntry,
     Op505PresetFile,
 };
-use sound_core::Vco;
+use sound_core::{TimeEgParams, Vco};
 use ym38x6_core::{gm2_bank0_patch, PresetEntry, PresetFile, Ym38x6Engine, Ym38x6Patch};
 
 /// `.38x6`（`Ym38x6Patch`）をop505の`Op505Patch`へ変換する（旧`op505_core::adapter::convert_patch`の
@@ -64,10 +64,22 @@ fn legacy_convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
     });
 
     let ch = &src.channel;
-    let pitch_fg_eg = convert_fg_eg(&ch.pitch_fg.eg, &mut warnings, "pitch_fg");
-    let cutoff_fg_eg = convert_fg_eg(&ch.cutoff_fg.eg, &mut warnings, "cutoff_fg");
+    let mut pitch_fg_eg = convert_fg_eg(&ch.pitch_fg.eg, &mut warnings, "pitch_fg");
+    let mut cutoff_fg_eg = convert_fg_eg(&ch.cutoff_fg.eg, &mut warnings, "cutoff_fg");
     let mut gain_fg_eg = convert_fg_eg(&ch.gain_fg, &mut warnings, "gain_fg");
     apply_transparent_gain_release(&mut gain_fg_eg, ch.gain_fg.rr, ch.gain_fg.loop_enabled, &mut warnings);
+
+    // ym38x6の`BipolarFg`はop505の旧方式と同じ「レベル＝大きさ(0〜1)・Depth＝バイポーラ(中心128)」
+    // なので、op505の現行方式（レベルがバイポーラ、Depthは符号なし強度）へ符号を移し替える
+    // （変換式は`op505_core::preset`の移行ロジックと同じ）。
+    let convert_bipolar_fg = |eg: &mut TimeEgParams, legacy_depth: u8| -> u8 {
+        let signed = legacy_depth as i32 - 128;
+        let magnitude = signed.unsigned_abs() as f32; // 0〜128
+        op505_core::bipolar_fg_levels_from_magnitude(eg, signed >= 0);
+        (magnitude * 255.0 / 128.0).round().clamp(0.0, 255.0) as u8
+    };
+    let pitch_fg_depth = convert_bipolar_fg(&mut pitch_fg_eg, ch.pitch_fg.depth);
+    let cutoff_fg_depth = convert_bipolar_fg(&mut cutoff_fg_eg, ch.cutoff_fg.depth);
 
     let channel = Op505ChannelParams {
         algorithm: ch.algorithm,
@@ -82,8 +94,8 @@ fn legacy_convert_patch(src: &Ym38x6Patch) -> (Op505Patch, Vec<String>) {
         filter_resonance: ch.filter_resonance,
         filter_type: ch.filter_type,
         filter_self_oscillation: ch.filter_self_oscillation,
-        pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: ch.pitch_fg.depth },
-        cutoff_fg: Op505BipolarFg { eg: cutoff_fg_eg, depth: ch.cutoff_fg.depth },
+        pitch_fg: Op505BipolarFg { eg: pitch_fg_eg, depth: pitch_fg_depth },
+        cutoff_fg: Op505BipolarFg { eg: cutoff_fg_eg, depth: cutoff_fg_depth },
         gain_fg: gain_fg_eg,
         texture_lfo: ch.texture_lfo,
     };

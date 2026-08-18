@@ -69,7 +69,16 @@ pub(crate) struct Op505EgBank {
 impl Default for Op505EgBank {
     fn default() -> Self {
         let eg = instant_sustain_eg();
-        Self { operators: [eg; 4], pitch_fg: eg, cutoff_fg: eg, gain_fg: eg }
+        // Pitch/Cutoff FGはレベルをバイポーラ解釈する（生値128＝無変調の中心）ため、
+        // 振幅系の`instant_sustain_eg()`（段0 level=255）を流用すると「全開プラスへ張り付いた」
+        // 初期状態になってしまう。無変調の中央EGを使う。
+        let neutral_fg = op505_core::neutral_bipolar_eg();
+        Self {
+            operators: [eg; 4],
+            pitch_fg: neutral_fg,
+            cutoff_fg: neutral_fg,
+            gain_fg: eg,
+        }
     }
 }
 
@@ -151,6 +160,8 @@ pub(crate) struct Op505VstParams {
     pub filter_self_oscillation: BoolParam,
 
     // ---- FG Depth（EG本体はOp505EgBank側） ----
+    // 符号を持たない振れ幅の倍率（0＝変調なし）。符号はEGのレベル波形側が持つため
+    // `bipolar_int`は使わない。
     #[id = "pitch_fg_depth"]
     pub pitch_fg_depth: IntParam,
     #[id = "cutoff_fg_depth"]
@@ -218,8 +229,8 @@ impl Default for Op505VstParams {
             resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_type: IntParam::new("Filter Type", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
-            pitch_fg_depth: bipolar_int(IntParam::new("Pitch FG Depth", 128, IntRange::Linear { min: 0, max: 255 })),
-            cutoff_fg_depth: bipolar_int(IntParam::new("Cutoff FG Depth", 128, IntRange::Linear { min: 0, max: 255 })),
+            pitch_fg_depth: IntParam::new("Pitch FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),

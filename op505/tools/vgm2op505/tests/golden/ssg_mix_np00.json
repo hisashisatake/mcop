@@ -276,42 +276,42 @@
           "stages": [
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 54,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             }
           ],
@@ -323,49 +323,49 @@
           "sync_rate": 134,
           "retrigger_mode": 0
         },
-        "depth": 128
+        "depth": 0
       },
       "cutoff_fg": {
         "eg": {
           "stages": [
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 255,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             },
             {
               "time": 0,
-              "level": 0,
+              "level": 128,
               "curve": 0
             }
           ],
@@ -377,7 +377,7 @@
           "sync_rate": 134,
           "retrigger_mode": 0
         },
-        "depth": 128
+        "depth": 0
       },
       "gain_fg": {
         "stages": [

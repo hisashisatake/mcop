@@ -834,11 +834,13 @@ mod tests {
             loop_start: 0,
             release_point: 0,
          ..Default::default()};
+        // レベルはバイポーラ（中心128＝無変調）。段0=255(上方向いっぱい)⇔段1=0(下方向いっぱい)を
+        // ループさせ、ピッチが上下に揺れるビブラートを作る。
         let mut lfo_stages = [TimeStage::default(); MAX_STAGES];
         lfo_stages[0] = TimeStage { time: 40, level: 255, curve: 0 };
         lfo_stages[1] = TimeStage { time: 40, level: 0, curve: 0 };
-        // 段2はリリース用（ピッチを中心＝level 0へ戻す）。ループ区間は0..=1のまま。
-        lfo_stages[2] = TimeStage { time: 40, level: 0, curve: 0 };
+        // 段2はリリース用（ピッチを中心＝level 128（中立）へ戻す）。ループ区間は0..=1のまま。
+        lfo_stages[2] = TimeStage { time: 40, level: sound_core::BIPOLAR_NEUTRAL_RAW, curve: 0 };
         patch.channel.pitch_fg.eg = TimeEgParams {
             stages: lfo_stages,
             stage_count: 3,
@@ -846,7 +848,7 @@ mod tests {
             loop_start: 0,
             release_point: 1,
          ..Default::default()};
-        patch.channel.pitch_fg.depth = 200; // 中立(128)からずらして揺れを出す
+        patch.channel.pitch_fg.depth = 200; // 振れ幅の倍率（符号なし、0〜255）
         PatchBank::from_patches(&[patch]).unwrap()
     }
 
