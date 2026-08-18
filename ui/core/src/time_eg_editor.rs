@@ -30,10 +30,12 @@ const HEADER_HEIGHT: f32 = 20.0;
 /// `HEADER_HEIGHT`と同じ扱い。
 const SPIN_ROW_HEIGHT: f32 = 35.0;
 const GRAPH_PAD: f32 = 6.0;
-/// VALUEモードのTIME欄の幅（px）。生値の入力欄自体は3桁（0〜255）で足りるが、その上に重ねる
-/// 変換後ミリ秒/秒の読み取り専用ラベル（最大"300.0s"程度）の幅に合わせて広めに取ってある
-/// （揃えないと入力欄だけ極端に狭く見える）。見た目は実機確認で微調整する。
-const TIME_MS_SPIN_WIDTH: f32 = 56.0;
+/// VALUEモードのTIME欄の幅（px）。旧値56pxは真下に重ねる変換後ミリ秒/秒の読み取り専用
+/// ラベル（最大"300.0s"程度）の幅に合わせて広めに取っていたが、TIME欄とLV欄の間が不自然に
+/// 離れて見える不具合の真因はこの幅ではなく、`spin_control`呼び出し側の`ui.scope`ラップ漏れ
+/// だった（詳細は`draw_value_mode`内のコメント参照）。それを修正した上でLV欄と同じ
+/// `SPIN_WIDTH_DEFAULT`（32px）まで縮小した。"300.0s"表示でも欠けないことは実機確認済み。
+const TIME_MS_SPIN_WIDTH: f32 = SPIN_WIDTH_DEFAULT;
 
 /// ドラッグでlevelを0へスナップする、グラフ下端からの距離（px）。TL<255時、`DB_FLOOR`付近の
 /// 逆写像が縮退する（複数のlevelがほぼ同じdBに潰れる）ことの吸収策（Step D）。
@@ -583,7 +585,15 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: 
                         // Gridの縦中央寄せがそのまま揃った見た目になる）。
                         ui.label(egui::RichText::new("TIME").size(8.0));
                         let time_field = TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i), profile);
-                        spin_control(ui, &time_field, egui::TextStyle::Small, TIME_MS_SPIN_WIDTH);
+                        // `spin_control`は内部で`allocate_exact_size`の直後に`ui.scope_builder`を
+                        // 呼ぶため、外側がGridの場合カーソルが2回進み列を2列分消費してしまう
+                        // （knob.rsの`spin_control`実装コメント参照）。LV欄側は`ui.add_enabled_ui`
+                        // （内部で`ui.scope`）に包まれているため偶然1列分に吸収されて正しく見えていた。
+                        // TIME欄も同じ`ui.scope`で包み、Grid列を確実に1列分だけ消費させる
+                        // （TIME欄とLV欄の間が異常に離れて見える不具合の実機確認済みの対策）。
+                        ui.scope(|ui| {
+                            spin_control(ui, &time_field, egui::TextStyle::Small, TIME_MS_SPIN_WIDTH);
+                        });
                         ui.label(egui::RichText::new("LV").size(8.0));
                         // 最終段のlevelは0固定のEG（OP EG/Pitch FG/Cutoff FG）がある。
                         // 動かせないことが分かるようグレーアウトする（`TimeEgProfile`参照）。
@@ -596,7 +606,7 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: 
                                 SPIN_WIDTH_DEFAULT,
                             );
                         });
-                        bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CV");
+                        bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CURVE");
                         ui.end_row();
 
                         // 2行目: TIME欄の変換後ミリ秒/秒だけを読み取り専用（中央寄せ）で表示する。

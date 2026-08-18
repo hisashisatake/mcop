@@ -350,6 +350,16 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
     // 切り出されるため、周囲のレイアウトが何であっても安定する）。
     // 「−」「+」ボタンの矩形は**同じ`center_y`**から計算して`ui.put`で直接配置する。
     // 2つのボタンが同じ入力から同じ計算で中心を求めるため、ピクセル単位で揃う。
+    //
+    // 注記: `allocate_exact_size`の直後に`ui.scope_builder`へ渡すと、`scope_builder`
+    // （内部の`scope_dyn`）が終了時に`advance_cursor_after_rect`でカーソルをもう一度
+    // 進めるため、外側が`Grid`だと1回のspin_control呼び出しで列を2列分消費しているように
+    // 見える（TimeEgエディタVALUEタブでTIME欄とLV欄の間が離れて見える一因）。ただし
+    // `allocate_exact_size`を`next_widget_position()`ベースの手組みに置き換えて二重前進を
+    // 除去する対策は、STAGES/LOOP/L.START/REL行とVALUEタブのLV欄自体の表示を破壊することを
+    // 実機確認済み（他の呼び出し側がこの二重前進の間隔に依存しているらしい）。安全な対策が
+    // 見つかるまでは`allocate_exact_size`のままにしてある。TIME欄とLV欄の間隔調整は
+    // `time_eg_editor.rs`側の局所的な補正で行うこと。
     let (row_rect, _row_response) = ui.allocate_exact_size(row_size, egui::Sense::hover());
     ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         let center_y = row_rect.center().y;
