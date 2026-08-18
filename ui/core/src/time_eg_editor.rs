@@ -17,7 +17,7 @@ use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
 use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
-use crate::knob::{bool_checkbox, spin_control, SPIN_WIDTH_DEFAULT};
+use crate::knob::{bool_checkbox, spin_control, spin_control_width, SPIN_WIDTH_DEFAULT};
 use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
@@ -30,8 +30,9 @@ const HEADER_HEIGHT: f32 = 20.0;
 /// `HEADER_HEIGHT`と同じ扱い。
 const SPIN_ROW_HEIGHT: f32 = 35.0;
 const GRAPH_PAD: f32 = 6.0;
-/// VALUEモードのTIME欄の数値欄幅（px）。ミリ秒表示は最大`300000`(6桁)になるため、
-/// 他の数値欄(`SPIN_WIDTH_DEFAULT`=4文字ぶん)より広く取る。見た目は実機確認で微調整する。
+/// VALUEモードのTIME欄の幅（px）。生値の入力欄自体は3桁（0〜255）で足りるが、その上に重ねる
+/// 変換後ミリ秒/秒の読み取り専用ラベル（最大"300.0s"程度）の幅に合わせて広めに取ってある
+/// （揃えないと入力欄だけ極端に狭く見える）。見た目は実機確認で微調整する。
 const TIME_MS_SPIN_WIDTH: f32 = 56.0;
 
 /// ドラッグでlevelを0へスナップする、グラフ下端からの距離（px）。TL<255時、`DB_FLOOR`付近の
@@ -197,7 +198,7 @@ enum TimeEgField {
     /// **UIでは1始まりのクリック点番号として表示する**（グラフ上でユーザーが数える点の番号と
     /// 一致させるため。`stage{i+1}`表示と同じ既存慣習）。
     ReleasePoint,
-    /// 段i(0-indexed)のtime。`display()`を秒数表示へオーバーライドする。
+    /// 段i(0-indexed)のtime。生値(0〜255)。変換後ミリ秒は`draw_value_mode`が別ラベルで表示する。
     StageTime(usize),
     /// 段i(0-indexed)のlevel。
     StageLevel(usize),
@@ -288,15 +289,10 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         }
     }
 
-    fn display(&self) -> String {
-        match self.field {
-            // 生値(0〜255)ではなく実ミリ秒を表示する（スピン欄の直接入力は生値のみ受け付ける、
-            // param_handle.rsのTimeEgHandle docコメント参照）。単位記号は付けない
-            // （VALUEモードの列見出し「TIME(m)」側でまとめて示す、`format_time_ms_plain`参照）。
-            TimeEgField::StageTime(_) => format_time_ms_plain(self.value().clamp(0, 255) as u8),
-            _ => self.value().to_string(),
-        }
-    }
+    // `display()`は既定実装（生値そのまま）を使う。TIME欄の変換後ミリ秒は
+    // `draw_value_mode`が別ラベルとして上に表示する（入力欄は生値に統一し、
+    // 表示と入力が別の数字になる非対称を解消するため。詳細はmemory
+    // `project_knob_display_vs_raw_input.md`参照）。
 
     fn begin_edit(&self) {
         self.handle.begin_edit();
@@ -379,8 +375,10 @@ impl BoolParamHandle for TimeEgBoolFieldHandle<'_> {
     }
 }
 
-/// time値(0〜255)を人が読める秒数表示へ変換する（"0ms"/"1.8ms"/"412ms"/"2.41s"）。
-/// `time=0`は瞬時を表す特殊値なので秒数計算を経由せず"0ms"を返す。
+/// time値(0〜255)を人が読める秒数表示へ変換する（"0m"/"58m"/"412m"/"2.4s"）。
+/// `time=0`は瞬時を表す特殊値なので秒数計算を経由せず"0m"を返す。GRAPHモードのドラッグ中
+/// フローティング表示と、VALUEモードのTIME欄上部の読み取り専用ラベル（生値入力欄とは別、
+/// `draw_value_mode`参照）の両方が使う。
 fn format_time_seconds(time: u8) -> String {
     // 単位は1文字("m"=ミリ秒/"s"=秒)に短縮する。VALUEモードのspin_control欄が24px幅しかなく
     // "56ms"のような2文字単位だと末尾が切れて読めなくなるため（実機確認で発覚）。
@@ -393,16 +391,6 @@ fn format_time_seconds(time: u8) -> String {
     } else {
         format!("{seconds:.1}s")
     }
-}
-
-/// time値(0〜255)をミリ秒の素の数値（単位記号なし）へ変換する。VALUEモードのspin_control専用
-/// （列見出し「TIME(m)」で単位をまとめて示すため、値欄ごとに"m"/"s"を付けない。GRAPHモードの
-/// ドラッグ中フローティング表示は`format_time_seconds`のまま——見出しが無い文脈では単位が要る）。
-fn format_time_ms_plain(time: u8) -> String {
-    if time == 0 {
-        return "0".to_string();
-    }
-    format!("{:.0}", time_to_seconds(time) * 1000.0)
 }
 
 /// GRAPHモードのY座標(px)をlevel(0〜255)へ逆写像する（Step Dのドラッグ編集が使う）。
@@ -562,7 +550,13 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
 /// ダイヤルは場所を取りすぎてSTAGES=8だと並びきらずスクロール必須になっていたため、
 /// 数値欄だけに絞って1段あたりの専有面積を削る（実機確認で「数値欄のみでいい」と判明）。
 /// 段番号("S1"等)は付けない（縦に並ぶ行の並び順が段番号を兼ねる——実機確認で「要らない」と判明）。
-/// 1段は1行構成: TIME(m)+LV+CVチェックを横一列に並べる（実機確認でこの割り付けを指定）。
+/// 1段は`egui::Grid`の2行構成: 1行目にTIME+LV+CVチェックを横一列に並べ（実機確認でこの
+/// 割り付けを指定）、2行目にTIME欄の変換後ms/s読み取り専用ラベル（中央寄せ）だけを積む。
+/// 各セルは単一行のみなので`egui::Grid`の縦中央寄せ（`egui`本体の`grid.rs`で
+/// Align2::LEFT_CENTERがハードコードされておりカスタマイズ不可）がそのまま「揃っている」
+/// 見た目になり、セルの高さを人為的に合わせる必要がない（当初はTIMEセルだけ縦に2段
+/// 積んで同じ効果を不可視プレースホルダで再現しようとしたが、行そのものを分けた方が
+/// 単純で崩れにくいと判断した）。
 /// 行ごとに独立した`ui.horizontal`だと、TIME欄の桁数（"0"〜"300000"）で実際の描画幅が
 /// 行ごとに微妙に変わり、LV欄以降の開始位置が段によってずれて見えた（実機確認で発覚）ため、
 /// `egui::Grid`で列位置を強制的に揃える。
@@ -585,13 +579,11 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: 
                 .min_col_width(0.0)
                 .show(ui, |ui| {
                     for i in 0..n {
-                        ui.label(egui::RichText::new("TIME(m)").size(8.0));
-                        spin_control(
-                            ui,
-                            &TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i), profile),
-                            egui::TextStyle::Small,
-                            TIME_MS_SPIN_WIDTH,
-                        );
+                        // 1行目: TIME/LV/CVの操作系だけを並べる（単一行のセルのみなので
+                        // Gridの縦中央寄せがそのまま揃った見た目になる）。
+                        ui.label(egui::RichText::new("TIME").size(8.0));
+                        let time_field = TimeEgFieldHandle::new(handle, TimeEgField::StageTime(i), profile);
+                        spin_control(ui, &time_field, egui::TextStyle::Small, TIME_MS_SPIN_WIDTH);
                         ui.label(egui::RichText::new("LV").size(8.0));
                         // 最終段のlevelは0固定のEG（OP EG/Pitch FG/Cutoff FG）がある。
                         // 動かせないことが分かるようグレーアウトする（`TimeEgProfile`参照）。
@@ -605,6 +597,28 @@ fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: 
                             );
                         });
                         bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(i)), "CV");
+                        ui.end_row();
+
+                        // 2行目: TIME欄の変換後ミリ秒/秒だけを読み取り専用（中央寄せ）で表示する。
+                        // 生値入力欄とは別の数字になる（表示と入力を同じ数字に揃えようとすると
+                        // 非線形変換の丸め・往復不一致が避けられないため、「打つ数字」と「読む数字」を
+                        // あえて別ウィジェットに分けた設計。memory `project_knob_display_vs_raw_input.md`参照）。
+                        ui.label("");
+                        let raw = time_field.value().clamp(0, 255) as u8;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(spin_control_width(TIME_MS_SPIN_WIDTH), 12.0),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format_time_seconds(raw))
+                                        .size(8.0)
+                                        .color(ui.visuals().weak_text_color()),
+                                );
+                            },
+                        );
+                        ui.label("");
+                        ui.label("");
+                        ui.label("");
                         ui.end_row();
                     }
                 });

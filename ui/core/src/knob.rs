@@ -200,25 +200,77 @@ pub fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &st
     }
 }
 
+/// スピンボタンに描く記号。フォントのグリフには頼らず`Painter`で直接線を引く
+/// （「−」ボタンだけASCII "+"と縦位置がズレて見える不具合が、ASCIIハイフンへ替えても
+/// 解消しなかったため——同じフォントの異なるグリフでも、字形自体の見た目の重心が
+/// 左右で揃うとは限らない。フォントに一切依存させないのが根本対策。実機確認で確定）。
+#[derive(Clone, Copy, PartialEq, Hash)]
+pub(crate) enum SpinGlyph {
+    Minus,
+    Plus,
+}
+
 /// 押下開始で1回、その後は初期遅延を挟んで一定間隔で繰り返し`true`を返すボタン（長押しリピート）。
 /// 一度ボタン上で押し始めたら、マウスがボタン矩形から外れてもマウスボタンを離すまでリピートを継続する。
-pub(crate) fn repeat_button(ui: &mut egui::Ui, label: &str) -> bool {
+/// `rect`は呼び出し側が明示する（`ui.add_sized`等の自動配置に頼らない理由は`spin_control`のコメント参照）。
+pub(crate) fn repeat_button(ui: &mut egui::Ui, rect: egui::Rect, glyph: SpinGlyph) -> bool {
     const INITIAL_DELAY: f64 = 0.4;
     const REPEAT_INTERVAL: f64 = 0.05;
 
     // ホバー/フォーカス時にボタンが膨張して縦幅が変わらないようにする（レイアウトのちらつき防止）
-    ui.spacing_mut().button_padding = egui::vec2(1.0, 0.0);
     {
         let widgets = &mut ui.style_mut().visuals.widgets;
         widgets.inactive.expansion = 0.0;
         widgets.hovered.expansion = 0.0;
         widgets.active.expansion = 0.0;
     }
-    // 固定サイズで確保し、状態によらず同じ縦幅にする
-    let response = ui.add_sized(
-        [12.0, 12.0],
-        egui::Button::new(egui::RichText::new(label).size(9.0)),
+    // `egui::Button`は使わず、クリック判定と背景の枠を自前で描く。`egui::Button`（`.small()`付き
+    // でも）は内部の`ButtonStyle`由来のパディング/最小サイズ強制により`rect`ちょうどのサイズに
+    // ならず、`ui.put`で強制フィットさせたつもりでも実際の背景は`rect`より縦長になっていた
+    // （glyphの中心は`rect`基準のため、結果として縦方向だけ上寄りに見えた。実機確認で発覚）。
+    // `rect`を直接使って自前描画すれば、背景とglyphが必ず同じ中心を共有する。
+    // idは`ui.next_auto_id()`ではなく`rect`位置から作る。`spin_control`が内部で使う
+    // `allocate_ui_with_layout`（`scope_dyn`経由）は「子uiに入る前後でauto_id_saltを
+    // 1回しか進めない」実装（egui本体の意図的なHACK）のため、STAGES/L.START/RELのように
+    // 同じ形の`spin_control`が兄弟として複数回呼ばれる行では、各呼び出し内のボタンの
+    // auto_idが呼び出しをまたいで衝突し、ボタン同士が同じidを取り合って表示が壊れていた
+    // （実機確認で発覚: LOOP/RELの±ボタンが三角形に潰れたような表示になった）。
+    // ボタンは同じ`rect`には絶対ならないため、位置をそのままsaltに使えば衝突しない。
+    let id = ui.id().with(("spin_repeat_button", glyph, rect.center().x.to_bits(), rect.center().y.to_bits()));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+    let color = visuals.fg_stroke.color;
+    // `response.rect`ではなく引数の`rect`から中心を出す（両者はほぼ同じ値になるはずだが、
+    // 「−」「+」の2呼び出しが完全に同じ入力から同じ計算で中心を求めることを保証するため、
+    // 呼び出し側が計算した値をそのまま使う）。
+    // ボタンの画面上の位置（中心座標の小数部分）に関わらず同じ見た目になるよう、中心座標を
+    // 物理ピクセル格子へスナップしてから使う（`pixels_per_point`を掛けて丸めてから戻す）。
+    // 矩形の上下端を個別にスナップする方式は誤りだった: 中心の小数部分によって上端・下端が
+    // 別々の方向へ丸められ、結果の太さが位置ごとに1px変わってしまっていた（実機確認・
+    // ユーザーの複数ボタン比較で発覚）。ピクセル格子は平行移動不変なので、中心さえ格子に
+    // 揃えれば、そこから固定オフセットで組み立てた矩形は常に同じ形になる。
+    let ppp = ui.ctx().pixels_per_point();
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let center = egui::pos2(snap(rect.center().x), snap(rect.center().y));
+    const HALF_LEN: f32 = 3.0;
+    // `line_segment`（ストローク描画）は水平線と垂直線でアンチエイリアシングの掛かり方が揃わず、
+    // 「+」の縦棒だけ細く/薄く見える不揃いな見た目になっていた（実機確認で発覚）。
+    // 塗りつぶし矩形なら水平・垂直どちらも同じ太さで確実に揃うため、線ではなく矩形で描く。
+    // 太さも物理ピクセルの整数倍へ丸め、縁が滲まないようにする。
+    let bar_thickness = ((1.6 * ppp).round().max(1.0)) / ppp;
+    ui.painter().rect_filled(
+        egui::Rect::from_center_size(center, egui::vec2(HALF_LEN * 2.0, bar_thickness)),
+        0.0,
+        color,
     );
+    if glyph == SpinGlyph::Plus {
+        ui.painter().rect_filled(
+            egui::Rect::from_center_size(center, egui::vec2(bar_thickness, HALF_LEN * 2.0)),
+            0.0,
+            color,
+        );
+    }
     let active_id = response.id.with("spin_active");
     let next_id = response.id.with("spin_next");
 
@@ -280,17 +332,53 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
     let step_up = || (handle.value() + 1).clamp(min, max);
     let step_down = || (handle.value() - 1).clamp(min, max);
 
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    let text_edit_height = ui.text_style_height(&text_style) + 4.0; // TextEdit既定margin(top+bottom)込み
+    let row_height = text_edit_height.max(SPIN_BUTTON_SIZE);
+    let row_size = egui::vec2(spin_control_width(desired_width), row_height);
+
+    // `ui.horizontal`（`Layout::left_to_right(Align::Center)`）に任せると、非wrap時のcursorは
+    // 「置いた順にcross軸(Y)が育つ」実装（`egui`本体`layout.rs`の`advance_after_rects`）のため、
+    // 一番背の高いTextEditより先に置く「−」ボタンと、後に置く「＋」ボタンとで中央寄せの基準が
+    // 微妙にズレ、実機で1〜2px程度の縦位置の食い違いとして見えてしまっていた（ユーザーが
+    // 赤い補助線付きの画像で指摘、フォント/グリフの問題ではなくボタン矩形そのもののズレと判明）。
+    // 対策として、行全体の矩形を`allocate_exact_size`で一度だけ確保し、その厳密な矩形を
+    // そのまま子uiの`max_rect`として使う（`allocate_ui_with_layout`は内部で新しい
+    // `Layout`を子uiに渡すため、STAGES/LOOP/L.START/RELのように`ui.vertical`や
+    // `ui.add_enabled_ui`で何重にも包まれた文脈だと、子uiの`max_rect`が意図した`row_size`
+    // より広く／不定になり、「+」ボタンだけ極端に横長になる不具合が実機確認で発覚した。
+    // `allocate_exact_size`が返す矩形は`align_size_within_rect`で必ず指定サイズちょうどに
+    // 切り出されるため、周囲のレイアウトが何であっても安定する）。
+    // 「−」「+」ボタンの矩形は**同じ`center_y`**から計算して`ui.put`で直接配置する。
+    // 2つのボタンが同じ入力から同じ計算で中心を求めるため、ピクセル単位で揃う。
+    let (row_rect, _row_response) = ui.allocate_exact_size(row_size, egui::Sense::hover());
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+        let center_y = row_rect.center().y;
+        let minus_rect = egui::Rect::from_center_size(
+            egui::pos2(row_rect.left() + SPIN_BUTTON_SIZE / 2.0, center_y),
+            egui::vec2(SPIN_BUTTON_SIZE, SPIN_BUTTON_SIZE),
+        );
+        let plus_rect = egui::Rect::from_center_size(
+            egui::pos2(row_rect.right() - SPIN_BUTTON_SIZE / 2.0, center_y),
+            egui::vec2(SPIN_BUTTON_SIZE, SPIN_BUTTON_SIZE),
+        );
+        let text_rect = egui::Rect::from_min_max(
+            egui::pos2(minus_rect.right() + SPIN_ITEM_SPACING, row_rect.top()),
+            egui::pos2(plus_rect.left() - SPIN_ITEM_SPACING, row_rect.bottom()),
+        );
 
         // ---- − ボタン（左・長押しリピート） ----
-        if repeat_button(ui, "\u{2212}") {
+        if repeat_button(ui, minus_rect, SpinGlyph::Minus) {
             set(step_down());
         }
 
         // ---- 数値入力欄 ----
-        let id = ui.next_auto_id();
-        ui.skip_ahead_auto_ids(1);
+        // `ui.next_auto_id()`ではなく`handle.name()`からidを作る。`allocate_ui_with_layout`
+        // （`scope_dyn`経由）は子uiへ入る前後でauto_id_saltを1回しか進めない実装のため、
+        // 兄弟の`spin_control`呼び出し（STAGES/L.START/RELなど同じ行に並ぶもの）で
+        // auto_idが衝突していた（`repeat_button`と同じ原因、実機確認で発覚）。
+        // `IntParamHandle::name()`はハンドルごとに一意な文字列（"...STAGES"等）を返す設計
+        // なので、これをsaltにすれば衝突しない。
+        let id = ui.id().with((handle.name(), "spin_text_edit"));
         let buffer_id = id.with("buf");
         let has_focus = ui.memory(|m| m.has_focus(id));
         let mut text = if has_focus {
@@ -299,10 +387,10 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
         } else {
             handle.display()
         };
-        let response = ui.add(
+        let response = ui.put(
+            text_rect,
             egui::TextEdit::singleline(&mut text)
                 .id(id)
-                .desired_width(desired_width)
                 .font(text_style)
                 .horizontal_align(egui::Align::Center),
         );
@@ -327,7 +415,7 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
         }
 
         // ---- ＋ボタン（右・長押しリピート） ----
-        if repeat_button(ui, "+") {
+        if repeat_button(ui, plus_rect, SpinGlyph::Plus) {
             set(step_up());
         }
     });
