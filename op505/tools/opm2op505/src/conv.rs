@@ -7,7 +7,7 @@
 //! opz2op505/psr2op505と異なりis_carrier/carrier_sustainは扱わない。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::eg_convert::convert_eg_shape;
+use op505_core::eg_convert::{apply_chip_lfo_am_to_eg, convert_eg_shape};
 use op505_core::{chip_lfo_pitch_to_pitch_fg, Op505ChannelParams, Op505Patch, Op505PresetEntry};
 use sound_core::TimeEgParams;
 
@@ -75,14 +75,39 @@ pub fn voice_to_op505_patch(
     // 詳細はop505-core::chip_lfo_pitch_to_pitch_fg参照。
     let pitch_fg = chip_lfo_pitch_to_pitch_fg(ch.pms, ch.chip_lfo_pmd, ch.chip_lfo_freq, 0);
     let pitch_migrated = ch.pms > 0 && ch.chip_lfo_pmd > 0;
+
+    // CHIP LFOのAM変調経路(ams/chip_lfo_amd)はオペレーターEGへ畳み込む（CHIP LFO退役の第二段階）。
+    // 詳細はopz2op505::conv::voice_to_op505_patchのコメント参照（同じロジックを踏襲）。
+    // OPMにはLD(delay)レジスタがないためdelay=0固定。
+    let am_depth_active = ch.ams > 0 && ch.chip_lfo_amd > 0;
+    let mut am_migrated_all = false;
+    if am_depth_active {
+        let mut any_enabled = false;
+        let mut all_migrated = true;
+        for op in non_eg.iter_mut() {
+            if !op.am_enable {
+                continue;
+            }
+            any_enabled = true;
+            match apply_chip_lfo_am_to_eg(&op.eg, ch.ams, ch.chip_lfo_amd, ch.chip_lfo_freq, 0, op.eg_shift) {
+                Some(new_eg) => {
+                    op.eg = new_eg;
+                    op.am_enable = false;
+                }
+                None => all_migrated = false,
+            }
+        }
+        am_migrated_all = any_enabled && all_migrated;
+    }
+
     let channel = Op505ChannelParams {
         algorithm: ch.algorithm,
         feedback: ch.feedback,
         chip_lfo_freq: ch.chip_lfo_freq,
         chip_lfo_pmd: if pitch_migrated { 0 } else { ch.chip_lfo_pmd },
-        chip_lfo_amd: ch.chip_lfo_amd,
+        chip_lfo_amd: if am_migrated_all { 0 } else { ch.chip_lfo_amd },
         pms: if pitch_migrated { 0 } else { ch.pms },
-        ams: ch.ams,
+        ams: if am_migrated_all { 0 } else { ch.ams },
         pitch_fg,
         ..Op505ChannelParams::default()
     };
@@ -163,6 +188,44 @@ mod tests {
         assert_eq!(patch.channel.pitch_fg, default_channel.pitch_fg);
         assert_eq!(patch.channel.cutoff_fg, default_channel.cutoff_fg);
         assert_eq!(patch.channel.gain_fg, default_channel.gain_fg);
+    }
+
+    #[test]
+    fn voice_to_op505_patch_migrates_am_when_sustain_is_audible() {
+        // d2r=0（D1Lで張り付く、サステイン可聴）+ 全OP ams_en=trueなら、AM経路は
+        // 全オペレーターのEGへ畳み込まれ、チャンネル共通のams/chip_lfo_amdも0にクリアされる。
+        let mut voice = make_voice(7, [31, 31, 31, 31]);
+        voice.ams = 3;
+        voice.amd = 99;
+        for op in [&mut voice.m1, &mut voice.c1, &mut voice.m2, &mut voice.c2] {
+            op.d2r = 0;
+            op.d1l = 12;
+            op.ams_en = true;
+        }
+        let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
+
+        for op in patch.operators.iter() {
+            assert!(!op.am_enable, "AM畳み込み成功後はam_enableをfalseへ落とすはず");
+            assert_eq!(op.eg.loop_enabled, 1, "畳み込み後のEGはAMループを持つはず");
+        }
+        assert_eq!(patch.channel.ams, 0, "全OP畳み込み成功時はチャンネルamsも0クリア");
+        assert_eq!(patch.channel.chip_lfo_amd, 0, "全OP畳み込み成功時はチャンネルchip_lfo_amdも0クリア");
+    }
+
+    #[test]
+    fn voice_to_op505_patch_keeps_chip_lfo_am_when_migration_not_applicable() {
+        // d2r>0（通常4段、サステインは0に固定される特殊ケース）は畳み込み対象外。
+        let mut voice = make_voice(7, [31, 31, 31, 31]);
+        voice.ams = 3;
+        voice.amd = 99;
+        for op in [&mut voice.m1, &mut voice.c1, &mut voice.m2, &mut voice.c2] {
+            op.ams_en = true;
+        }
+        let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
+
+        assert!(patch.operators.iter().all(|op| op.am_enable), "畳み込み不可なのでam_enableは維持されるはず");
+        assert!(patch.channel.ams > 0, "畳み込み不可なのでチャンネルamsはCHIP LFO用に維持されるはず");
+        assert!(patch.channel.chip_lfo_amd > 0, "畳み込み不可なのでチャンネルchip_lfo_amdは維持されるはず");
     }
 
     #[test]

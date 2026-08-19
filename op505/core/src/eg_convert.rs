@@ -14,6 +14,8 @@
 // ---------------------------------------------------------------------------
 
 use sound_core::{seconds_to_time, EgParams, TimeEgParams, TimeStage, MAX_STAGES};
+use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz};
+use sound_fm::mapping::eg_shift_to_db_range;
 
 fn seconds_for_ar(rate: u8) -> Option<f32> {
     if rate == 0 {
@@ -205,6 +207,76 @@ pub fn apply_transparent_gain_release(
     }
 }
 
+/// CHIP LFOのAM(振幅変調)経路を1オペレーターのEGへ畳み込む
+/// （CHIP LFO退役の第二段階、memory `project_chip_lfo_retirement_investigation.md`参照）。
+///
+/// `env_amp`(dB領域のEG)と`amp_factor`(線形領域のchip AM乗算)が`operator.rs`で完全に独立した
+/// 乗算項である以上、AMをEGそのものへ畳み込む選択は「dBレンジへの変換」という近似を伴う
+/// （振幅リニアの三角波はdBレンジでは直線にならない）。実データ走査でAM可聴パッチのAM深さは
+/// 中央値0.27・7割が1段近似の誤差0.3dB未満に収まると確認済み。
+///
+/// 対象は「保持区間(`0..=release_point`)がループしておらず(`loop_enabled==0`)、かつ保持区間の
+/// 終端レベルが0でない」EGのみ。実データ走査でAM可聴パッチのオペレーターEGはこの条件を
+/// 全て満たすか、終端レベル0（無音まで減衰しきる）のいずれかで、後者にAMをかけても
+/// 聴こえないため素直にNoneを返す（ループ中のEGT系EGも同様、二重ループは表現できないため対象外）。
+/// 呼び出し側はNoneのとき、そのオペレーターの`am_enable`をtrueのまま維持しCHIP LFO側のAMを使う。
+///
+/// 段構成：保持区間終端(`release_point`)の後に「平坦待機(半周期+delay) → 下降(1/4周期) →
+/// 上昇(1/4周期)」の3段を追加しループさせる（`loop_start=release_point+1`,
+/// `release_point'=release_point+3`）。CHIP LFOのAMは`clamp(1-triangle*D, 0, 1)`で上側が
+/// 常にクランプされるため、実波形は「半周期平坦、半周期で谷へ往復」というこの3段と一致する。
+/// 谷レベルは`ΔL = |20·log10(1-D)| / db_range × 255`をサステインレベルから引いた値
+/// （0未満はクランプ、`amp_factor`のclampと同じ挙動）。
+pub fn apply_chip_lfo_am_to_eg(
+    eg: &TimeEgParams,
+    ams: u8,
+    chip_lfo_amd: u8,
+    chip_lfo_freq: u8,
+    chip_lfo_delay: u8,
+    eg_shift: u8,
+) -> Option<TimeEgParams> {
+    let depth = ams_to_depth(ams) * (chip_lfo_amd as f32 / 255.0);
+    if depth <= 0.0 || eg.loop_enabled != 0 {
+        return None;
+    }
+    let stage_count = eg.stage_count as usize;
+    if stage_count + 3 > MAX_STAGES {
+        return None;
+    }
+    let r = eg.release_point as usize;
+    let sustain_level = eg.stages[r].level;
+    if sustain_level == 0 {
+        return None;
+    }
+
+    let db_range = eg_shift_to_db_range(eg_shift);
+    let delta_db = -20.0 * (1.0 - depth).max(1e-6).log10();
+    let delta_level = (delta_db / db_range * 255.0).round();
+    let floor_level = (sustain_level as f32 - delta_level).max(0.0) as u8;
+
+    let half_period_seconds = 0.5 / chip_lfo_freq_to_hz(chip_lfo_freq);
+    let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
+    let flat_time = seconds_to_time(half_period_seconds + delay_seconds);
+    let ramp_time = seconds_to_time(half_period_seconds / 2.0);
+
+    let mut stages = eg.stages;
+    for i in (r + 1..stage_count).rev() {
+        stages[i + 3] = stages[i];
+    }
+    stages[r + 1] = TimeStage { time: flat_time, level: sustain_level, curve: 0 };
+    stages[r + 2] = TimeStage { time: ramp_time, level: floor_level, curve: 0 };
+    stages[r + 3] = TimeStage { time: ramp_time, level: sustain_level, curve: 0 };
+
+    Some(TimeEgParams {
+        stages,
+        stage_count: (stage_count + 3) as u8,
+        loop_enabled: 1,
+        loop_start: (r + 1) as u8,
+        release_point: (r + 3) as u8,
+        ..*eg
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -346,5 +418,102 @@ mod tests {
             (before - after).abs() < 1e-6,
             "gain_fg rr=0 should stay transparent (not close the gate) after note_off: before={before} after={after}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_chip_lfo_am_to_eg（CHIP LFO AM経路→オペレーターEG畳み込み）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_chip_lfo_am_to_eg_none_when_depth_zero() {
+        let eg = convert_eg_shape(200, 0, 200, 0, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert!(apply_chip_lfo_am_to_eg(&eg, 0, 200, 128, 0, 0).is_none());
+        assert!(apply_chip_lfo_am_to_eg(&eg, 200, 0, 128, 0, 0).is_none());
+    }
+
+    #[test]
+    fn apply_chip_lfo_am_to_eg_none_when_sustain_is_silent() {
+        // d1r=0=0でなくとも通常4段でstages[release_point].level==0（D2Rが0まで減衰しきる形）はNone。
+        let eg = convert_eg_shape(200, 150, 180, 100, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(eg.stages[eg.release_point as usize].level, 0);
+        assert!(apply_chip_lfo_am_to_eg(&eg, 200, 200, 128, 0, 0).is_none());
+    }
+
+    #[test]
+    fn apply_chip_lfo_am_to_eg_none_when_already_looping() {
+        // loop_enabled!=0（EGT系）で変換されたEGは対象外。
+        let eg = convert_eg_shape(200, 200, 0, 0, 200, 64, 1, 0, &mut Vec::new(), "test");
+        assert_eq!(eg.loop_enabled, 1);
+        assert!(apply_chip_lfo_am_to_eg(&eg, 200, 200, 128, 0, 0).is_none());
+    }
+
+    #[test]
+    fn apply_chip_lfo_am_to_eg_builds_loop_around_sustain() {
+        // d1r=0（255で張り付く）: stage_count=2, release_point=0, sustain=255。
+        let eg = convert_eg_shape(200, 0, 255, 0, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(eg.release_point, 0);
+        assert_eq!(eg.stages[0].level, 255);
+
+        let result = apply_chip_lfo_am_to_eg(&eg, 255, 255, 128, 0, 0).expect("should migrate");
+        assert_eq!(result.stage_count, 5); // 元2段 + AM3段
+        assert_eq!(result.loop_enabled, 1);
+        assert_eq!(result.loop_start, 1);
+        assert_eq!(result.release_point, 3);
+        assert_eq!(result.stages[1].level, 255, "平坦段はサステインレベルのまま");
+        assert!(result.stages[2].level < 255, "下降段は谷へ向かう");
+        assert_eq!(result.stages[3].level, 255, "上昇段はサステインレベルへ戻る");
+        assert_eq!(result.stages[2].time, result.stages[3].time, "下降/上昇は対称");
+        // 元のリリース段(index1)はindex4へシフトしている。
+        assert_eq!(result.stages[4], eg.stages[1]);
+    }
+
+    #[test]
+    fn apply_chip_lfo_am_to_eg_floor_never_goes_negative() {
+        // 深いAM(ほぼ100%)でも谷は0未満にならない。d2r=0（d1rでd1lへ降りて張り付く）で
+        // sustain=d1l=40の低いサステインを使う（d1r=0だとd1lが無視されsustain=255になるため）。
+        let eg = convert_eg_shape(200, 100, 40, 0, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(eg.stages[eg.release_point as usize].level, 40);
+        let result = apply_chip_lfo_am_to_eg(&eg, 255, 255, 128, 0, 0).expect("should migrate");
+        assert_eq!(result.stages[result.loop_start as usize + 1].level, 0);
+    }
+
+    /// 畳み込み後のEGを実際にTimeEgで鳴らし、山谷がsustain/floorへ正しく到達し
+    /// ボイス解放（idle化）も従来どおり機能することを確認する統合テスト。
+    #[test]
+    fn apply_chip_lfo_am_to_eg_oscillates_and_still_releases() {
+        let sr = 44100.0;
+        // d2r=0（d1rでd1l=200へ降りて張り付く）: release_point段のsustain=200。
+        let eg = convert_eg_shape(255, 100, 200, 0, 200, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(eg.stages[eg.release_point as usize].level, 200);
+        let result = apply_chip_lfo_am_to_eg(&eg, 255, 255, 200, 0, 0).expect("should migrate");
+
+        let mut tick_eg = TimeEg::new();
+        tick_eg.note_on();
+        // アタック(255到達)＋d1r減衰(200へ、実測で約1秒かかる)の通過中は255〜200の中間値を
+        // 経由するため、定常ループに入るまで十分ウォームアップしてから観測する。
+        for _ in 0..(sr as usize * 2) {
+            tick_eg.tick(sr, result, 1.0);
+        }
+        let mut max_seen = 0.0f32;
+        let mut min_seen = 1.0f32;
+        for _ in 0..44100 {
+            let level = tick_eg.tick(sr, result, 1.0);
+            max_seen = max_seen.max(level);
+            min_seen = min_seen.min(level);
+        }
+        assert!((max_seen - 200.0 / 255.0).abs() < 0.02, "max_seen={max_seen}");
+        assert!(min_seen < max_seen - 0.05, "expected audible swing, min={min_seen} max={max_seen}");
+        assert!(!tick_eg.is_idle(), "looping AM should never idle on its own");
+
+        tick_eg.note_off();
+        let mut became_idle = false;
+        for _ in 0..200_000 {
+            tick_eg.tick(sr, result, 1.0);
+            if tick_eg.is_idle() {
+                became_idle = true;
+                break;
+            }
+        }
+        assert!(became_idle, "note_off should still walk the release stage to Idle");
     }
 }
