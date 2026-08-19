@@ -7,7 +7,7 @@
 //! ビット一致することを確認済み。実際の既定は聴感A/Bの結果`AttackMode::None`（詳細は[AttackMode]参照）。
 
 use op505_core::eg_convert::convert_eg_shape;
-use op505_core::{Op505ChannelParams, Op505Patch, Op505PresetEntry};
+use op505_core::{chip_lfo_pitch_to_pitch_fg, Op505ChannelParams, Op505Patch, Op505PresetEntry};
 use sound_core::TimeEgParams;
 
 use crate::map::{self, ConvOptions, CARRIERS};
@@ -89,16 +89,22 @@ pub fn voice_to_op505_patch(
     });
 
     let ch = map::convert_channel(voice, alg as u8, opts);
+    // CHIP LFOのピッチ変調経路(pms/chip_lfo_pmd)はPitch FGへ移設する（CHIP LFO退役の第一段階）。
+    // 移設したらpms/chip_lfo_pmdは0にクリアし二重変調を防ぐ。chip_lfo_freq/delayはAM経路
+    // （chip_lfo_amd/ams）と共有するため保持する。詳細はop505-core::chip_lfo_pitch_to_pitch_fg参照。
+    let pitch_fg = chip_lfo_pitch_to_pitch_fg(ch.pms, ch.chip_lfo_pmd, ch.chip_lfo_freq, ch.chip_lfo_delay);
+    let pitch_migrated = ch.pms > 0 && ch.chip_lfo_pmd > 0;
     let channel = Op505ChannelParams {
         algorithm: ch.algorithm,
         feedback: ch.feedback,
         chip_lfo_freq: ch.chip_lfo_freq,
-        chip_lfo_pmd: ch.chip_lfo_pmd,
+        chip_lfo_pmd: if pitch_migrated { 0 } else { ch.chip_lfo_pmd },
         chip_lfo_amd: ch.chip_lfo_amd,
         chip_lfo_delay: ch.chip_lfo_delay,
-        pms: ch.pms,
+        pms: if pitch_migrated { 0 } else { ch.pms },
         ams: ch.ams,
         filter_cutoff: ch.filter_cutoff,
+        pitch_fg,
         ..Op505ChannelParams::default()
     };
 

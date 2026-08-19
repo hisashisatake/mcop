@@ -25,7 +25,7 @@ pub use sound_core::BIPOLAR_NEUTRAL_RAW;
 use std::collections::BTreeMap;
 
 use sound_fm::algorithm::ALGORITHMS;
-use sound_fm::chip_lfo::{ams_to_depth, pms_to_cents_range, ChipLfo};
+use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz, pms_to_cents_range, ChipLfo};
 use sound_fm::mapping::{
     carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
     FM_MODULATION_INDEX_SCALE,
@@ -96,6 +96,60 @@ pub fn bipolar_fg_levels_from_magnitude(eg: &mut TimeEgParams, positive: bool) {
         let centered = sound_core::BIPOLAR_NEUTRAL_RAW as f32
             + sign * stage.level as f32 * sound_core::BIPOLAR_NEUTRAL_RAW as f32 / 255.0;
         stage.level = centered.round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// CHIP LFOのピッチ変調経路（`pms`×`chip_lfo_pmd`の三角波、`chip_lfo_freq`が速度・
+/// `chip_lfo_delay`が先頭待機）をPitch FGの2段三角ループへ変換する
+/// （CHIP LFO退役の第一段階、memory `project_chip_lfo_retirement_investigation.md`参照）。
+///
+/// 両者とも波形は三角波固定のため厳密に一致する（`bipolar_level`が`(v-128)/128`慣例で
+/// 正側127/128に頭打ちする非対称性のみ残る、DT1等と同じ許容誤差）。段構成は
+/// 「中央(128)で`delay_seconds`待機→谷(0)へ瞬時ジャンプ(time=0)→山(255)⇄谷(0)を
+/// `1/(2×freq)`秒ずつループ」の4段。CHIP LFO側もdelay終了と同時に位相0(谷)から
+/// 上昇を始めるため、delay終了直後に谷へ着地するこの構成と一致する。
+///
+/// `pms=0`または`chip_lfo_pmd=0`（変調なし）のときは無変調の既定値を返す。
+///
+/// 呼び出し規約：変換ツールはこの関数の戻り値を`pitch_fg`へ書き込んだら、
+/// 移設元の`pms`/`chip_lfo_pmd`を0にクリアする（二重変調を防ぐ）。`chip_lfo_freq`/
+/// `chip_lfo_delay`はAM経路（`chip_lfo_amd`/`ams`）と共有するフィールドのため保持したままにする。
+pub fn chip_lfo_pitch_to_pitch_fg(
+    pms: u8,
+    chip_lfo_pmd: u8,
+    chip_lfo_freq: u8,
+    chip_lfo_delay: u8,
+) -> Op505BipolarFg {
+    let cents_amplitude = pms_to_cents_range(pms) * (chip_lfo_pmd as f32 / 255.0);
+    if cents_amplitude <= 0.0 {
+        return Op505BipolarFg::default();
+    }
+
+    let depth = ((cents_amplitude / 1200.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
+    let half_period_seconds = 0.5 / chip_lfo_freq_to_hz(chip_lfo_freq);
+
+    let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
+    stages[0] =
+        TimeStage { time: sound_core::seconds_to_time(delay_seconds), level: BIPOLAR_NEUTRAL_RAW, curve: 0 };
+    stages[1] = TimeStage { time: 0, level: 0, curve: 0 };
+    stages[2] =
+        TimeStage { time: sound_core::seconds_to_time(half_period_seconds), level: 255, curve: 0 };
+    stages[3] =
+        TimeStage { time: sound_core::seconds_to_time(half_period_seconds), level: 0, curve: 0 };
+
+    Op505BipolarFg {
+        eg: TimeEgParams {
+            stages,
+            stage_count: 4,
+            loop_enabled: 1,
+            loop_start: 2,
+            release_point: 3,
+            retrigger_mode: RETRIGGER_MODE_RESET,
+            ..TimeEgParams::default()
+        },
+        depth,
     }
 }
 
@@ -913,5 +967,71 @@ mod tests {
         let json = serde_json::to_string(&patch).expect("serialize");
         let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(patch, restored, "Op505Patch should round-trip through JSON unchanged");
+    }
+
+    // -----------------------------------------------------------------------
+    // chip_lfo_pitch_to_pitch_fg（CHIP LFOピッチ経路→Pitch FG移設）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chip_lfo_pitch_to_pitch_fg_off_when_pms_or_pmd_zero() {
+        let default_fg = Op505BipolarFg::default();
+        assert_eq!(chip_lfo_pitch_to_pitch_fg(0, 200, 128, 0), default_fg);
+        assert_eq!(chip_lfo_pitch_to_pitch_fg(200, 0, 128, 0), default_fg);
+    }
+
+    #[test]
+    fn chip_lfo_pitch_to_pitch_fg_builds_triangle_loop() {
+        let fg = chip_lfo_pitch_to_pitch_fg(255, 255, 128, 0);
+        assert_eq!(fg.eg.stage_count, 4);
+        assert_eq!(fg.eg.loop_enabled, 1);
+        assert_eq!(fg.eg.loop_start, 2);
+        assert_eq!(fg.eg.release_point, 3);
+        assert_eq!(fg.eg.stages[0].level, BIPOLAR_NEUTRAL_RAW, "delay段は中央(無変調)");
+        assert_eq!(fg.eg.stages[1].time, 0, "谷への瞬時ジャンプ");
+        assert_eq!(fg.eg.stages[1].level, 0, "谷");
+        assert_eq!(fg.eg.stages[2].level, 255, "山");
+        assert_eq!(fg.eg.stages[3].level, 0, "谷");
+        assert_eq!(fg.eg.stages[2].time, fg.eg.stages[3].time, "半周期は対称");
+        // pms=255, pmd=255 → 700cents、depth = 700/1200*255 ≈ 149
+        assert_eq!(fg.depth, 149);
+    }
+
+    #[test]
+    fn chip_lfo_pitch_to_pitch_fg_delay_becomes_leading_neutral_stage() {
+        let no_delay = chip_lfo_pitch_to_pitch_fg(200, 200, 128, 0);
+        let with_delay = chip_lfo_pitch_to_pitch_fg(200, 200, 128, 200);
+        assert_eq!(no_delay.eg.stages[0].time, 0);
+        assert!(with_delay.eg.stages[0].time > 0, "delay>0はdelay段のtimeへ反映される");
+        // ループ部分（stage2/3の周期）はdelayの有無に依存しない。
+        assert_eq!(no_delay.eg.stages[2].time, with_delay.eg.stages[2].time);
+    }
+
+    /// 変換後のPitch FGをTimeEgで実際に鳴らし、CHIP LFOの三角波と山谷が一致することを確認する
+    /// （厳密な波形一致の裏取り。`bipolar_level`の正側127/128頭打ちのみ許容誤差）。
+    #[test]
+    fn chip_lfo_pitch_to_pitch_fg_matches_chip_lfo_peak_amplitude() {
+        let sr = 44100.0;
+        let pms = 180u8;
+        let pmd = 220u8;
+        let freq = 150u8;
+        let expected_cents = pms_to_cents_range(pms) * (pmd as f32 / 255.0);
+
+        let fg = chip_lfo_pitch_to_pitch_fg(pms, pmd, freq, 0);
+        let mut eg = TimeEg::new_bipolar();
+        eg.note_on();
+        let mut max_cents = f32::MIN;
+        let mut min_cents = f32::MAX;
+        // 数周期分ティックして山谷の到達を確認する。
+        let cycle_seconds = 1.0 / chip_lfo_freq_to_hz(freq) as f64;
+        let samples = ((cycle_seconds * 4.0) * sr as f64) as usize;
+        for _ in 0..samples {
+            let out = eg.tick(sr, fg.eg, 1.0);
+            let cents = bipolar_level(out) * (fg.depth as f32 / 255.0) * 1200.0;
+            max_cents = max_cents.max(cents);
+            min_cents = min_cents.min(cents);
+        }
+        assert!((min_cents - -expected_cents).abs() < 5.0, "min_cents={min_cents} expected=-{expected_cents}");
+        assert!((max_cents - expected_cents).abs() < 5.0, "max_cents={max_cents} expected={expected_cents}");
     }
 }

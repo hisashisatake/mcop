@@ -275,10 +275,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -294,47 +294,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -736,10 +736,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -755,47 +755,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -1197,10 +1197,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -1216,47 +1216,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -1658,10 +1658,10 @@
           "algorithm": 4,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -1677,47 +1677,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -2119,10 +2119,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -2138,47 +2138,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -2580,10 +2580,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -2599,47 +2599,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -3041,10 +3041,10 @@
           "algorithm": 0,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -3060,47 +3060,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -3502,10 +3502,10 @@
           "algorithm": 4,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -3521,47 +3521,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -3963,10 +3963,10 @@
           "algorithm": 7,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -3982,47 +3982,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
@@ -4424,10 +4424,10 @@
           "algorithm": 4,
           "feedback": 108,
           "chip_lfo_freq": 30,
-          "chip_lfo_pmd": 40,
+          "chip_lfo_pmd": 0,
           "chip_lfo_amd": 30,
           "chip_lfo_delay": 0,
-          "pms": 43,
+          "pms": 0,
           "ams": 1,
           "filter_cutoff": 255,
           "filter_resonance": 0,
@@ -4443,47 +4443,47 @@
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 255,
+                  "curve": 0
+                },
+                {
+                  "time": 96,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 },
                 {
                   "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
-                  "curve": 0
-                },
-                {
-                  "time": 0,
-                  "level": 128,
+                  "level": 0,
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
-              "loop_enabled": 0,
-              "loop_start": 0,
-              "release_point": 0,
+              "stage_count": 4,
+              "loop_enabled": 1,
+              "loop_start": 2,
+              "release_point": 3,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0,
+              "retrigger_mode": 1,
               "level_drift": 128,
               "depth_drift": 128
             },
