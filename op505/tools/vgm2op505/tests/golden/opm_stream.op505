@@ -57,7 +57,9 @@
               "release_point": 2,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -121,7 +123,9 @@
               "release_point": 2,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -185,7 +189,9 @@
               "release_point": 2,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -249,7 +255,9 @@
               "release_point": 2,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -326,7 +334,9 @@
               "release_point": 0,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "depth": 0
           },
@@ -380,7 +390,9 @@
               "release_point": 0,
               "sync_enabled": 0,
               "sync_rate": 134,
-              "retrigger_mode": 0
+              "retrigger_mode": 0,
+              "level_drift": 128,
+              "depth_drift": 128
             },
             "depth": 0
           },
@@ -433,7 +445,9 @@
             "release_point": 0,
             "sync_enabled": 0,
             "sync_rate": 134,
-            "retrigger_mode": 0
+            "retrigger_mode": 0,
+            "level_drift": 128,
+            "depth_drift": 128
           },
           "texture_lfo": {
             "waveform": 0,

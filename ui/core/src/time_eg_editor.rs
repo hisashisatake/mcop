@@ -18,7 +18,7 @@ use sound_core::{TimeEgParams, MAX_STAGES};
 
 use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
 use crate::knob::{bool_checkbox, spin_control, spin_control_width, SPIN_WIDTH_DEFAULT};
-use crate::param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
+use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
 
 /// ヘッダ行（EG名+GRAPH/VALUEタブ）の見込み高さ（px）。`time_eg_editor`の固定枠`size`から
@@ -207,6 +207,12 @@ enum TimeEgField {
     StageTime(usize),
     /// 段i(0-indexed)のlevel。
     StageLevel(usize),
+    /// ループ1周ごとに中心へ加算するレベル量。生値(0〜255)、128=無効。
+    /// `stage_spin_row`では`BipolarHandle`で包み-128〜+127として見せる。
+    LevelDrift,
+    /// ループ1周ごとに振れ幅へ掛ける率。生値(0〜255)、128=等倍。
+    /// `stage_spin_row`では`BipolarHandle`で包み-128〜+127として見せる。
+    DepthDrift,
 }
 
 /// `TimeEgHandle`から`TimeEgField`1つぶんの`IntParamHandle`を導出する使い捨てアダプター
@@ -252,6 +258,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             TimeEgField::ReleasePoint => p.release_point as i32 + 1,
             TimeEgField::StageTime(i) => p.stages[i].time as i32,
             TimeEgField::StageLevel(i) => p.stages[i].level as i32,
+            TimeEgField::LevelDrift => p.level_drift as i32,
+            TimeEgField::DepthDrift => p.depth_drift as i32,
         }
     }
 
@@ -272,6 +280,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             TimeEgField::LoopStart => self.handle.params().release_point as i32,
             TimeEgField::ReleasePoint => self.max_release_point() as i32 + 1,
             TimeEgField::StageTime(_) | TimeEgField::StageLevel(_) => 255,
+            TimeEgField::LevelDrift | TimeEgField::DepthDrift => 255,
         }
     }
 
@@ -279,6 +288,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         match self.field {
             TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
             TimeEgField::ReleasePoint => 1,
+            // 128=無効（バイポーラ中心）。`sound_core::time_eg::BIPOLAR_NEUTRAL_RAW`と同じ値。
+            TimeEgField::LevelDrift | TimeEgField::DepthDrift => 128,
             _ => 0,
         }
     }
@@ -291,6 +302,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             TimeEgField::ReleasePoint => format!("{base} REL"),
             TimeEgField::StageTime(i) => format!("{base} stage{} TIME", i + 1),
             TimeEgField::StageLevel(i) => format!("{base} stage{} LEVEL", i + 1),
+            TimeEgField::LevelDrift => format!("{base} L.DRIFT"),
+            TimeEgField::DepthDrift => format!("{base} D.DRIFT"),
         }
     }
 
@@ -324,6 +337,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             TimeEgField::ReleasePoint => p.release_point = clamped.saturating_sub(1),
             TimeEgField::StageTime(i) => p.stages[i].time = clamped,
             TimeEgField::StageLevel(i) => p.stages[i].level = clamped,
+            TimeEgField::LevelDrift => p.level_drift = clamped,
+            TimeEgField::DepthDrift => p.depth_drift = clamped,
         }
         self.handle.set_params(normalize(p, self.profile));
     }
@@ -567,6 +582,24 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("REL").size(8.0));
                 spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            });
+        });
+        // L.DRIFT/D.DRIFTはループ1周ごとにレベルを螺旋状にずらす（CHIP LFOのAM退役検討の
+        // 副産物。詳細はmemory `project_chip_lfo_retirement_investigation.md`）。ループが
+        // 成立しないと無意味なのでLOOPと同じ条件でグレーアウトする。表示・入力とも
+        // `BipolarHandle`で-128〜+127（128=無効/等倍）として見せる。
+        ui.add_enabled_ui(loop_enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("L.DRIFT").size(8.0));
+                let inner = TimeEgFieldHandle::new(handle, TimeEgField::LevelDrift, profile);
+                spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            });
+        });
+        ui.add_enabled_ui(loop_enabled, |ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("D.DRIFT").size(8.0));
+                let inner = TimeEgFieldHandle::new(handle, TimeEgField::DepthDrift, profile);
+                spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
             });
         });
     });

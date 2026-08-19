@@ -157,6 +157,17 @@ pub struct TimeEgParams {
     /// だった。詳細はmemory `project_timeeg_tempo_sync_and_retrigger_mode.md`参照）。
     #[serde(default)]
     pub retrigger_mode: u8,
+    /// ループ1周ごとに中心（振れ幅の中点）へ加算するレベル量。128=無効（中心固定）。
+    /// バイポーラ（128未満は下降方向、128超は上昇方向）。ループが同じレベルへ戻り続ける
+    /// 制約を崩し、「減衰する音の上で揺れ続ける」形を表現する（旧`.op505`バンクには存在しない
+    /// フィールドのため`#[serde(default)]`で128=無効にする。詳細はmemory
+    /// `project_chip_lfo_retirement_investigation.md`参照）。
+    #[serde(default = "default_drift")]
+    pub level_drift: u8,
+    /// ループ1周ごとに振れ幅へ掛ける率。128=等倍（無効）。0側は縮小、255側は拡大。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で128（無効）にする。
+    #[serde(default = "default_drift")]
+    pub depth_drift: u8,
 }
 
 /// `sync_rate`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
@@ -164,6 +175,11 @@ pub struct TimeEgParams {
 /// index 10（1/4）のアンカー値にしておく。
 fn default_sync_rate() -> u8 {
     SYNC_NOTE_ANCHORS[10]
+}
+
+/// `level_drift`/`depth_drift`の`#[serde(default)]`用。128＝無効（中心128慣例に揃える）。
+fn default_drift() -> u8 {
+    BIPOLAR_NEUTRAL_RAW
 }
 
 /// retrigger_modeの意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
@@ -190,7 +206,18 @@ impl Default for TimeEgParams {
             sync_enabled: 0,
             sync_rate: default_sync_rate(),
             retrigger_mode: RETRIGGER_MODE_CONTINUE,
+            level_drift: default_drift(),
+            depth_drift: default_drift(),
         }
+    }
+}
+
+impl TimeEgParams {
+    /// `level_drift`/`depth_drift`のどちらかが無効値(128)でない＝ループドリフトが有効か。
+    /// 中立時（両方128）はこのフラグでガードし、ドリフト計算を一切実行しないことで
+    /// 既存パッチの出力をビット単位で不変に保つ。
+    pub fn has_drift(&self) -> bool {
+        self.level_drift != BIPOLAR_NEUTRAL_RAW || self.depth_drift != BIPOLAR_NEUTRAL_RAW
     }
 }
 
@@ -200,6 +227,89 @@ fn level_of(stage: &TimeStage) -> f32 {
 
 fn clamp_stage_count(stage_count: u8) -> usize {
     (stage_count as usize).clamp(1, MAX_STAGES)
+}
+
+/// `level_drift`(0〜255、128=無効)→ループ1周あたりレベル空間(0.0〜1.0)への加算量。
+/// 128で厳密に0.0。バイポーラ（128未満は負方向=下降、128超は正方向=上昇）、
+/// 両側とも距離1〜127を0.0005〜1.0の指数カーブへ写す（`pms_to_cents_range`と同じ
+/// OnceLockテーブル化パターン。初期案、実装後に音を聴いて係数を調整する）。
+pub fn level_drift_per_cycle(raw: u8) -> f32 {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        const MIN: f32 = 0.0005;
+        const MAX: f32 = 1.0;
+        let mut table = [0.0f32; 256];
+        for (raw, slot) in table.iter_mut().enumerate() {
+            let raw = raw as i32;
+            let center = BIPOLAR_NEUTRAL_RAW as i32;
+            if raw == center {
+                continue;
+            }
+            let (sign, dist) = if raw < center {
+                (-1.0, (center - raw) as f32)
+            } else {
+                (1.0, (raw - center) as f32)
+            };
+            *slot = sign * MIN * (MAX / MIN).powf(((dist - 1.0) / 126.0).clamp(0.0, 1.0));
+        }
+        table
+    });
+    table[raw as usize]
+}
+
+/// `depth_drift`(0〜255、128=等倍)→ループ1周あたり振れ幅への乗率。
+/// 128で厳密に1.0、0≈0.5倍、255≈1.99倍（`2^((raw-128)/128)`、初期案）。
+pub fn depth_drift_per_cycle(raw: u8) -> f32 {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (raw, slot) in table.iter_mut().enumerate() {
+            let exponent = (raw as f32 - BIPOLAR_NEUTRAL_RAW as f32) / BIPOLAR_NEUTRAL_RAW as f32;
+            *slot = 2f32.powf(exponent);
+        }
+        table
+    });
+    table[raw as usize]
+}
+
+/// ループ区間（`loop_start..=release_point`）のレベルレンジの中点。ドリフトは
+/// この点を中心に振れ幅を伸縮する（`depth_drift`）。1段ループは跳ね戻し先レベルと
+/// 段自身のレベルの中点を使う。`neutral_level`はキーオン起点（`TimeEg::neutral_level`と
+/// 一致させること。`TimeEg`のランタイム計算（`advance`/`enter_stage`）と、`TimeEg`を
+/// 持たないプレビュー描画（ui-core）の両方から呼ばれるため`pub`にしてある）。
+pub fn loop_pivot_level(params: &TimeEgParams, neutral_level: f32, loop_start: usize, release_point: usize) -> f32 {
+    if loop_start == release_point {
+        let bounce =
+            if loop_start == 0 { neutral_level } else { level_of(&params.stages[loop_start - 1]) };
+        let stage_level = level_of(&params.stages[loop_start]);
+        (bounce + stage_level) * 0.5
+    } else {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for stage in &params.stages[loop_start..=release_point] {
+            let l = level_of(stage);
+            lo = lo.min(l);
+            hi = hi.max(l);
+        }
+        (lo + hi) * 0.5
+    }
+}
+
+/// `pivot`を中心に`level_offset`（加算）・`depth_gain`（乗算）のドリフトを`raw_level`へ適用し、
+/// 0.0〜1.0へクランプする。
+pub fn apply_loop_drift(pivot: f32, raw_level: f32, level_offset: f32, depth_gain: f32) -> f32 {
+    (pivot + (raw_level - pivot) * depth_gain + level_offset).clamp(0.0, 1.0)
+}
+
+/// ループを`cycles`周ぶん折り返した後の累積`(level_offset, depth_gain)`を返す
+/// （0周＝まだ一度も折り返していない中立値`(0.0, 1.0)`）。`TimeEg`自身の累積とは独立で、
+/// プレビュー描画（ui-core）がランタイム状態を持たずに「N周先の見た目」を計算するために使う。
+pub fn drift_accumulated_after_cycles(params: &TimeEgParams, cycles: usize) -> (f32, f32) {
+    if !params.has_drift() || cycles == 0 {
+        return (0.0, 1.0);
+    }
+    let per_level = level_drift_per_cycle(params.level_drift);
+    let per_depth = depth_drift_per_cycle(params.depth_drift);
+    (per_level * cycles as f32, per_depth.powi(cycles as i32))
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +527,12 @@ pub struct TimeEg {
     /// （さもないと段0のtimeが0でない限り、キーオン直後に全開マイナスからの
     /// スイープが必ず入ってしまう）。
     neutral_level: f32,
+    /// ループドリフト（`level_drift`）の累積オフセット。ループが1周するたびに加算される。
+    /// note_on/retriggerで0.0へリセットする（累積は「今のノートで何周したか」を表すため）。
+    level_offset: f32,
+    /// ループドリフト（`depth_drift`）の累積ゲイン。ループが1周するたびに乗算される。
+    /// note_on/retriggerで1.0へリセットする。
+    depth_gain: f32,
 }
 
 impl TimeEg {
@@ -442,6 +558,8 @@ impl TimeEg {
             release_pending: false,
             idle: true,
             neutral_level,
+            level_offset: 0.0,
+            depth_gain: 1.0,
         }
     }
 
@@ -455,6 +573,8 @@ impl TimeEg {
         self.release_pending = false;
         self.pending_start = PendingStart::Fresh;
         self.idle = false;
+        self.level_offset = 0.0;
+        self.depth_gain = 1.0;
     }
 
     /// 残響レベルを保持したまま段0へ再突入する（`eg::Eg::retrigger`と同じ思想）。
@@ -464,6 +584,8 @@ impl TimeEg {
         self.pending_start = PendingStart::Retrigger;
         self.elapsed = 0.0;
         self.idle = false;
+        self.level_offset = 0.0;
+        self.depth_gain = 1.0;
     }
 
     pub fn note_off(&mut self) {
@@ -565,7 +687,7 @@ impl TimeEg {
     fn advance(&mut self, params: &TimeEgParams, cur: usize, stage_count: usize, overflow: f64) {
         if self.releasing {
             if cur + 1 < stage_count {
-                self.enter_stage(params, cur + 1, overflow);
+                self.enter_stage(params, stage_count, cur + 1, overflow);
             } else {
                 self.idle = true;
                 self.stage_index = cur;
@@ -580,6 +702,13 @@ impl TimeEg {
             // 保持区間の終端。ループ有効なら戻り、無効ならサステイン点として静止する
             // （`eg::Eg`のD2R=0フリーズに相当）。ここから先はnote-offでしか進まない。
             if params.loop_enabled != 0 {
+                // ループが1周完了した瞬間。ドリフト（level_drift/depth_drift）の累積を
+                // ここで更新する（`params.has_drift()`で中立時は0演算のままスキップし、
+                // 既存パッチの出力をビット単位で不変に保つ）。
+                if params.has_drift() {
+                    self.level_offset += level_drift_per_cycle(params.level_drift);
+                    self.depth_gain *= depth_drift_per_cycle(params.depth_drift);
+                }
                 // 1段ループ（`loop_start == release_point`）だけは、その段の**入口レベル**
                 // （直前段の終端レベル、段0なら`neutral_level`）へ跳ね戻してからやり直す。
                 // レベル連続のままだと「自分の終端レベルから自分の終端レベルへ」向かうことになり
@@ -587,28 +716,53 @@ impl TimeEg {
                 // 多段ループ（`loop_start < release_point`）は従来どおりレベル連続で周回する
                 // （区間の両端を行き来する三角波的な動きになる）。
                 if loop_start == release_point {
-                    self.level = if loop_start == 0 {
+                    let bounce_raw = if loop_start == 0 {
                         self.neutral_level
                     } else {
                         level_of(&params.stages[loop_start - 1])
                     };
+                    self.level = if params.has_drift() {
+                        let pivot = loop_pivot_level(params, self.neutral_level, loop_start, release_point);
+                        apply_loop_drift(pivot, bounce_raw, self.level_offset, self.depth_gain)
+                    } else {
+                        bounce_raw
+                    };
                 }
-                self.enter_stage(params, loop_start, overflow);
+                self.enter_stage(params, stage_count, loop_start, overflow);
             } else {
                 self.settle_at_current_level(cur);
             }
         } else if cur + 1 < stage_count {
-            self.enter_stage(params, cur + 1, overflow);
+            self.enter_stage(params, stage_count, cur + 1, overflow);
         } else {
             // stage_countの終端に達したがrelease_pointに届いていない設定不整合。そこで静止する。
             self.settle_at_current_level(cur);
         }
     }
 
-    fn enter_stage(&mut self, params: &TimeEgParams, next: usize, overflow: f64) {
+    /// `idx`段がループ区間（`loop_start..=release_point`、ループ無効なら常にfalse）に
+    /// 属するか。属する段だけがドリフト（累積オフセット/ゲイン）の対象になる。
+    fn stage_in_loop_region(params: &TimeEgParams, stage_count: usize, idx: usize) -> bool {
+        if params.loop_enabled == 0 {
+            return false;
+        }
+        let release_point = (params.release_point as usize).min(stage_count - 1);
+        let loop_start = (params.loop_start as usize).min(release_point);
+        idx >= loop_start && idx <= release_point
+    }
+
+    fn enter_stage(&mut self, params: &TimeEgParams, stage_count: usize, next: usize, overflow: f64) {
         self.stage_index = next;
         self.segment_start = self.level;
-        self.segment_end = level_of(&params.stages[next]);
+        let raw_end = level_of(&params.stages[next]);
+        self.segment_end = if params.has_drift() && Self::stage_in_loop_region(params, stage_count, next) {
+            let release_point = (params.release_point as usize).min(stage_count - 1);
+            let loop_start = (params.loop_start as usize).min(release_point);
+            let pivot = loop_pivot_level(params, self.neutral_level, loop_start, release_point);
+            apply_loop_drift(pivot, raw_end, self.level_offset, self.depth_gain)
+        } else {
+            raw_end
+        };
         self.elapsed = overflow;
     }
 
@@ -778,6 +932,185 @@ mod tests {
         assert!((max_seen - 200.0 / 255.0).abs() < 0.01, "max_seen={max_seen}");
         assert!((min_seen - 80.0 / 255.0).abs() < 0.01, "min_seen={min_seen}");
         assert!(!eg.is_idle(), "looping should never become idle on its own");
+    }
+
+    // -----------------------------------------------------------------------
+    // ループドリフト（level_drift / depth_drift）
+    // -----------------------------------------------------------------------
+
+    fn drift_test_cycle_samples(sr: f32, stage_time: u8) -> usize {
+        (time_to_seconds(stage_time) as f64 * 2.0 * sr as f64) as usize
+    }
+
+    fn drift_test_attack_samples(sr: f32, stage_time: u8) -> usize {
+        (time_to_seconds(stage_time) as f64 * sr as f64) as usize + 50
+    }
+
+    #[test]
+    fn level_drift_makes_loop_center_descend_over_cycles() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 200, 0), (30, 100, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            level_drift: 40, // 128未満=下降方向
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let cycle_samples = drift_test_cycle_samples(sr, 30);
+        for _ in 0..drift_test_attack_samples(sr, 30) {
+            eg.tick(sr, params, 1.0);
+        }
+
+        let mut first_cycle_max = 0.0f32;
+        for _ in 0..cycle_samples {
+            first_cycle_max = first_cycle_max.max(eg.tick(sr, params, 1.0));
+        }
+        for _ in 0..(cycle_samples * 8) {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut later_cycle_max = 0.0f32;
+        for _ in 0..cycle_samples {
+            later_cycle_max = later_cycle_max.max(eg.tick(sr, params, 1.0));
+        }
+
+        assert!(
+            later_cycle_max < first_cycle_max - 0.05,
+            "level_drift should make the loop descend over cycles: first={first_cycle_max} later={later_cycle_max}"
+        );
+        assert!(!eg.is_idle(), "drifting loop should never become idle on its own");
+    }
+
+    #[test]
+    fn depth_drift_shrinks_swing_over_cycles() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 200, 0), (30, 50, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            depth_drift: 40, // 128未満=縮小方向
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let cycle_samples = drift_test_cycle_samples(sr, 30);
+        for _ in 0..drift_test_attack_samples(sr, 30) {
+            eg.tick(sr, params, 1.0);
+        }
+
+        let swing_over = |eg: &mut TimeEg, n: usize| -> f32 {
+            let (mut lo, mut hi) = (1.0f32, 0.0f32);
+            for _ in 0..n {
+                let out = eg.tick(sr, params, 1.0);
+                lo = lo.min(out);
+                hi = hi.max(out);
+            }
+            hi - lo
+        };
+
+        let first_swing = swing_over(&mut eg, cycle_samples);
+        for _ in 0..(cycle_samples * 8) {
+            eg.tick(sr, params, 1.0);
+        }
+        let later_swing = swing_over(&mut eg, cycle_samples);
+
+        assert!(
+            later_swing < first_swing * 0.7,
+            "depth_drift should shrink the swing over cycles: first={first_swing} later={later_swing}"
+        );
+        assert!(!eg.is_idle());
+    }
+
+    /// リリース区間はループ区間の外なので、ドリフトが蓄積していてもrawレベルへ着地し、
+    /// idleになる（ボイス解放条件「全4オペレーターがidle」を壊さないための必須要件）。
+    #[test]
+    fn release_settles_at_raw_level_ignoring_accumulated_drift() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 200, 0), (30, 100, 0), (30, 0, 0)]),
+            stage_count: 4,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            level_drift: 220, // 上昇方向、大きめに蓄積させる
+            depth_drift: 220, // 拡大方向、大きめに蓄積させる
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        // 複数周ループさせてドリフトを蓄積させる。
+        for _ in 0..(drift_test_cycle_samples(sr, 30) * 6) {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(!eg.is_idle());
+
+        eg.note_off();
+        let mut became_idle = false;
+        let mut final_level = -1.0;
+        for _ in 0..200_000 {
+            let level = eg.tick(sr, params, 1.0);
+            if eg.is_idle() {
+                became_idle = true;
+                final_level = level;
+                break;
+            }
+        }
+        assert!(became_idle, "expected note_off to walk to Idle even with drift accumulated");
+        assert!(
+            (final_level - 0.0).abs() < 1e-6,
+            "release stage should settle at raw level 0.0, unaffected by drift: {final_level}"
+        );
+    }
+
+    #[test]
+    fn note_on_resets_drift_accumulators() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 200, 0), (30, 100, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            level_drift: 40,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let cycle_samples = drift_test_cycle_samples(sr, 30);
+        let attack_samples = drift_test_attack_samples(sr, 30);
+
+        for _ in 0..attack_samples {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut first_run_max = 0.0f32;
+        for _ in 0..cycle_samples {
+            first_run_max = first_run_max.max(eg.tick(sr, params, 1.0));
+        }
+
+        // さらにループさせてドリフトを蓄積させておく。
+        for _ in 0..(cycle_samples * 5) {
+            eg.tick(sr, params, 1.0);
+        }
+
+        // note_onで再スタート。累積がリセットされていれば1回目と同じ最初の周のmaxになる。
+        eg.note_on();
+        for _ in 0..attack_samples {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut second_run_max = 0.0f32;
+        for _ in 0..cycle_samples {
+            second_run_max = second_run_max.max(eg.tick(sr, params, 1.0));
+        }
+
+        assert!(
+            (second_run_max - first_run_max).abs() < 0.01,
+            "note_on should reset drift accumulators: first={first_run_max} second={second_run_max}"
+        );
     }
 
     #[test]
@@ -1092,6 +1425,12 @@ mod tests {
         assert_eq!(params.stage_count, 4);
         assert_eq!(params.loop_start, 2);
         assert_eq!(params.release_point, 2, "release_point should adopt the legacy loop_end value");
+        // level_drift/depth_driftは旧バンクに存在しない。derive(Deserialize)の`#[serde(default)]`が
+        // 素の0を入れるとバイポーラ値としては「最大マイナス」になり全パッチが壊れる
+        // （過去にDT1/pitch_fg.depthで実際に踏んだバグ。memory `project_bipolar_default_center_bugfix`）。
+        assert_eq!(params.level_drift, BIPOLAR_NEUTRAL_RAW, "missing level_drift should default to neutral(128), not 0");
+        assert_eq!(params.depth_drift, BIPOLAR_NEUTRAL_RAW, "missing depth_drift should default to neutral(128), not 0");
+        assert!(!params.has_drift());
     }
 
     // -----------------------------------------------------------------------

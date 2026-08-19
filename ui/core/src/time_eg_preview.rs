@@ -164,10 +164,12 @@ struct LayoutOptions {
     /// 各段（time!=0）の最小横幅重み。プレビューは0.0（純粋な対数幅）、エディタは
     /// `EDITOR_MIN_STAGE_WEIGHT`（速い段でもヒットテスト可能な最小幅を保証）。
     min_weight: f32,
-    /// trueならループ区間を2周描く（「ここが繰り返す」visual、`time_eg_layout`の既存動作）。
-    /// falseなら1周のみ描く（エディタ用。描画段数が半減し団子問題がさらに緩和され、
-    /// 「2周目の頂点はどの段を指すか」という編集対象の曖昧さも生じない）。
-    loop_two_cycles: bool,
+    /// ループ区間を何周描くか（1=ループなし相当、実際には1周目のみ描画）。
+    /// 2以上ならループを`loop_cycles`回描き、2周目以降にはループドリフト
+    /// （`TimeEgParams::has_drift()`）を`sound_core::drift_accumulated_after_cycles`で
+    /// 適用したレベルを使う（`time_eg_layout`の既定動作）。エディタ用の1周描画モードは
+    /// 描画段数を減らしヒットテストしやすくするための選択（設計上の意味は変わらない）。
+    loop_cycles: usize,
 }
 
 /// `TimeEgParams`から`TimeEgGeometry`を計算する共通実装。`inner`はウィジェットの描画可能領域
@@ -183,25 +185,47 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     let loop_active = params.loop_enabled != 0;
     // 1段ループは周回のたびにレベルが不連続に跳ぶ。その跳ね先（段の入口レベル）。
     let single_stage_loop = loop_active && loop_start == release_point;
-    let loop_entry_level =
-        if loop_start == 0 { neutral_start_level(mapping) } else { params.stages[loop_start - 1].level };
+    let neutral_raw = neutral_start_level(mapping);
+    let loop_entry_level_raw = if loop_start == 0 { neutral_raw } else { params.stages[loop_start - 1].level };
 
-    // 保持区間で辿る段indexの列: 0..=release_point（1周目）。ループ有効かつ2周描画モードなら
-    // loop_start..=release_pointをもう1周（実機は無限に繰り返すが、プレビューは「ここが繰り返す」と
-    // 分かるよう2周で打ち切る。eg_preview.rsのLoop=1描画と同じ方針）。エディタ用の1周描画モードは
-    // 描画段数を減らしヒットテストしやすくするための選択（設計上の意味は変わらない）。
-    let mut held_sequence: Vec<usize> = (0..=release_point).collect();
-    // 1周目の段数(=release_point+1)。2周描画モードでは「2周目の先頭」を指すオフセットとして、
-    // 1周描画モードでは（延長されないため）held_sequence自体の最終長として使う。
+    // 周番号cycle(0=1周目、まだ一度も折り返していない)における、raw_levelのドリフト適用後レベルを
+    // 返す。`sound_core::loop_pivot_level`/`drift_accumulated_after_cycles`/`apply_loop_drift`は
+    // `sound_core::TimeEg`のランタイム計算と全く同じ式を使う自由関数（プレビューはTimeEgの
+    // インスタンスを持たないため、N周先の見た目をここで直接計算する）。
+    let drifted_level = |raw_level: u8, cycle: usize| -> u8 {
+        if cycle == 0 || !params.has_drift() {
+            return raw_level;
+        }
+        let pivot = sound_core::loop_pivot_level(params, neutral_raw as f32 / 255.0, loop_start, release_point);
+        let (offset, gain) = sound_core::drift_accumulated_after_cycles(params, cycle);
+        let drifted = sound_core::apply_loop_drift(pivot, raw_level as f32 / 255.0, offset, gain);
+        (drifted * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+
+    // 保持区間で辿る(段index, 周番号)の列: 1周目(cycle=0)は0..=release_point。ループ有効かつ
+    // `opts.loop_cycles>=2`なら、loop_start..=release_pointをcycle=1,2,...と(loop_cycles-1)回
+    // 追加で辿る（実機は無限に繰り返すが、プレビューは指定周数で打ち切る。周番号はドリフト計算に
+    // そのまま渡す）。
+    let mut held_sequence: Vec<(usize, usize)> = (0..=release_point).map(|s| (s, 0)).collect();
+    // 1周目の段数(=release_point+1)。2周目以降の先頭を指すオフセットの基準として使う。
     let first_cycle_len = held_sequence.len();
-    if loop_active && opts.loop_two_cycles {
-        held_sequence.extend(loop_start..=release_point);
+    if loop_active {
+        for cycle in 1..opts.loop_cycles {
+            held_sequence.extend((loop_start..=release_point).map(|s| (s, cycle)));
+        }
     }
+    // ループ1周ぶんの段数（多段・1段どちらのループでも各周で共通）。
+    let held_cycle_len = release_point - loop_start + 1;
+    // 最終周（`opts.loop_cycles`周目、1-indexed）がheld_sequence上で開始するインデックス。
+    // `opts.loop_cycles<2`（ループ描画なし）ならNone。
+    let last_cycle_start_held_idx =
+        (opts.loop_cycles >= 2).then(|| first_cycle_len + (opts.loop_cycles - 2) * held_cycle_len);
 
-    // リリース区間で辿る段indexの列: release_point+1..n（現在レベルから順にそれぞれのtargetへ
-    // 向かう多段リリース）。保持区間と合わせて段リストをちょうど分割するので、両者は決して重ならない。
-    // release_pointが最終段のときだけ空になる（＝リリース無し。Gain FGの透過既定用）。
-    let release_sequence: Vec<usize> = (release_point + 1..n).collect();
+    // リリース区間で辿る(段index, 周番号)の列: release_point+1..n（現在レベルから順にそれぞれの
+    // targetへ向かう多段リリース、ドリフトの影響を受けないためcycle=0固定）。保持区間と合わせて
+    // 段リストをちょうど分割するので、両者は決して重ならない。release_pointが最終段のときだけ
+    // 空になる（＝リリース無し。Gain FGの透過既定用）。
+    let release_sequence: Vec<(usize, usize)> = (release_point + 1..n).map(|s| (s, 0)).collect();
 
     let floor = axis_floor_db(mapping);
     let tl_db = tl_to_db(tl);
@@ -216,19 +240,34 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
 
     // note-onの起点はパネル種別で決まる（TimeEg::note_onの`neutral_level`と対応）。
     // 振幅系は0（無音）、バイポーラのPitch/Cutoff FGは中央128（無変調）。
-    let start_db = stage_target_db(mapping, floor, tl_db, neutral_start_level(mapping));
+    let start_db = stage_target_db(mapping, floor, tl_db, neutral_raw);
     let mut points = vec![Pos2::new(x0, db_to_y(start_db))];
-    let mut stage_of_point = vec![*held_sequence.first().unwrap_or(&0)];
+    let mut stage_of_point = vec![held_sequence.first().map(|&(s, _)| s).unwrap_or(0)];
     let mut x = x0;
 
-    // 1段ループを2周描くときは、周回の境目でレベルが入口へ跳ね戻る。同じxに頂点をもう1つ置いて
-    // 幅0の縦線として明示する（描かないと2周目が平坦な線になり、実際の音と食い違って見える）。
-    let jump_at = (single_stage_loop && opts.loop_two_cycles).then_some(first_cycle_len);
-    let jump_extra = usize::from(jump_at.is_some());
+    // 1段ループを複数周描くときは、周回の境目ごとにレベルが入口へ跳ね戻る。周回のたびに
+    // 同じxへ頂点をもう1つ置いて幅0の縦線として明示する（描かないと各周が平坦な線になり、
+    // 実際の音と食い違って見える）。跳ね戻し先自体もその周のドリフトが乗る。
+    let jump_ats: Vec<(usize, usize)> = if single_stage_loop && opts.loop_cycles >= 2 {
+        (1..opts.loop_cycles)
+            .map(|cycle| (first_cycle_len + (cycle - 1) * held_cycle_len, cycle))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let jump_extra = jump_ats.len();
+    // 最終周の開始頂点（points配列上のインデックス）。ジャンプ挿入で位置がずれうるため、
+    // 実際の構築過程で観測して記録する（計算式での事前導出はジャンプ数に依存して複雑になり
+    // バグを呼びやすいため避けた）。
+    let mut loop_span_start_point: Option<usize> = None;
 
-    for (i, &stage_idx) in held_sequence.iter().chain(release_sequence.iter()).enumerate() {
-        if jump_at == Some(i) {
-            let entry_db = stage_target_db(mapping, floor, tl_db, loop_entry_level);
+    for (i, &(stage_idx, cycle)) in held_sequence.iter().chain(release_sequence.iter()).enumerate() {
+        if last_cycle_start_held_idx == Some(i) {
+            loop_span_start_point = Some(points.len() - 1);
+        }
+        if let Some(&(_, jump_cycle)) = jump_ats.iter().find(|&&(idx, _)| idx == i) {
+            let entry_level = drifted_level(loop_entry_level_raw, jump_cycle);
+            let entry_db = stage_target_db(mapping, floor, tl_db, entry_level);
             points.push(Pos2::new(x, db_to_y(entry_db)));
             stage_of_point.push(stage_idx);
         }
@@ -237,7 +276,8 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
         // min_weightの床には引っかからず常に幅0（垂直）のままにする。
         let weight = if stage.time == 0 { 0.0 } else { log_width(time_to_seconds(stage.time)).max(opts.min_weight) };
         x = (x + weight * scale).min(right_edge);
-        let target_db = stage_target_db(mapping, floor, tl_db, stage.level);
+        let level = drifted_level(stage.level, cycle);
+        let target_db = stage_target_db(mapping, floor, tl_db, level);
         points.push(Pos2::new(x, db_to_y(target_db)));
         stage_of_point.push(stage_idx);
     }
@@ -246,10 +286,11 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     // したがって折れ線としての範囲は**始点`points[loop_start]`から終点`points[release_point+1]`まで**。
     // 始点側に+1すると1段ぶん右へずれる（実機確認で「L.START=0なのに三角マーカーが最左に来ない」
     // として発覚したバグ。`loop_start=0`のときの始点はlevel=0の開始点`points[0]`そのものになる）。
-    // 2周描画: 2周目の先頭段の始点が`points[first_cycle_len]`、終点が`points[held_sequence.len()]`。
-    // 1周描画: 延長されないので1周目そのもの（`points[loop_start]`〜`points[first_cycle_len]`）。
-    let loop_span = loop_active.then_some(if opts.loop_two_cycles {
-        (first_cycle_len, held_sequence.len() + jump_extra)
+    // 複数周描画: 最終周の先頭段の始点が`loop_span_start_point`（構築過程で観測済み）、
+    // 終点が`points[held_sequence.len()+jump_extra]`。1周描画: 延長されないので1周目そのもの
+    // （`points[loop_start]`〜`points[first_cycle_len]`）。
+    let loop_span = loop_active.then_some(if let Some(start) = loop_span_start_point {
+        (start, held_sequence.len() + jump_extra)
     } else {
         (loop_start, first_cycle_len)
     });
@@ -271,19 +312,28 @@ fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, 
     TimeEgGeometry { points, stage_of_point, loop_span, release_point: release_point_index, scale, sustain_terminal_point }
 }
 
+/// ループドリフト無効時にプレビューが描く周数（「ここが繰り返す」visual、従来からの既定）。
+const LOOP_PREVIEW_CYCLES_STATIC: usize = 2;
+/// ループドリフト有効時にプレビューが描く周数。中心/振れ幅が周を追うごとに動いていく様子を
+/// 見せるため、静的ループより多めに描く（プランのユーザー選択：「ドリフト時のみ4周描く」）。
+const LOOP_PREVIEW_CYCLES_DRIFTING: usize = 4;
+
 /// `TimeEgParams`から`TimeEgGeometry`を計算する（読み取り専用プレビュー用）。`inner`はウィジェットの
 /// 描画可能領域（パディング適用後の矩形）、`mapping`/`tl`は`eg_preview`と同じ意味（TLを持たない
-/// FGパネルはtl=255で呼ぶ）。
+/// FGパネルはtl=255で呼ぶ）。ループドリフト（`level_drift`/`depth_drift`）が有効なパッチは
+/// 4周、それ以外は従来通り2周描く（中立時は既存の見た目・8件の既存テストと完全に一致する）。
 pub fn time_eg_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) -> TimeEgGeometry {
-    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: 0.0, loop_two_cycles: true })
+    let loop_cycles = if params.has_drift() { LOOP_PREVIEW_CYCLES_DRIFTING } else { LOOP_PREVIEW_CYCLES_STATIC };
+    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: 0.0, loop_cycles })
 }
 
 /// `time_eg_layout`のエディタ用バリアント（Step 8のGRAPHモードが使う）。速い段でも
 /// `EDITOR_MIN_STAGE_WEIGHT`ぶんの最小幅を確保し、ループは1周のみ描く
 /// （`LayoutOptions`のドキュメント参照。頂点のドラッグ・右クリック編集を実用的にするための調整で、
-/// `time_eg_layout`自体の見た目・8件の既存テストには影響しない）。
+/// `time_eg_layout`自体の見た目・8件の既存テストには影響しない）。ドリフトの有無に関わらず
+/// 常に1周（編集対象の曖昧さを避けるため、`time_eg_layout`側の周数切り替えとは独立）。
 pub fn time_eg_editor_layout(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8) -> TimeEgGeometry {
-    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: EDITOR_MIN_STAGE_WEIGHT, loop_two_cycles: false })
+    layout_impl(params, inner, mapping, tl, LayoutOptions { min_weight: EDITOR_MIN_STAGE_WEIGHT, loop_cycles: 1 })
 }
 
 /// `TimeEgGeometry`をeguiで描画する（保持区間=緑、リリース区間=赤。曲線整形は各段の`curve`に従う）。
@@ -420,6 +470,42 @@ mod tests {
         assert_eq!(hi - lo, 4, "loop_start..=release_point間のセグメント数のはず");
         // ループの始点と終点は同じレベル（1周して同じ場所へ戻るため）。
         assert!((g.points[lo].y - g.points[hi].y).abs() < 1e-3, "ループは同じレベルへ閉じるはず");
+    }
+
+    /// ループドリフト有効時は4周描き、かつループが「同じレベルへ閉じない」（螺旋状に動く）
+    /// ことをグラフ上でも確認する。中立時の対テスト`loop_enabled_draws_two_cycles`と対になる。
+    #[test]
+    fn drift_draws_four_cycles_and_does_not_close() {
+        let mut params = gain_switch_params();
+        params.level_drift = 40; // 128未満=下降方向
+        let g = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let (lo, hi) = g.loop_span.expect("loop_enabled=1のはず");
+        // 4周描画: 最終周(4周目)のセグメント数は中立時と同じ4段分のまま
+        // （周を追加しても1周ぶんのセグメント数自体は変わらない）。
+        assert_eq!(hi - lo, 4, "最終周もloop_start..=release_point間の4セグメントのはず");
+        // level_driftが効いていれば、最終周の始点・終点は中立時より低いレベル（=大きいy）になる。
+        let neutral = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        let (neutral_lo, _) = neutral.loop_span.expect("loop_enabled=1のはず");
+        assert!(
+            g.points[lo].y > neutral.points[neutral_lo].y + 1.0,
+            "level_drift適用後は中立時よりレベルが下がっている（y座標が大きい）はず: drifted={} neutral={}",
+            g.points[lo].y,
+            neutral.points[neutral_lo].y
+        );
+    }
+
+    /// ループドリフトが無効（既定値128/128）なら、4周描画ロジック自体は`has_drift()`で
+    /// 早期リターンし、中立時と完全に同じジオメトリになることを固定する
+    /// （周数の切り替え条件が誤って常時4周になっていないかの回帰防止）。
+    #[test]
+    fn default_drift_produces_identical_geometry_to_two_cycle_baseline() {
+        let params = gain_switch_params();
+        assert!(!params.has_drift());
+        let g = time_eg_layout(&params, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        // 2周描画（従来動作）と同じセグメント数・座標になっているはず。
+        let (lo, hi) = g.loop_span.expect("loop_enabled=1のはず");
+        assert_eq!(hi - lo, 4);
+        assert!((g.points[lo].y - g.points[hi].y).abs() < 1e-3, "中立時は従来通りループが閉じるはず");
     }
 
     /// L.START=0のループ開始マーカーはグラフ最左（level=0の開始点`points[0]`）に来る。
