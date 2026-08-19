@@ -231,12 +231,14 @@ fn clamp_stage_count(stage_count: u8) -> usize {
 
 /// `level_drift`(0〜255、128=無効)→ループ1周あたりレベル空間(0.0〜1.0)への加算量。
 /// 128で厳密に0.0。バイポーラ（128未満は負方向=下降、128超は正方向=上昇）、
-/// 両側とも距離1〜127を0.0005〜1.0の指数カーブへ写す（`pms_to_cents_range`と同じ
-/// OnceLockテーブル化パターン。初期案、実装後に音を聴いて係数を調整する）。
+/// 両側とも距離1〜127を0.0010〜1.0の指数カーブへ写す（`pms_to_cents_range`と同じ
+/// OnceLockテーブル化パターン）。MINは初期案0.0005→0.0015→0.0010と聴感プローブ
+/// （`op505/core/examples/loop_drift_probe.rs`、BPF+ノコギリ波比較）で調整済み。
+/// 詳細はmemory `project_timeeg_loop_drift.md`参照。
 pub fn level_drift_per_cycle(raw: u8) -> f32 {
     static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
     let table = TABLE.get_or_init(|| {
-        const MIN: f32 = 0.0005;
+        const MIN: f32 = 0.0010;
         const MAX: f32 = 1.0;
         let mut table = [0.0f32; 256];
         for (raw, slot) in table.iter_mut().enumerate() {
