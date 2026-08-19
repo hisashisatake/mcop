@@ -212,9 +212,10 @@ mod tests {
         assert_eq!(patch.channel.chip_lfo_amd, 0, "全OP畳み込み成功時はチャンネルchip_lfo_amdも0クリア");
     }
 
+    /// d2r>0（無音まで減衰する形）もlevel_driftで畳み込める（CHIP LFO退役の第三段階）。
+    /// 減衰段がドリフト付きAMループへ置換されるため、CHIP LFOへのフォールバックは起きない。
     #[test]
-    fn voice_to_op505_patch_keeps_chip_lfo_am_when_migration_not_applicable() {
-        // d2r>0（通常4段、サステインは0に固定される特殊ケース）は畳み込み対象外。
+    fn voice_to_op505_patch_migrates_am_for_decaying_operators_too() {
         let mut voice = make_voice(7, [31, 31, 31, 31]);
         voice.ams = 3;
         voice.amd = 99;
@@ -223,9 +224,17 @@ mod tests {
         }
         let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
 
-        assert!(patch.operators.iter().all(|op| op.am_enable), "畳み込み不可なのでam_enableは維持されるはず");
-        assert!(patch.channel.ams > 0, "畳み込み不可なのでチャンネルamsはCHIP LFO用に維持されるはず");
-        assert!(patch.channel.chip_lfo_amd > 0, "畳み込み不可なのでチャンネルchip_lfo_amdは維持されるはず");
+        for op in patch.operators.iter() {
+            assert!(!op.am_enable, "減衰する音色もAMを畳み込めるはず");
+            assert_eq!(op.eg.loop_enabled, 1, "AMループを持つはず");
+            assert!(
+                op.eg.level_drift < sound_core::BIPOLAR_NEUTRAL_RAW,
+                "減衰はlevel_driftで表現されるはず: {}",
+                op.eg.level_drift
+            );
+        }
+        assert_eq!(patch.channel.ams, 0, "CHIP LFOへのフォールバックは残らない");
+        assert_eq!(patch.channel.chip_lfo_amd, 0, "CHIP LFOへのフォールバックは残らない");
     }
 
     #[test]

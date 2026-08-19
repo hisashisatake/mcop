@@ -13,7 +13,10 @@
 // 300秒クランプ警告を共有する（旧`.38x6`経由の2段変換と同じ変換ロジックを直接呼ぶ形）。
 // ---------------------------------------------------------------------------
 
-use sound_core::{seconds_to_time, EgParams, TimeEgParams, TimeStage, MAX_STAGES};
+use sound_core::{
+    seconds_to_time, time_to_seconds, EgParams, TimeEgParams, TimeStage, BIPOLAR_NEUTRAL_RAW,
+    MAX_STAGES,
+};
 use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz};
 use sound_fm::mapping::eg_shift_to_db_range;
 
@@ -215,18 +218,31 @@ pub fn apply_transparent_gain_release(
 /// （振幅リニアの三角波はdBレンジでは直線にならない）。実データ走査でAM可聴パッチのAM深さは
 /// 中央値0.27・7割が1段近似の誤差0.3dB未満に収まると確認済み。
 ///
-/// 対象は「保持区間(`0..=release_point`)がループしておらず(`loop_enabled==0`)、かつ保持区間の
-/// 終端レベルが0でない」EGのみ。実データ走査でAM可聴パッチのオペレーターEGはこの条件を
-/// 全て満たすか、終端レベル0（無音まで減衰しきる）のいずれかで、後者にAMをかけても
-/// 聴こえないため素直にNoneを返す（ループ中のEGT系EGも同様、二重ループは表現できないため対象外）。
-/// 呼び出し側はNoneのとき、そのオペレーターの`am_enable`をtrueのまま維持しCHIP LFO側のAMを使う。
+/// 対象は保持区間(`0..=release_point`)がループしていない(`loop_enabled==0`)EG。
+/// ループ中のEGT系EGは二重ループを表現できないため対象外（`None`）。
+/// 呼び出し側は`None`のとき、そのオペレーターの`am_enable`をtrueのまま維持しCHIP LFO側のAMを使う。
 ///
-/// 段構成：保持区間終端(`release_point`)の後に「平坦待機(半周期+delay) → 下降(1/4周期) →
-/// 上昇(1/4周期)」の3段を追加しループさせる（`loop_start=release_point+1`,
-/// `release_point'=release_point+3`）。CHIP LFOのAMは`clamp(1-triangle*D, 0, 1)`で上側が
-/// 常にクランプされるため、実波形は「半周期平坦、半周期で谷へ往復」というこの3段と一致する。
-/// 谷レベルは`ΔL = |20·log10(1-D)| / db_range × 255`をサステインレベルから引いた値
+/// 保持区間の終端レベルによって2通りの段構成を作る。
+///
+/// **サステインが可聴(終端レベル>0)の場合**：終端(`release_point`)の後ろに
+/// 「平坦待機(半周期+delay) → 下降(1/4周期) → 上昇(1/4周期)」の3段を追加してループさせる。
+/// CHIP LFOのAMは`clamp(1-triangle*D, 0, 1)`で上側が常にクランプされるため、実波形は
+/// 「半周期平坦、半周期で谷へ往復」というこの3段と一致する。
+///
+/// **無音まで減衰する(終端レベル==0)場合**：その減衰段を上記3段のAMループで**置換**し、
+/// `level_drift`で1周ごとに中心を下げることで減衰そのものを表現する
+/// （`level_drift`はこのケースのために実装した機構。memory `project_timeeg_loop_drift.md`）。
+/// ループのレベルは`apply_loop_drift`が0でクランプするため、元の「無音へ落ちて張り付く」
+/// 挙動もそのまま再現される。
+///
+/// 谷レベルは共通で`ΔL = |20·log10(1-D)| / db_range × 255`を中心レベルから引いた値
 /// （0未満はクランプ、`amp_factor`のclampと同じ挙動）。
+///
+/// **既知の制約（聴感確認済み、2026-08-19）**：AMループは保持区間より後ろにしか置けないため、
+/// アタック・減衰の最中はAMがかからない。CHIP LFOはnote-onから回っているので、実機比で
+/// AM開始が「アタック+減衰」ぶん遅れる（実測0.21秒の例で聴き分け可能）。段数上限8のため
+/// アタック区間をAM周期で刻んで埋めることはできず、方式上避けられない。曲線がdB領域に
+/// なることによる谷の深さの差は、同じ聴感確認で識別不能と判定された。
 pub fn apply_chip_lfo_am_to_eg(
     eg: &TimeEgParams,
     ams: u8,
@@ -240,41 +256,104 @@ pub fn apply_chip_lfo_am_to_eg(
         return None;
     }
     let stage_count = eg.stage_count as usize;
-    if stage_count + 3 > MAX_STAGES {
+    let r = eg.release_point as usize;
+    if r >= stage_count {
         return None;
     }
-    let r = eg.release_point as usize;
+    let hz = chip_lfo_freq_to_hz(chip_lfo_freq);
+    let half_period_seconds = 0.5 / hz;
+    let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
+    let flat_time = seconds_to_time(half_period_seconds + delay_seconds);
+    let ramp_time = seconds_to_time(half_period_seconds / 2.0);
+
     let sustain_level = eg.stages[r].level;
-    if sustain_level == 0 {
+    // 減衰ケースはAMループが減衰段を置換するので、正味の増加は3段ではなく2段。
+    let (center_level, replaces_stage) = if sustain_level > 0 {
+        (sustain_level, false)
+    } else {
+        // 無音へ落ちる段の「入口レベル」をAMの中心にする。
+        //
+        // 入口も0なら（ar=0フリーズ＝常時無音、あるいはd1l=0で減衰1の時点で無音に達する形）
+        // 変調する音そのものが無い。この場合はEGを変更せず`Some`で返す——「畳み込めなかった」
+        // のではなく「畳み込む必要がなかった」ので、呼び出し側はams/amdをクリアしてよい
+        // （`None`を返すとCHIP LFOが1音色のためだけに生き残ってしまう。実バンクの
+        // GreatVibes op3がこの形だった）。
+        if r == 0 {
+            return Some(*eg);
+        }
+        let center = eg.stages[r - 1].level;
+        if center == 0 {
+            return Some(*eg);
+        }
+        (center, true)
+    };
+    let added = if replaces_stage { 2 } else { 3 };
+    if stage_count + added > MAX_STAGES {
         return None;
     }
 
     let db_range = eg_shift_to_db_range(eg_shift);
     let delta_db = -20.0 * (1.0 - depth).max(1e-6).log10();
     let delta_level = (delta_db / db_range * 255.0).round();
-    let floor_level = (sustain_level as f32 - delta_level).max(0.0) as u8;
+    let floor_level = (center_level as f32 - delta_level).max(0.0) as u8;
 
-    let half_period_seconds = 0.5 / chip_lfo_freq_to_hz(chip_lfo_freq);
-    let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
-    let flat_time = seconds_to_time(half_period_seconds + delay_seconds);
-    let ramp_time = seconds_to_time(half_period_seconds / 2.0);
+    // 減衰ケースは、元の減衰段が持っていた「中心レベル→0までの所要時間」と同じ速さで
+    // ループ中心が下がるよう`level_drift`を決める。
+    let level_drift = if replaces_stage {
+        let decay_seconds = time_to_seconds(eg.stages[r].time);
+        if decay_seconds > 0.0 {
+            let per_second = (center_level as f32 / 255.0) / decay_seconds;
+            level_drift_for_descent(per_second / hz)
+        } else {
+            // decay_seconds<=0（time=0＝瞬時）は元のD2Rが最速レートで一瞬にして無音へ
+            // 落ちる形。「減衰しない」(128)ではなく「最速で減衰する」が正しい変換。
+            // 実バンクのFrenchHorn op3（唯一のキャリア）がこの形で、修正前は無効な
+            // level_driftのままAMがいつまでも同じ深さで揺れ続け、キャリアなのに
+            // 減衰しないという明確な聴感差になっていた。
+            level_drift_for_descent(f32::MAX)
+        }
+    } else {
+        eg.level_drift
+    };
 
+    // 減衰ケースは段`r`を潰して3段を置く（後続はr+1から2つ後ろへ）。
+    // サステインケースは段`r`を残して直後に3段を差し込む（後続はr+1から3つ後ろへ）。
+    let insert_at = if replaces_stage { r } else { r + 1 };
+    let tail_from = if replaces_stage { r + 1 } else { r + 1 };
     let mut stages = eg.stages;
-    for i in (r + 1..stage_count).rev() {
-        stages[i + 3] = stages[i];
+    for i in (tail_from..stage_count).rev() {
+        stages[i + added] = stages[i];
     }
-    stages[r + 1] = TimeStage { time: flat_time, level: sustain_level, curve: 0 };
-    stages[r + 2] = TimeStage { time: ramp_time, level: floor_level, curve: 0 };
-    stages[r + 3] = TimeStage { time: ramp_time, level: sustain_level, curve: 0 };
+    stages[insert_at] = TimeStage { time: flat_time, level: center_level, curve: 0 };
+    stages[insert_at + 1] = TimeStage { time: ramp_time, level: floor_level, curve: 0 };
+    stages[insert_at + 2] = TimeStage { time: ramp_time, level: center_level, curve: 0 };
 
     Some(TimeEgParams {
         stages,
-        stage_count: (stage_count + 3) as u8,
+        stage_count: (stage_count + added) as u8,
         loop_enabled: 1,
-        loop_start: (r + 1) as u8,
-        release_point: (r + 3) as u8,
+        loop_start: insert_at as u8,
+        release_point: (insert_at + 2) as u8,
+        level_drift,
         ..*eg
     })
+}
+
+/// 目標の「ループ1周あたりのレベル下降量」に最も近い`level_drift`生値（128未満＝下降方向）を返す。
+/// `level_drift_per_cycle`（`sound-core/src/time_eg.rs`）の指数カーブの逆写像。
+/// 表現レンジ(0.0010〜1.0)の外はクランプする——実データ走査では下限を下回るものが
+/// 60本中4本あったが、いずれも100秒超かけて減衰する音色で、最遅値で代用しても差は出ない。
+fn level_drift_for_descent(per_cycle: f32) -> u8 {
+    const MIN: f32 = 0.0010;
+    const MAX: f32 = 1.0;
+    if !per_cycle.is_finite() || per_cycle <= MIN {
+        return BIPOLAR_NEUTRAL_RAW - 1;
+    }
+    if per_cycle >= MAX {
+        return BIPOLAR_NEUTRAL_RAW - 127;
+    }
+    let dist = 1.0 + 126.0 * (per_cycle / MIN).ln() / (MAX / MIN).ln();
+    BIPOLAR_NEUTRAL_RAW - dist.round().clamp(1.0, 127.0) as u8
 }
 
 // ---------------------------------------------------------------------------
@@ -431,12 +510,123 @@ mod tests {
         assert!(apply_chip_lfo_am_to_eg(&eg, 200, 0, 128, 0, 0).is_none());
     }
 
+    /// 減衰ケース（stages[release_point].level==0）は、その減衰段をドリフト付きAMループで
+    /// **置換**する。段数の増分は3ではなく2。
     #[test]
-    fn apply_chip_lfo_am_to_eg_none_when_sustain_is_silent() {
-        // d1r=0=0でなくとも通常4段でstages[release_point].level==0（D2Rが0まで減衰しきる形）はNone。
+    fn apply_chip_lfo_am_to_eg_replaces_decay_stage_with_drifting_loop() {
         let eg = convert_eg_shape(200, 150, 180, 100, 150, 0, 0, 0, &mut Vec::new(), "test");
-        assert_eq!(eg.stages[eg.release_point as usize].level, 0);
-        assert!(apply_chip_lfo_am_to_eg(&eg, 200, 200, 128, 0, 0).is_none());
+        assert_eq!(eg.stage_count, 4);
+        assert_eq!(eg.stages[eg.release_point as usize].level, 0, "減衰しきる形であること");
+        let center = eg.stages[eg.release_point as usize - 1].level;
+
+        let result = apply_chip_lfo_am_to_eg(&eg, 200, 200, 128, 0, 0).expect("減衰ケースも畳み込めるはず");
+        assert_eq!(result.stage_count, 6, "減衰段を置換するので増分は2");
+        assert_eq!(result.loop_enabled, 1);
+        // 減衰段(index2)がAMループに置き換わり、リリース段は後ろへ押し出される。
+        assert_eq!(result.loop_start, 2);
+        assert_eq!(result.release_point, 4);
+        assert_eq!(result.stages[2].level, center, "AMの中心は減衰段の入口レベル");
+        assert!(result.stages[3].level < center, "谷へ降りる");
+        assert_eq!(result.stages[4].level, center, "中心へ戻る");
+        assert!(result.level_drift < BIPOLAR_NEUTRAL_RAW, "減衰を表すため下降方向のドリフトが要る");
+        assert_eq!(result.stages[5], eg.stages[3], "元のリリース段が末尾へ移る");
+    }
+
+    /// 変調する音が無いケース（ar=0フリーズ／d1l=0で減衰1の時点で無音）は、EGを変えずに
+    /// `Some`で返す＝「畳み込む必要がなかった」。`None`だとCHIP LFOが生き残ってしまう。
+    #[test]
+    fn apply_chip_lfo_am_to_eg_returns_unchanged_when_nothing_audible_to_modulate() {
+        // ar=0（フリーズ＝常時無音）
+        let frozen = convert_eg_shape(0, 150, 180, 100, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(frozen.stages[frozen.release_point as usize].level, 0);
+        assert_eq!(apply_chip_lfo_am_to_eg(&frozen, 200, 200, 128, 0, 0), Some(frozen));
+
+        // d1l=0：アタック後すぐ0へ落ちる（実バンクのGreatVibes op3がこの形）
+        let silent_sustain = convert_eg_shape(200, 150, 0, 100, 150, 0, 0, 0, &mut Vec::new(), "test");
+        assert_eq!(silent_sustain.stages[silent_sustain.release_point as usize].level, 0);
+        assert_eq!(
+            apply_chip_lfo_am_to_eg(&silent_sustain, 200, 200, 128, 0, 0),
+            Some(silent_sustain)
+        );
+    }
+
+    /// 元のD2Rが瞬時(time=0)で無音へ落ちる形は「最速の減衰」であるべきで、無効(128)へ
+    /// フォールバックしてはいけない。修正前は`decay_seconds<=0.0`の分岐が誤って`eg.level_drift`
+    /// （既定128＝無効）を返しており、実バンクの`FrenchHorn`op3（唯一のキャリア）で
+    /// 「キャリアだけ減衰せずいつまでも同じ深さで揺れ続ける」という明確な聴感差になった。
+    #[test]
+    fn apply_chip_lfo_am_to_eg_instant_decay_gets_fastest_drift_not_disabled() {
+        let mut stages = [TimeStage::default(); MAX_STAGES];
+        stages[0] = TimeStage { time: 10, level: 255, curve: 0 };
+        stages[1] = TimeStage { time: 20, level: 255, curve: 0 }; // center
+        stages[2] = TimeStage { time: 0, level: 0, curve: 0 }; // 瞬時に無音(置換対象)
+        stages[3] = TimeStage { time: 30, level: 0, curve: 0 }; // release
+        let eg = TimeEgParams {
+            stages,
+            stage_count: 4,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 2,
+            ..TimeEgParams::default()
+        };
+        let result = apply_chip_lfo_am_to_eg(&eg, 200, 200, 128, 0, 0).expect("畳み込めるはず");
+        assert!(
+            result.level_drift <= 10,
+            "瞬時減衰は最速ドリフト(生値1)に近いはず: {}",
+            result.level_drift
+        );
+    }
+
+    /// 減衰が速いほど、1周あたり大きく下げる必要がある＝`level_drift`は128から遠ざかる。
+    #[test]
+    fn faster_decay_needs_stronger_level_drift() {
+        let slow = convert_eg_shape(200, 150, 180, 20, 150, 0, 0, 0, &mut Vec::new(), "test");
+        let fast = convert_eg_shape(200, 150, 180, 200, 150, 0, 0, 0, &mut Vec::new(), "test");
+        let slow_drift = apply_chip_lfo_am_to_eg(&slow, 200, 200, 128, 0, 0).unwrap().level_drift;
+        let fast_drift = apply_chip_lfo_am_to_eg(&fast, 200, 200, 128, 0, 0).unwrap().level_drift;
+        assert!(
+            fast_drift < slow_drift,
+            "速い減衰ほど強い下降ドリフトが要る: slow={slow_drift} fast={fast_drift}"
+        );
+    }
+
+    /// 減衰ケースを実際に鳴らし、(1)揺れながら (2)減衰し (3)note_offでidleへ落ちる ことを確認する。
+    #[test]
+    fn decay_case_oscillates_while_descending_and_still_releases() {
+        let sr = 44100.0;
+        let eg = convert_eg_shape(255, 200, 200, 120, 200, 0, 0, 0, &mut Vec::new(), "test");
+        let result = apply_chip_lfo_am_to_eg(&eg, 255, 255, 180, 0, 0).expect("畳み込めるはず");
+
+        let mut tick_eg = TimeEg::new();
+        tick_eg.note_on();
+        // アタック/減衰1を通過させてからループ区間を観測する。
+        for _ in 0..(sr as usize / 2) {
+            tick_eg.tick(sr, result, 1.0);
+        }
+        let swing_of = |eg: &mut TimeEg, n: usize| -> (f32, f32) {
+            let (mut lo, mut hi) = (1.0f32, 0.0f32);
+            for _ in 0..n {
+                let v = eg.tick(sr, result, 1.0);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+            (lo, hi)
+        };
+        let (_, early_hi) = swing_of(&mut tick_eg, sr as usize);
+        let (_, late_hi) = swing_of(&mut tick_eg, sr as usize * 3);
+        assert!(late_hi < early_hi, "ドリフトで減衰していくはず: early={early_hi} late={late_hi}");
+        assert!(!tick_eg.is_idle(), "ループ中は自力でidleにならない");
+
+        tick_eg.note_off();
+        let mut became_idle = false;
+        for _ in 0..400_000 {
+            tick_eg.tick(sr, result, 1.0);
+            if tick_eg.is_idle() {
+                became_idle = true;
+                break;
+            }
+        }
+        assert!(became_idle, "note_offでリリース段を辿ってidleへ落ちること");
     }
 
     #[test]
