@@ -32,6 +32,17 @@ def default_channel() -> dict:
     return dict(_default_patch()["channel"])
 
 
+def pitch_fg_from_chip_lfo(pms: int, pmd: int, freq: int, delay: int = 0) -> dict:
+    """CHIP LFOのピッチ変調パラメーター(pms/pmd/freq/delay)と同じビブラートを、
+    Pitch FGの2段三角ループとして返す（`patchlab.chip_lfo_pitch_to_pitch_fg_json`の
+    ラッパー、`op505-core::chip_lfo_pitch_to_pitch_fg`の変換式そのもの）。
+
+    CHIP LFO完全退役に向け、手動設計テンプレートがCHIP LFOのpms/chip_lfo_pmdへ書き込む
+    代わりにこちらを使う。`pms=0`または`pmd=0`のときは無変調の既定値を返す。
+    """
+    return json.loads(patchlab.chip_lfo_pitch_to_pitch_fg_json(pms, pmd, freq, delay))
+
+
 @functools.lru_cache(maxsize=8192)
 def _time_eg_json(ar: int, d1r: int, d1l: int, d2r: int, rr: int) -> str:
     # CMA-ES等の大量呼び出しでのFFIコストを吸収するためlru_cacheを噛ませる

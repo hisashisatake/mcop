@@ -9,7 +9,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use op505_core::{eg_convert::convert_eg_shape, Op505Engine, Op505Patch};
+use op505_core::{chip_lfo_pitch_to_pitch_fg, eg_convert::convert_eg_shape, Op505Engine, Op505Patch};
 use sound_core::Vco;
 
 /// JSONで与えた1パッチ（`Op505Patch` のserde表現）を1ノート分レンダリングし、
@@ -79,6 +79,23 @@ fn default_patch_json() -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(format!("default patch JSON serialize error: {e}")))
 }
 
+/// CHIP LFOのピッチ変調経路(pms/chip_lfo_pmd)をPitch FGの2段三角ループへ変換し、そのJSON表現
+/// （`Op505BipolarFg`のserde表現、`{"eg": {...}, "depth": N}`）を返す
+/// （`op505-core::chip_lfo_pitch_to_pitch_fg`のラッパー。CHIP LFO完全退役に向け、
+/// 手動設計テンプレートがCHIP LFOに依存せずPitch FGでビブラートを組めるようにする、
+/// memory `project_chip_lfo_retirement_investigation.md`参照）。
+#[pyfunction]
+fn chip_lfo_pitch_to_pitch_fg_json(
+    pms: u8,
+    chip_lfo_pmd: u8,
+    chip_lfo_freq: u8,
+    chip_lfo_delay: u8,
+) -> PyResult<String> {
+    let fg = chip_lfo_pitch_to_pitch_fg(pms, chip_lfo_pmd, chip_lfo_freq, chip_lfo_delay);
+    serde_json::to_string(&fg)
+        .map_err(|e| PyValueError::new_err(format!("pitch_fg JSON serialize error: {e}")))
+}
+
 /// バインディングが生きているか確認する簡易関数（スモークテスト用）。
 #[pyfunction]
 fn engine_info() -> String {
@@ -90,6 +107,7 @@ fn patchlab(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_patch, m)?)?;
     m.add_function(wrap_pyfunction!(rate_eg_to_time_eg, m)?)?;
     m.add_function(wrap_pyfunction!(default_patch_json, m)?)?;
+    m.add_function(wrap_pyfunction!(chip_lfo_pitch_to_pitch_fg_json, m)?)?;
     m.add_function(wrap_pyfunction!(engine_info, m)?)?;
     Ok(())
 }

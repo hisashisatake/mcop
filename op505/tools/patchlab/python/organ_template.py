@@ -8,9 +8,9 @@
     tl0..3     : 各倍音の音量（255=最大 / 0=消音）
     mul0..3    : 倍音ポジション（MUL: 1=基音/2=1oct/3=5度+1oct/4=2oct）
     feedback   : 歪み量（0=クリーン / 大=ロック系の歪み）
-    pms        : ピッチLFO感度（0=ビブラートOFF / 大=深いビブラート）
-    vib_depth  : ビブラート深さ（tone_lfo_pmd）
-    vib_rate   : ビブラート速度（tone_lfo_freq: 0≈3Hz / 255≈80Hz、指数）
+    pms        : ピッチLFO感度（0=ビブラートOFF / 大=深いビブラート、Pitch FG Depthへ変換される）
+    vib_depth  : ビブラート深さ（Pitch FGへの入力、旧tone_lfo_pmd相当）
+    vib_rate   : ビブラート速度（Pitch FGへの入力、旧tone_lfo_freq相当: 0≈3Hz / 255≈80Hz、指数）
     d1r        : 全OP共通の減衰（0=無限サステイン）
     perc_d1r   : OP1のみ速減衰（Hammond Percussion: 4'倍音の打鍵感）
     perc_d1l   : OP1のD1L（perc_d1r>0時。0=消音まで減衰）
@@ -88,10 +88,12 @@ def make_organ_patch(
         op_c(tl3, mul3, dt[3], d1r,     d1l),
     ]
 
+    # ビブラートはCHIP LFO(pms/tone_lfo_pmd)ではなくPitch FGで表現する（CHIP LFO完全退役、
+    # memory `project_chip_lfo_retirement_investigation.md`参照）。同じ(pms, vib_depth, vib_rate)
+    # から厳密に同じ三角波ビブラートが得られる（`chip_lfo_pitch_to_pitch_fg`は近似ではない）。
     ch = op505_patch.make_channel(
         algorithm=7, feedback=feedback,
-        tone_lfo_freq=vib_rate, tone_lfo_pmd=vib_depth, tone_lfo_amd=0, tone_lfo_delay=0,
-        pms=pms, ams=0,
+        pitch_fg=op505_patch.pitch_fg_from_chip_lfo(pms, vib_depth, vib_rate),
     )
     return {"operators": ops, "channel": ch}
 
