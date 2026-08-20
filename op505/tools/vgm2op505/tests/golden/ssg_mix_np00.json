@@ -444,6 +444,8 @@
         "level_drift": 128,
         "depth_drift": 128
       },
+      "gain_fg_to_master": true,
+      "gain_fg_to_operators": false,
       "texture_lfo": {
         "waveform": 0,
         "destination": 0,

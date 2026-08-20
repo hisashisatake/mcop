@@ -252,9 +252,25 @@ pub struct Op505ChannelParams {
     pub cutoff_fg: Op505BipolarFg,
     /// Gain FG：静止を挟んだ2値スイッチ（トレモロ/ゲート）等、TimeEgの本命ユースケース。
     pub gain_fg: Op505GainFg,
+    /// Gain FGの出力先マスタースイッチ：VCF後段（合成後）へ一括乗算するか。既定true（従来どおり）。
+    /// `gain_fg_to_operators`と独立にON/OFFできる（両方true・両方falseも可）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で従来挙動(true)にする。
+    #[serde(default = "default_gain_fg_to_master")]
+    pub gain_fg_to_master: bool,
+    /// Gain FGの出力先スイッチ：`am_enable`な各オペレーターの`amp_factor`へ乗算するか。既定false。
+    /// trueにするとGain FGはOP単位の変調（キャリアなら音量トレモロ、モジュレーターなら
+    /// 変調指数のうねり＝倍音構成の周期変化）を作る——CHIP LFO AM経路の厳密代替
+    /// （memory `project_chip_lfo_retirement_investigation.md`参照）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で無効(false)にする。
+    #[serde(default)]
+    pub gain_fg_to_operators: bool,
     /// 質感LFO（旧チャンネルLFOを5波形に絞って再編、焼き込み専用）。型は`ym38x6-core`を再利用する
     /// （EG非依存のため、fork-on-write方針で独自進化させたくなるまでは複製しない）。
     pub texture_lfo: TextureLfo,
+}
+
+fn default_gain_fg_to_master() -> bool {
+    true
 }
 
 /// `Gain FG`の透過既定：stage0(time=0,level=255)を即座に到達しそのまま静止し、
@@ -296,6 +312,8 @@ impl Default for Op505ChannelParams {
             pitch_fg: Op505BipolarFg::default(),
             cutoff_fg: Op505BipolarFg::default(),
             gain_fg: default_gain_fg(),
+            gain_fg_to_master: true,
+            gain_fg_to_operators: false,
             texture_lfo: TextureLfo::default(),
         }
     }
@@ -521,6 +539,19 @@ impl Channel {
             op.set_chip_lfo_modulation(chip_pitch_mod_cents, am);
         }
 
+        // Gain FG：VCA（合成後の一括乗算）とOP単位AM（CHIP LFO AM経路の厳密代替、
+        // memory `project_chip_lfo_retirement_investigation.md`参照）の両方の源になる、
+        // 単一のTimeEg。オペレーターループより前にtickし、両方の用途で同じサンプルの値を使う
+        // （tick回数は変わらないため既存パッチの出力はビット単位で不変）。
+        let gain_fg = self.channel_params.gain_fg;
+        let gain_fg_to_operators = self.channel_params.gain_fg_to_operators;
+        let gain_fg_speed = tempo_speed_scale(&gain_fg, tempo_bpm);
+        let gain_fg_out = self.gain_fg_eg.tick(sample_rate, gain_fg, gain_fg_speed);
+        for op in self.operators.iter_mut() {
+            let factor = if op.params.am_enable && gain_fg_to_operators { gain_fg_out } else { 1.0 };
+            op.set_am_factor(factor);
+        }
+
         // アルゴリズム結線に基づく4op合成
         let algo = &ALGORITHMS[(self.channel_params.algorithm as usize).min(7)];
         let mut op_outputs = [0.0f32; 4];
@@ -581,10 +612,9 @@ impl Channel {
             FilterType::from_u8(cp.filter_type),
         );
 
-        // VCA：Gain FG（TimeEg）をtickしてゲイン乗算するだけ（VoiceAmpの実体と同じ1行）。
-        let gain_fg_speed = tempo_speed_scale(&cp.gain_fg, tempo_bpm);
-        let gain = self.gain_fg_eg.tick(sample_rate, cp.gain_fg, gain_fg_speed);
-        filtered * gain
+        // VCA：Gain FGは既にオペレーターループより前でtick済み（`gain_fg_out`）。
+        // ここでは合成後へ一括乗算するかどうかを`gain_fg_to_master`で切り替えるだけ。
+        filtered * if cp.gain_fg_to_master { gain_fg_out } else { 1.0 }
     }
 }
 

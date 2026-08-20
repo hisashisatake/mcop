@@ -134,6 +134,8 @@ fn test_lead() -> Op505Patch {
         pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 16 }, // 0.15s遅延、~5.5Hz、控えめな深さ(片振幅≈75セント)
         cutoff_fg: neutral_bipolar_fg(),
         gain_fg: transparent_gain_fg(),
+        gain_fg_to_master: true,
+        gain_fg_to_operators: false,
         texture_lfo: TextureLfo::default(),
     };
 
@@ -180,6 +182,8 @@ fn test_vibrato() -> Op505Patch {
         pitch_fg: Op505BipolarFg { eg: vibrato_eg(0.15, 0.09), depth: 183 },
         cutoff_fg: neutral_bipolar_fg(),
         gain_fg: transparent_gain_fg(),
+        gain_fg_to_master: true,
+        gain_fg_to_operators: false,
         texture_lfo: TextureLfo::default(),
     };
 
@@ -219,6 +223,8 @@ fn test_pluck() -> Op505Patch {
         pitch_fg: neutral_bipolar_fg(),
         cutoff_fg: neutral_bipolar_fg(),
         gain_fg: transparent_gain_fg(),
+        gain_fg_to_master: true,
+        gain_fg_to_operators: false,
         texture_lfo: TextureLfo::default(),
     };
 

@@ -312,6 +312,10 @@ impl Op505Plugin {
             pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
             cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
             gain_fg: egs.gain_fg,
+            // TODO(CHIP LFO完全退役 手順6): DAWパラメーター化してUIから切り替えられるようにする。
+            // 現状は暫定的に従来挙動（マスターのみ）へ固定。
+            gain_fg_to_master: true,
+            gain_fg_to_operators: false,
             // 質感LFOは焼き込み専用のためCC補正を受けない（NRPN/DAWパラメーターのみ、
             // 演奏系CC1/76/77/78はすべてPitch FGへ行く）。
             texture_lfo: TextureLfo {

@@ -73,6 +73,11 @@ pub struct Operator {
     velocity: u8,
     chip_lfo_pitch_mod_cents: f32,
     chip_lfo_amp_mod: f32,
+    /// Gain FGがOP単位で配線されたときの追加ゲイン係数（0.0〜1.0、既定1.0＝無変調）。
+    /// `chip_lfo_amp_mod`由来の`amp_factor`とは独立した乗算項（CHIP LFO AM経路の厳密代替、
+    /// memory `project_chip_lfo_retirement_investigation.md`参照）。CHIP LFO側が退役するまでは
+    /// 両方が共存できるが、変換ツールは同一オペレーターへ二重に配線しない規約を守る。
+    am_factor: f32,
     perf_lfo_pitch_mod_cents: f32,
     f_number_ratio: f32,
     is_carrier: bool,
@@ -110,6 +115,7 @@ impl Operator {
             velocity: 127,
             chip_lfo_pitch_mod_cents: 0.0,
             chip_lfo_amp_mod: 0.0,
+            am_factor: 1.0,
             perf_lfo_pitch_mod_cents: 0.0,
             f_number_ratio: 1.0,
             is_carrier: false,
@@ -181,6 +187,13 @@ impl Operator {
     pub fn set_chip_lfo_modulation(&mut self, pitch_cents: f32, amp_mod: f32) {
         self.chip_lfo_pitch_mod_cents = pitch_cents;
         self.chip_lfo_amp_mod = amp_mod;
+    }
+
+    /// Gain FGがOP単位（`gain_fg_to_operators`）で配線されたときのゲイン係数を設定する。
+    /// `factor`はそのまま乗算されるので呼び出し側で0.0〜1.0にクランプ済みの値を渡すこと
+    /// （`Channel::tick`はGain FGのtick出力＝0.0〜1.0をそのまま渡す）。
+    pub fn set_am_factor(&mut self, factor: f32) {
+        self.am_factor = factor;
     }
 
     pub fn set_pitch_modulation(&mut self, cents: f32) {
@@ -283,10 +296,10 @@ impl Operator {
             self.cached_tl_gain_key = Some(tl_gain_key);
             v
         };
-        let amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
+        let chip_amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
         let db_range = eg_shift_to_db_range(self.params.eg_shift);
         let env_amp = self.compute_env_amp(env_level, db_range);
-        sample * env_amp * tl_gain * amp_factor
+        sample * env_amp * tl_gain * chip_amp_factor * self.am_factor
     }
 }
 
