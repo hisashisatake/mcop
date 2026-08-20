@@ -23,6 +23,9 @@ pub const SYNC_NOTE_NAMES: [&str; sound_core::SYNC_NOTE_COUNT] = [
 ];
 /// TimeEgのretrigger_mode名（宣言順=0/1、`sound_core::RETRIGGER_MODE_*`に対応）。
 pub const RETRIGGER_MODE_NAMES: [&str; 2] = ["Continue", "Reset"];
+/// TimeEgのtexture名（宣言順=0〜3、`sound_core::TEXTURE_*`に対応。旧質感LFOのS&H/Random/
+/// Chaos波形の後継、memory `project_texture_lfo_retirement.md`参照）。
+pub const TEXTURE_NAMES: [&str; 4] = ["OFF", "S&H", "Random", "Chaos"];
 /// フィルタータイプ名（宣言順=0/1/2、`sound_core::vcf::FilterType::from_u8`に対応。
 /// 2以上は全てBP扱いになるため3値で足りる）。
 pub const FILTER_TYPE_NAMES: [&str; 3] = ["LP", "HP", "BP"];

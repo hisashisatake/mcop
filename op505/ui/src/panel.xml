@@ -72,6 +72,9 @@
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
+          <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
+               乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
+          <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13"/>
         </stack>
       </row>
     </panel>
@@ -94,6 +97,7 @@
                両方ON/両方OFFも可（排他ではない）。 -->
           <checkbox label="MASTER" handle="gain_fg_to_master"/>
           <checkbox label="OP" handle="gain_fg_to_operators"/>
+          <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14"/>
         </stack>
       </row>
     </panel>
@@ -110,6 +114,7 @@
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
+          <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15"/>
         </stack>
         <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
              変調するFGなので、フィルター本体のパラメーターと隣接させた方が対応関係が分かりやすい。 -->
