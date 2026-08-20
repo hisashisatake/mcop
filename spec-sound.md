@@ -1,21 +1,23 @@
 # 38x6 音源仕様
 
 **⚠️ 2026-08-12の方針転換により、ym38x6は開発中止・凍結した（詳細はspec-roadmap.md冒頭「方針転換」節）。
-本ドキュメントは凍結時点のym38x6仕様として保持する。** ただし「sound-core共通」と注記されたVCO抽象・
-FG（Pitch/Cutoff/Gain）・質感LFO・チャンネルIDとキーオン契約・三層モデル等の記述は`sound-core`/`sound-fm`
-に実装されたチップ非依存の共有仕様であり、後継の主力チップop505にもそのまま適用される。`.38x6`ファイル形式・
-ym38x6-vstのCC/NRPN・OPQコンバーター設計等、`ym38x6-core`/`ym38x6-vst`固有の記述は凍結対象。
+本ドキュメントは凍結時点のym38x6仕様として保持する。2026-08-20、凍結中だったym38x6関連のコード・データ
+一式（`ym38x6/`ディレクトリ等）を削除した。本ドキュメントの記述は削除前の設計記録として引き続き保持する。**
+「sound-core共通」と注記されたVCO抽象・FG（Pitch/Cutoff/Gain）・質感LFO・チャンネルIDとキーオン契約・
+三層モデル等の記述は`sound-core`/`sound-fm`に実装されたチップ非依存の共有仕様であり、主力チップop505にも
+そのまま適用される。`.38x6`ファイル形式・ym38x6-vstのCC/NRPN・OPQコンバーター設計等、
+`ym38x6-core`/`ym38x6-vst`固有の記述はym38x6削除に伴い現存しないコードの記録。
 op505固有のパラメーター仕様は`op505/core`のソースコード直下のドキュメントコメントを正本とする
 （専用spec文書は未着手、spec.md参照）。
 
 ## チャンネルIDとキーオン契約（sound-core共通）
 
-`Ym38x6Engine::note_on(channel, frequency, velocity, patch)`で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。
+`Vco::note_on(channel, frequency, velocity)`（`Op505Engine`が実装）で発音し、`channel`は呼び出し側（VST/gesture-app等）が指定する安定したIDとして扱う。
 
 - 同じ`channel`へ再度`note_on`すると、`env_level`を0（無音）に落とさず**残響レベルからAttackを再開**する（実機OPMのKey-On挙動。EGは減衰量をリセットせず現在値からアタックするため、前の音が消えきる前のキーオンではARが本来の立ち上がりをせず、モジュレーターのエンベロープが残響に引きずられる＝FMらしい再アタックの明るさが出る）。これにより同音連打でもプチノイズが出ない
   - ※以前は「即座にカットしてAttackから再開する同音チョーク」を実機準拠としていたが、これは実機EGの誤解に基づくものだった。実機は切らずに残響から再アタックする
 - ピッチベンドは`set_pitch_bend(channel, cents)`、または`set_pitch_bend_group(group, cents)`で`channel >> 7`が一致する全ボイスへ一括適用する（MIDIチャンネル単位ベンド）
-- VST（ym38x6-vst）はボイスIDを`midi_ch*128 + note`で符号化する（一意性＝Note Off/同音再アタックの突き合わせ、グループ性＝`id >> 7`でMIDIチャンネルを復元しベンド一括適用、を両立）
+- VST（op505-vst、旧ym38x6-vstも同様）はボイスIDを`midi_ch*128 + note`で符号化する（一意性＝Note Off/同音再アタックの突き合わせ、グループ性＝`id >> 7`でMIDIチャンネルを復元しベンド一括適用、を両立）
 - gesture-appはコードの声部インデックス（0〜N-1の固定スロット）を`channel`として使う（[spec-app.md](spec-app.md)参照）
 
 ## 波形メモリ専用音色バンク（38x6のOP1のみ有効）
@@ -37,7 +39,8 @@ op505固有のパラメーター仕様は`op505/core`のソースコード直下
 ```
 
 エンジンは38x6そのものなので専用の音源実装は不要。`ym38x6-core`の`waveform_memory_patch(waveform, adsr)`
-（[preset.rs](ym38x6/core/src/preset.rs)）がこの音色のパッチを生成する。
+（`preset.rs`）がこの音色のパッチを生成していた（ym38x6削除〈2026-08-20〉に伴いこの実装は現存しない。
+op505には未移植、spec.md「プロジェクト概要」参照）。
 
 ### 音色の構成
 
@@ -51,7 +54,8 @@ WMS-1の単一指数ADSRとはOPM準拠カーブを通る分だけ触感がわ�
 
 ### ビルトイン波形（スロット0〜31）
 
-38x6のビルトイン波形は **4基本波 × 8変換の32種**（[waveform.rs](ym38x6/core/src/waveform.rs)）。
+38x6のビルトイン波形は **4基本波 × 8変換の32種**（[waveform.rs](sound/fm/src/waveform.rs)、
+op505-coreと共有）。
 **0〜7のサイン系のみOPZ由来**（ymfm OPZ実装準拠）で、**8〜31の3基本波はOPN/OPM/OPZには無い独自拡張**。
 
 - 0〜7: サイン系（OPZ由来）
@@ -142,16 +146,16 @@ Program 0〜7 に配置する（8以降は同じ並びを繰り返す = `program
   NOISE_BASE_CLOCK / (16 × max(NP,1))`。`NOISE_BASE_CLOCK = 2MHz`（YM2203/YM2608の内部SSG
   標準クロック相当）を固定基準とする（エンジンはチップ固有の ssg_clock を知らないため）。
 - ピッチレス（note周波数/FM変調入力に依存しない）。ADSR・TL・AM・ベロシティの音量制御は通常どおり効く。
-- 実装: [waveform.rs](ym38x6/core/src/waveform.rs)（`is_noise_waveform`/`noise_color`/`noise_clock_rate`）、
-  [operator.rs](ym38x6/core/src/operator.rs)（`next_noise_sample`、`tick`内分岐）。
+- 実装: [waveform.rs](sound/fm/src/waveform.rs)（`is_noise_waveform`/`noise_color`/`noise_clock_rate`、
+  op505-coreと共有）、[operator.rs](op505/core/src/operator.rs)（`next_noise_sample`、`tick`内分岐）。
 
 #### トーン+ノイズ混合（実機SSGの同時出力）
 
 実機SSGは1チャンネルでトーンとノイズを同時に出せる（ミキサーR7のbit0-2=tone, bit3-5=noise が
 各々独立、両方有効可）。38x6では **Algorithm 7（全並列）** で OP1=矩形波（トーン）＋OP3=ノイズ
 の**加算混合**で近似する（OP2/4はTL=0でミュート）。実機の「トーン AND ノイズ（トーンでノイズを
-ゲート）」ではなく加算だが、両方が同時に聞こえる。vgm2x6 がトーン・ノイズ両有効を検出して
-この混合パッチ（`mix_patch`）を使う。
+ゲート）」ではなく加算だが、両方が同時に聞こえる。vgm2op505（旧vgm2x6）がトーン・ノイズ両有効を
+検出してこの混合パッチ（`mix_patch`）を使う。
 
 ---
 
@@ -281,7 +285,7 @@ half-squared / 2x-half / 2x-squared-half / 2x-abs-half / 2x-pos-squared-half）�
 #### 24〜31: 三角系（独自拡張）
 基本波 triangle（サイン位相に揃えた 0→+1→0→-1→0、p=0.25で+1ピーク）に、サイン系と同じ8変換を適用。
 
-実装: [waveform.rs](ym38x6/core/src/waveform.rs)。
+実装: [waveform.rs](sound/fm/src/waveform.rs)（op505-coreと共有）。
 
 ### ユーザー定義波形（番号32〜255）
 
@@ -461,7 +465,7 @@ Pitch FG＋チップ内LFO(PMS/PMD)＋質感LFO(Dest=Pitch) が積み重なる�
 ①のビブラートは鳴る（GM2互換：ホイールを触らなくてもパッチのビブラートは効く）。Pitch FGはループ時に
 AR/D1R の2レートを持つため、CC76「Vibrato Rate」は両レートを一括でスケールする（全体の速さ）。
 
-**具体式（実装確定、ym38x6-vst）：**
+**具体式（実装確定、op505-vst。当初ym38x6-vstで実装、op505-midiへ移植済み）：**
 
 - **CC76（Rate）**：AR/D1Rは指数マッピング（`rate_to_delta`）のため、生コードへの単純加算では
   ベース値によって体感速度が大きく変わってしまう（「一括スケール」の語義に反する）。そのため
@@ -611,7 +615,8 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 ## チップ内LFO
 
-FMチップに内蔵された「音作り」用のLFO（プリセット・NRPNで設定）。VCO層（`ym38x6-core`）に属する
+FMチップに内蔵された「音作り」用のLFO（プリセット・NRPNで設定）。VCO層（`op505-core`、共通ロジックは
+`sound-fm::chip_lfo`）に属する
 **チップ固有の変調源で、VCOを差し替えると消える**（旧称「音色LFO」。「チップ内」はこのレイヤー帰属を
 名指しした呼称で、opz2x6/opm2x6が写像する先はこのチップ内LFOである）。演奏用のモジュレーション（[FG](#ファンクションジェネレーターfgpitchcutoffgain)／[質感LFO](#質感lfo5波形専用焼き込み)）とは完全に独立しており、演奏時のビブラート/トレモロには影響しない。
 
@@ -695,7 +700,7 @@ SMF内のNRPNデータエントリの意味が変わるため、変更する際�
 TL（Destination=3）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
 （質感LFOは焼き込み専用のためCCによる加算補正はなく、演奏系CC1/76/77/78はPitch FGへ行く）。
 未接続（Destination=0）はLFO自体は`tick`し続けるがどのターゲットへも出力しない。新規パッチの既定状態でもある。
-ym38x6-ui/op505-uiの質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、
+op505-uiの質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、
 直前の行き先から未接続へ切り替わる。
 
 **Fade Mode enum：**
@@ -758,7 +763,7 @@ Algorithm / Feedback / 質感LFO Destination / 質感LFO Rate / 質感LFO Depth 
 
 （質感LFOは8個＝Destination/Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset。Destinationは
 Algorithm同様、離散enumだがNRPN(0,0)とDAWパラメーターの両方で公開する（シャドウ差分検知方式、
-ym38x6/vst/src/lib.rs参照）。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設して48個、その後Destinationの二重公開に合わせて49個になった。）
+op505-vstの`lib.rs`参照）。焼き込み専用のため演奏CC補正は受けない。3つのFG〈Pitch/Cutoff/Gain〉は共通EG=AR/D1R/D1L/D2R/RR＋Loop/Floor/Curve/Delayで、加えてPitch/Cutoffはバイポーラ Depth を持つ〈Gainは Floor が深さ役でDepth無し〉。Loop/CurveはAlgorithm同様、離散トグルだがNRPNとDAWパラメーターの両方で公開する。DelayはAR等と同じ連続値のためNRPN専用ではなくDAWパラメーターのみ〈NRPN番地は持たない〉。仕様上の当初案は45個だったが、ステップ7実装時にCC78の対応先が存在しない矛盾が見つかりDelayを新設して48個、その後Destinationの二重公開に合わせて49個になった。）
 
 **オペレーター単位（12個 × 4op = 48個）：**
 TL / AR / D1R / D2R / D1L / RR / MUL / DT1 / KS / AME / Velocity Sensitivity / OP Fine Tune
@@ -816,7 +821,7 @@ CC65 ON時、新しいノート（新チャンネル）のF-Numberは、同一MI
 
 **Sostenuto（CC66）：**
 
-CC66 ON時点で発音中（Note-On済みかつNote-Off未到達）の全チャンネルに「サステイン保持」フラグを立てる。該当チャンネルはNote-OffされてもCC66 OFFまでReleaseに入らない（CC64と同じ仕組みを対象チャンネルのみに適用）。CC66 ON以降に新規キーオンしたノートは対象外。実装済み（smf2wav `render.rs`・ym38x6-vst `lib.rs`）、詳細は下記「サステインペダル（CC64）の実装方針」参照（`sostenuto`をCC64の`pending_release`と組み合わせて解放判定する）。
+CC66 ON時点で発音中（Note-On済みかつNote-Off未到達）の全チャンネルに「サステイン保持」フラグを立てる。該当チャンネルはNote-OffされてもCC66 OFFまでReleaseに入らない（CC64と同じ仕組みを対象チャンネルのみに適用）。CC66 ON以降に新規キーオンしたノートは対象外。実装済み（smf2op505 `render.rs`・op505-vst `lib.rs`。当初はsmf2wav/ym38x6-vstで実装し、op505側へ移植した）、詳細は下記「サステインペダル（CC64）の実装方針」参照（`sostenuto`をCC64の`pending_release`と組み合わせて解放判定する）。
 
 **Soft Pedal（CC67）：**
 
@@ -825,17 +830,19 @@ CC67 ON中に新規キーオンしたノートに対してのみ、実効TL（**
 実効TL(キャリアのみ) = clamp(TLベース値 - CC67値, 0, 255)
 実効Cutoff = clamp(Cutoffベース値 - CC67値, 0, 255)
 ```
-実装済み（smf2wav `midi.rs`の`apply_soft_pedal`／ym38x6-vst `midi.rs`の同名関数、複製）。減算はNote-On時点のCC67深さで焼き込み、以降にCC67の値が変わっても既に鳴っているノートには（簡易実装として）ライブ伝播ループ経由で現在値が再適用される（Note-Onのタイミングでsoft対象と判定されたノートに限る。ペダルの深さそのものが発音中に変化するのは実運用上まれなため許容）。
+実装済み（`op505-midi`（`op505/midi/src/pedal.rs`）の`apply_soft_pedal`、op505-vst/smf2op505が共有。
+当初はsmf2wav/ym38x6-vstに個別実装していたものを、op505-midi新設〈フェーズ5.5〉時に共有クレートへ集約した）。減算はNote-On時点のCC67深さで焼き込み、以降にCC67の値が変わっても既に鳴っているノートには（簡易実装として）ライブ伝播ループ経由で現在値が再適用される（Note-Onのタイミングでsoft対象と判定されたノートに限る。ペダルの深さそのものが発音中に変化するのは実運用上まれなため許容）。
 
 **All Sound Off（CC120）/ Reset All Controllers（CC121）/ All Notes Off（CC123）：**
 
-GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリースを経ず即座に消音**（`Ym38x6Engine::silence_group`でボイスマップから即除去、残響も無い）、CC123は**通常のNote-Off相当**（リリースして自然減衰）。CC121は「モジュレーションの三層モデル」の**③ジェスチャー層のみ**リセットする（②パート状態・①音色は保持、上記「補強規則」参照）。対象はCC64/66/67ペダル・Pitch Bend・CC1(Mod Wheel)・アフタータッチ（Channel Pressure/Poly Key Pressure）。CC2/CC4/CC7/CC11/CC76〜78/センドレベル/RPN選択等（②パート状態）は保持する。実装済み（smf2wav `render.rs`・ym38x6-vst `lib.rs`）。
+GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリースを経ず即座に消音**（`Op505Engine::silence_group`でボイスマップから即除去、残響も無い）、CC123は**通常のNote-Off相当**（リリースして自然減衰）。CC121は「モジュレーションの三層モデル」の**③ジェスチャー層のみ**リセットする（②パート状態・①音色は保持、上記「補強規則」参照）。対象はCC64/66/67ペダル・Pitch Bend・CC1(Mod Wheel)・アフタータッチ（Channel Pressure/Poly Key Pressure）。CC2/CC4/CC7/CC11/CC76〜78/センドレベル/RPN選択等（②パート状態）は保持する。実装済み（smf2op505 `render.rs`・op505-vst `lib.rs`）。
 
 **サステインペダル（CC64）の実装方針：**
 
 「ペダル対応」は2つの独立した関心事に分かれる。(a)はペダル本体、(b)はオプション拡張。
 
-**(a) ホールドフラグ方式（実装済み）：** smf2wav（`render.rs`、e828515）・ym38x6-vst（`lib.rs`）とも実装済み。CC66(Sostenuto)/CC67(Soft Pedal)/CC120/CC121/CC123も同じホールドフラグ方式を拡張して実装している。
+**(a) ホールドフラグ方式（実装済み）：** smf2op505（`render.rs`）・op505-vst（`lib.rs`）とも実装済み
+（当初smf2wav〈`render.rs`、e828515〉・ym38x6-vstで実装し、op505側へ移植した）。CC66(Sostenuto)/CC67(Soft Pedal)/CC120/CC121/CC123も同じホールドフラグ方式を拡張して実装している。
 
 普通のサステイン（離鍵してもReleaseに入らない）は、チャンネルを新規確保せず、現状の1ノート=1チャンネル（[キーオン契約](#チャンネルidとキーオン契約sound-core共通)）のまま実現できる。`pedal_down: [bool; 16]` と `pending_release: [u128; 16]`（ビットN=ノート番号Nが離鍵済みだがいずれかのペダルで保持中）に加え、`keys_down: [u128; 16]`（物理的に押下中の鍵）・`sostenuto: [u128; 16]`（CC66 ON時点でのkeys_downスナップショット）・`cc67: [u8; 16]`／`soft_notes: [u128; 16]`（Soft Pedal深さと対象ノート）をMIDIチャンネルごとに持つ。
 
@@ -896,7 +903,7 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
 |---|---|
 | Bank 0 | GM2プログラムマップ準拠（0〜127）。patchlabでの知覚記述子探索＋手動テンプレート設計で族ごとに作成 |
 | Bank 1以降 | ユーザー定義プリセット |
-| WAVEFORM_MEMORY_BANK+1以降 | OPQ/PSR-70の変換音色（ym38x6/tools/psr2x6で生成） |
+| WAVEFORM_MEMORY_BANK+1以降 | OPQ/PSR-70の変換音色（op505/tools/psr2op505で生成） |
 
 **音色作成方針（フェーズ6・patchlabで実施）：**
 - 当初はGM2リファレンス音からのML逆算合成（A-by-S）でBank 0を自動生成する計画だったが、
@@ -905,7 +912,7 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   叩き台に、人手で族ごとにテンプレート設計（piano/brass/organ_template等）する方式に転換
 - FMが苦手なカテゴリ（アコースティックピアノ・弦楽器・合唱等）は最近似の音色設計で代替
 - 実際のGM2→音色マッピング表はフェーズ6で別途作成
-- Bank 0の作成にはOPQ/PSR-70実機プリセットを直接流用しない。実機音色の変換はym38x6/tools/psr2x6で別バンク（WAVEFORM_MEMORY_BANK+1以降）へ行う
+- Bank 0の作成にはOPQ/PSR-70実機プリセットを直接流用しない。実機音色の変換はop505/tools/psr2op505で別バンク（WAVEFORM_MEMORY_BANK+1以降）へ行う
 
 **実装状況（フェーズ8・パラメーターUI・音色運用）：**
 - CC0+CC32によるバンク選択とProgram Changeの受信を実装済み。
@@ -921,13 +928,13 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
     無限サスティンとする
 - 上記以外のbank・program番号は、bank・program番号から決定的に生成する暫定パッチ
   （`placeholder_patch`）を使用する（patchlabでのBank0設計・プリセットライブラリができるまでの
-  暫定構成。優先順位はユーザープリセット(.38x6) > Bank0手動チューニング > `placeholder_patch`）。
+  暫定構成。優先順位はユーザープリセット(.op505) > Bank0手動チューニング > `placeholder_patch`）。
 - nice-plugの制約により、MIDI Program ChangeイベントはCLAPでのみ受信可能（VST3では
   受信不可、`MidiConfig::MidiCCs`の仕様）。CC0/CC32（Bank Select）はVST3でも受信可能。
 - VST3でMIDIファイル等からProgram Changeを行うため、CC102（GM2未定義領域の先頭）を
   Program Change代替として受信する（値0〜127=プログラム番号、CC0/CC32バンクと組み合わせて
   `patch_for_program`で解決）。CLAPでは本来のMIDI Program Changeが届くため代替は不要だが、
-  両対応のため変換ツール（ym38x6/tools/vgm2x6等）はProgram ChangeとCC102を併送する。
+  両対応のため変換ツール（op505/tools/vgm2op505等）はProgram ChangeとCC102を併送する。
   旧実装はVOPMex互換のCC92を使っていたが、CC92はGM2のEffects 2 Depth（トレモロ）と
   衝突するため廃止した（MIDI CCセクション参照）。
 - VST3でもプリセットを切り替えられるよう、nice-plugパラメーター「Program」
@@ -939,9 +946,11 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   （MIDI Program Change経由で切り替えた場合はプラグインのリロードが必要、暫定。
   本格的なプリセット編集UIはフェーズ8「パラメーターUI」で別途検討）。
 
-**ユーザープリセット（Bank1以降）の読み込み（フェーズ8・パラメーターUI・音色運用）：**
+**ユーザープリセット（Bank1以降）の読み込み（フェーズ8・パラメーターUI・音色運用、ym38x6固有仕様。
+ym38x6削除〈2026-08-20〉後は資産としての記録。op505の`.op505`形式は`op505_core::Op505PresetFile`
+〈`op505/core/src/preset.rs`〉のドキュメントコメントを正本とする）：**
 
-`.38x6`ファイル形式（JSON、`ym38x6-core::PresetFile`に定義）。常に1つの`bank`
+`.38x6`ファイル形式（JSON、旧`ym38x6-core::PresetFile`に定義されていた）。常に1つの`bank`
 （Bank Select相当、CC0×128+CC32、0〜16383）と、`presets`/`programs`いずれかの
 プリセット配列を持つ（単数/複数の区別はなく、すべて以下のいずれかの形式）。
 
@@ -1081,9 +1090,7 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | CC2 Destination | 0, 34 | 0〜5（destination enum、下記参照。既定5=TLキャリア一括） |
 | CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
 
-**op505でのNRPNテーブル差分（2026-08、op505-vstフェーズ2実装時）：**
-
-上記テーブルは`ym38x6-vst`（凍結）のもの。`op505-vst`（フェーズ2、`op505/vst/src/lib.rs`）では以下の差分がある。
+**op505-vstのNRPNテーブル仕様（2026-08、フェーズ2実装時、`op505/vst/src/lib.rs`）：**
 
 - **NRPN(0,28)〜(0,33)（Pitch/Cutoff/Gain FG Loop/Curve）は欠番として予約**する（未実装、`_ => {}`で無視）。
   op505のTimeEg 7本はDAWパラメーターではなくnice-plugの`#[persist]`状態
@@ -1091,10 +1098,9 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
   GUI表示と実際に鳴る音がズレる。Loop/Curve相当（`TimeEgParams`の`loop_enabled`等）はGUI/persist
   経由でのみ編集する設計に統一した。番号を詰めずそのまま欠番にしたのは、将来persist状態への
   安全な書き込み手段（`try_write()`等）を追加する余地を残すため。
-- **NRPN(0,14) Filter Type・NRPN(0,15) Filter Self-Oscillationは、op505では二重公開**
-  （DAWパラメーターとの1シャドウ差分検知）になる。ym38x6ではこの2つがNRPN専用だったが、
-  op505-vstフェーズ1で先にDAWパラメーター化されていたため、algorithmや質感LFO群と同じ
-  シャドウ差分検知パターンで両立させる。
+- **NRPN(0,14) Filter Type・NRPN(0,15) Filter Self-Oscillationは二重公開**
+  （DAWパラメーターとの1シャドウ差分検知）になる。op505-vstフェーズ1で先に
+  DAWパラメーター化されていたため、algorithmや質感LFO群と同じシャドウ差分検知パターンで両立させる。
 - 上記以外（質感LFO・Algorithm・Waveform・AT/Poly AT/CC2/CC4 Destination・Operator F-Number）は
   ym38x6と同一のNRPN番号・意味論のまま`op505-vst`へ移植済み。
 
@@ -1183,7 +1189,7 @@ CSM的フォルマント合成は **Algorithm 7（全並列）が事実上の唯
 
 ## OPQから38x6へのコンバーター設計
 
-PSR-70のサウンドROM（`Software/ROM2`、JKN0/PSR70-reverse）に格納されたOPQ音色データ（実使用は約32音色、テーブル上の定義は約80）を架空音源プリセット形式（`.38x6`）へ変換する。実装は`ym38x6/tools/psr2x6`。
+PSR-70のサウンドROM（`Software/ROM2`、JKN0/PSR70-reverse）に格納されたOPQ音色データ（実使用は約32音色、テーブル上の定義は約80）を架空音源プリセット形式（`.38x6`）へ変換する。実装は旧`ym38x6/tools/psr2x6`（2026-08-20削除、op505向け直接変換は`op505/tools/psr2op505`）。
 変換先は`WAVEFORM_MEMORY_BANK + 1`以降のバンク（Programは0〜127、128件ごとに連番バンクへ分割）。
 （OPQボイスは0x60以降がOPM互換のレジスタ配置。デチューンは6bit。正確なビット配置は`Guides/OPQ_ProgGuide.pdf`を出典とする。
 なお「`def_seqs.h`」「450エントリ」はシーケンス／自動伴奏データを指し、音色データではない。）
