@@ -17,7 +17,7 @@ use op505_core::{
     op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch, Op505PresetEntry,
     Op505PresetFile,
 };
-use sound_core::{seconds_to_time, TextureLfo, TimeEgParams, TimeStage, MAX_STAGES};
+use sound_core::{seconds_to_time, TimeEgParams, TimeStage, MAX_STAGES};
 
 const TEST_BANK: u16 = 4;
 
@@ -130,7 +130,6 @@ fn test_lead() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
-        texture_lfo: TextureLfo::default(),
     };
 
     Op505Patch { operators, channel }
@@ -172,7 +171,6 @@ fn test_vibrato() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
-        texture_lfo: TextureLfo::default(),
     };
 
     Op505Patch { operators, channel }
@@ -207,7 +205,6 @@ fn test_pluck() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
-        texture_lfo: TextureLfo::default(),
     };
 
     Op505Patch { operators, channel }

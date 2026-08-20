@@ -44,8 +44,6 @@ pub use vcf::{
 pub mod vca;
 pub use vca::{Vca, VoiceAmp};
 
-pub mod texture_lfo;
-pub use texture_lfo::{texture_lfo_to_shape, TextureLfo};
 
 // ---------------------------------------------------------------------------
 // Wave table format (ymfm-compatible log encoding)

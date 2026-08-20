@@ -181,5 +181,4 @@ fn channel_defaults_survive_x6_roundtrip() {
     assert_eq!(patch.channel.filter_resonance, default_channel.filter_resonance);
     assert_eq!(patch.channel.filter_type, default_channel.filter_type);
     assert_eq!(patch.channel.filter_self_oscillation, default_channel.filter_self_oscillation);
-    assert_eq!(patch.channel.texture_lfo, default_channel.texture_lfo);
 }

@@ -54,7 +54,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -120,7 +121,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -186,7 +188,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -252,7 +255,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -325,7 +329,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "depth": 0
       },
@@ -381,7 +386,8 @@
           "sync_rate": 134,
           "retrigger_mode": 0,
           "level_drift": 128,
-          "depth_drift": 128
+          "depth_drift": 128,
+          "texture": 0
         },
         "depth": 0
       },
@@ -436,20 +442,11 @@
         "sync_rate": 134,
         "retrigger_mode": 0,
         "level_drift": 128,
-        "depth_drift": 128
+        "depth_drift": 128,
+        "texture": 0
       },
       "gain_fg_to_master": true,
-      "gain_fg_to_operators": false,
-      "texture_lfo": {
-        "waveform": 0,
-        "destination": 0,
-        "rate": 0,
-        "depth": 0,
-        "delay": 0,
-        "fade_mode": 0,
-        "fade_time": 0,
-        "offset": 128
-      }
+      "gain_fg_to_operators": false
     }
   },
   "warnings": []

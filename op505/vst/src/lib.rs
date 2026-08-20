@@ -17,9 +17,8 @@ use op505_core::{
     op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch,
     Op505PresetBank,
 };
-use sound_core::{cc76_to_rate_scale, lfo_fade_mode_from_index, AudioProcessor, ChorusType, LfoFadeMode, MasterEffects, ReverbType, TextureLfo, Vco};
+use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 use sound_fm::mapping::F_NUMBER_CENTER;
-use sound_fm::FmLfoDestination;
 use std::sync::Arc;
 
 use crate::params::Op505EgBank;
@@ -81,26 +80,6 @@ struct Op505Plugin {
     // DAWオートメーション変化時はprocess()内の差分検知で上書き、NRPN(0,10)〜(0,13)は直接書き込む。
     operator_waveforms: [u8; 4],
     last_operator_waveforms: [u8; 4],
-
-    // 質感LFO（NRPN(0,0)/(0,1)/(0,22)〜(0,27)）の状態。全項目が①音色/NRPN専用で、
-    // 演奏系CC(1/76/77/78)による補正は受けない（焼き込み専用、spec-sound.md参照）。
-    // NRPN直書き込み＋DAWパラメーターとの1シャドウ差分検知（algorithmと同型）で管理する。
-    texture_lfo_destination: FmLfoDestination, // NRPN(0,0)
-    texture_lfo_waveform: u8,                  // NRPN(0,1)、0〜4
-    texture_lfo_fade_mode: LfoFadeMode,        // NRPN(0,22)
-    texture_lfo_rate: u8,                      // NRPN(0,23)
-    texture_lfo_depth: u8,                     // NRPN(0,24)
-    texture_lfo_delay: u8,                     // NRPN(0,25)
-    texture_lfo_fade_time: u8,                 // NRPN(0,26)
-    texture_lfo_offset: u8,                    // NRPN(0,27)
-    last_texture_lfo_destination_param: u8,
-    last_texture_lfo_waveform_param: u8,
-    last_texture_lfo_fade_mode_param: u8,
-    last_texture_lfo_rate_param: u8,
-    last_texture_lfo_depth_param: u8,
-    last_texture_lfo_delay_param: u8,
-    last_texture_lfo_fade_time_param: u8,
-    last_texture_lfo_offset_param: u8,
 
     // Pitch FG（②③層の補正を受ける唯一のFGスロット、spec-sound.md「演奏層による補正」節）。
     // CC1/76/77/78の生値をMIDIチャンネルごとに保持し、build_patch()で毎ブロックPitch FGの
@@ -208,25 +187,6 @@ impl Default for Op505Plugin {
             last_filter_self_oscillation_param: true,
             operator_waveforms: [0; 4],
             last_operator_waveforms: [0; 4],
-            // 新規挿入時の既定は「どこにも接続されていない」。FmLfoDestination::Unplugged=0
-            // （2026-08-18並べ替え後）で、TextureLfo::default()のdestination:0と自然に一致する。
-            texture_lfo_destination: FmLfoDestination::Unplugged,
-            texture_lfo_waveform: 0,
-            texture_lfo_fade_mode: LfoFadeMode::default(),
-            texture_lfo_rate: 0,
-            texture_lfo_depth: 0,
-            texture_lfo_delay: 0,
-            texture_lfo_fade_time: 0,
-            texture_lfo_offset: 128,
-            last_texture_lfo_destination_param: 0, // Unplugged=0
-
-            last_texture_lfo_waveform_param: 0,
-            last_texture_lfo_fade_mode_param: 0,
-            last_texture_lfo_rate_param: 0,
-            last_texture_lfo_depth_param: 0,
-            last_texture_lfo_delay_param: 0,
-            last_texture_lfo_fade_time_param: 0,
-            last_texture_lfo_offset_param: 0,
             pitch_fg_cc1: [0; MIDI_CHANNEL_COUNT],
             pitch_fg_cc76: [64; MIDI_CHANNEL_COUNT],
             pitch_fg_cc77: [0; MIDI_CHANNEL_COUNT],
@@ -308,18 +268,6 @@ impl Op505Plugin {
             gain_fg: egs.gain_fg,
             gain_fg_to_master: p.gain_fg_to_master.value(),
             gain_fg_to_operators: p.gain_fg_to_operators.value(),
-            // 質感LFOは焼き込み専用のためCC補正を受けない（NRPN/DAWパラメーターのみ、
-            // 演奏系CC1/76/77/78はすべてPitch FGへ行く）。
-            texture_lfo: TextureLfo {
-                waveform: self.texture_lfo_waveform,
-                destination: self.texture_lfo_destination as u8,
-                rate: self.texture_lfo_rate,
-                depth: self.texture_lfo_depth,
-                delay: self.texture_lfo_delay,
-                fade_mode: self.texture_lfo_fade_mode as u8,
-                fade_time: self.texture_lfo_fade_time,
-                offset: self.texture_lfo_offset,
-            },
         };
 
         Op505Patch { operators, channel }
@@ -366,16 +314,9 @@ impl Op505Plugin {
             ControlTarget::ModulationDepthRange => {
                 self.pitch_fg_rpn0_5 = cc_to_u7(value);
             }
-            // NRPN(0,0): 質感LFO Destination（0=未接続/1=Pitch/2=Volume/3=TLキャリア一括/4=Cutoff）。
-            // build_patch()が毎ブロックtexture_lfo.destinationへ詰め替え、set_channel_paramsの
-            // 定期伝播に乗るため、明示的な即時反映呼び出しは不要。
-            ControlTarget::TextureLfoDestination => {
-                self.texture_lfo_destination = FmLfoDestination::from_u8(cc_to_u7(value).min(4));
-            }
-            // NRPN(0,1): 質感LFO Waveform（0〜4、質感LFOの5波形パレットへ直接対応）。
-            ControlTarget::TextureLfoWaveform => {
-                self.texture_lfo_waveform = cc_to_u7(value).min(4);
-            }
+            // NRPN(0,0)〜(0,1)・(0,22)〜(0,27): 旧質感LFOのアドレス。質感LFO退役に伴い
+            // 欠番として予約し何もしない（`ReservedFgLoopCurve`と同じ扱い）。
+            ControlTarget::ReservedTextureLfo => {}
             // NRPN(0,2): Reverb Type
             ControlTarget::ReverbType => {
                 self.effects.set_reverb_type(ReverbType::from_u8(cc_to_u7(value)));
@@ -431,27 +372,6 @@ impl Op505Plugin {
             // NRPN(0,18)〜(0,21): Operator F-Number Op0〜3
             ControlTarget::OperatorFNumber(op_index) => {
                 self.apply_operator_f_number_override(op_index as usize);
-            }
-            // NRPN(0,22): 質感LFO Fade Mode（0=ON-IN/1=ON-OUT/2=OFF-IN/3=OFF-OUT）。
-            ControlTarget::TextureLfoFadeMode => {
-                self.texture_lfo_fade_mode = lfo_fade_mode_from_index(cc_to_u7(value));
-            }
-            // NRPN(0,23)〜(0,27): 質感LFO Rate/Depth/Delay/FadeTime/Offset（焼き込み専用、
-            // DAWパラメーターとの1シャドウ差分検知はprocess()側。ここはNRPNからの直接書き込み）。
-            ControlTarget::TextureLfoRate => {
-                self.texture_lfo_rate = cc_to_u8(value);
-            }
-            ControlTarget::TextureLfoDepth => {
-                self.texture_lfo_depth = cc_to_u8(value);
-            }
-            ControlTarget::TextureLfoDelay => {
-                self.texture_lfo_delay = cc_to_u8(value);
-            }
-            ControlTarget::TextureLfoFadeTime => {
-                self.texture_lfo_fade_time = cc_to_u8(value);
-            }
-            ControlTarget::TextureLfoOffset => {
-                self.texture_lfo_offset = cc_to_u8(value);
             }
             // NRPN(0,28)〜(0,33): 欠番として予約（TimeEgはpersist状態のためNRPNから触らない）。
             ControlTarget::ReservedFgLoopCurve => {}
@@ -513,22 +433,6 @@ impl Plugin for Op505Plugin {
     fn reset(&mut self) {
         self.engine = Op505Engine::new(self.sample_rate);
         self.effects = MasterEffects::new(self.sample_rate);
-        self.texture_lfo_destination = FmLfoDestination::Unplugged;
-        self.texture_lfo_waveform = 0;
-        self.texture_lfo_fade_mode = LfoFadeMode::default();
-        self.texture_lfo_rate = 0;
-        self.texture_lfo_depth = 0;
-        self.texture_lfo_delay = 0;
-        self.texture_lfo_fade_time = 0;
-        self.texture_lfo_offset = 128;
-        self.last_texture_lfo_destination_param = 0;
-        self.last_texture_lfo_waveform_param = 0;
-        self.last_texture_lfo_fade_mode_param = 0;
-        self.last_texture_lfo_rate_param = 0;
-        self.last_texture_lfo_depth_param = 0;
-        self.last_texture_lfo_delay_param = 0;
-        self.last_texture_lfo_fade_time_param = 0;
-        self.last_texture_lfo_offset_param = 0;
         self.pitch_fg_cc1 = [0; MIDI_CHANNEL_COUNT];
         self.pitch_fg_cc76 = [64; MIDI_CHANNEL_COUNT];
         self.pitch_fg_cc77 = [0; MIDI_CHANNEL_COUNT];
@@ -608,49 +512,6 @@ impl Plugin for Op505Plugin {
         if filter_self_oscillation_param != self.last_filter_self_oscillation_param {
             self.filter_self_oscillation = filter_self_oscillation_param;
             self.last_filter_self_oscillation_param = filter_self_oscillation_param;
-        }
-
-        // 質感LFO（8個）：algorithmと同じ1シャドウ差分検知方式。NRPN(0,0)/(0,1)/(0,22)〜(0,27)直接
-        // 書き込みと共存する（build_patch()が毎ブロック読むため、明示的な即時反映呼び出しは不要）。
-        let texture_lfo_destination_param = self.params.texture_lfo_destination.value() as u8;
-        if texture_lfo_destination_param != self.last_texture_lfo_destination_param {
-            self.texture_lfo_destination = FmLfoDestination::from_u8(texture_lfo_destination_param);
-            self.last_texture_lfo_destination_param = texture_lfo_destination_param;
-        }
-        let texture_lfo_waveform_param = self.params.texture_lfo_waveform.value() as u8;
-        if texture_lfo_waveform_param != self.last_texture_lfo_waveform_param {
-            self.texture_lfo_waveform = texture_lfo_waveform_param;
-            self.last_texture_lfo_waveform_param = texture_lfo_waveform_param;
-        }
-        let texture_lfo_fade_mode_param = self.params.texture_lfo_fade_mode.value() as u8;
-        if texture_lfo_fade_mode_param != self.last_texture_lfo_fade_mode_param {
-            self.texture_lfo_fade_mode = lfo_fade_mode_from_index(texture_lfo_fade_mode_param);
-            self.last_texture_lfo_fade_mode_param = texture_lfo_fade_mode_param;
-        }
-        let texture_lfo_rate_param = self.params.texture_lfo_rate.value() as u8;
-        if texture_lfo_rate_param != self.last_texture_lfo_rate_param {
-            self.texture_lfo_rate = texture_lfo_rate_param;
-            self.last_texture_lfo_rate_param = texture_lfo_rate_param;
-        }
-        let texture_lfo_depth_param = self.params.texture_lfo_depth.value() as u8;
-        if texture_lfo_depth_param != self.last_texture_lfo_depth_param {
-            self.texture_lfo_depth = texture_lfo_depth_param;
-            self.last_texture_lfo_depth_param = texture_lfo_depth_param;
-        }
-        let texture_lfo_delay_param = self.params.texture_lfo_delay.value() as u8;
-        if texture_lfo_delay_param != self.last_texture_lfo_delay_param {
-            self.texture_lfo_delay = texture_lfo_delay_param;
-            self.last_texture_lfo_delay_param = texture_lfo_delay_param;
-        }
-        let texture_lfo_fade_time_param = self.params.texture_lfo_fade_time.value() as u8;
-        if texture_lfo_fade_time_param != self.last_texture_lfo_fade_time_param {
-            self.texture_lfo_fade_time = texture_lfo_fade_time_param;
-            self.last_texture_lfo_fade_time_param = texture_lfo_fade_time_param;
-        }
-        let texture_lfo_offset_param = self.params.texture_lfo_offset.value() as u8;
-        if texture_lfo_offset_param != self.last_texture_lfo_offset_param {
-            self.texture_lfo_offset = texture_lfo_offset_param;
-            self.last_texture_lfo_offset_param = texture_lfo_offset_param;
         }
 
         // Waveform Op0〜3：algorithmと同じ差分検知方式。NRPN(0,10)〜(0,13)直接書き込みと共存する。

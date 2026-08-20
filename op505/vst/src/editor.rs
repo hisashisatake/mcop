@@ -53,14 +53,6 @@ fn build_panel_params<'a>(
     Op505PanelParams {
         algorithm: vi(&params.algorithm, setter),
         feedback: vi(&params.feedback, setter),
-        texture_lfo_rate: vi(&params.texture_lfo_rate, setter),
-        texture_lfo_depth: vi(&params.texture_lfo_depth, setter),
-        texture_lfo_delay: vi(&params.texture_lfo_delay, setter),
-        texture_lfo_waveform: vi(&params.texture_lfo_waveform, setter),
-        texture_lfo_fade_mode: vi(&params.texture_lfo_fade_mode, setter),
-        texture_lfo_fade_time: vi(&params.texture_lfo_fade_time, setter),
-        texture_lfo_offset: vi(&params.texture_lfo_offset, setter),
-        texture_lfo_destination: vi(&params.texture_lfo_destination, setter),
         cutoff: vi(&params.cutoff, setter),
         resonance: vi(&params.resonance, setter),
         filter_type: vi(&params.filter_type, setter),
@@ -144,14 +136,6 @@ pub(crate) fn create_editor(
                                             set!(params.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
                                             set!(params.gain_fg_to_master, ch.gain_fg_to_master);
                                             set!(params.gain_fg_to_operators, ch.gain_fg_to_operators);
-                                            set!(params.texture_lfo_rate, ch.texture_lfo.rate as i32);
-                                            set!(params.texture_lfo_depth, ch.texture_lfo.depth as i32);
-                                            set!(params.texture_lfo_delay, ch.texture_lfo.delay as i32);
-                                            set!(params.texture_lfo_waveform, ch.texture_lfo.waveform as i32);
-                                            set!(params.texture_lfo_fade_mode, ch.texture_lfo.fade_mode as i32);
-                                            set!(params.texture_lfo_fade_time, ch.texture_lfo.fade_time as i32);
-                                            set!(params.texture_lfo_offset, ch.texture_lfo.offset as i32);
-                                            set!(params.texture_lfo_destination, ch.texture_lfo.destination as i32);
                                             for (i, op) in patch.operators.iter().enumerate() {
                                                 let op_p = &params.operators[i];
                                                 set!(op_p.tl, op.tl as i32);

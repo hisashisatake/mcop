@@ -246,33 +246,9 @@ impl Op505State {
                 }) as Box<dyn IntParamHandle>
             };
         }
-        macro_rules! tlfo {
-            ($field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
-                Box::new(Op505IntField {
-                    state: state.clone(),
-                    dirty: dirty.clone(),
-                    get: |p: &Op505Patch| p.channel.texture_lfo.$field as i32,
-                    set: |p: &mut Op505Patch, v: i32| p.channel.texture_lfo.$field = v as u8,
-                    min: $min,
-                    max: $max,
-                    default: $default,
-                    name: $name,
-                }) as Box<dyn IntParamHandle>
-            };
-        }
         Op505PanelParams {
             algorithm: ch!(algorithm, "Algorithm", 0, 7, 0),
             feedback: ch!(feedback, "Feedback", 0, 255, 0),
-            texture_lfo_rate: tlfo!(rate, "Texture LFO Rate", 0, 255, 0),
-            texture_lfo_depth: tlfo!(depth, "Texture LFO Depth", 0, 255, 0),
-            texture_lfo_delay: tlfo!(delay, "Texture LFO Delay", 0, 255, 0),
-            texture_lfo_waveform: tlfo!(waveform, "Texture LFO Waveform", 0, 4, 0),
-            texture_lfo_fade_mode: tlfo!(fade_mode, "Texture LFO Fade Mode", 0, 3, 0),
-            texture_lfo_fade_time: tlfo!(fade_time, "Texture LFO Fade Time", 0, 255, 0),
-            texture_lfo_offset: tlfo!(offset, "Texture LFO Offset", 0, 255, 128),
-            // default=0はFmLfoDestination::Unplugged（ダブルクリック/Ctrl+クリックでのリセット先。
-            // 2026-08-18並べ替え後、Unplugged=0）。
-            texture_lfo_destination: tlfo!(destination, "Texture LFO Destination", 0, 4, 0),
             cutoff: ch!(filter_cutoff, "Filter Cutoff", 0, 255, 255),
             resonance: ch!(filter_resonance, "Filter Resonance", 0, 255, 0),
             filter_type: ch!(filter_type, "Filter Type", 0, 255, 0),

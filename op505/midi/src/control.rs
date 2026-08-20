@@ -18,10 +18,12 @@ pub enum ControlTarget {
     PitchBendRange,
     /// RPN(0,5): Modulation Depth Range
     ModulationDepthRange,
-    /// NRPN(0,0): 質感LFO Destination
-    TextureLfoDestination,
-    /// NRPN(0,1): 質感LFO Waveform
-    TextureLfoWaveform,
+    /// NRPN(0,0)〜(0,1)・(0,22)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
+    /// Delay/FadeTime/Offset)のアドレス。質感LFO退役（`TimeEgParams::texture`へ統合、
+    /// memory `project_texture_lfo_retirement.md`参照）に伴い**欠番として予約**し、再利用しない
+    /// （`ReservedFgLoopCurve`と同じ理由：既存のSMF/DAWオートメーションが別の意味で
+    /// 解釈されるのを防ぐため）。
+    ReservedTextureLfo,
     /// NRPN(0,2): Reverb Type
     ReverbType,
     /// NRPN(0,3): Chorus Type
@@ -50,18 +52,6 @@ pub enum ControlTarget {
     PolyAtDestination,
     /// NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（引数はOpインデックス0〜3）
     OperatorFNumber(u8),
-    /// NRPN(0,22): 質感LFO Fade Mode
-    TextureLfoFadeMode,
-    /// NRPN(0,23): 質感LFO Rate
-    TextureLfoRate,
-    /// NRPN(0,24): 質感LFO Depth
-    TextureLfoDepth,
-    /// NRPN(0,25): 質感LFO Delay
-    TextureLfoDelay,
-    /// NRPN(0,26): 質感LFO Fade Time
-    TextureLfoFadeTime,
-    /// NRPN(0,27): 質感LFO Offset
-    TextureLfoOffset,
     /// NRPN(0,28)〜(0,33)。op505のTimeEg 7本はpersist状態のためNRPNから触ると
     /// GUI表示と実音がズレる。**欠番として予約**（ym38x6版FG Loop/Curve相当）。
     ReservedFgLoopCurve,
@@ -78,8 +68,7 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Rpn(0, 0) => ControlTarget::PitchBendRange,
         RpnSelection::Rpn(0, 5) => ControlTarget::ModulationDepthRange,
         RpnSelection::Rpn(_, _) => ControlTarget::Unassigned,
-        RpnSelection::Nrpn(0, 0) => ControlTarget::TextureLfoDestination,
-        RpnSelection::Nrpn(0, 1) => ControlTarget::TextureLfoWaveform,
+        RpnSelection::Nrpn(0, 0..=1) => ControlTarget::ReservedTextureLfo,
         RpnSelection::Nrpn(0, 2) => ControlTarget::ReverbType,
         RpnSelection::Nrpn(0, 3) => ControlTarget::ChorusType,
         RpnSelection::Nrpn(0, 4) => ControlTarget::ReverbTime,
@@ -94,12 +83,7 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 16) => ControlTarget::AtDestination,
         RpnSelection::Nrpn(0, 17) => ControlTarget::PolyAtDestination,
         RpnSelection::Nrpn(0, lsb @ 18..=21) => ControlTarget::OperatorFNumber(lsb - 18),
-        RpnSelection::Nrpn(0, 22) => ControlTarget::TextureLfoFadeMode,
-        RpnSelection::Nrpn(0, 23) => ControlTarget::TextureLfoRate,
-        RpnSelection::Nrpn(0, 24) => ControlTarget::TextureLfoDepth,
-        RpnSelection::Nrpn(0, 25) => ControlTarget::TextureLfoDelay,
-        RpnSelection::Nrpn(0, 26) => ControlTarget::TextureLfoFadeTime,
-        RpnSelection::Nrpn(0, 27) => ControlTarget::TextureLfoOffset,
+        RpnSelection::Nrpn(0, 22..=27) => ControlTarget::ReservedTextureLfo,
         RpnSelection::Nrpn(0, 28..=33) => ControlTarget::ReservedFgLoopCurve,
         RpnSelection::Nrpn(0, 34) => ControlTarget::Cc2Destination,
         RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
@@ -116,8 +100,7 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         ControlTarget::Unassigned
         | ControlTarget::PitchBendRange
         | ControlTarget::ModulationDepthRange
-        | ControlTarget::TextureLfoDestination
-        | ControlTarget::TextureLfoWaveform
+        | ControlTarget::ReservedTextureLfo
         | ControlTarget::ReverbType
         | ControlTarget::ChorusType
         | ControlTarget::ReverbTime
@@ -131,12 +114,6 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::FilterSelfOscillation
         | ControlTarget::AtDestination
         | ControlTarget::PolyAtDestination
-        | ControlTarget::TextureLfoFadeMode
-        | ControlTarget::TextureLfoRate
-        | ControlTarget::TextureLfoDepth
-        | ControlTarget::TextureLfoDelay
-        | ControlTarget::TextureLfoFadeTime
-        | ControlTarget::TextureLfoOffset
         | ControlTarget::ReservedFgLoopCurve
         | ControlTarget::Cc2Destination
         | ControlTarget::Cc4Destination => false,
@@ -160,6 +137,15 @@ mod tests {
         for lsb in 28..=33 {
             assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedFgLoopCurve);
             assert!(!needs_voice_update(ControlTarget::ReservedFgLoopCurve));
+        }
+    }
+
+    /// 旧質感LFOのNRPNアドレス。質感LFO退役後は欠番として予約し、再利用しない。
+    #[test]
+    fn reserved_texture_lfo_range_is_never_touched() {
+        for lsb in [0, 1, 22, 23, 24, 25, 26, 27] {
+            assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedTextureLfo);
+            assert!(!needs_voice_update(ControlTarget::ReservedTextureLfo));
         }
     }
 
