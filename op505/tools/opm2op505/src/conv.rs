@@ -7,8 +7,11 @@
 //! opz2op505/psr2op505と異なりis_carrier/carrier_sustainは扱わない。
 //! 詳細な設計判断はop505/tools/opz2op505/src/conv.rsのdocコメント参照（同じパターンを踏襲）。
 
-use op505_core::eg_convert::{apply_chip_lfo_am_to_eg, convert_eg_shape};
-use op505_core::{chip_lfo_pitch_to_pitch_fg, Op505ChannelParams, Op505Patch, Op505PresetEntry};
+use op505_core::eg_convert::convert_eg_shape;
+use op505_core::{
+    chip_lfo_am_to_gain_fg, chip_lfo_pitch_to_pitch_fg, Op505ChannelParams, Op505Patch,
+    Op505PresetEntry,
+};
 use sound_core::TimeEgParams;
 
 use crate::map;
@@ -76,41 +79,28 @@ pub fn voice_to_op505_patch(
     let pitch_fg = chip_lfo_pitch_to_pitch_fg(ch.pms, ch.chip_lfo_pmd, ch.chip_lfo_freq, 0);
     let pitch_migrated = ch.pms > 0 && ch.chip_lfo_pmd > 0;
 
-    // CHIP LFOのAM変調経路(ams/chip_lfo_amd)はオペレーターEGへ畳み込む（CHIP LFO退役の第二段階）。
+    // CHIP LFOのAM変調経路(ams/chip_lfo_amd)はGain FGへ厳密変換する（CHIP LFO完全退役）。
     // 詳細はopz2op505::conv::voice_to_op505_patchのコメント参照（同じロジックを踏襲）。
     // OPMにはLD(delay)レジスタがないためdelay=0固定。
-    let am_depth_active = ch.ams > 0 && ch.chip_lfo_amd > 0;
-    let mut am_migrated_all = false;
-    if am_depth_active {
-        let mut any_enabled = false;
-        let mut all_migrated = true;
-        for op in non_eg.iter_mut() {
-            if !op.am_enable {
-                continue;
-            }
-            any_enabled = true;
-            match apply_chip_lfo_am_to_eg(&op.eg, ch.ams, ch.chip_lfo_amd, ch.chip_lfo_freq, 0, op.eg_shift) {
-                Some(new_eg) => {
-                    op.eg = new_eg;
-                    op.am_enable = false;
-                }
-                None => all_migrated = false,
-            }
-        }
-        am_migrated_all = any_enabled && all_migrated;
-    }
+    let am_fg = chip_lfo_am_to_gain_fg(ch.ams, ch.chip_lfo_amd, ch.chip_lfo_freq, 0);
+    let am_active = am_fg.is_some() && non_eg.iter().any(|op| op.am_enable);
 
-    let channel = Op505ChannelParams {
+    let mut channel = Op505ChannelParams {
         algorithm: ch.algorithm,
         feedback: ch.feedback,
         chip_lfo_freq: ch.chip_lfo_freq,
         chip_lfo_pmd: if pitch_migrated { 0 } else { ch.chip_lfo_pmd },
-        chip_lfo_amd: if am_migrated_all { 0 } else { ch.chip_lfo_amd },
+        chip_lfo_amd: if am_active { 0 } else { ch.chip_lfo_amd },
         pms: if pitch_migrated { 0 } else { ch.pms },
-        ams: if am_migrated_all { 0 } else { ch.ams },
+        ams: if am_active { 0 } else { ch.ams },
         pitch_fg,
         ..Op505ChannelParams::default()
     };
+    if am_active {
+        channel.gain_fg = am_fg.expect("am_active implies Some");
+        channel.gain_fg_to_master = false;
+        channel.gain_fg_to_operators = true;
+    }
 
     (Op505Patch { operators: non_eg, channel }, warnings)
 }
@@ -190,10 +180,11 @@ mod tests {
         assert_eq!(patch.channel.gain_fg, default_channel.gain_fg);
     }
 
+    /// AM経路はGain FGへ厳密変換される（CHIP LFO完全退役）。旧②実装（オペレーターEGへの
+    /// 畳み込み）と違い、変換はチャンネル単位の一発勝負でオペレーターのEG形状（減衰する/
+    /// サステインする）に依存しない。
     #[test]
-    fn voice_to_op505_patch_migrates_am_when_sustain_is_audible() {
-        // d2r=0（D1Lで張り付く、サステイン可聴）+ 全OP ams_en=trueなら、AM経路は
-        // 全オペレーターのEGへ畳み込まれ、チャンネル共通のams/chip_lfo_amdも0にクリアされる。
+    fn voice_to_op505_patch_migrates_am_to_gain_fg() {
         let mut voice = make_voice(7, [31, 31, 31, 31]);
         voice.ams = 3;
         voice.amd = 99;
@@ -205,36 +196,29 @@ mod tests {
         let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
 
         for op in patch.operators.iter() {
-            assert!(!op.am_enable, "AM畳み込み成功後はam_enableをfalseへ落とすはず");
-            assert_eq!(op.eg.loop_enabled, 1, "畳み込み後のEGはAMループを持つはず");
+            assert!(op.am_enable, "am_enableはGain FGのOPゲートとしてそのまま維持されるはず");
         }
-        assert_eq!(patch.channel.ams, 0, "全OP畳み込み成功時はチャンネルamsも0クリア");
-        assert_eq!(patch.channel.chip_lfo_amd, 0, "全OP畳み込み成功時はチャンネルchip_lfo_amdも0クリア");
+        assert!(patch.channel.gain_fg_to_operators, "AM経路はGain FGのOP配線を有効にするはず");
+        assert!(!patch.channel.gain_fg_to_master, "AM専用にした場合マスターVCAは無効になるはず");
+        assert_eq!(patch.channel.gain_fg.loop_enabled, 1, "Gain FGはAMループを持つはず");
+        assert_eq!(patch.channel.ams, 0, "移設後はチャンネルamsを0クリア（二重変調防止）");
+        assert_eq!(patch.channel.chip_lfo_amd, 0, "移設後はチャンネルchip_lfo_amdを0クリア（二重変調防止）");
     }
 
-    /// d2r>0（無音まで減衰する形）もlevel_driftで畳み込める（CHIP LFO退役の第三段階）。
-    /// 減衰段がドリフト付きAMループへ置換されるため、CHIP LFOへのフォールバックは起きない。
+    /// どのオペレーターも`ams_en=false`（AM未使用）なら、Gain FGへは何も配線せず
+    /// ams/chip_lfo_amdもそのまま残す（CHIP LFOはまだ生きているため退避不要）。
     #[test]
-    fn voice_to_op505_patch_migrates_am_for_decaying_operators_too() {
+    fn voice_to_op505_patch_keeps_chip_lfo_am_when_no_operator_enables_it() {
         let mut voice = make_voice(7, [31, 31, 31, 31]);
         voice.ams = 3;
         voice.amd = 99;
-        for op in [&mut voice.m1, &mut voice.c1, &mut voice.m2, &mut voice.c2] {
-            op.ams_en = true;
-        }
         let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
 
-        for op in patch.operators.iter() {
-            assert!(!op.am_enable, "減衰する音色もAMを畳み込めるはず");
-            assert_eq!(op.eg.loop_enabled, 1, "AMループを持つはず");
-            assert!(
-                op.eg.level_drift < sound_core::BIPOLAR_NEUTRAL_RAW,
-                "減衰はlevel_driftで表現されるはず: {}",
-                op.eg.level_drift
-            );
-        }
-        assert_eq!(patch.channel.ams, 0, "CHIP LFOへのフォールバックは残らない");
-        assert_eq!(patch.channel.chip_lfo_amd, 0, "CHIP LFOへのフォールバックは残らない");
+        assert!(!patch.channel.gain_fg_to_operators, "ams_enなOPが無ければGain FGは配線されない");
+        // voice.ams=3(生レジスタ2bit)/amd=99(生レジスタ7bit)は`map::convert_channel`で
+        // depth値(0〜255)へ写像される（ams_reg_to_depth/lfo_depth_reg_to_depth）。
+        assert_eq!(patch.channel.ams, 255, "ams_enなOPが無ければCHIP LFO側のamsは維持される");
+        assert_eq!(patch.channel.chip_lfo_amd, 199);
     }
 
     #[test]
