@@ -23,14 +23,16 @@ let pendingPos     = null;   // {x,y} — mousemove から animation tick へ橋
 let mouseHeld      = false;
 let mousePos       = { x: 0, y: 0 };
 
-// ym38x6ビルトイン波形（スロット0〜7、waveform.rs参照）。波形メモリ音色のProgram番号に対応。
+// OP505ビルトイン波形（スロット0〜7、waveform.rs参照）。波形メモリ音色のProgram番号に対応。
 const WAVE_NAMES = ['sine', 'half-sine', 'abs-sine', 'square', 'saw', 'quantized', 'pulse', 'octave'];
 
 // Bank=0（GM2 Bank0）で手動チューニング済みのProgram名（preset.rsのgm2_bank0_patch参照）。
 // 未掲載のProgramはplaceholder_patchへフォールバックする。
 const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80: 'Lead 1 (Square)' };
 
-// 波形メモリ音色専用のBank Select番号（ym38x6-coreのWAVEFORM_MEMORY_BANKと一致させる）。
+// 波形メモリ音色専用のBank Select番号（凍結済みym38x6-coreのWAVEFORM_MEMORY_BANKと一致させていた
+// 値。op505-coreには波形メモリ専用音色バンクが未移植のため、現状このBankを指定しても
+// op505_set_programは「未登録」を返す。将来op505へ移植する可能性を見越してUIは残してある）。
 // Program 0〜7=ビルトイン波形+ピアノ風ADSR、8〜15=ビルトイン波形+リード風ADSR、
 // 16〜127=ユーザー波形スロット（preset.rsのwaveform_memory_params_for_program参照）。
 const WAVEFORM_MEMORY_BANK = 16383;
@@ -43,8 +45,9 @@ const WAVEFORM_MEMORY_BANK = 16383;
 const LFO_RATE_DEFAULT = 140; // 中程度の速さ
 const LFO_RATE_STEP    = 8;
 const LFO_DELAY = 0;
-const LFO_DEST_PITCH  = 0; // ビブラート
-const LFO_DEST_VOLUME = 1; // トレモロ
+// FmLfoDestination（sound-fm）の値: Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/Cutoff=4
+const LFO_DEST_PITCH  = 1; // ビブラート
+const LFO_DEST_VOLUME = 2; // トレモロ
 const MOD_DEPTH_RANGE = 64; // RPN0,5デフォルト（約50セント相当）
 const CC77_BASE = 0;        // Depthベース値は0固定。深さはマウスホイール（CC1相当）のみで制御
 
@@ -53,7 +56,7 @@ let lfoDestination = LFO_DEST_PITCH;
 let lfoRate        = LFO_RATE_DEFAULT;
 
 async function applyPerformanceLfo(channel) {
-  await invoke('ym38x6_set_performance_lfo', {
+  await invoke('op505_set_performance_lfo', {
     channel,
     rate: lfoRate,
     delay: LFO_DELAY,
@@ -77,17 +80,11 @@ async function applyPerformanceLfoToActiveChannels() {
 // Bank/Programを復元する（FM⇔波形メモリのどちら向きの切替でも双方向に復元される）。
 // 「波形メモリ」チェックON時はBank欄をWAVEFORM_MEMORY_BANKに固定して編集不可にする。
 // ─────────────────────────────────────────────
-// エンジン切替（0=OP505 / 1=38x6）。note_on/note_offのIPCは共通で、どちらのエンジンが鳴るかは
-// バックエンドのactive側が決める（engines.rs参照）。モジュールスコープに置くのは、
-// 音色エディタ起動時（toggleEditor()、IIFE外）にも現在値を参照して同期する必要があるため。
-let activeEngine = 0;
-
 (() => {
   const wmToggle = document.getElementById('waveform-memory-toggle');
   const bankEl   = document.getElementById('program-bank');
   const numEl    = document.getElementById('program-num');
   const labelEl  = document.getElementById('program-label');
-  const engineEl = document.getElementById('engine-select');
 
   // 各モードで最後に使っていたBank/Program（モード切替時の復元先）
   let savedFmBank    = parseInt(bankEl.value, 10) || 0;
@@ -126,30 +123,18 @@ let activeEngine = 0;
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
     const program = Math.max(0, Math.min(127, parseInt(numEl.value, 10) || 0));
 
-    if (activeEngine === 0) {
-      // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
-      // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
-      const patch = await invoke('op505_set_program', { bank, program });
-      labelEl.textContent = patch
-        ? `OP505: ${programName(bank, program)}`
-        : `OP505: ${programName(bank, program)}（.op505未登録）`;
-    } else {
-      labelEl.textContent = programName(bank, program);
-      await invoke('ym38x6_set_program', { bank, program });
-    }
-    // PRESETSサイドバー（editor-wasm）へBank/Program変更を伝える。エンジン・見つかったか否かに
+    // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
+    // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
+    const patch = await invoke('op505_set_program', { bank, program });
+    labelEl.textContent = patch
+      ? programName(bank, program)
+      : `${programName(bank, program)}（.op505未登録）`;
+    // PRESETSサイドバー（editor-wasm）へBank/Program変更を伝える。見つかったか否かに
     // 関わらず常に呼ぶ（サイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため）。
     notifyEditorSelection();
     lastChordKey = null; // 同じコードでも即座に音色変更させる
   }
 
-  engineEl.addEventListener('change', async () => {
-    activeEngine = parseInt(engineEl.value, 10) || 0;
-    await invoke('set_active_engine', { engineId: activeEngine });
-    await applyProgram();
-    // 音色エディタ(editor-wasm)側にも切替を伝える（未起動ならE キー初回起動時にsyncEditorEngine()が反映する）。
-    notifyEditorEngine(activeEngine);
-  });
   wmToggle.addEventListener('change', () => { syncBankField(); applyProgram(); });
   bankEl.addEventListener('input', applyProgram);
   numEl.addEventListener('input', applyProgram);
@@ -418,16 +403,10 @@ window.addEventListener('keydown', async (e) => {
 // ─────────────────────────────────────────────
 const editorOverlay = document.getElementById('editor-overlay');
 let editorHandle  = null;
-let editorModule  = null; // import()したモジュール参照。notify_shift/notify_engine呼び出しに使う
+let editorModule  = null; // import()したモジュール参照。notify_shift呼び出しに使う
 let editorVisible = false;
 
-// エンジン切替(#engine-select)をeditor-wasm側へ伝える。未起動時は何もしない
-// （起動時（toggleEditorの初回表示時）にactiveEngineの現在値で改めて同期する）。
-function notifyEditorEngine(engineId) {
-  if (editorModule) editorModule.notify_engine(engineId);
-}
-
-// メイン画面のBank/Program欄の変更（エンジン問わず）をeditor-wasm側へ伝える。未起動時は何もしない
+// メイン画面のBank/Program欄の変更をeditor-wasm側へ伝える。未起動時は何もしない
 // （PRESETSサイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため、次にエディタが
 // 再描画される際にサイドバーの再読み込みを予約する）。
 function notifyEditorSelection() {
@@ -448,8 +427,6 @@ async function toggleEditor() {
     });
     editorHandle = new editorModule.EditorHandle();
     await editorHandle.start('editor-canvas');
-    // wasmモジュールは起動のたびリセットされる（既定OP505）ため、現在のエンジン選択を反映する。
-    notifyEditorEngine(activeEngine);
   } else if (!editorVisible && editorHandle) {
     // エディタを閉じてメイン画面に戻る瞬間に、Bank/Program欄をエディタ側の最新値へ同期する
     // （リアルタイム同期はしない。既存のapplyProgram()リスナーへ委譲することで、

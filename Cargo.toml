@@ -5,22 +5,11 @@ members = [
     "ui/core",
     "ui/layout",
     "ui/codegen",
-    "ym38x6/core",
     "op505/core",
     "op505/midi",
     "op505/ui",
     "op505/vst",
-    "ym38x6/ui",
-    "ym38x6/vst",
     "gesture-app/src-tauri",
-    "ym38x6/tools/psr2x6",
-    "ym38x6/tools/mucom2x6",
-    "ym38x6/tools/opm2x6",
-    "ym38x6/tools/opz2x6",
-    "ym38x6/tools/opzref4x6",
-    "ym38x6/tools/smf2wav",
-    "ym38x6/tools/wavetest4x6",
-    "ym38x6/tools/vgm2x6",
     "op505/tools/common",
     "op505/tools/opzref",
     "op505/tools/wavetest",
@@ -31,28 +20,22 @@ members = [
     "op505/tools/vgm2op505",
     "op505/tools/smf2op505",
 ]
-# ym38x6/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
+# op505/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
-# 除外して独立クレートとして扱う（ビルドはmaturin専任、ym38x6-coreはpath依存で参照）。
+# 除外して独立クレートとして扱う（ビルドはmaturin専任、op505-coreはpath依存で参照）。
 # gesture-app/editor-wasm・op505/ui/preview-wasm はwasm32-unknown-unknown専用クレート
 # （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
 # cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
-# 個別に行う（editor-wasmはym38x6-uiを、preview-wasmはop505-ui(preview feature)/ui-codegenを
-# path依存で参照。旧tools/xml-panel-dsl/codegen-wasmはpreview-wasmへ統合され削除済み。
-# preview-wasmは2026-08-14に`ym38x6/ui/preview-wasm`から`op505/ui/preview-wasm`へ移動）。
+# 個別に行う（editor-wasm・preview-wasmとも op505-ui/ui-codegen をpath依存で参照する）。
 # op505/tools/xml-panel-dsl/preview-native はeframe nativeのxml-panel-dslプレビュー用GUIツール
-# （分離・ドッキング可能なプレビュー等、preview-wasm＝ブラウザ版では実現できない機能向け。
-# 2026-08-14に`ym38x6/tools/xml-panel-dsl`から移動）。
+# （分離・ドッキング可能なプレビュー等、preview-wasm＝ブラウザ版では実現できない機能向け）。
 # winit/glow等の重い依存を`cargo check --workspace`に持ち込まないため除外し、
 # scoop版の既定cargoで個別にビルドする（preview-wasmと同じop505-ui(preview feature)/ui-codegen
 # をpath依存で参照するが、wasm32は不要）。
-# sound/{core,fm}・ui/{common,layout,codegen} は製品非依存の共有クレート群
-# （ディレクトリ=グループ、パッケージ名は<group>-<part>。ym38x6/op505配下と同じ規約）。
+# sound/{core,fm}・ui/{core,layout,codegen} は製品非依存の共有クレート群
+# （ディレクトリ=グループ、パッケージ名は<group>-<part>。op505配下と同じ規約）。
 # op505/tools/common（op505-tools）は製品非依存ではなく、op505ツール群専用の共有クレート。
-# ym38x6側の同種ユーティリティ（smf2wav等）へ依存しないための複製先でもある（fork-on-write。
-# 詳細はop505/tools/common/Cargo.tomlのコメント）。
 exclude = [
-    "ym38x6/tools/patchlab",
     "op505/tools/patchlab",
     "gesture-app/editor-wasm",
     "op505/ui/preview-wasm",

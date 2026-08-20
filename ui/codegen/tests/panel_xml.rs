@@ -1,42 +1,40 @@
-//! `ym38x6-ui/src/panel.xml`（実際の正本）を`generate_rust`に通し、構造が壊れていないことを
-//! 検証する。ここで確認する木構造（OPパネルの`eg-preview`+17ウィジェット均等割り付け等）は、
-//! かつての垂直スライス検証（旧`spike.rs`の`draw_op_taffy`、現行描画と同一と確認済みの
-//! 手書きtaffy版リファレンス。役目をui-codegen/interpret.rsが代替したため削除済み）と1:1で対応する。
+//! `op505-ui/src/panel.xml`（実際の正本）を`generate_rust`に通し、構造が壊れていないことを
+//! 検証する。ここで確認する木構造（OPパネルの`time-eg-editor`+11ウィジェットの`stack_grow`3行
+//! 折り返し等）は、ビルド成果物（`$OUT_DIR/panel_generated.rs`）の実測と一致させてある
+//! （2026-08-20、ym38x6-ui削除に伴い旧ym38x6-ui版のリファレンスから移行。旧版はOPパネルが
+//! 1列・17ウィジェット均等割りだったが、op505-uiはOPパネルのcolumns=2グリッド化・TimeEg
+//! エディタ化により木構造が異なる）。
 
 fn panel_xml() -> String {
-    std::fs::read_to_string("../../ym38x6/ui/src/panel.xml").expect("panel.xml が見つかりません")
+    std::fs::read_to_string("../../op505/ui/src/panel.xml").expect("panel.xml が見つかりません")
 }
 
 #[test]
 fn generates_without_error() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).expect("generate_rust が失敗しました");
-    assert!(rust.starts_with("pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {"));
+    assert!(rust.starts_with("pub fn draw_op505_panel(ui: &mut egui::Ui, params: &Op505PanelParams) {"));
     assert!(rust.trim_end().ends_with('}'));
 }
 
-/// OPパネルのレイアウト木が、旧`spike.rs`の`draw_op_taffy`(削除済み)で検証済みだった構造
-/// （eg-preview(130x105、EGプレビューグラフ実装で84x66から拡大済み) + LOOP/CURVEの`<stack>`
-/// (checkbox実測70x38+70x25を縦積み) + 17ウィジェットの`row_grow`均等割り付け(62x71)、
-/// うちwaveform+AMも`<stack>`(130x71+70x25)）と一致することを確認する。
+/// OPパネルのレイアウト木が、ビルド成果物の実測（`time-eg-editor`(260x250) + 11ウィジェットの
+/// `stack_grow`3行折り返し(62x71×4 + 62x71×4 + 62x71+waveform/AMの`<stack>`(130x71+70x25))）と
+/// 一致することを確認する。
 ///
-/// ノブの宣言幅62は`ui_core::knob::KNOB_CELL_SIZE`と同期する値。バイポーラ表示（`-128`〜`+127`）で
-/// 数値欄を24→32pxへ広げてもスピン行の実幅は60pxに収まるため、この宣言幅は変わっていない。
+/// ノブの宣言幅62は`ui_core::knob::KNOB_CELL_SIZE`と同期する値。
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
-    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(130.0, 105.0), \
-stack(outer_gap, vec![leaf(70.0, 38.0), leaf(70.0, 25.0)]), \
-row_grow(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
-leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
-leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), \
-stack(0.0, vec![leaf(130.0, 71.0), leaf(70.0, 25.0)]), \
-leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)])]);";
+    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(260.0, 250.0), \
+stack_grow(outer_gap, vec![\
+row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)]), \
+row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)]), \
+row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), stack(0.0, vec![leaf(130.0, 71.0), leaf(70.0, 25.0)])])\
+])]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
-    // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される。`<let>`廃止に伴い
-    // 中間変数を経由しないが、計算内容は同一）、waveform_selectorのindex、LOOP/CURVEの<stack>展開。
+    // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される）、waveform_selectorのindex。
     assert!(rust.contains(
         "ui.add_enabled_ui(!crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.vel_sens, \"VEL\"); });"
     ));
@@ -44,8 +42,6 @@ leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)])]);";
         "ui.add_enabled_ui(crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.velocity_gain, \"V.GAIN\"); });"
     ));
     assert!(rust.contains("waveform_selector(ui, &*op.waveform, (i) as usize);"));
-    assert!(rust.contains("bool_checkbox(ui, &*op.op_loop, \"LOOP\");"));
-    assert!(rust.contains("bool_checkbox(ui, &*op.curve, \"CURVE\");"));
     assert!(rust.contains("bool_checkbox(ui, &*op.ame, \"AM\");"));
 }
 
@@ -101,7 +97,7 @@ fn header_title_from_attr_resolves() {
 fn all_panels_present() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
-    assert!(rust.contains("for (i, op) in params.operators.iter().enumerate()"));
+    assert!(rust.contains("for (i_row, i_chunk) in params.operators.chunks(2).enumerate()"));
     assert!(rust.contains("\"TEXTURE LFO\""));
     assert!(rust.contains("\"PITCH FG\""));
     assert!(rust.contains("\"CUTOFF FG\""));

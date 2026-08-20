@@ -1,6 +1,6 @@
-//! gesture-app埋め込み用の音色エディタ（egui-wasm）。`ym38x6-ui`の共有レイアウトを
+//! gesture-app埋め込み用の音色エディタ（egui-wasm）。`op505-ui`の共有レイアウトを
 //! eframeのWebRunnerでcanvasに描画し、パラメーター変更をTauri IPC経由で
-//! src-tauriの`Ym38x6Engine`へ反映する。wasm32-unknown-unknown専用クレート
+//! src-tauriの`Op505Engine`へ反映する。wasm32-unknown-unknown専用クレート
 //! （ワークスペースからは除外。ビルドはrustup配下のcargoで個別に行う）。
 
 mod app;
@@ -13,7 +13,7 @@ mod program_sync;
 mod shift_keys;
 mod state;
 
-pub use engine_sync::{notify_engine, notify_selection_changed};
+pub use engine_sync::notify_selection_changed;
 pub use program_sync::get_current_program;
 pub use shift_keys::notify_shift;
 

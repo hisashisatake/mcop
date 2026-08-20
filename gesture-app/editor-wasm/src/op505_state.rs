@@ -1,7 +1,7 @@
-//! OP505パネル用の状態とハンドル。`handle.rs`/`state.rs`のym38x6版と異なり、フラットな
-//! `EditorState`構造体を新設せず`Op505Patch`（op505-core、`Default`実装済み）をそのまま
-//! `Rc<RefCell<>>`で保持する（設計判断はplan参照: 専用DTOを作らずOp505Patchを直接シリアライズ
-//! する方針と対を成す。196値ぶんのミラー構造体を手書きしない）。
+//! OP505パネル用の状態とハンドル。フラットなミラー構造体を新設せず`Op505Patch`
+//! （op505-core、`Default`実装済み）をそのまま`Rc<RefCell<>>`で保持する
+//! （設計判断はplan参照: 専用DTOを作らずOp505Patchを直接シリアライズする方針と対を成す。
+//! 196値ぶんのミラー構造体を手書きしない）。
 //!
 //! TimeEg（`sound_core::TimeEgParams`）はOp505Patch内の7箇所（4つのOP EG＋Pitch/Cutoff/Gain FG）に
 //! ネストしているため、`Op505IntField`（フラットなi32/bool 1個への単純ハンドル）とは別に、
@@ -17,8 +17,8 @@ use op505_core::Op505Patch;
 use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 use sound_core::TimeEgParams;
 
-use crate::handle::{int_field, IntField};
-use crate::state::EditorState;
+use crate::handle::int_field;
+use crate::state::MasterEffectsState;
 
 /// `Op505Patch`内の1つのi32相当(u8)フィールドへの単純ハンドル。`handle.rs::IntField`のOP505版。
 pub struct Op505IntField {
@@ -223,11 +223,11 @@ impl Op505State {
         Self { patch, dirty }
     }
 
-    /// `master_state`/`master_dirty`はym38x6側`EditorState`と共有するMASTER EFFECTS状態
-    /// （エンジン非依存のため複製せず参照する。`app.rs`の`self.state`/`self.dirty`をそのまま渡す）。
+    /// `master_state`/`master_dirty`はエンジン非依存のMASTER EFFECTS状態
+    /// （`app.rs`の`self.master_effects`/`self.master_effects_dirty`をそのまま渡す）。
     pub fn build_panel_params(
         &self,
-        master_state: &Rc<RefCell<EditorState>>,
+        master_state: &Rc<RefCell<MasterEffectsState>>,
         master_dirty: &Rc<Cell<bool>>,
     ) -> Op505PanelParams<'static> {
         let state = &self.patch;

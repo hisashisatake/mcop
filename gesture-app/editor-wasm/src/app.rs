@@ -1,151 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use op505_core::Op505Patch;
 use op505_ui::draw_op505_panel;
-use ym38x6_ui::{draw_param_panel, BipolarFgPanelParams, FgEgPanelParams, OperatorPanelParams, PanelParams};
 
-use crate::handle::{bool_field, int_field, op_int_field, BoolField, IntField};
 use crate::ipc;
 use crate::keyboard;
 use crate::op505_state::Op505State;
-use crate::state::EditorState;
-
-
-// オペレーターインデックスをconst genericsにしているのは、`IntField`/`BoolField`の
-// get/setが（クロージャの環境キャプチャを避けて軽量にするため）プレーンな関数ポインタ
-// `fn(&EditorState) -> i32`型である一方、配列インデックスは本来は実行時の値だから。
-// 非キャプチャクロージャしか`fn`型へ強制変換できないため、インデックスをconst genericsの
-// `I`として埋め込み、各モノモーフィック化(I=0,1,2,3)ごとにコンパイル時定数として扱わせている。
-fn operator_panel<const I: usize>(state: &Rc<RefCell<EditorState>>, dirty: &Rc<Cell<bool>>) -> OperatorPanelParams<'static> {
-    macro_rules! op {
-        ($field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
-            op_int_field!(state, dirty, I, $field, $name, $min, $max, $default)
-        };
-    }
-    OperatorPanelParams {
-        tl: op!(tl, "TL", 0, 255, 200),
-        ar: op!(ar, "AR", 0, 255, 255),
-        d1r: op!(d1r, "D1R", 0, 255, 100),
-        d2r: op!(d2r, "D2R", 0, 255, 80),
-        d1l: op!(d1l, "D1L", 0, 255, 180),
-        rr: op!(rr, "RR", 0, 255, 150),
-        mul: op!(mul, "MUL", 0, 15, 1),
-        dt1: op!(dt1, "DT1", 0, 255, 128),
-        ksr: op!(ksr, "KSR", 0, 255, 64),
-        vel_sens: op!(vel_sens, "VEL", 0, 255, 0),
-        velocity_gain: op!(velocity_gain, "V.GAIN", 0, 255, 255),
-        op_fine_tune: op!(op_fine_tune, "FINE", 0, 255, 128),
-        ame: Box::new(BoolField {
-            state: state.clone(),
-            dirty: dirty.clone(),
-            get: |s: &EditorState| s.operators[I].ame,
-            set: |s: &mut EditorState, v: bool| s.operators[I].ame = v,
-        }),
-        waveform: op!(waveform, "Waveform", 0, 255, 0),
-        floor: op!(floor, "Floor", 0, 255, 0),
-        op_loop: Box::new(BoolField {
-            state: state.clone(),
-            dirty: dirty.clone(),
-            get: |s: &EditorState| s.operators[I].op_loop,
-            set: |s: &mut EditorState, v: bool| s.operators[I].op_loop = v,
-        }),
-        curve: Box::new(BoolField {
-            state: state.clone(),
-            dirty: dirty.clone(),
-            get: |s: &EditorState| s.operators[I].curve,
-            set: |s: &mut EditorState, v: bool| s.operators[I].curve = v,
-        }),
-        eg_shift: op!(eg_shift, "EGSFT", 0, 255, 0),
-        level_scale: op!(level_scale, "LEVEL SCALE", 0, 255, 0),
-    }
-}
-
-fn build_panel_params(state: &Rc<RefCell<EditorState>>, dirty: &Rc<Cell<bool>>) -> PanelParams<'static> {
-    macro_rules! ch {
-        ($field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
-            int_field!(state, dirty, $field, $name, $min, $max, $default)
-        };
-    }
-    macro_rules! chb {
-        ($field:ident) => {
-            bool_field!(state, dirty, $field)
-        };
-    }
-    PanelParams {
-        algorithm: ch!(algorithm, "Algorithm", 0, 7, 0),
-        feedback: ch!(feedback, "Feedback", 0, 255, 0),
-        texture_lfo_rate: ch!(texture_lfo_rate, "Texture LFO Rate", 0, 255, 0),
-        texture_lfo_depth: ch!(texture_lfo_depth, "Texture LFO Depth", 0, 255, 0),
-        texture_lfo_delay: ch!(texture_lfo_delay, "Texture LFO Delay", 0, 255, 0),
-        texture_lfo_waveform: ch!(texture_lfo_waveform, "Texture LFO Waveform", 0, 4, 0),
-        texture_lfo_fade_mode: ch!(texture_lfo_fade_mode, "Texture LFO Fade Mode", 0, 3, 0),
-        texture_lfo_fade_time: ch!(texture_lfo_fade_time, "Texture LFO Fade Time", 0, 255, 0),
-        texture_lfo_offset: ch!(texture_lfo_offset, "Texture LFO Offset", 0, 255, 128),
-        texture_lfo_destination: ch!(texture_lfo_destination, "Texture LFO Destination", 0, 4, 0),
-        chip_lfo_freq: ch!(chip_lfo_freq, "Chip LFO Freq", 0, 255, 0),
-        chip_lfo_pmd: ch!(chip_lfo_pmd, "Chip LFO PMD", 0, 255, 0),
-        chip_lfo_amd: ch!(chip_lfo_amd, "Chip LFO AMD", 0, 255, 0),
-        chip_lfo_delay: ch!(chip_lfo_delay, "Chip LFO Delay", 0, 255, 0),
-        pms: ch!(pms, "PMS", 0, 255, 0),
-        ams: ch!(ams, "AMS", 0, 255, 0),
-        pitch_fg: BipolarFgPanelParams {
-            eg: FgEgPanelParams {
-                ar: ch!(pitch_fg_ar, "Pitch FG AR", 0, 255, 0),
-                d1r: ch!(pitch_fg_d1r, "Pitch FG D1R", 0, 255, 0),
-                d1l: ch!(pitch_fg_d1l, "Pitch FG D1L", 0, 255, 255),
-                d2r: ch!(pitch_fg_d2r, "Pitch FG D2R", 0, 255, 0),
-                rr: ch!(pitch_fg_rr, "Pitch FG RR", 0, 255, 255),
-                floor: ch!(pitch_fg_floor, "Pitch FG Floor", 0, 255, 0),
-                delay: ch!(pitch_fg_delay, "Pitch FG Delay", 0, 255, 0),
-                loop_enabled: chb!(pitch_fg_loop),
-                curve: chb!(pitch_fg_curve),
-            },
-            depth: ch!(pitch_fg_depth, "Pitch FG Depth", 0, 255, 128),
-        },
-        cutoff: ch!(cutoff, "Filter Cutoff", 0, 255, 255),
-        resonance: ch!(resonance, "Filter Resonance", 0, 255, 0),
-        cutoff_fg: BipolarFgPanelParams {
-            eg: FgEgPanelParams {
-                ar: ch!(cutoff_fg_ar, "Cutoff FG AR", 0, 255, 0),
-                d1r: ch!(cutoff_fg_d1r, "Cutoff FG D1R", 0, 255, 0),
-                d1l: ch!(cutoff_fg_d1l, "Cutoff FG D1L", 0, 255, 0),
-                d2r: ch!(cutoff_fg_d2r, "Cutoff FG D2R", 0, 255, 0),
-                rr: ch!(cutoff_fg_rr, "Cutoff FG RR", 0, 255, 0),
-                floor: ch!(cutoff_fg_floor, "Cutoff FG Floor", 0, 255, 0),
-                delay: ch!(cutoff_fg_delay, "Cutoff FG Delay", 0, 255, 0),
-                loop_enabled: chb!(cutoff_fg_loop),
-                curve: chb!(cutoff_fg_curve),
-            },
-            depth: ch!(cutoff_fg_depth, "Cutoff FG Depth", 0, 255, 128),
-        },
-        gain_fg: FgEgPanelParams {
-            ar: ch!(gain_fg_ar, "Gain FG AR", 0, 255, 255),
-            d1r: ch!(gain_fg_d1r, "Gain FG D1R", 0, 255, 0),
-            d1l: ch!(gain_fg_d1l, "Gain FG D1L", 0, 255, 255),
-            d2r: ch!(gain_fg_d2r, "Gain FG D2R", 0, 255, 0),
-            rr: ch!(gain_fg_rr, "Gain FG RR", 0, 255, 0),
-            floor: ch!(gain_fg_floor, "Gain FG Floor", 0, 255, 0),
-            delay: ch!(gain_fg_delay, "Gain FG Delay", 0, 255, 0),
-            loop_enabled: chb!(gain_fg_loop),
-            curve: chb!(gain_fg_curve),
-        },
-        rev_send: ch!(rev_send, "Reverb Send", 0, 255, 0),
-        reverb_type: ch!(reverb_type, "Reverb Type", 0, 7, 3),
-        cho_send: ch!(cho_send, "Chorus Send", 0, 255, 0),
-        chorus_type: ch!(chorus_type, "Chorus Type", 0, 7, 0),
-        reverb_time: ch!(reverb_time, "Reverb Time", 0, 255, 128),
-        chorus_mod_rate: ch!(chorus_mod_rate, "Chorus Mod Rate", 0, 255, 128),
-        chorus_mod_depth: ch!(chorus_mod_depth, "Chorus Mod Depth", 0, 255, 128),
-        chorus_feedback: ch!(chorus_feedback, "Chorus Feedback", 0, 255, 0),
-        chorus_send_to_reverb: ch!(chorus_send_to_reverb, "Chorus Send To Reverb", 0, 255, 0),
-        operators: [
-            operator_panel::<0>(state, dirty),
-            operator_panel::<1>(state, dirty),
-            operator_panel::<2>(state, dirty),
-            operator_panel::<3>(state, dirty),
-        ],
-    }
-}
+use crate::state::MasterEffectsState;
 
 /// Open/Save/Save As/PRESETS選択/Bank・Programスピンの全経路が共有する表示状態。
 /// `current_bank`/`current_program`は「見た目と動作を一致させる」ための唯一の正——
@@ -157,16 +19,14 @@ struct Identity {
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
     unsaved_changes: Rc<Cell<bool>>,
-    /// `list_bank_entries`で取得した、今のbankの担当ファイルの音色一覧。`apply()`のたびに
+    /// `op505_list_bank_entries`で取得した、今のbankの担当ファイルの音色一覧。`apply()`のたびに
     /// 再取得し、Save/Save As/Openによるレジストリの変化を常に反映する。
     presets: Rc<RefCell<Vec<ipc::PresetEntry>>>,
-    /// `apply()`が立てるプリセット読込直後1回ぶんの「次のsend_patch()完了ではunsaved_changesを
-    /// 立てない」抑制フラグ。`load_preset`はエンジンへの反映のため`target`のdirtyを立てるが、
+    /// `apply()`が立てるプリセット読込直後1回ぶんの「次のsend_op505_patch()完了ではunsaved_changesを
+    /// 立てない」抑制フラグ。`load_preset`はエンジンへの反映のため`patch`のdirtyを立てるが、
     /// それをそのまま`unsaved_changes`に波及させると、プリセットを読み込んだ瞬間から
     /// 未保存マーク`*`が付いてしまう（ユーザーはまだ何も編集していない）ため。
     suppress_unsaved: Rc<Cell<bool>>,
-    /// このIdentityが今どちらのエンジンの状態と結び付いているか（`fetch_bank_entries`用）。
-    target: ipc::PatchTarget,
 }
 
 impl Identity {
@@ -182,37 +42,37 @@ impl Identity {
 
         let presets = self.presets.clone();
         let bank = loaded.bank;
-        let target = self.target.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            *presets.borrow_mut() = ipc::fetch_bank_entries(&target, bank).await;
+            *presets.borrow_mut() = ipc::fetch_bank_entries(bank).await;
             crate::shift_keys::request_repaint();
         });
     }
 }
 
-/// 指定のbank/programをレジストリから読み込む（`ipc::load_preset`＝`get_bank_program`、
-/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・エンジン切替・
-/// 起動直後の初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく
-/// 更新されているため、「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
+/// 指定のbank/programをレジストリから読み込む（`ipc::load_preset`＝`op505_get_bank_program`、
+/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・起動直後の
+/// 初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく更新されているため、
+/// 「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
 /// `keep_fg`は`ipc::load_preset`参照（PRESETSリストのShift+クリック専用、他の呼び出し元は常にfalse）。
-async fn handle_navigate(target: ipc::PatchTarget, identity: Identity, bank: u16, program: u8, keep_fg: bool) {
-    if let Some(loaded) = ipc::load_preset(&target, bank, program, keep_fg).await {
+async fn handle_navigate(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, identity: Identity, bank: u16, program: u8, keep_fg: bool) {
+    if let Some(loaded) = ipc::load_preset(&patch, &dirty, bank, program, keep_fg).await {
         identity.apply(loaded);
     }
 }
 
-/// Bank欄のハンドル。ノブ下の数値欄＋±ボタン（`ym38x6_ui::spin_control`）と同じ見た目・操作感にする
+/// Bank欄のハンドル。ノブ下の数値欄＋±ボタン（`ui_core::spin_control`）と同じ見た目・操作感にする
 /// （メイン画面はHTML nativeのnumber inputだが、eguiでは同じ見た目を作れないため、
 /// エディタ内の他のパラメーターと統一したルック＆フィールに合わせる）。
 /// 値が変わったら`handle_navigate`と同じ経路でオンメモリのPresetBankから読み込む。
 struct BankField {
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
-    target: ipc::PatchTarget,
+    patch: Rc<RefCell<Op505Patch>>,
+    dirty: Rc<Cell<bool>>,
     identity: Identity,
 }
 
-impl ym38x6_ui::IntParamHandle for BankField {
+impl op505_ui::IntParamHandle for BankField {
     fn value(&self) -> i32 {
         self.current_bank.get() as i32
     }
@@ -232,23 +92,30 @@ impl ym38x6_ui::IntParamHandle for BankField {
     fn set(&self, value: i32) {
         let bank = value.clamp(0, 16383) as u16;
         self.current_bank.set(bank);
-        wasm_bindgen_futures::spawn_local(handle_navigate(self.target.clone(), self.identity.clone(), bank, self.current_program.get(), false));
+        wasm_bindgen_futures::spawn_local(handle_navigate(
+            self.patch.clone(),
+            self.dirty.clone(),
+            self.identity.clone(),
+            bank,
+            self.current_program.get(),
+            false,
+        ));
     }
     fn end_edit(&self) {}
 }
 
-/// presets_dir内/外を区別しない任意のファイル（`.38x6`/`.op505`）をネイティブOpenダイアログで選ぶ。
+/// presets_dir内/外を区別しない任意の`.op505`ファイルをネイティブOpenダイアログで選ぶ。
 /// `bank`はダイアログの初期ディレクトリ決定にのみ使う。
-async fn handle_open_patch_file(target: ipc::PatchTarget, bank: u16, identity: Identity) {
-    if let Some(loaded) = ipc::open_patch_file(&target, bank).await {
+async fn handle_open_patch_file(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, bank: u16, identity: Identity) {
+    if let Some(loaded) = ipc::open_patch_file(&patch, &dirty, bank).await {
         identity.apply(loaded);
     }
 }
 
 /// 現在のbank/programの担当ファイルへ上書き保存する。名前入力欄で音色名を変更していれば
 /// それも一緒に保存される。
-async fn handle_save_patch_overwrite(target: ipc::PatchTarget, bank: u16, program: u8, patch_name: String, identity: Identity) {
-    if let Some(saved) = ipc::save_patch_overwrite(&target, bank, program, patch_name).await {
+async fn handle_save_patch_overwrite(patch: Rc<RefCell<Op505Patch>>, bank: u16, program: u8, patch_name: String, identity: Identity) {
+    if let Some(saved) = ipc::save_patch_overwrite(&patch, bank, program, patch_name).await {
         identity.apply(saved);
     }
 }
@@ -256,31 +123,29 @@ async fn handle_save_patch_overwrite(target: ipc::PatchTarget, bank: u16, progra
 /// ネイティブSaveダイアログで保存先を選ぶ。bank/programは今表示されている値をそのまま書き込む
 /// （自動採番はしない）。成功したら以後の上書き保存先として記録する。
 async fn handle_save_patch_as(
-    target: ipc::PatchTarget,
+    patch: Rc<RefCell<Op505Patch>>,
     patch_name: String,
     bank: u16,
     program: u8,
     default_file_name: String,
     identity: Identity,
 ) {
-    if let Some(saved) = ipc::save_patch_as(&target, patch_name, bank, program, default_file_name).await {
+    if let Some(saved) = ipc::save_patch_as(&patch, patch_name, bank, program, default_file_name).await {
         identity.apply(saved);
     }
 }
 
-/// gesture-app埋め込み用エディタ本体。`draw_param_panel`(ym38x6-ui)を1回呼ぶだけで
-/// VSTと同じノブパネルを描画する。値変更はローカル`EditorState`へ即時反映しつつ
-/// `dirty`フラグを立て、フレーム末尾でまとめて`ym38x6_set_patch`/`set_master_effects`へ送る
-/// （ドラッグ中に1サンプルごとIPCを叩くと過負荷になるための1フレーム1回バッチ送信）。
+/// gesture-app埋め込み用エディタ本体。`draw_op505_panel`(op505-ui)を1回呼ぶだけでVSTと同じ
+/// ノブパネルを描画する。値変更はローカル状態へ即時反映しつつ`dirty`フラグを立て、フレーム末尾で
+/// まとめて`op505_set_patch`/`set_master_effects`へ送る（ドラッグ中に1サンプルごとIPCを叩くと
+/// 過負荷になるための1フレーム1回バッチ送信）。
 pub struct EditorApp {
-    state: Rc<RefCell<EditorState>>,
-    dirty: Rc<Cell<bool>>,
-    /// OP505パネル用の状態。38x6側とは独立して常時保持する（エンジン切替で作り直さない。
-    /// gesture-app/src-tauriのEngines同様、切替直前の編集内容を失わないため）。
     op505: Op505State,
+    master_effects: Rc<RefCell<MasterEffectsState>>,
+    master_effects_dirty: Rc<Cell<bool>>,
     /// ZXCV(白鍵)/ASDF(黒鍵)ミニ鍵盤の表示オクターブ＋押下状態。
     keyboard: keyboard::KeyboardState,
-    /// `list_presets`で取得したプリセット一覧（取得完了まで空）。非同期タスクと共有する。
+    /// `op505_list_bank_entries`で取得したプリセット一覧（取得完了まで空）。非同期タスクと共有する。
     presets: Rc<RefCell<Vec<ipc::PresetEntry>>>,
     /// Open/Save As/PRESETS選択/Bank・Programスピンで読み込んだファイルの実ファイル名。Noneなら
     /// 未Openで「Save」は無効化する（presets_dir内/外を区別しない、Open/Save/Save As共通の状態）。
@@ -294,7 +159,7 @@ pub struct EditorApp {
     current_program: Rc<Cell<u8>>,
     /// 直近の保存以降にパラメーターまたは音色名を変更したか（フレーム末尾のdirty処理に便乗して立てる）。
     unsaved_changes: Rc<Cell<bool>>,
-    /// `Identity::apply()`が立てる、次のsend_patch()完了1回ぶんの`unsaved_changes`抑制フラグ
+    /// `Identity::apply()`が立てる、次のsend_op505_patch()完了1回ぶんの`unsaved_changes`抑制フラグ
     /// （`Identity`のdoc参照）。
     suppress_unsaved: Rc<Cell<bool>>,
 }
@@ -305,9 +170,9 @@ impl EditorApp {
         // （下の初期`handle_navigate`が完了すると、その`Identity::apply()`が自動で取得・反映する）。
         let presets = Rc::new(RefCell::new(Vec::new()));
 
-        let state = Rc::new(RefCell::new(EditorState::default()));
-        let dirty = Rc::new(Cell::new(false));
         let op505 = Op505State::new();
+        let master_effects = Rc::new(RefCell::new(MasterEffectsState::default()));
+        let master_effects_dirty = Rc::new(Cell::new(false));
         let current_file_name = Rc::new(RefCell::new(None));
         let current_patch_name = Rc::new(RefCell::new(String::new()));
         let current_bank = Rc::new(Cell::new(0));
@@ -317,15 +182,6 @@ impl EditorApp {
 
         // メイン画面（main.js）のBank/Program欄の現在値を初期値として読み込む。起動直後から
         // エディタとメイン画面の選択が一致した状態にする（見た目と動作を一致させるため）。
-        // `active_engine()`はwasmモジュールのthread_local既定値（0=OP505）を返す。main.js側の
-        // 実際の選択がym38x6であれば、直後の`notify_engine()`呼び出しが立てる
-        // `SELECTION_STALE`経由で次フレームに正しいエンジンへ即座に読み直される
-        // （`engine_sync.rs`参照）ため、ここでの一時的な不一致は問題にならない。
-        let target = if crate::engine_sync::active_engine() == 0 {
-            ipc::PatchTarget::Op505 { patch: op505.patch.clone(), dirty: op505.dirty.clone() }
-        } else {
-            ipc::PatchTarget::Ym38x6 { state: state.clone(), dirty: dirty.clone() }
-        };
         let identity = Identity {
             current_file_name: current_file_name.clone(),
             current_patch_name: current_patch_name.clone(),
@@ -334,15 +190,14 @@ impl EditorApp {
             unsaved_changes: unsaved_changes.clone(),
             presets: presets.clone(),
             suppress_unsaved: suppress_unsaved.clone(),
-            target: target.clone(),
         };
         let (initial_bank, initial_program) = ipc::read_program_fields();
-        wasm_bindgen_futures::spawn_local(handle_navigate(target, identity, initial_bank, initial_program, false));
+        wasm_bindgen_futures::spawn_local(handle_navigate(op505.patch.clone(), op505.dirty.clone(), identity, initial_bank, initial_program, false));
 
         Self {
-            state,
-            dirty,
             op505,
+            master_effects,
+            master_effects_dirty,
             keyboard: keyboard::KeyboardState::new(),
             presets,
             current_file_name,
@@ -351,15 +206,6 @@ impl EditorApp {
             current_program,
             unsaved_changes,
             suppress_unsaved,
-        }
-    }
-
-    /// 今どちらのエンジンがアクティブかに応じて、PRESETSサイドバーの読み書き先を組み立てる。
-    fn patch_target(&self) -> ipc::PatchTarget {
-        if crate::engine_sync::active_engine() == 0 {
-            ipc::PatchTarget::Op505 { patch: self.op505.patch.clone(), dirty: self.op505.dirty.clone() }
-        } else {
-            ipc::PatchTarget::Ym38x6 { state: self.state.clone(), dirty: self.dirty.clone() }
         }
     }
 
@@ -372,7 +218,6 @@ impl EditorApp {
             unsaved_changes: self.unsaved_changes.clone(),
             presets: self.presets.clone(),
             suppress_unsaved: self.suppress_unsaved.clone(),
-            target: self.patch_target(),
         }
     }
 }
@@ -380,16 +225,15 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::shift_keys::register_context(ui.ctx());
-        // main.js側でエンジン切替またはBank/Program欄の変更が起きていれば、メイン画面の現在値を
-        // 読み直して現在のアクティブエンジンへ`handle_navigate`する（PRESETSサイドバーを常に
-        // メイン画面のBank/Program欄と一致させる唯一の経路。`engine_sync.rs`参照。project memory
-        // `project_op505_editor_state_stale_on_demo_switch`の後継設計）。
+        // main.js側でBank/Program欄の変更が起きていれば、メイン画面の現在値を読み直して
+        // `handle_navigate`する（PRESETSサイドバーを常にメイン画面のBank/Program欄と一致させる
+        // 唯一の経路。`engine_sync.rs`参照）。
         if crate::engine_sync::take_selection_stale() {
             let (bank, program) = ipc::read_program_fields();
-            wasm_bindgen_futures::spawn_local(handle_navigate(self.patch_target(), self.identity(), bank, program, false));
+            wasm_bindgen_futures::spawn_local(handle_navigate(self.op505.patch.clone(), self.op505.dirty.clone(), self.identity(), bank, program, false));
         }
 
-        // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(ym38x6-vst)と同じ
+        // 鍵盤は画面下に端から端まで張り付ける（枠線・余白なし）。塗りはVST(op505-vst)と同じ
         // 標準ダークテーマのpanel_fillに合わせる（独自の色を増やさず一貫させるため）。
         // 他のパネルより先に確保することで、PRESETSサイドバーより下まで全幅で届く
         // （Panel::leftを先に確保すると鍵盤がサイドバー分狭くなってしまうため、この順序が重要）。
@@ -407,17 +251,18 @@ impl eframe::App for EditorApp {
             .min_size(120.0)
             .max_size(400.0)
             .show_inside(ui, |ui| {
-                let target = self.patch_target();
+                let patch = self.op505.patch.clone();
+                let dirty = self.op505.dirty.clone();
 
                 // Open/Save/Save As（presets_dir内/外を区別しない、ネイティブファイルダイアログ）。
                 ui.horizontal(|ui| {
                     if ui.button("Open").clicked() {
-                        wasm_bindgen_futures::spawn_local(handle_open_patch_file(target.clone(), self.current_bank.get(), self.identity()));
+                        wasm_bindgen_futures::spawn_local(handle_open_patch_file(patch.clone(), dirty.clone(), self.current_bank.get(), self.identity()));
                     }
                     let save_enabled = self.current_file_name.borrow().is_some();
                     if ui.add_enabled(save_enabled, egui::Button::new("Save")).clicked() {
                         wasm_bindgen_futures::spawn_local(handle_save_patch_overwrite(
-                            target.clone(),
+                            patch.clone(),
                             self.current_bank.get(),
                             self.current_program.get(),
                             self.current_patch_name.borrow().clone(),
@@ -429,18 +274,17 @@ impl eframe::App for EditorApp {
                         // ダイアログの提案ファイル名は「今開いているファイル名」を優先する
                         // （Save Asはバンク全体を書き出すため、個々の音色名より自然）。
                         // 何も開いていなければ音色名、それも空なら"patch"にフォールバックする。
-                        let ext_suffix = format!(".{}", target.file_ext());
                         let default_file_name = self
                             .current_file_name
                             .borrow()
                             .as_deref()
-                            .and_then(|f| f.strip_suffix(ext_suffix.as_str()))
+                            .and_then(|f| f.strip_suffix(".op505"))
                             .filter(|f| !f.is_empty())
                             .map(str::to_string)
                             .or_else(|| (!patch_name.is_empty()).then(|| patch_name.clone()))
                             .unwrap_or_else(|| "patch".to_string());
                         wasm_bindgen_futures::spawn_local(handle_save_patch_as(
-                            target.clone(),
+                            patch.clone(),
                             patch_name,
                             self.current_bank.get(),
                             self.current_program.get(),
@@ -451,7 +295,7 @@ impl eframe::App for EditorApp {
                 });
 
                 // Bank（presets_dir内/外を区別しない、常に見える唯一の「今何を編集しているか」）。
-                // 他のパラメーターと同じ数値欄＋±ボタン（ym38x6_ui::spin_control）を使う。
+                // 他のパラメーターと同じ数値欄＋±ボタン（ui_core::spin_control）を使う。
                 // 値が変わったらpresets_dir全体から(bank, 現在のprogram)を探して読み込む
                 // （＝handle_navigate、BankField::set参照。別ファイルへ飛びうる唯一の操作）。
                 ui.horizontal(|ui| {
@@ -459,10 +303,11 @@ impl eframe::App for EditorApp {
                     let bank_field = BankField {
                         current_bank: self.current_bank.clone(),
                         current_program: self.current_program.clone(),
-                        target: target.clone(),
+                        patch: patch.clone(),
+                        dirty: dirty.clone(),
                         identity: self.identity(),
                     };
-                    ym38x6_ui::spin_control(ui, &bank_field, egui::TextStyle::Body, 44.0);
+                    ui_core::spin_control(ui, &bank_field, egui::TextStyle::Body, 44.0);
                 });
                 let file_label = self.current_file_name.borrow().clone().unwrap_or_else(|| "(unsaved)".to_string());
                 let mark = if self.unsaved_changes.get() { "*" } else { "" };
@@ -490,7 +335,8 @@ impl eframe::App for EditorApp {
                             // programだけ切り替える＝別ファイルへは飛ばない（handle_navigate参照）。
                             self.current_program.set(preset.program);
                             wasm_bindgen_futures::spawn_local(handle_navigate(
-                                self.patch_target(),
+                                patch.clone(),
+                                dirty.clone(),
                                 self.identity(),
                                 self.current_bank.get(),
                                 preset.program,
@@ -501,29 +347,13 @@ impl eframe::App for EditorApp {
                 });
             });
 
-        // main.jsのEngineセレクトで選ばれている方のパネルだけを描く。両エンジンの状態は
-        // 常時保持している（Op505State::new参照）ため、切替をまたいでも編集内容は失われない。
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if crate::engine_sync::active_engine() == 0 {
-                let panel = self.op505.build_panel_params(&self.state, &self.dirty);
-                draw_op505_panel(ui, &panel);
-            } else {
-                let panel = build_panel_params(&self.state, &self.dirty);
-                draw_param_panel(ui, &panel);
-            }
+            let panel = self.op505.build_panel_params(&self.master_effects, &self.master_effects_dirty);
+            draw_op505_panel(ui, &panel);
         });
 
         // プリセット読込直後の1回だけは`suppress_unsaved`が消費し、未保存マーク`*`を立てない
         // （`Identity`のdoc参照。読込自体がdirtyを立てるため、素通しすると読んだ瞬間`*`が付いてしまう）。
-        if self.dirty.get() {
-            self.dirty.set(false);
-            ipc::send_patch(&self.state.borrow());
-            if self.suppress_unsaved.replace(false) {
-                // 消費済み。
-            } else {
-                self.unsaved_changes.set(true);
-            }
-        }
         if self.op505.dirty.get() {
             self.op505.dirty.set(false);
             ipc::send_op505_patch(&self.op505.patch.borrow());
@@ -532,6 +362,10 @@ impl eframe::App for EditorApp {
             } else {
                 self.unsaved_changes.set(true);
             }
+        }
+        if self.master_effects_dirty.get() {
+            self.master_effects_dirty.set(false);
+            ipc::send_master_effects(&self.master_effects.borrow());
         }
     }
 
