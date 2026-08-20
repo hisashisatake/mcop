@@ -64,7 +64,7 @@ C-F-G（I-IV-V）を基準とする理由：最も基本的な進行であり、
 
           ↓
 
-音源エンジン（共通、Vco実装を切替可能。既定38x6・OP505も選択可）
+音源エンジン（op505-core、Vco実装）
   コード → 発音
 
           ↓
@@ -100,24 +100,22 @@ UI描画（共通）
 
 両モードとも**同一のキャリブレーション・同一のジェスチャーシステム**を使用。
 
-## 音源エンジン切替（動作確認用の簡易UI）
+## Bank/Program（動作確認用の簡易UI）
 
 画面右下の`#program-panel`（`gesture-app/src/index.html`）に、動作確認目的の簡易UIとして
-音源エンジン切替を用意している。ジェスチャー入力・キャリブレーション層はエンジンに依存せず共通
-（`note_on`/`note_off`のTauri IPCは共通、どちらのエンジンが鳴るかはバックエンドの
-アクティブ側`Vco`実装が決める）。
+Bank/Program選択を用意している（2026-08-20、ym38x6削除に伴いエンジン切替UI自体は廃止。
+現在はop505単体）。
 
 ```
-Engine [38x6 / OP505]
-  ├ 38x6選択時: Bank/Program欄でGM2 Bank0等の既存.38x6パッチを指定
-  └ OP505選択時: 右に第2ドロップダウンが出現
-       ├ 「Bank/Program変換」: 左のBank/Programの.38x6パッチをAdapterでOP505形式へ変換して鳴らす
-       │   （同じBank/ProgramをエンジンA/B比較できる、Adapterの実地検証を兼ねる）
-       └ 「Demo: ...」: op505-core組み込みのデモパッチ（TimeEg固有の形。レート方式では書けない
-           静止付きループ等）を直接選択。「Gain Switch (e3)」等
+Bank <input> Program <input>
+  └ op505_set_program(bank, program) を呼び、op505_presets_dir()配下の.op505プリセットを
+    直接引く（フォールバックなし。見つからなければ現在の音色を維持し「未登録」と表示）
+波形メモリ <checkbox>
+  └ ONでBank欄をWAVEFORM_MEMORY_BANK(16383)に固定（op505には波形メモリ専用音色バンクが
+    未移植のため、現状は「未登録」表示になる。将来op505へ移植する可能性を見越してUIは残してある）
 ```
 
-エンジン切替時、開いていれば音色エディタ（Eキー、`editor-wasm`）側にも同期される。
+Bank/Program変更時、開いていれば音色エディタ（Eキー、`editor-wasm`）側にも同期される。
 
 ## ジェスチャーレパートリー
 
@@ -199,7 +197,7 @@ F-Numberの更新:             フレームごと（≒16ms以内）
 `tauri.conf.json`は`devUrl`（Viteのようなホットリロードサーバー）を使わず、
 `frontendDist: "../src"`をWebView2の内蔵プロトコルで直接配信している。WebView2のプロファイルは
 `%LOCALAPPDATA%\<identifier>\EBWebView\Default\Cache`（`identifier`は`tauri.conf.json`の値、
-本アプリでは`com.ym38x6.app`）にディスク永続化されており、**アプリを完全終了してもキャッシュは消えない**。
+本アプリでは`com.op505.app`）にディスク永続化されており、**アプリを完全終了してもキャッシュは消えない**。
 `main.js`の`import('./editor-wasm/editor_wasm.js')`と、生成された`editor_wasm.js`内の
 `fetch(new URL('editor_wasm_bg.wasm', import.meta.url))`はどちらも素の`fetch`でキャッシュ無効化の
 指定がなく、ビルドが最新化されていてもWebViewが古い`.js`/`.wasm`をキャッシュから読み続ける。
@@ -216,9 +214,9 @@ F-Numberの更新:             フレームごと（≒16ms以内）
 
 `editor-wasm`はwasm32専用クレートのためrustup版cargo・独自の`target/`ディレクトリ
 （`gesture-app/editor-wasm/target/`、ワークスペース本体の`target/`とは別）でビルドされる。
-`ym38x6/ui/build.rs`は`cargo:rerun-if-changed=src/panel.xml`で変更検知しているが、この
+`op505/ui/build.rs`は`cargo:rerun-if-changed=src/panel.xml`で変更検知しているが、この
 wasm32専用targetディレクトリ側だけ`panel.xml`編集を検知し損ね、古い生成コード
-（`$OUT_DIR/panel_generated.rs`）を使い続ける事故が発生した（ネイティブ側の`cargo build -p ym38x6-ui`
+（`$OUT_DIR/panel_generated.rs`）を使い続ける事故が発生した（ネイティブ側の`cargo build -p op505-ui`
 では正しく最新化されることを確認済みで、wasm32側特有の問題）。原因の完全特定はできていないが、
 発生時の回避策は次の通り。
 
@@ -229,5 +227,5 @@ powershell -File gesture-app\scripts\build-editor-wasm.ps1
 ```
 
 `panel.xml`編集がどうしても反映されない（生成コードのwidth/justify/margin等の値を
-`gesture-app\editor-wasm\target\wasm32-unknown-unknown\release\build\ym38x6-ui-*\out\panel_generated.rs`
+`gesture-app\editor-wasm\target\wasm32-unknown-unknown\release\build\op505-ui-*\out\panel_generated.rs`
 で直接grepして未反映を確認できる場合）は、まずこのクリーンビルドを試す。

@@ -1,4 +1,4 @@
-# 38x6 実装ロードマップ
+# op505 実装ロードマップ
 
 このファイルは実装フェーズを管理する。全体像は [spec.md](spec.md)、
 音源エンジン仕様は [spec-sound.md](spec-sound.md)、アプリUI仕様は [spec-app.md](spec-app.md)、
@@ -15,16 +15,18 @@ FM音源変換ツール群の横断知見は [spec-fm.md](spec-fm.md) を参照�
 N点Time/Level方式EG）に一本化する。**
 
 - **ym38x6関連コード（`ym38x6-core`/`ym38x6-vst`/`ym38x6-ui`、`ym38x6/tools/`配下の変換・検証ツール群）は
-  凍結する**（動作は保持するが新機能追加はしない）。将来的に削除・アーカイブする予定。
-  当面は資産（実装済みロジック・実機忠実度チューニングの知見・変換テーブル）としてop505側の
-  参考・移行元に使う。
+  凍結した**（動作は保持するが新機能追加はしない）。当面は資産（実装済みロジック・実機忠実度
+  チューニングの知見・変換テーブル）としてop505側の参考・移行元に使う運用とした。
 - **共有基盤（`sound/core`・`sound/fm`・`ui/core`・`ui/layout`・`ui/codegen`）はop505が継承する。**
   Vcoトレイト・FG/質感LFO・アルゴリズム結線表等、ym38x6向けに実装された機能の大半はチップ非依存の
   共有レイヤーに実装済みのため、この方針転換による手戻りは限定的（下記フェーズ1・2・4・7を参照）。
 - 以下のフェーズ一覧は、この方針転換を踏まえて**移行対象を明記する形に改訂**した
   （2026-08-12改訂。改訂前の内容はgit履歴で参照可能）。
-- `CLAUDE.md`・`spec.md`等の他ドキュメントもym38x6を主力として記述している箇所が残っており、
-  今回のロードマップ改訂と合わせて棚卸しが必要（別途一覧を提示して確認する）。
+- **2026-08-20、凍結中だったym38x6関連のコード・データを一式削除した**（`ym38x6/`ディレクトリ、
+  gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペースメンバー等）。op505-coreは
+  元々ym38x6-coreに一切依存しない設計だったため、この削除でop505側の挙動に変更はない。
+  再生成不能な原本データ（TX81Z実機吸出しsyx・実機録音等）は削除前にアーカイブへ退避済み。
+  `CLAUDE.md`・`spec.md`等の他ドキュメントの棚卸しも同日中に完了した。
 
 ---
 
@@ -35,7 +37,8 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op
 編集する・プリセット選択）・op505-vstフェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等の
 MIDI表現系）・フェーズ5.5（検証・音作りツール群のop505移行、opzref/wavetest/patchlab/
 smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、詳細はフェーズ5.5・フェーズ8・
-フェーズ12）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
+フェーズ12）。**2026-08-20、凍結中だったym38x6関連コード・データを一式削除し、
+gesture-appも単一エンジン（OP505）構成へ単純化した**。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
 
 ---
 
@@ -57,7 +60,7 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → リバーブの聴感調整完了: Freeverb方式からFDN方式（Householder行列、8ライン）へ刷新し
     プリディレイを追加（2026-07-20、`3abe090`）。詳細はmemory参照
 
-フェーズ3: 38x6 FMエンジン導入、波形選択・デチューン拡張（完了・ym38x6固有、凍結対象）
+フェーズ3: 38x6 FMエンジン導入、波形選択・デチューン拡張（完了・ym38x6固有、2026-08-20削除済み）
   → OPZ系の音色表現を取り込む（ym38x6-core）
   → op505-coreは別実装（N点Time/Level方式EG）としてフェーズ12以降に新設・デフォーク済み。
     このフェーズ自体の再実施は不要（アルゴリズム結線表・TL/KSR等のマッピングはsound-fmとして
@@ -68,17 +71,17 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → OPQ由来の音楽的表現を一般化して活用
 
 フェーズ5: 実機音色資産の取り込みと音作り基盤（op505直接変換ツール群・検証ツール群とも移行完了）
-  → 変換ツール群（ym38x6/tools/、凍結）: opz2x6 / vgm2x6 / psr2x6 / mucom2x6 / opm2x6
+  → 変換ツール群（ym38x6/tools/、2026-08-20削除済み）: opz2x6 / vgm2x6 / psr2x6 / mucom2x6 / opm2x6
     実機・既存資産（OPZ/OPM/OPN/OPQ/PSR-70/MUCOM88）を .38x6 バンクへ変換していた
     （WAVEFORM_MEMORY_BANK+1以降。Bank 0には流用しない）
   → **2026-08-11 op505デフォーク完了**（feature/op505-defork、developへ--no-ffマージ・push済み、
     `64a1de2`）: 上記5ツール全てを .op505 直接変換版（opz2op505/vgm2op505/psr2op505/
     mucom2op505/opm2op505、`op505/tools/`）へ移行済み。ym38x6-core/xxx2x6/vgm2x6への依存はゼロ
     （fork-on-write方式で複製・再構築、詳細はmemory「op505デフォーク全フェーズ完了」・spec-fm.md「デフォーク」節）
-  → 試聴・検証ツール（ym38x6/tools/、凍結）: smf2wav（SMF→WAV、エンジン性能検証・
+  → 試聴・検証ツール（ym38x6/tools/、2026-08-20削除済み）: smf2wav（SMF→WAV、エンジン性能検証・
     CC/NRPN解釈の参照実装を兼ねる）/ wavetest4x6（波形試聴）/ opzref4x6（ymfm参照レンダラ、音程・配線の検算用）
     → **op505向け移行はフェーズ5.5で完了**（smf2op505 / wavetest / opzref、op505/tools/配下）
-  → エンジン忠実度チューニング（feedback・KSR・EG曲線等、完了・ym38x6-coreで実施済み）。
+  → エンジン忠実度チューニング（feedback・KSR・EG曲線等、完了・当時のym38x6-coreで実施済み）。
     OPN/OPM忠実を保ちつつ拡張軸（8bit・非サイン波形・フィルター等）へ投資した知見は、
     op505-coreの新規EG設計（4点T/L EG検討）にも引き継がれている
   → feedback上限1.8（ハイハット系のノイズ再現）とOPNベース音色（音程安定性）のトレードオフは
@@ -90,15 +93,15 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → `feature/op505-tools-migration`ブランチで実施。ステップ1〜4（opzref/wavetest/patchlab/
     op505-midi+smf2op505）+ ドキュメント更新まで全て完了、developへ--no-ffマージ済み
   → **opzref のop505対応 完了**: `op505/tools/opzref`新設（opz2op505ベース、`RegSink`トレイトで
-    実機/テスト二重化）。旧`opzref4x6`（`ym38x6/tools/opzref4x6`へリネームし凍結資産として保持）
-    とWAVハッシュ完全一致を確認済み
+    実機/テスト二重化）。旧`opzref4x6`（`ym38x6/tools/opzref4x6`へリネームし凍結資産として保持していたが、
+    2026-08-20にym38x6一式削除に伴い削除済み）とWAVハッシュ完全一致を確認済み
   → **wavetest のop505対応 完了**: `op505/tools/wavetest`新設。`op505_core::eg_convert::convert_eg_shape`
     経由で既存9音色×4opのレート方式EG数値を維持しつつTimeEg化、TimeEgネイティブデモ3種
-    （多段リリース・ループGain FGゲート・非単調EG）を追加。旧`wavetest4x6`は凍結資産として保持
+    （多段リリース・ループGain FGゲート・非単調EG）を追加。旧`wavetest4x6`は2026-08-20削除済み
   → **patchlab のop505対応 完了**: `op505/tools/patchlab`新設（PyO3バインディング）。35次元
     パラメーター空間は維持し、`vector_to_patch()`の出口で`convert_eg_shape`を一度通す設計。
     `python/op505_patch.py`が「レート方式ノブdict→op505パッチdict」の唯一の変換入口。
-    ym38x6版（`ym38x6/tools/patchlab`）は凍結資産として保持
+    ym38x6版（`ym38x6/tools/patchlab`）は2026-08-20削除済み
   → **op505-midi クレート新設・smf2op505 新設 完了**: CC/NRPN解釈を`op505-midi`
     （`op505/midi`）へ共有クレート化し、`op505-vst`と`smf2op505`の両方が参照する
     （fork-on-writeの限定的な例外、詳細はspec-fm.md 8章）。`ControlTarget` enumで
@@ -116,7 +119,8 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → 知覚記述子（明るさ・金属度・歪み等7軸）の自動分析＋probe探索による近傍パラメーターの
     ルックアップを叩き台に、人手で族ごとにテンプレート設計する方式へ転換（設計方針自体は継続）
   → **ym38x6版（.38x6形式）でPiano(0-7)/Organ(16-23)/Brass(56-63)の3族が完了**していたが
-    （piano_template.py/organ_template.py/brass_template.py）、ym38x6凍結に伴い**参考資産として保存**、
+    （piano_template.py/organ_template.py/brass_template.py）、ym38x6凍結に伴い参考資産として
+    保存していた（2026-08-20、ym38x6一式削除前にアーカイブへ退避済み）。
     op505向け（.op505形式）に再設計が必要
   → 残り13族（Chromatic Percussion(8-15)/Guitar(24-31)/Bass(32-39)/Strings(40-47)/
     Ensemble(48-55)/Reed(64-71)/Pipe(72-79)/Synth Lead(80-87)/Synth Pad(88-95)/
@@ -128,7 +132,8 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → 実装層は sound-core。FMをVCOと見なし後段にアナログシンセ的なVCF/VCA/VCO変調層を被せる
     （決め台詞「EG＝一発の形 / LFO＝持続する揺れ」。実機への忠実ではなく拡張軸）
   → アーキテクチャ方針: モジュレーション層は sound-core に置き、発振源（VCO）を差し替え可能にする。
-    Vcoトレイトは現在`Ym38x6Engine`と`Op505Engine`の2実装を持つ（詳細は spec.md「クレート構成／VCO抽象」）。
+    Vcoトレイトは当時`Ym38x6Engine`と`Op505Engine`の2実装を持っていた（ym38x6削除〈2026-08-20〉後は
+    `Op505Engine`のみ。詳細は spec.md「クレート構成／VCO抽象」）。
     **このフェーズの成果物（Eg/Vcf/Vca・FG・質感LFO・アルゴリズム結線表等）はチップ非依存の
     sound-core/sound-fmに実装されているため、ym38x6凍結の影響を受けずop505でもそのまま有効。**
   → ステップ1「VCO抽象境界の確立」完了（Vco/AudioProcessorトレイトをsound-coreに実装）
@@ -288,9 +293,9 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
     REAPER実機確認済み（発音・ライブ伝播・EGドラッグ・`.op505`プリセット選択・
     プロジェクト保存→再起動でのpersistラウンドトリップ）
   → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系
-    （NRPN・表情CC・ペダル・OP単位キーオン・RPN）を`ym38x6-vst`（凍結・参照実装）から移植した。
-    NRPNテーブル30エントリ（ym38x6の36からPitch/Cutoff/Gain FG Loop/Curve=NRPN(0,28)〜(0,33)を
-    欠番化。op505のTimeEg 7本はpersist状態でNRPNから直接書けないため）、表情ルーティング
+    （NRPN・表情CC・ペダル・OP単位キーオン・RPN）を実装した。
+    NRPNテーブル30エントリ（op505のTimeEg 7本はpersist状態でNRPNから直接書けないため
+    Pitch/Cutoff/Gain FG Loop/Curveは欠番）、表情ルーティング
     CC1/CC2/CC4/CC76/CC77/CC78（`ExpressionDestination`モデル移植、CC78はTimeEgにDelay
     フィールドが無いためPitch FG第0段の`time`への相対補正で代替）、CC66/CC67/CC120/CC121/CC123、
     OP単位キーオンCC103〜106・OP単位F-Number(NRPN 0,18〜21)・RPN(0,0)ピッチベンド感度・RPN(0,5)、
@@ -333,7 +338,8 @@ smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、�
   → e3知見をそのまま実装した組み込みデモパッチ「Gain Switch (e3)」を含む3種のデモパッチを追加し、
     gesture-appのエンジン切替UIから選択・試聴できるようにした（2026-08-10、gesture-appでの
     実聴取確認まで完了）。**当初`op505/core/src/demo.rs`に実装していたが、op505デフォーク後に廃止済み**
-    （現在デモパッチ相当のヘルパーは`gesture-app/src-tauri/src/engines.rs`のテストコードに残るのみ。
+    （デモパッチ相当のヘルパーは`gesture-app/src-tauri/src/engines.rs`のテストコードに残っていたが、
+    2026-08-20のym38x6削除に伴うgesture-app単一エンジン化でこのファイル自体も削除。
     `op505/core/src/`の実体は`lib.rs`/`operator.rs`/`preset.rs`/`eg_convert.rs`の4ファイル）
   → `op505/ui`（クレート名op505-ui）を新設し、panel.xmlからのコード生成方式でエディタパネルを実装。
     `Op505Patch`はEGだけで203値（TimeEg 7本×29値、全269値中の大半）を占めるため、TimeEgエディタ

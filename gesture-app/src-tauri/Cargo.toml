@@ -10,12 +10,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 cpal = "0.15"
-ym38x6-core = { path = "../../ym38x6/core" }
 op505-core = { path = "../../op505/core" }
+sound-core = { path = "../../sound/core" }
+sound-fm = { path = "../../sound/fm" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 # op505_patch_json_keys_are_stableテスト（Op505Patch直シリアライズのワイヤーフォーマット検査）専用。
 serde_json = "1"
-# engines.rsのrender_mixes_both_engines_additivelyテスト（OP505側を確実に鳴らす入力パッチの構築）専用。
-sound-core = { path = "../../sound/core" }

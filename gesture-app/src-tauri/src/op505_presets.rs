@@ -1,22 +1,36 @@
-//! OP505版プリセットレジストリ + Open/Save/Save As用Tauriコマンド。
+//! OP505のプリセットレジストリ + Open/Save/Save As用Tauriコマンド。
 //!
-//! `main.rs`のym38x6版（`BankRegistry`/`build_registry`/`preset_entries`/`with_bank`/
-//! `current_open_dir`/`open_patch_file`/`save_patch_overwrite`/`save_patch_as`）と同形の設計を
-//! `.op505`向けに複製したもの（fork-on-write。`op505-core`は`ym38x6-core`に依存できないため、
-//! `#[tauri::command]`は具体型を要求する以上どのみち複製になる。crate-dependency-guard参照）。
+//! bank番号ごとに「担当ファイル」を覚え、Open/Save/Save Asがセッション中に更新する
+//! （1バンク=1ファイルという運用が前提）。
 
-use op505_core::{op505_presets_dir, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
+use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::engines::Engines;
-use crate::ym38x6_dto::{PresetEntryDto, SavedFileDto};
+/// `op505_list_bank_entries`が返すプリセット一覧の1件。
+#[derive(serde::Serialize)]
+pub struct PresetEntryDto {
+    pub bank: u16,
+    pub program: u8,
+    pub name: String,
+}
 
-/// `open_patch_file`/`op505_get_bank_program`が返す、読み込んだ音色の内容。
-/// `Ym38x6_dto::LoadedPatchDto`のOP505版（`Op505Patch`は専用DTOを介さず直接シリアライズする、
-/// `op505_set_patch`と同じ方針）。
+/// `op505_save_patch_overwrite`/`op505_save_patch_as`が成功時に返す保存結果。
+/// `file_name`（実ファイル名、例: "organ_family.op505"）と`patch_name`（音色名、
+/// バンクファイル内の`Op505PresetEntry.name`）は別概念のため分けて返す
+/// （1ファイルに複数音色が入っている場合、ファイル名と音色名は一致しない）。
+#[derive(serde::Serialize)]
+pub struct SavedFileDto {
+    pub patch_name: String,
+    pub file_name: String,
+    pub bank: u16,
+    pub program: u8,
+}
+
+/// `op505_open_patch_file`/`op505_get_bank_program`が返す、読み込んだ音色の内容
+/// （`Op505Patch`は専用DTOを介さず直接シリアライズする、`op505_set_patch`と同じ方針）。
 #[derive(serde::Serialize)]
 pub struct Op505LoadedPatchDto {
     pub patch: Op505Patch,
@@ -122,7 +136,7 @@ pub fn op505_list_bank_entries(registry: tauri::State<'_, Mutex<Op505BankRegistr
 pub fn op505_get_bank_program(
     registry: tauri::State<'_, Mutex<Op505BankRegistry>>,
     bank_state: tauri::State<'_, Mutex<Op505PresetBank>>,
-    engine: tauri::State<'_, Arc<Mutex<Engines>>>,
+    engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>,
     bank: u16,
     program: u8,
 ) -> Op505LoadedPatchDto {
@@ -138,7 +152,7 @@ pub fn op505_get_bank_program(
     if let Some(preset) = bank_state.lock().unwrap().get(bank, program) {
         return Op505LoadedPatchDto { patch: preset.patch, patch_name: preset.name.clone(), file_name: None, bank, program };
     }
-    let patch = engine.lock().unwrap().op505.current_patch();
+    let patch = engine.lock().unwrap().current_patch();
     Op505LoadedPatchDto { patch, patch_name: String::new(), file_name: None, bank, program }
 }
 

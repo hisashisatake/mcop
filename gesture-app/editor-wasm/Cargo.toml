@@ -9,10 +9,11 @@ crate-type = ["cdylib"]
 [dependencies]
 egui = "0.34"
 eframe = { version = "0.34", default-features = false, features = ["glow"] }
-ym38x6-ui = { path = "../../ym38x6/ui" }
 op505-core = { path = "../../op505/core" }
 op505-ui = { path = "../../op505/ui" }
+ui-core = { path = "../../ui/core" }
 sound-core = { path = "../../sound/core" }
+sound-fm = { path = "../../sound/fm" }
 # wasm-bindgen-cli（ビルド時に別途インストールするツール）とクレートのバージョンは完全一致が
 # 必須なため厳密ピン。上げる場合は `cargo install wasm-bindgen-cli --version <同じ値> --force` も必要。
 wasm-bindgen = "=0.2.126"

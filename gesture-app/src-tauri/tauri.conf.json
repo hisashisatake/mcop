@@ -1,7 +1,7 @@
 {
   "productName": "gesture-app",
   "version": "0.1.0",
-  "identifier": "com.ym38x6.app",
+  "identifier": "com.op505.app",
   "build": {
     "frontendDist": "../src",
     "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-editor-wasm.ps1",
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "38x6 作曲支援",
+        "title": "OP505 作曲支援",
         "width": 1200,
         "height": 800
       }
