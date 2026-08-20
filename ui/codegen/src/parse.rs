@@ -245,15 +245,18 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
         "checkbox" => {
             let label = req_attr(el, "label")?;
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
-            // 実測値: 幅70は"CURVE"ラベル基準（bool_checkboxはallocate_exact_sizeせず内容依存幅のため）。
+            // 既定幅70は"CURVE"ラベル基準の実測値（bool_checkboxはallocate_exact_sizeせず内容依存幅の
+            // ため）。"SELF-OSC"のような長いラベルは既定幅だと折り返されるため、`width`属性で
+            // インスタンスごとに上書きできる。
             // 高さ20はegui既定`interact_size.y`(18.0)に対する実測ベースの近似値。<row>直下の単独配置では
             // 隣接ウィジェット(knob等66px)がRowのmax_heightを支配するため実害なく、<stack>直下では
             // この実高さのおかげでN個重ねても行高さが66pxのまま膨張しない。
+            let width = attr_f32_or(el, "width", 70.0)?;
             (
                 Widget::Checkbox { label: label.clone(), handle },
                 label,
                 "checkbox".to_string(),
-                Size { w: 70.0, h: 20.0 },
+                Size { w: width, h: 20.0 },
             )
         }
         "waveform" => {

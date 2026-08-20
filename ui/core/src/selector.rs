@@ -23,6 +23,9 @@ pub const SYNC_NOTE_NAMES: [&str; sound_core::SYNC_NOTE_COUNT] = [
 ];
 /// TimeEgのretrigger_mode名（宣言順=0/1、`sound_core::RETRIGGER_MODE_*`に対応）。
 pub const RETRIGGER_MODE_NAMES: [&str; 2] = ["Continue", "Reset"];
+/// フィルタータイプ名（宣言順=0/1/2、`sound_core::vcf::FilterType::from_u8`に対応。
+/// 2以上は全てBP扱いになるため3値で足りる）。
+pub const FILTER_TYPE_NAMES: [&str; 3] = ["LP", "HP", "BP"];
 
 /// 固定候補名一覧から1つを選ぶ汎用コンボボックス。Reverb/Chorus Type等の
 /// enum的パラメーター(0〜names.len()-1)向け。`salt`はウィジェットごとにIDを一意にする値。

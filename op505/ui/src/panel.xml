@@ -16,7 +16,7 @@
   </style>
 
   <panels match-height="true">
-    <panel span="12" title="CHANNEL">
+    <panel span="3" title="CHANNEL">
       <header>
         <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
@@ -29,10 +29,8 @@
         </row>
       </row>
     </panel>
-  </panels>
 
-  <panels>
-    <panel span="7" title="TEXTURE LFO">
+    <panel span="9" title="TEXTURE LFO">
       <header>
         <jack kind="source"/>
         <title/>
@@ -48,17 +46,6 @@
         <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
         <!-- TX.OFSは中央128＝オフセットなしのバイポーラ（lfo_offset_from_param参照）。 -->
         <knob label="TX.OFS" handle="texture_lfo_offset" bipolar="true"/>
-      </row>
-    </panel>
-    <panel span="5" title="FILTER">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <knob label="CUTOFF" handle="cutoff"/>
-        <knob label="RESO" handle="resonance"/>
-        <knob label="TYPE" handle="filter_type"/>
-        <checkbox label="SELF-OSC" handle="filter_self_oscillation"/>
       </row>
     </panel>
   </panels>
@@ -88,22 +75,6 @@
         </stack>
       </row>
     </panel>
-    <panel title="CUTOFF FG" span="4">
-      <header>
-        <jack kind="dest" dest-index="4" label="TX LFO" handle="texture_lfo_destination"/>
-        <title/>
-      </header>
-      <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
-        <stack gap="spacing">
-          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
-          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
-          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
-          <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
-        </stack>
-      </row>
-    </panel>
     <panel title="GAIN FG" span="4">
       <header>
         <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
@@ -123,6 +94,30 @@
                両方ON/両方OFFも可（排他ではない）。 -->
           <checkbox label="MASTER" handle="gain_fg_to_master"/>
           <checkbox label="OP" handle="gain_fg_to_operators"/>
+        </stack>
+      </row>
+    </panel>
+    <panel title="CUTOFF FG" span="4">
+      <header>
+        <jack kind="dest" dest-index="4" label="TX LFO" handle="texture_lfo_destination"/>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
+        <stack gap="spacing">
+          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
+          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
+          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
+          <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
+        </stack>
+        <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
+             変調するFGなので、フィルター本体のパラメーターと隣接させた方が対応関係が分かりやすい。 -->
+        <stack gap="spacing">
+          <knob label="CUTOFF" handle="cutoff"/>
+          <knob label="RESO" handle="resonance"/>
+          <enum label="TYPE" handle="filter_type" names="FILTER_TYPE_NAMES" salt="12"/>
+          <checkbox label="SELF-OSC" handle="filter_self_oscillation" width="100"/>
         </stack>
       </row>
     </panel>

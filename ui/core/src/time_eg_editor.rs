@@ -26,9 +26,10 @@ use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometr
 /// px単位で厳密には一致しない（フォントメトリクス依存）が、GRAPH/VALUE切替・段数変更で
 /// 枠の外形自体は変わらないため実用上問題ない（Step 2の固定枠化）。
 const HEADER_HEIGHT: f32 = 20.0;
-/// STAGES/LOOP/L.START/L.END/RELのspin行（`stage_spin_row`）の見込み高さ（px）。
-/// `HEADER_HEIGHT`と同じ扱い。
-const SPIN_ROW_HEIGHT: f32 = 35.0;
+/// STAGES/LOOP/L.START/RELの行とL.DRIFT/D.DRIFTの行、2行ぶんの`stage_spin_row`の
+/// 見込み高さ（px）。`HEADER_HEIGHT`と同じ扱い。ラベルが1行に収まらず折り返される
+/// 不具合対策でL.DRIFT/D.DRIFTを2行目へ分けたため、1行だった頃より高さが増えている。
+const SPIN_ROW_HEIGHT: f32 = 65.0;
 const GRAPH_PAD: f32 = 6.0;
 /// VALUEモードのTIME欄の幅（px）。旧値56pxは真下に重ねる変換後ミリ秒/秒の読み取り専用
 /// ラベル（最大"300.0s"程度）の幅に合わせて広めに取っていたが、TIME欄とLV欄の間が不自然に
@@ -561,45 +562,52 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
     let params = handle.params();
     let SpinRowEnabled { rel: rel_enabled, loop_toggle: loop_enabled, loop_start: loop_start_enabled } =
         spin_row_enabled(&params, profile);
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new("STAGES").size(8.0));
-            spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
-        });
-        ui.add_enabled_ui(loop_enabled, |ui| {
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("LOOP").size(8.0));
-                bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::LoopEnabled), "");
+                ui.label(egui::RichText::new("STAGES").size(8.0));
+                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
             });
-        });
-        ui.add_enabled_ui(loop_start_enabled, |ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("L.START").size(8.0));
-                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            ui.add_enabled_ui(loop_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("LOOP").size(8.0));
+                    bool_checkbox(ui, &TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::LoopEnabled), "");
+                });
             });
-        });
-        ui.add_enabled_ui(rel_enabled, |ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("REL").size(8.0));
-                spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            ui.add_enabled_ui(loop_start_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("L.START").size(8.0));
+                    spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::LoopStart, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+                });
+            });
+            ui.add_enabled_ui(rel_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("REL").size(8.0));
+                    spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::ReleasePoint, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+                });
             });
         });
         // L.DRIFT/D.DRIFTはループ1周ごとにレベルを螺旋状にずらす（CHIP LFOのAM退役検討の
         // 副産物。詳細はmemory `project_chip_lfo_retirement_investigation.md`）。ループが
         // 成立しないと無意味なのでLOOPと同じ条件でグレーアウトする。表示・入力とも
         // `BipolarHandle`で-128〜+127（128=無効/等倍）として見せる。
-        ui.add_enabled_ui(loop_enabled, |ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("L.DRIFT").size(8.0));
-                let inner = TimeEgFieldHandle::new(handle, TimeEgField::LevelDrift, profile);
-                spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+        // STAGES/LOOP/L.START/RELと同じ行に詰めると、狭いパネル（GAIN FG等）でラベルが
+        // 折り返され"D.DRIFT"が1文字ずつ縦積みになって読めなくなる不具合が実機確認で判明した
+        // ため、1行下に分けて配置する。
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(loop_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("L.DRIFT").size(8.0));
+                    let inner = TimeEgFieldHandle::new(handle, TimeEgField::LevelDrift, profile);
+                    spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+                });
             });
-        });
-        ui.add_enabled_ui(loop_enabled, |ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("D.DRIFT").size(8.0));
-                let inner = TimeEgFieldHandle::new(handle, TimeEgField::DepthDrift, profile);
-                spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            ui.add_enabled_ui(loop_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("D.DRIFT").size(8.0));
+                    let inner = TimeEgFieldHandle::new(handle, TimeEgField::DepthDrift, profile);
+                    spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+                });
             });
         });
     });

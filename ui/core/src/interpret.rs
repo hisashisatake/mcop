@@ -28,7 +28,7 @@ use crate::layout;
 use crate::mapping::mul_fine_ratio;
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
-use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES};
+use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, LFO_FADE_MODE_NAMES, LFO_WAVEFORM_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 
@@ -190,6 +190,7 @@ fn resolve_names(name: &str) -> &'static [&'static str] {
         "LFO_WAVEFORM_NAMES" => &LFO_WAVEFORM_NAMES,
         "LFO_FADE_MODE_NAMES" => &LFO_FADE_MODE_NAMES,
         "RETRIGGER_MODE_NAMES" => &RETRIGGER_MODE_NAMES,
+        "FILTER_TYPE_NAMES" => &FILTER_TYPE_NAMES,
         _ => &["?"],
     }
 }
