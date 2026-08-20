@@ -156,6 +156,78 @@ pub fn chip_lfo_pitch_to_pitch_fg(
 /// Gain FG：Depthなし、TimeEgParamsそのもの（ym38x6の`GainFg`のTimeEg版）。
 pub type Op505GainFg = TimeEgParams;
 
+/// CHIP LFOのAM変調経路（`ams`×`chip_lfo_amd`の振幅変調、`chip_lfo_freq`が速度・
+/// `chip_lfo_delay`が先頭待機）をGain FGの5段ループへ変換する
+/// （CHIP LFO完全退役、memory `project_chip_lfo_retirement_investigation.md`参照）。
+///
+/// CHIP LFOのAM係数は`amp_factor = (1 - triangle×depth).clamp(0,1)`（`operator.rs`の
+/// `amp_factor`計算と同じ式）で、`triangle<0`の半波がクランプされるため実波形は
+/// **「平坦T/4→下降T/4→上昇T/4→平坦T/4」**になる（ピッチ経路の素の三角波とは違う形。
+/// クランプがあるからこそ設計が分岐する）。Gain FGは`curve=0`のときレベルをそのまま線形補間する
+/// （`TimeEg::shaped_output`参照）ため、**線形ゲイン領域どうしで折れ線が完全一致**する
+/// （旧`apply_chip_lfo_am_to_eg`はdB領域のオペレーターEGへ畳み込む近似だったが、これは
+/// 近似を伴わない厳密変換）。
+///
+/// 段構成：`[0]`瞬時に255へ（`time=0`、キーオン起点の立ち上げ）→`[1]`
+/// `delay_seconds + T/4`平坦保持（255、位相0〜0.25はクランプにより平坦）→`[2]`floorへT/4で下降
+/// （位相0.25〜0.5）→`[3]`255へT/4で上昇（位相0.5〜0.75）→`[4]`T/2平坦保持（255、
+/// 位相0.75〜1.0と次周期の0〜0.25が連続するため合算してT/2）で`loop_start=2`へ戻る。
+/// `release_point=4`（最終段）なのでnote-offはループを止めない
+/// （CHIP LFOがリリース中も鳴り続けるのと同じ挙動）。
+///
+/// `ams=0`または`chip_lfo_amd=0`（変調なし）のときは`None`を返す。Pitch FGと違いGain FGは
+/// 既存パッチが別用途（マスターVCA等）で使っている可能性があるため、無変調の既定値では
+/// 上書きしない——呼び出し側が`None`のときは`gain_fg`に一切触れない規約にする。
+///
+/// 呼び出し規約：戻り値が`Some`かつ`am_enable`なオペレーターが1つ以上あるときのみ
+/// `gain_fg`へ書き込み、`gain_fg_to_operators=true`・`gain_fg_to_master=false`にする。
+/// `am_enable`はそのまま維持する（「チャンネル共通AMを受けるOP」というゲートの意味は
+/// CHIP LFO時代と変わらない、源がGAIN FGに替わるだけ）。
+pub fn chip_lfo_am_to_gain_fg(
+    ams: u8,
+    chip_lfo_amd: u8,
+    chip_lfo_freq: u8,
+    chip_lfo_delay: u8,
+) -> Option<Op505GainFg> {
+    let depth = ams_to_depth(ams) * (chip_lfo_amd as f32 / 255.0);
+    if depth <= 0.0 {
+        return None;
+    }
+
+    let hz = chip_lfo_freq_to_hz(chip_lfo_freq);
+    let quarter_period_seconds = 0.25 / hz;
+    let half_period_seconds = 0.5 / hz;
+    let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
+    let floor_level = ((1.0 - depth) * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
+    stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+    stages[1] = TimeStage {
+        time: sound_core::seconds_to_time(delay_seconds + quarter_period_seconds),
+        level: 255,
+        curve: 0,
+    };
+    stages[2] = TimeStage {
+        time: sound_core::seconds_to_time(quarter_period_seconds),
+        level: floor_level,
+        curve: 0,
+    };
+    stages[3] =
+        TimeStage { time: sound_core::seconds_to_time(quarter_period_seconds), level: 255, curve: 0 };
+    stages[4] =
+        TimeStage { time: sound_core::seconds_to_time(half_period_seconds), level: 255, curve: 0 };
+
+    Some(TimeEgParams {
+        stages,
+        stage_count: 5,
+        loop_enabled: 1,
+        loop_start: 2,
+        release_point: 4,
+        retrigger_mode: RETRIGGER_MODE_RESET,
+        ..TimeEgParams::default()
+    })
+}
+
 /// `Op505ChannelParams`の一部（`chip_lfo_*`等）を除く、チャンネル単位パラメーター一式。
 /// ym38x6の`ChannelParams`から、旧`ChannelParamsWire`後方互換層（フィールドリネーム・
 /// 旧filter_eg_*/vca_eg_*からの移行）を取り除いた素直な新フォーマット。
@@ -1033,5 +1105,98 @@ mod tests {
         }
         assert!((min_cents - -expected_cents).abs() < 5.0, "min_cents={min_cents} expected=-{expected_cents}");
         assert!((max_cents - expected_cents).abs() < 5.0, "max_cents={max_cents} expected={expected_cents}");
+    }
+
+    // -----------------------------------------------------------------------
+    // chip_lfo_am_to_gain_fg（CHIP LFO AM経路→Gain FG厳密変換）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chip_lfo_am_to_gain_fg_off_when_ams_or_amd_zero() {
+        assert_eq!(chip_lfo_am_to_gain_fg(0, 200, 128, 0), None);
+        assert_eq!(chip_lfo_am_to_gain_fg(200, 0, 128, 0), None);
+    }
+
+    #[test]
+    fn chip_lfo_am_to_gain_fg_builds_expected_stages() {
+        let fg = chip_lfo_am_to_gain_fg(255, 255, 128, 0).expect("depth>0のはず");
+        assert_eq!(fg.stage_count, 5);
+        assert_eq!(fg.loop_enabled, 1);
+        assert_eq!(fg.loop_start, 2);
+        assert_eq!(fg.release_point, 4, "最終段＝note-offでループを止めない");
+        assert_eq!(fg.stages[0].time, 0, "キーオン直後は瞬時に255へ");
+        assert_eq!(fg.stages[0].level, 255);
+        assert_eq!(fg.stages[1].level, 255, "位相0〜0.25は平坦（クランプ側）");
+        assert_eq!(fg.stages[2].time, fg.stages[3].time, "下降/上昇は対称な1/4周期");
+        assert_eq!(fg.stages[3].level, 255, "山へ復帰");
+        // ams=255,amd=255 → depth=ams_to_depth(255)≈1.0 → floorはほぼ0
+        assert!(fg.stages[2].level <= 2, "深いAMではfloorがほぼ0付近: {}", fg.stages[2].level);
+        // 周期境界をまたぐ平坦段（stage4）は1/4周期段（stage2）のほぼ2倍の長さ
+        let quarter = sound_core::time_to_seconds(fg.stages[2].time);
+        let half = sound_core::time_to_seconds(fg.stages[4].time);
+        assert!(
+            (half - 2.0 * quarter).abs() / half < 0.06,
+            "half={half} quarter={quarter}（量子化許容誤差内で2倍のはず）"
+        );
+    }
+
+    #[test]
+    fn chip_lfo_am_to_gain_fg_delay_extends_leading_flat_stage() {
+        let no_delay = chip_lfo_am_to_gain_fg(200, 200, 128, 0).unwrap();
+        let with_delay = chip_lfo_am_to_gain_fg(200, 200, 128, 200).unwrap();
+        assert!(with_delay.stages[1].time > no_delay.stages[1].time, "delay>0は先頭平坦段を延ばす");
+        // ループ部分（stage2〜4の周期）はdelayの有無に依存しない。
+        assert_eq!(no_delay.stages[2].time, with_delay.stages[2].time);
+        assert_eq!(no_delay.stages[4].time, with_delay.stages[4].time);
+    }
+
+    /// 変換後のGain FGを実際にTimeEgで鳴らし、CHIP LFOのAM（`operator.rs`と同じ
+    /// `(1-triangle×depth).clamp(0,1)`式）が到達する振幅の谷/山と一致することを確認する
+    /// （厳密な波形一致の裏取り。`chip_lfo_pitch_to_pitch_fg_matches_chip_lfo_peak_amplitude`と
+    /// 同じ手法：量子化された`time`とCHIP LFOの連続hzは長時間では位相がずれるため、
+    /// 位相非依存の指標＝振幅の到達範囲で照合する）。
+    #[test]
+    fn chip_lfo_am_to_gain_fg_matches_chip_lfo_amplitude_extremes() {
+        let sr = 44100.0;
+        let ams = 180u8;
+        let amd = 200u8;
+        let freq = 150u8;
+        let depth = ams_to_depth(ams) * (amd as f32 / 255.0);
+        let expected_floor = ((1.0 - depth) * 255.0).round();
+
+        let gain_fg = chip_lfo_am_to_gain_fg(ams, amd, freq, 0).expect("depth>0のはず");
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let mut min_level = f32::MAX;
+        let mut max_level = f32::MIN;
+        // 数周期分ティックして山谷の到達を確認する。
+        let cycle_seconds = 1.0 / chip_lfo_freq_to_hz(freq) as f64;
+        let samples = ((cycle_seconds * 4.0) * sr as f64) as usize;
+        for _ in 0..samples {
+            let level = eg.tick(sr, gain_fg, 1.0) * 255.0;
+            min_level = min_level.min(level);
+            max_level = max_level.max(level);
+        }
+        assert!((min_level - expected_floor).abs() < 3.0, "min_level={min_level} expected={expected_floor}");
+        assert!((max_level - 255.0).abs() < 1.0, "max_level={max_level}");
+
+        // 参照実装（CHIP LFO本体 + operator.rsと同じamp_factor式）でも同じ谷/山に到達することを
+        // 確認する。ChipLfoは連続hzで駆動されGain FGは量子化された`time`で駆動されるため
+        // 長時間では位相がずれるが、振幅の到達範囲（位相非依存）はどちらも同じ式
+        // `ams_to_depth(ams)×(amd/255)`から導かれるので一致するはず。
+        let mut chip_lfo = ChipLfo::new();
+        chip_lfo.note_on();
+        let mut ref_min = f32::MAX;
+        let mut ref_max = f32::MIN;
+        for _ in 0..samples {
+            let triangle = chip_lfo.tick(sr, freq, 0);
+            let chip_amp_mod = triangle * depth;
+            let amp_factor = (1.0 - chip_amp_mod).clamp(0.0, 1.0);
+            ref_min = ref_min.min(amp_factor * 255.0);
+            ref_max = ref_max.max(amp_factor * 255.0);
+        }
+        assert!((ref_min - expected_floor).abs() < 1.0, "ref_min={ref_min} expected={expected_floor}");
+        assert!((min_level - ref_min).abs() < 3.0, "min_level={min_level} ref_min={ref_min}");
+        assert!((max_level - ref_max).abs() < 1.0, "max_level={max_level} ref_max={ref_max}");
     }
 }
