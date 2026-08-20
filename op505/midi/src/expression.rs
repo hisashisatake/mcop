@@ -2,11 +2,15 @@ use op505_core::Op505Patch;
 use sound_fm::algorithm::ALGORITHMS;
 
 /// 表情コントローラー（AT/CC2/CC4）共通の加算先（spec-sound.md Expression Destination参照）。
+///
+/// `LfoAmd`（旧CHIP LFO AMDへの加算）はCHIP LFO完全退役に伴い削除済み。Gain FGは
+/// スカラーの「深さ」フィールドを持たないため、CHIP LFO時代と同じ意味の代替先が存在しない
+/// （memory `project_chip_lfo_retirement_investigation.md`参照）。
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum ExpressionDestination {
+    /// 旧`LfoPmd`（CHIP LFO PMDへの加算）の後継。Pitch FGの`depth`（振れ幅倍率）へ加算する。
     #[default]
-    LfoPmd,
-    LfoAmd,
+    PitchFgDepth,
     FilterCutoff,
     FilterResonance,
     TlAllOps,
@@ -16,11 +20,10 @@ pub enum ExpressionDestination {
 impl ExpressionDestination {
     pub fn from_u8(value: u8) -> Self {
         match value {
-            0 => ExpressionDestination::LfoPmd,
-            1 => ExpressionDestination::LfoAmd,
-            2 => ExpressionDestination::FilterCutoff,
-            3 => ExpressionDestination::FilterResonance,
-            4 => ExpressionDestination::TlAllOps,
+            0 => ExpressionDestination::PitchFgDepth,
+            1 => ExpressionDestination::FilterCutoff,
+            2 => ExpressionDestination::FilterResonance,
+            3 => ExpressionDestination::TlAllOps,
             _ => ExpressionDestination::TlCarriers,
         }
     }
@@ -53,13 +56,9 @@ pub fn apply_expression_modulation(
     };
     let add = |base: u8, pressure: u8| (base as u16 + pressure as u16).min(255) as u8;
 
-    let pmd = pressure_for(ExpressionDestination::LfoPmd);
+    let pmd = pressure_for(ExpressionDestination::PitchFgDepth);
     if pmd > 0 {
-        patch.channel.chip_lfo_pmd = add(patch.channel.chip_lfo_pmd, pmd);
-    }
-    let amd = pressure_for(ExpressionDestination::LfoAmd);
-    if amd > 0 {
-        patch.channel.chip_lfo_amd = add(patch.channel.chip_lfo_amd, amd);
+        patch.channel.pitch_fg.depth = add(patch.channel.pitch_fg.depth, pmd);
     }
     let cutoff = pressure_for(ExpressionDestination::FilterCutoff);
     if cutoff > 0 {

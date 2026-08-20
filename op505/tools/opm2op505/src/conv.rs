@@ -72,12 +72,9 @@ pub fn voice_to_op505_patch(
     }
 
     let ch = map::convert_channel(voice);
-    // CHIP LFOのピッチ変調経路(pms/chip_lfo_pmd)はPitch FGへ移設する（CHIP LFO退役の第一段階）。
-    // 移設したらpms/chip_lfo_pmdは0にクリアし二重変調を防ぐ。OPMにはLD(delay)レジスタがないため
-    // delay=0固定。chip_lfo_freqはAM経路（chip_lfo_amd/ams）と共有するため保持する。
-    // 詳細はop505-core::chip_lfo_pitch_to_pitch_fg参照。
+    // CHIP LFOのピッチ変調経路(pms/chip_lfo_pmd)はPitch FGへ厳密変換する（CHIP LFO完全退役）。
+    // OPMにはLD(delay)レジスタがないためdelay=0固定。詳細はop505-core::chip_lfo_pitch_to_pitch_fg参照。
     let pitch_fg = chip_lfo_pitch_to_pitch_fg(ch.pms, ch.chip_lfo_pmd, ch.chip_lfo_freq, 0);
-    let pitch_migrated = ch.pms > 0 && ch.chip_lfo_pmd > 0;
 
     // CHIP LFOのAM変調経路(ams/chip_lfo_amd)はGain FGへ厳密変換する（CHIP LFO完全退役）。
     // 詳細はopz2op505::conv::voice_to_op505_patchのコメント参照（同じロジックを踏襲）。
@@ -88,11 +85,6 @@ pub fn voice_to_op505_patch(
     let mut channel = Op505ChannelParams {
         algorithm: ch.algorithm,
         feedback: ch.feedback,
-        chip_lfo_freq: ch.chip_lfo_freq,
-        chip_lfo_pmd: if pitch_migrated { 0 } else { ch.chip_lfo_pmd },
-        chip_lfo_amd: if am_active { 0 } else { ch.chip_lfo_amd },
-        pms: if pitch_migrated { 0 } else { ch.pms },
-        ams: if am_active { 0 } else { ch.ams },
         pitch_fg,
         ..Op505ChannelParams::default()
     };
@@ -201,24 +193,20 @@ mod tests {
         assert!(patch.channel.gain_fg_to_operators, "AM経路はGain FGのOP配線を有効にするはず");
         assert!(!patch.channel.gain_fg_to_master, "AM専用にした場合マスターVCAは無効になるはず");
         assert_eq!(patch.channel.gain_fg.loop_enabled, 1, "Gain FGはAMループを持つはず");
-        assert_eq!(patch.channel.ams, 0, "移設後はチャンネルamsを0クリア（二重変調防止）");
-        assert_eq!(patch.channel.chip_lfo_amd, 0, "移設後はチャンネルchip_lfo_amdを0クリア（二重変調防止）");
     }
 
-    /// どのオペレーターも`ams_en=false`（AM未使用）なら、Gain FGへは何も配線せず
-    /// ams/chip_lfo_amdもそのまま残す（CHIP LFOはまだ生きているため退避不要）。
+    /// どのオペレーターも`ams_en=false`（AM未使用）なら、Gain FGは既定の透過値のまま
+    /// （マスターVCAとしての用途を壊さない）。
     #[test]
-    fn voice_to_op505_patch_keeps_chip_lfo_am_when_no_operator_enables_it() {
+    fn voice_to_op505_patch_leaves_gain_fg_untouched_when_no_operator_enables_am() {
         let mut voice = make_voice(7, [31, 31, 31, 31]);
         voice.ams = 3;
         voice.amd = 99;
         let (patch, _) = voice_to_op505_patch(&voice, OperatorOrder::Direct, AttackMode::None);
 
         assert!(!patch.channel.gain_fg_to_operators, "ams_enなOPが無ければGain FGは配線されない");
-        // voice.ams=3(生レジスタ2bit)/amd=99(生レジスタ7bit)は`map::convert_channel`で
-        // depth値(0〜255)へ写像される（ams_reg_to_depth/lfo_depth_reg_to_depth）。
-        assert_eq!(patch.channel.ams, 255, "ams_enなOPが無ければCHIP LFO側のamsは維持される");
-        assert_eq!(patch.channel.chip_lfo_amd, 199);
+        assert!(patch.channel.gain_fg_to_master, "マスターVCAとしての既定用途は維持される");
+        assert_eq!(patch.channel.gain_fg, Op505ChannelParams::default().gain_fg, "Gain FGは既定の透過値のまま");
     }
 
     #[test]

@@ -101,7 +101,9 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
       AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
       texture_lfo      ← TextureLfo構造体・texture_lfo_to_shape変換（VCO実装に依存しないモジュレーション層の部品）
     fm/                ← クレート名sound-fm。FM合成チップ間で共有する、EG非依存の汎用部品（op505-coreが依存）
-      algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・チップ内LFO・波形生成
+      algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・波形生成。
+                            chip_lfoはop505エンジンから退役済み（2026-08-20）で、opz2op505等の変換ツールが
+                            実機レジスタ値を写像する数式ライブラリとしてのみ現役（詳細はspec-sound.md参照）
       texture_lfo      ← FmLfoDestination（FM合成チップ固有のLFO適用先解釈のみ。TextureLfo本体はsound-coreを再エクスポート）
   ui/                  ← UIレイヤーの共有基盤（製品非依存、egui依存）
     core/              ← クレート名ui-core。ノブ・EGプレビュー・TimeEgエディタ・アルゴリズム結線図・

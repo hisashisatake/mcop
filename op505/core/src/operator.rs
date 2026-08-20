@@ -71,12 +71,8 @@ pub struct Operator {
     phase: f32,
     eg: TimeEg,
     velocity: u8,
-    chip_lfo_pitch_mod_cents: f32,
-    chip_lfo_amp_mod: f32,
-    /// Gain FGがOP単位で配線されたときの追加ゲイン係数（0.0〜1.0、既定1.0＝無変調）。
-    /// `chip_lfo_amp_mod`由来の`amp_factor`とは独立した乗算項（CHIP LFO AM経路の厳密代替、
-    /// memory `project_chip_lfo_retirement_investigation.md`参照）。CHIP LFO側が退役するまでは
-    /// 両方が共存できるが、変換ツールは同一オペレーターへ二重に配線しない規約を守る。
+    /// Gain FGがOP単位で配線されたときのゲイン係数（0.0〜1.0、既定1.0＝無変調）。
+    /// 旧CHIP LFO AM経路の厳密代替（memory `project_chip_lfo_retirement_investigation.md`参照）。
     am_factor: f32,
     perf_lfo_pitch_mod_cents: f32,
     f_number_ratio: f32,
@@ -113,8 +109,6 @@ impl Operator {
             phase: 0.0,
             eg: TimeEg::new(),
             velocity: 127,
-            chip_lfo_pitch_mod_cents: 0.0,
-            chip_lfo_amp_mod: 0.0,
             am_factor: 1.0,
             perf_lfo_pitch_mod_cents: 0.0,
             f_number_ratio: 1.0,
@@ -184,11 +178,6 @@ impl Operator {
         self.eg.level()
     }
 
-    pub fn set_chip_lfo_modulation(&mut self, pitch_cents: f32, amp_mod: f32) {
-        self.chip_lfo_pitch_mod_cents = pitch_cents;
-        self.chip_lfo_amp_mod = amp_mod;
-    }
-
     /// Gain FGがOP単位（`gain_fg_to_operators`）で配線されたときのゲイン係数を設定する。
     /// `factor`はそのまま乗算されるので呼び出し側で0.0〜1.0にクランプ済みの値を渡すこと
     /// （`Channel::tick`はGain FGのtick出力＝0.0〜1.0をそのまま渡す）。
@@ -207,7 +196,6 @@ impl Operator {
     fn effective_frequency(&mut self) -> f32 {
         let cents = dt1_to_cents(self.params.dt1)
             + op_fine_tune_to_cents(self.params.op_fine_tune)
-            + self.chip_lfo_pitch_mod_cents
             + self.perf_lfo_pitch_mod_cents;
         let pitch_ratio = if self.cached_pitch_ratio_key == Some(cents) {
             self.cached_pitch_ratio
@@ -296,10 +284,9 @@ impl Operator {
             self.cached_tl_gain_key = Some(tl_gain_key);
             v
         };
-        let chip_amp_factor = (1.0 - self.chip_lfo_amp_mod).clamp(0.0, 1.0);
         let db_range = eg_shift_to_db_range(self.params.eg_shift);
         let env_amp = self.compute_env_amp(env_level, db_range);
-        sample * env_amp * tl_gain * chip_amp_factor * self.am_factor
+        sample * env_amp * tl_gain * self.am_factor
     }
 }
 
@@ -530,18 +517,25 @@ mod tests {
     }
 
     #[test]
-    fn chip_lfo_modulation_affects_frequency_and_amplitude() {
+    fn pitch_modulation_affects_frequency() {
+        let mut op = Operator::new(fast_params());
+        op.note_on(440.0, 127);
+
+        let base = op.effective_frequency();
+        op.set_pitch_modulation(100.0);
+        let pitched = op.effective_frequency();
+        assert!(pitched > base, "positive pitch mod should raise frequency");
+    }
+
+    /// Gain FGのOP単位配線（旧CHIP LFO AM経路の厳密代替）は`am_factor`で音量に直接乗算される。
+    #[test]
+    fn am_factor_mutes_output_at_zero() {
         let sr = 44100.0;
         let wave = gen_op_sine();
         let mut op = Operator::new(fast_params());
         op.note_on(440.0, 127);
 
-        let base = op.effective_frequency();
-        op.set_chip_lfo_modulation(100.0, 0.0);
-        let pitched = op.effective_frequency();
-        assert!(pitched > base, "positive pitch mod should raise frequency");
-
-        op.set_chip_lfo_modulation(0.0, 1.0);
+        op.set_am_factor(0.0);
         for _ in 0..10 {
             assert_eq!(op.tick(sr, &wave, 0.0, 69, 120.0), 0.0);
         }

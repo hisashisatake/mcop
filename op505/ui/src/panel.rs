@@ -44,13 +44,6 @@ pub struct Op505PanelParams<'a> {
     // CHANNEL
     pub algorithm: Box<dyn IntParamHandle + 'a>,
     pub feedback: Box<dyn IntParamHandle + 'a>,
-    // CHIP LFO
-    pub chip_lfo_freq: Box<dyn IntParamHandle + 'a>,
-    pub chip_lfo_pmd: Box<dyn IntParamHandle + 'a>,
-    pub chip_lfo_amd: Box<dyn IntParamHandle + 'a>,
-    pub chip_lfo_delay: Box<dyn IntParamHandle + 'a>,
-    pub pms: Box<dyn IntParamHandle + 'a>,
-    pub ams: Box<dyn IntParamHandle + 'a>,
     // TEXTURE LFO
     pub texture_lfo_rate: Box<dyn IntParamHandle + 'a>,
     pub texture_lfo_depth: Box<dyn IntParamHandle + 'a>,
@@ -69,6 +62,9 @@ pub struct Op505PanelParams<'a> {
     pub pitch_fg: Op505BipolarFgPanelParams<'a>,
     pub cutoff_fg: Op505BipolarFgPanelParams<'a>,
     pub gain_fg: Box<dyn TimeEgHandle + 'a>,
+    /// Gain FGの行先スイッチ（旧CHIP LFO AM経路の厳密代替）。
+    pub gain_fg_to_master: Box<dyn BoolParamHandle + 'a>,
+    pub gain_fg_to_operators: Box<dyn BoolParamHandle + 'a>,
     // MASTER EFFECTS
     pub rev_send: Box<dyn IntParamHandle + 'a>,
     pub reverb_type: Box<dyn IntParamHandle + 'a>,

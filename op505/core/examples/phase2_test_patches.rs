@@ -121,12 +121,6 @@ fn test_lead() -> Op505Patch {
     let channel = Op505ChannelParams {
         algorithm: 4, // (O1->O2)+(O3->O4)。09区間でNRPN(0,9)=7へ切り替えると全並列になり音色が変わる
         feedback: 50,
-        chip_lfo_freq: 0,
-        chip_lfo_pmd: 0,
-        chip_lfo_amd: 0,
-        chip_lfo_delay: 0,
-        pms: 0,
-        ams: 0,
         filter_cutoff: 130, // 中庸に下げておく(CC4手動ワウのヘッドルーム確保)
         filter_resonance: 50,
         filter_type: 0, // LP
@@ -169,12 +163,6 @@ fn test_vibrato() -> Op505Patch {
     let channel = Op505ChannelParams {
         algorithm: 7, // 全並列、Op1のみ可聴(TL=0の他3opは無音)。FM変調を一切受けないクリーンなサイン
         feedback: 0,
-        chip_lfo_freq: 0,
-        chip_lfo_pmd: 0,
-        chip_lfo_amd: 0,
-        chip_lfo_delay: 0,
-        pms: 0,
-        ams: 0,
         filter_cutoff: 255, // サイン波は倍音が無いためフィルターは全開のままでよい
         filter_resonance: 0,
         filter_type: 0,
@@ -210,12 +198,6 @@ fn test_pluck() -> Op505Patch {
     let channel = Op505ChannelParams {
         algorithm: 7, // 全並列。Program Changeの切替が明確な音色差として聴こえるようにする
         feedback: 20,
-        chip_lfo_freq: 0,
-        chip_lfo_pmd: 0,
-        chip_lfo_amd: 0,
-        chip_lfo_delay: 0,
-        pms: 0,
-        ams: 0,
         filter_cutoff: 200,
         filter_resonance: 30,
         filter_type: 0,

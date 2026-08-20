@@ -53,12 +53,6 @@ fn build_panel_params<'a>(
     Op505PanelParams {
         algorithm: vi(&params.algorithm, setter),
         feedback: vi(&params.feedback, setter),
-        chip_lfo_freq: vi(&params.chip_lfo_freq, setter),
-        chip_lfo_pmd: vi(&params.chip_lfo_pmd, setter),
-        chip_lfo_amd: vi(&params.chip_lfo_amd, setter),
-        chip_lfo_delay: vi(&params.chip_lfo_delay, setter),
-        pms: vi(&params.pms, setter),
-        ams: vi(&params.ams, setter),
         texture_lfo_rate: vi(&params.texture_lfo_rate, setter),
         texture_lfo_depth: vi(&params.texture_lfo_depth, setter),
         texture_lfo_delay: vi(&params.texture_lfo_delay, setter),
@@ -80,6 +74,8 @@ fn build_panel_params<'a>(
             depth: vi(&params.cutoff_fg_depth, setter),
         },
         gain_fg: vt(egs, |b: &Op505EgBank| b.gain_fg, |b: &mut Op505EgBank, v| b.gain_fg = v, "GAIN FG"),
+        gain_fg_to_master: vb(&params.gain_fg_to_master, setter),
+        gain_fg_to_operators: vb(&params.gain_fg_to_operators, setter),
         rev_send: vi(&params.rev_send, setter),
         reverb_type: vi(&params.reverb_type, setter),
         reverb_time: vi(&params.reverb_time, setter),
@@ -140,18 +136,14 @@ pub(crate) fn create_editor(
                                             let ch = &patch.channel;
                                             set!(params.algorithm, ch.algorithm as i32);
                                             set!(params.feedback, ch.feedback as i32);
-                                            set!(params.chip_lfo_freq, ch.chip_lfo_freq as i32);
-                                            set!(params.chip_lfo_pmd, ch.chip_lfo_pmd as i32);
-                                            set!(params.chip_lfo_amd, ch.chip_lfo_amd as i32);
-                                            set!(params.chip_lfo_delay, ch.chip_lfo_delay as i32);
-                                            set!(params.pms, ch.pms as i32);
-                                            set!(params.ams, ch.ams as i32);
                                             set!(params.cutoff, ch.filter_cutoff as i32);
                                             set!(params.resonance, ch.filter_resonance as i32);
                                             set!(params.filter_type, ch.filter_type as i32);
                                             set!(params.filter_self_oscillation, ch.filter_self_oscillation);
                                             set!(params.pitch_fg_depth, ch.pitch_fg.depth as i32);
                                             set!(params.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
+                                            set!(params.gain_fg_to_master, ch.gain_fg_to_master);
+                                            set!(params.gain_fg_to_operators, ch.gain_fg_to_operators);
                                             set!(params.texture_lfo_rate, ch.texture_lfo.rate as i32);
                                             set!(params.texture_lfo_depth, ch.texture_lfo.depth as i32);
                                             set!(params.texture_lfo_delay, ch.texture_lfo.delay as i32);

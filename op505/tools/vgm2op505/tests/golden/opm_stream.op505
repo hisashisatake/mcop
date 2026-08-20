@@ -274,12 +274,6 @@
         "channel": {
           "algorithm": 7,
           "feedback": 0,
-          "chip_lfo_freq": 0,
-          "chip_lfo_pmd": 0,
-          "chip_lfo_amd": 0,
-          "chip_lfo_delay": 0,
-          "pms": 0,
-          "ams": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,

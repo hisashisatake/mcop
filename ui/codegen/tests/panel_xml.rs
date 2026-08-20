@@ -58,14 +58,14 @@ fn op_header_title_and_readout() {
 }
 
 /// コミット0da0584で`<column title=>`が実描画に配線されておらず脱落していた
-/// CHANNEL/CHIP LFOの見出しが復活していることを確認する
+/// CHANNELの見出しが復活していることを確認する
 /// （`<panels>`/`<panel>`統一後は他の見出しと同じ`ui.horizontal`ラップになる）。
+/// CHIP LFOパネルは2026-08-20のCHIP LFO完全退役でXMLから削除済み。
 #[test]
-fn channel_and_chip_lfo_titles_present() {
+fn channel_title_present() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("ui.label(egui::RichText::new(\"CHANNEL\").strong());"));
-    assert!(rust.contains("ui.label(egui::RichText::new(\"CHIP LFO\").strong());"));
 }
 
 /// `<header><title/>...`（空タグ）が親の`title=`属性から見出しを解決することを確認する
@@ -90,9 +90,10 @@ fn header_title_from_attr_resolves() {
     assert_eq!(lines[idx + 1], "});");
 }
 
-/// XMLに書かれた8つの`<panels>`グループ（OP repeat + CHANNEL/CHIP LFO(span4/8) + TEXTURE LFO +
+/// XMLに書かれたパネル（OP repeat + CHANNEL(span12) + TEXTURE LFO + FILTER +
 /// PITCH FG + CUTOFF FG + GAIN FG + MASTER EFFECT(REVERB/CHORUS)）が全て生成されている
-/// （要素の脱落がない）ことを確認する。
+/// （要素の脱落がない）ことを確認する。CHIP LFOパネルは2026-08-20のCHIP LFO完全退役で
+/// XMLから削除済み（GAIN FGパネルのMASTER/OPチェックボックスが厳密代替）。
 #[test]
 fn all_panels_present() {
     let xml = panel_xml();
@@ -104,7 +105,8 @@ fn all_panels_present() {
     assert!(rust.contains("\"GAIN FG\""));
     assert!(rust.contains("\"MASTER EFFECT (REVERB)\""));
     assert!(rust.contains("\"MASTER EFFECT (CHORUS)\""));
-    assert!(rust.contains("params.chip_lfo_freq"));
+    assert!(rust.contains("params.gain_fg_to_master"));
+    assert!(rust.contains("params.gain_fg_to_operators"));
     assert!(rust.contains("finish_texture_lfo_patchbay"));
 }
 

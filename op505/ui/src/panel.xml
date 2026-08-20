@@ -16,7 +16,7 @@
   </style>
 
   <panels match-height="true">
-    <panel span="4" title="CHANNEL">
+    <panel span="12" title="CHANNEL">
       <header>
         <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
@@ -27,19 +27,6 @@
           <knob label="ALG" handle="algorithm" margin="0 60"/>
           <knob label="FB" handle="feedback" margin="0 30"/>
         </row>
-      </row>
-    </panel>
-    <panel span="8" title="CHIP LFO">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <knob label="CH.FRQ" handle="chip_lfo_freq"/>
-        <knob label="CH.PMD" handle="chip_lfo_pmd"/>
-        <knob label="CH.AMD" handle="chip_lfo_amd"/>
-        <knob label="CH.DLY" handle="chip_lfo_delay"/>
-        <knob label="PMS" handle="pms"/>
-        <knob label="AMS" handle="ams"/>
       </row>
     </panel>
   </panels>
@@ -131,6 +118,11 @@
           <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
           <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11"/>
+          <!-- 行先スイッチ（旧CHIP LFO AM経路の厳密代替）。MASTER=合成後の一括乗算、
+               OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
+               両方ON/両方OFFも可（排他ではない）。 -->
+          <checkbox label="MASTER" handle="gain_fg_to_master"/>
+          <checkbox label="OP" handle="gain_fg_to_operators"/>
         </stack>
       </row>
     </panel>

@@ -38,7 +38,12 @@ op505-uiのXML DSL移行・共有クレートのsound/ui グループ再編・op
 MIDI表現系）・フェーズ5.5（検証・音作りツール群のop505移行、opzref/wavetest/patchlab/
 smf2op505・op505-midi共有クレート化）が完了**（2026-08-14時点、詳細はフェーズ5.5・フェーズ8・
 フェーズ12）。**2026-08-20、凍結中だったym38x6関連コード・データを一式削除し、
-gesture-appも単一エンジン（OP505）構成へ単純化した**。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
+gesture-appも単一エンジン（OP505）構成へ単純化した**。同日、**CHIP LFO（PMS/AMS×PMD/AMD、
+チップ内蔵の音作り用LFO）をエンジンから完全退役**させた——ピッチ経路はPitch FGへ、AM経路は
+Gain FGのOP単位配線（`gain_fg_to_operators`）へ、それぞれ近似ではなく数式的に厳密な変換で移設し、
+`Op505ChannelParams`の該当6フィールドをフォーマットごと削除した（op505-core/op505-ui/op505-vst/
+gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応、詳細はmemory
+`project_chip_lfo_retirement_investigation.md`参照）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
 
 ---
 

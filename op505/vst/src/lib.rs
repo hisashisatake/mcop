@@ -299,12 +299,6 @@ impl Op505Plugin {
         let channel = Op505ChannelParams {
             algorithm: self.algorithm,
             feedback: p.feedback.value() as u8,
-            chip_lfo_freq: p.chip_lfo_freq.value() as u8,
-            chip_lfo_pmd: p.chip_lfo_pmd.value() as u8,
-            chip_lfo_amd: p.chip_lfo_amd.value() as u8,
-            chip_lfo_delay: p.chip_lfo_delay.value() as u8,
-            pms: p.pms.value() as u8,
-            ams: p.ams.value() as u8,
             filter_cutoff: p.cutoff.value() as u8,
             filter_resonance: p.resonance.value() as u8,
             filter_type: self.filter_type,
@@ -312,10 +306,8 @@ impl Op505Plugin {
             pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
             cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
             gain_fg: egs.gain_fg,
-            // TODO(CHIP LFO完全退役 手順6): DAWパラメーター化してUIから切り替えられるようにする。
-            // 現状は暫定的に従来挙動（マスターのみ）へ固定。
-            gain_fg_to_master: true,
-            gain_fg_to_operators: false,
+            gain_fg_to_master: p.gain_fg_to_master.value(),
+            gain_fg_to_operators: p.gain_fg_to_operators.value(),
             // 質感LFOは焼き込み専用のためCC補正を受けない（NRPN/DAWパラメーターのみ、
             // 演奏系CC1/76/77/78はすべてPitch FGへ行く）。
             texture_lfo: TextureLfo {

@@ -25,7 +25,7 @@ pub use sound_core::BIPOLAR_NEUTRAL_RAW;
 use std::collections::BTreeMap;
 
 use sound_fm::algorithm::ALGORITHMS;
-use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz, pms_to_cents_range, ChipLfo};
+use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz, pms_to_cents_range};
 use sound_fm::mapping::{
     carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
     FM_MODULATION_INDEX_SCALE,
@@ -228,19 +228,16 @@ pub fn chip_lfo_am_to_gain_fg(
     })
 }
 
-/// `Op505ChannelParams`の一部（`chip_lfo_*`等）を除く、チャンネル単位パラメーター一式。
-/// ym38x6の`ChannelParams`から、旧`ChannelParamsWire`後方互換層（フィールドリネーム・
-/// 旧filter_eg_*/vca_eg_*からの移行）を取り除いた素直な新フォーマット。
+/// チャンネル単位パラメーター一式。ym38x6の`ChannelParams`から、旧`ChannelParamsWire`
+/// 後方互換層（フィールドリネーム・旧filter_eg_*/vca_eg_*からの移行）を取り除いた素直な新フォーマット。
+///
+/// CHIP LFO（PMS/PMD/AMS/AMD/FRQ/DLY）は2026-08-20に完全退役し、フィールドごと削除済み。
+/// ピッチ経路はPitch FGへ、AM経路はGain FGのOP単位配線（`gain_fg_to_operators`）へ
+/// 厳密変換される（memory `project_chip_lfo_retirement_investigation.md`参照）。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Op505ChannelParams {
     pub algorithm: u8,
     pub feedback: u8,
-    pub chip_lfo_freq: u8,
-    pub chip_lfo_pmd: u8,
-    pub chip_lfo_amd: u8,
-    pub chip_lfo_delay: u8,
-    pub pms: u8,
-    pub ams: u8,
     pub filter_cutoff: u8,
     pub filter_resonance: u8,
     pub filter_type: u8,
@@ -299,12 +296,6 @@ impl Default for Op505ChannelParams {
         Self {
             algorithm: 0,
             feedback: 0,
-            chip_lfo_freq: 0,
-            chip_lfo_pmd: 0,
-            chip_lfo_amd: 0,
-            chip_lfo_delay: 0,
-            pms: 0,
-            ams: 0,
             filter_cutoff: 255,
             filter_resonance: 0,
             filter_type: 0,
@@ -355,7 +346,6 @@ struct Channel {
     tl_carrier_mod_delta: f32,
     cutoff_mod_delta: f32,
     channel_gain: f32,
-    chip_lfo: ChipLfo,
     /// 4op合成後に適用するSVF本体。CutoffのEG変調は`cutoff_fg_eg`が別途計算し、
     /// `effective_cutoff`で合成してから渡す（sound-coreの`VoiceFilter`のような一体型ではなく
     /// 分解結線。sound-core側にEG方式ごとの並行実装を増やさないための設計、plan参照）。
@@ -409,7 +399,6 @@ impl Channel {
             tl_carrier_mod_delta: 0.0,
             cutoff_mod_delta: 0.0,
             channel_gain: 1.0,
-            chip_lfo: ChipLfo::new(),
             svf: Svf::new(),
             cutoff_fg_eg,
             gain_fg_eg,
@@ -522,24 +511,7 @@ impl Channel {
             op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
         }
 
-        // チップ内LFO（プリセット・NRPNで設定する音作り用、PMS/AMS×PMD/AMD）
-        let chip_lfo_value = self.chip_lfo.tick(
-            sample_rate,
-            self.channel_params.chip_lfo_freq,
-            self.channel_params.chip_lfo_delay,
-        );
-        let chip_pitch_mod_cents = chip_lfo_value
-            * pms_to_cents_range(self.channel_params.pms)
-            * (self.channel_params.chip_lfo_pmd as f32 / 255.0);
-        let chip_amp_mod = chip_lfo_value
-            * ams_to_depth(self.channel_params.ams)
-            * (self.channel_params.chip_lfo_amd as f32 / 255.0);
-        for op in self.operators.iter_mut() {
-            let am = if op.params.am_enable { chip_amp_mod } else { 0.0 };
-            op.set_chip_lfo_modulation(chip_pitch_mod_cents, am);
-        }
-
-        // Gain FG：VCA（合成後の一括乗算）とOP単位AM（CHIP LFO AM経路の厳密代替、
+        // Gain FG：VCA（合成後の一括乗算）とOP単位AM（旧CHIP LFO AM経路の厳密代替、
         // memory `project_chip_lfo_retirement_investigation.md`参照）の両方の源になる、
         // 単一のTimeEg。オペレーターループより前にtickし、両方の用途で同じサンプルの値を使う
         // （tick回数は変わらないため既存パッチの出力はビット単位で不変）。
@@ -870,6 +842,9 @@ impl Vco for Op505Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `ChipLfo`は本番コードから退役済み（CHIP LFO完全退役）。ここではGain FGへの厳密変換が
+    // 実機挙動と一致することを裏取りするオラクルとしてのみ使う（chip_lfo.rs冒頭コメント参照）。
+    use sound_fm::chip_lfo::ChipLfo;
 
     fn stages_with(entries: &[(u8, u8, u8)]) -> [TimeStage; sound_core::MAX_STAGES] {
         let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];

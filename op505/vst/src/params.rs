@@ -138,18 +138,6 @@ pub(crate) struct Op505VstParams {
     pub algorithm: IntParam,
     #[id = "feedback"]
     pub feedback: IntParam,
-    #[id = "chip_lfo_freq"]
-    pub chip_lfo_freq: IntParam,
-    #[id = "chip_lfo_pmd"]
-    pub chip_lfo_pmd: IntParam,
-    #[id = "chip_lfo_amd"]
-    pub chip_lfo_amd: IntParam,
-    #[id = "chip_lfo_delay"]
-    pub chip_lfo_delay: IntParam,
-    #[id = "pms"]
-    pub pms: IntParam,
-    #[id = "ams"]
-    pub ams: IntParam,
     #[id = "cutoff"]
     pub cutoff: IntParam,
     #[id = "resonance"]
@@ -166,6 +154,13 @@ pub(crate) struct Op505VstParams {
     pub pitch_fg_depth: IntParam,
     #[id = "cutoff_fg_depth"]
     pub cutoff_fg_depth: IntParam,
+
+    // ---- Gain FGの行先スイッチ（Depthなし、bool 2個。旧CHIP LFO AM経路の厳密代替。
+    //      memory `project_chip_lfo_retirement_investigation.md`参照） ----
+    #[id = "gain_fg_to_master"]
+    pub gain_fg_to_master: BoolParam,
+    #[id = "gain_fg_to_operators"]
+    pub gain_fg_to_operators: BoolParam,
 
     // ---- Texture LFO ----
     #[id = "texture_lfo_rate"]
@@ -219,18 +214,14 @@ impl Default for Op505VstParams {
         Self {
             algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
             feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
-            chip_lfo_freq: IntParam::new("Chip LFO Freq", 0, IntRange::Linear { min: 0, max: 255 }),
-            chip_lfo_pmd: IntParam::new("Chip LFO PMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            chip_lfo_amd: IntParam::new("Chip LFO AMD", 0, IntRange::Linear { min: 0, max: 255 }),
-            chip_lfo_delay: IntParam::new("Chip LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
-            pms: IntParam::new("PMS", 0, IntRange::Linear { min: 0, max: 255 }),
-            ams: IntParam::new("AMS", 0, IntRange::Linear { min: 0, max: 255 }),
             cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
             resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_type: IntParam::new("Filter Type", 0, IntRange::Linear { min: 0, max: 255 }),
             filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
             pitch_fg_depth: IntParam::new("Pitch FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_to_master: BoolParam::new("Gain FG to Master", true),
+            gain_fg_to_operators: BoolParam::new("Gain FG to Operators", false),
             texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),

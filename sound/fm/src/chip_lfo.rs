@@ -1,14 +1,16 @@
 // ---------------------------------------------------------------------------
-// チップ内LFO（spec.md「チップ内LFO」セクション参照）
+// チップ内LFO（旧称「音色LFO」）— 2026-08-20、op505エンジンから完全退役済み。
 //
-// プリセット・NRPNで設定する「音作り」用のLFO。波形は三角波固定。
-// PMS/AMSはチャンネルごとの変調感度、PMD/AMDはLFOそのものの深さで、
-// 両者の積が実際の変調量になる。AMはオペレーターごとのAME（OperatorParams::am_enable）
-// でON/OFFする。演奏系モジュレーション（FG/質感LFO）とは完全に独立した別系統
-// （FMチップ内蔵・パッチ内で完結・VCO差し替えで消えるレイヤー、旧称「音色LFO」）。
+// かつてPMS/PMD/AMS/AMD/FRQ/DLYとしてop505-coreのChannelが持っていたLFO本体（三角波、
+// AMはOperatorParams::am_enableでON/OFF）。ピッチ経路はPitch FGへ、AM経路はGain FGの
+// OP単位配線（gain_fg_to_operators）へ厳密変換され、`Op505ChannelParams`から
+// 該当6フィールドも削除された（memory `project_chip_lfo_retirement_investigation.md`参照）。
 //
-// 数式はすべて初期案（暫定）。CLAUDE.mdのテスト方針に従い、
-// 実装後に音を聴いて係数を調整する。
+// 3つの変換関数（`chip_lfo_freq_to_hz`/`pms_to_cents_range`/`ams_to_depth`）は
+// opz2op505/opm2op505等の変換ツールが実機レジスタ値→深さへ写像する入力として
+// 現役で使い続ける。`ChipLfo`本体（三角波オシレーター）はop505-coreの`chip_lfo_am_to_gain_fg`テスト
+// （`chip_lfo_am_to_gain_fg_matches_chip_lfo_amplitude_extremes`）が、Gain FGへの変換が
+// 実機挙動と一致することを検証するオラクルとしてのみ使う（本番コードからの参照はゼロ）。
 // ---------------------------------------------------------------------------
 
 /// チップ内LFOの周波数(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
@@ -74,6 +76,7 @@ pub fn ams_to_depth(ams: u8) -> f32 {
 }
 
 /// チップ内LFO本体：三角波固定（spec.md準拠）+ Delay。
+/// op505エンジンからは退役済みで、現在は`op505-core`のテストオラクル専用（本ファイル冒頭コメント参照）。
 pub struct ChipLfo {
     phase: f32,
     elapsed: f32,

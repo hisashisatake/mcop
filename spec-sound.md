@@ -445,9 +445,10 @@ Gain は音量に負値が無いためDepthを持たず、Floor が深さを担�
   `実効Cutoff = clamp(Cutoffベース + FG出力 × (Depth-128)/128, 0, 255)`。
 - **Gain FG**：旧「VCA EG」の後継。出力はVcaゲインへ直結（ループ=トレモロ／ワンショット=通常アンプEG）。
 
-各行き先では、FG・[チップ内LFO](#チップ内lfo)・[質感LFO](#質感lfo5波形専用焼き込み)が
-**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が積み重なる。Pitchは
-Pitch FG＋チップ内LFO(PMS/PMD)＋質感LFO(Dest=Pitch) が積み重なる）。
+各行き先では、FG・[質感LFO](#質感lfo5波形専用焼き込み)が**加算的に共存**する
+（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が積み重なる。Pitchは
+Pitch FG＋質感LFO(Dest=Pitch) が積み重なる。旧チップ内LFO(PMS/PMD)は2026-08-20に
+Pitch FGへ完全統合されたため別レイヤーとしては存在しない）。
 
 ### 演奏層による補正（Pitch FGのみ）
 
@@ -590,7 +591,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 | パラメーター群 | 層 | 保存先 | 設定経路 |
 |---|---|---|---|
-| オペレーター12種×4 / Algorithm / Feedback / チップ内LFO6項目 / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目** / **質感LFO8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
+| オペレーター12種×4 / Algorithm / Feedback / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目** / **質感LFO8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
 | CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（Pitch FG補正）** / **CC2/CC4（Expression Destination加算、下記）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
 | **CC1（モジュレーションホイール）** / Pitch Bend / アフタータッチ / CC64/66/67（ペダル）/ CC103〜106（OP単位キーオン） | ③ジェスチャー | 保存しない（揮発） | MIDI |
 
@@ -613,27 +614,20 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 ---
 
-## チップ内LFO
+## チップ内LFO（廃止済み）
 
-FMチップに内蔵された「音作り」用のLFO（プリセット・NRPNで設定）。VCO層（`op505-core`、共通ロジックは
-`sound-fm::chip_lfo`）に属する
-**チップ固有の変調源で、VCOを差し替えると消える**（旧称「音色LFO」。「チップ内」はこのレイヤー帰属を
-名指しした呼称で、opz2x6/opm2x6が写像する先はこのチップ内LFOである）。演奏用のモジュレーション（[FG](#ファンクションジェネレーターfgpitchcutoffgain)／[質感LFO](#質感lfo5波形専用焼き込み)）とは完全に独立しており、演奏時のビブラート/トレモロには影響しない。
+FMチップに内蔵された「音作り」用のLFO（PMS/AMS×PMD/AMD、三角波固定、旧称「音色LFO」）は、
+op505エンジンから**2026-08-20に完全退役した**。ピッチ経路はPitch FGの2段三角ループへ、
+AM経路はGain FGのOP単位配線（`gain_fg_to_operators`、[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)参照）へ、
+それぞれ数式的に厳密な変換で移設済み（近似ではない。詳細はmemory
+`project_chip_lfo_retirement_investigation.md`参照）。`Op505ChannelParams`の該当6フィールド
+（chip_lfo_freq/pmd/amd/delay、pms、ams）は削除され、op505-vst/op505-uiからもパネルごと消えている。
 
-> **チップ内LFOと演奏系モジュレーションの違い（混同防止）：** チップ内LFO＝チップ忠実のPMS/AMS×PMD/AMD（音作り・パッチ内で完結、VCO差し替えで消える）／FG・質感LFO＝38x6拡張の永続層（ビブラート/トレモロ/オートワウ等の軌跡はFG、5波形の飛び道具は質感LFO）。両系統は独立して同時に効く。
-
-| 項目 | 値 | 備考 |
-|------|-----|------|
-| 波形 | 三角波 | OPQ由来・固定 |
-| 周波数 | 3bit → 8bit（0〜255） | |
-| PMD（ピッチ変調深さ） | 0〜255 | |
-| AMD（振幅変調深さ） | 0〜255 | |
-| PM感度（PMS） | チャンネルごと 3bit → 8bit | 指数カーブ（0=オフ、1〜255でOPM PMS=1(+/-5cents)〜PMS=7(+/-700cents)を両端アンカーとした指数補間） |
-| AM感度（AMS） | チャンネルごと 2bit → 8bit | 指数カーブ（0=オフ、1〜255でOPM AMS=1(23.9dB)〜AMS=3(95.6dB)を両端アンカーとした指数補間をdepth=1-10^(-dB/20)で振幅深度に変換） |
-| Delay | 0〜255 | キーオンからLFO効果開始までの遅延時間。OPZ(TX81Z)のLFO DELAY由来（opz2x6変換で使用。手設計音色では現状常に0） |
-| AMオン/オフ | オペレーターごと | |
-
-周波数/PMD/AMD/Delay/PMS/AMSの6項目は、チャンネル単位のDAWパラメーターとして公開する（MIDI実装方針セクション参照）。
+`sound-fm::chip_lfo`モジュール自体は残っているが、いまはエンジンが直接使う機能ではなく、
+opz2op505/opm2op505等の変換ツールが実機レジスタ値→深さへ写像する際に使う数式ライブラリ
+（`chip_lfo_freq_to_hz`/`pms_to_cents_range`/`ams_to_depth`の3関数）としてのみ現役。
+三角波オシレーター本体（`ChipLfo`構造体）は本番コードから参照されず、op505-coreの回帰テストが
+Gain FGへの変換が実機挙動と一致することを裏取りするオラクルとして使うのみ。
 
 ---
 
@@ -1121,21 +1115,22 @@ Channel Pressure・Poly Key Pressure・CC2（ブレス）・CC4（フット）�
 
 | ソース | NRPN | デフォルト |
 |---|---|---|
-| Channel Pressure（AT Destination） | 0, 16 | LFO PMD |
-| Poly Key Pressure（Poly AT Destination） | 0, 17 | LFO PMD |
+| Channel Pressure（AT Destination） | 0, 16 | Pitch FG Depth |
+| Poly Key Pressure（Poly AT Destination） | 0, 17 | Pitch FG Depth |
 | CC2（ブレス、Breath Controller） | 0, 34 | TL（キャリア一括） |
 | CC4（フット、Foot Controller） | 0, 35 | Filter Cutoff（**手動ワウ**） |
 
-destination enum（共通）：
+destination enum（共通）。旧`LFO AMD`は2026-08-20のCHIP LFO完全退役に伴い削除、
+`LFO PMD`は加算先をPitch FGの`depth`フィールドへ差し替えて`Pitch FG Depth`に改称した
+（Gain FGはスカラーの「深さ」を持たないためAMD相当の代替先は存在しない）：
 
 | 値 | 宛先 |
 |---|---|
-| 0 | LFO PMD（デフォルト） |
-| 1 | LFO AMD |
-| 2 | Filter Cutoff |
-| 3 | Filter Resonance |
-| 4 | TL（全オペレーター一括） |
-| 5 | TL（キャリア一括） |
+| 0 | Pitch FG Depth（デフォルト） |
+| 1 | Filter Cutoff |
+| 2 | Filter Resonance |
+| 3 | TL（全オペレーター一括） |
+| 4 | TL（キャリア一括） |
 
 加算モデル：
 ```
@@ -1156,7 +1151,7 @@ Destination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/(0,5)はグローバ
 
 **手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
 フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。
-チップ内LFOのCutoff行先（質感LFO Destination=4、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
+質感LFOのCutoff行先（Destination=4、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
 「オートワウ」（自動で周期的に開閉）とは独立して積み重なり、演奏者がリアルタイムに手で
 ワウ効果を制御しつつ、パッチ側の自動オートワウも同時に効かせられる。
 
