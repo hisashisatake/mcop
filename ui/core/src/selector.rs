@@ -28,15 +28,19 @@ pub const FILTER_TYPE_NAMES: [&str; 3] = ["LP", "HP", "BP"];
 
 /// 固定候補名一覧から1つを選ぶ汎用コンボボックス。Reverb/Chorus Type等の
 /// enum的パラメーター(0〜names.len()-1)向け。`salt`はウィジェットごとにIDを一意にする値。
+/// `height`は確保する縦幅（既定66.0は`<knob>`とのRow内揃え用、`<stack>`縦積み時は
+/// `panel.xml`の`<enum height="...">`属性で個別に縮められる。`ui-codegen`の
+/// `Size{w:100.0, h:height}`と一致させること）。
 pub fn enum_selector(
     ui: &mut egui::Ui,
     handle: &dyn IntParamHandle,
     label: &str,
     names: &[&str],
     salt: usize,
+    height: f32,
 ) {
     ui.allocate_ui_with_layout(
-        egui::vec2(100.0, 66.0),
+        egui::vec2(100.0, height),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             ui.label(egui::RichText::new(label).size(9.0));

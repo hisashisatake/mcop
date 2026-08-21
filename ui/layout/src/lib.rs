@@ -91,7 +91,10 @@ impl Justify {
 pub enum Node {
     Leaf { size: Vec2 },
     Row { justify: Justify, gap: f32, grow: f32, children: Vec<Node> },
-    Stack { gap: f32, grow: f32, children: Vec<Node> },
+    /// `align_center`は横方向（クロス軸）の揃え。既定false＝左詰め（子の最大幅に合わせて
+    /// 左から積む）。trueにすると`<knob>`(62px)のような子の幅が`<enum>`(100px)より狭い場合、
+    /// 幅の狭い子を中央寄せする（taffyの`align_items: Center`）。
+    Stack { gap: f32, grow: f32, align_center: bool, children: Vec<Node> },
 }
 
 /// 固定サイズの葉（配置対象ウィジェット1個ぶん）。
@@ -110,17 +113,28 @@ pub fn row_grow(justify: Justify, gap: f32, children: Vec<Node>) -> Node {
     Node::Row { justify, gap, grow: 1.0, children }
 }
 
-/// 縦積みコンテナ（親の余剰幅を内容幅ぶんに収める＝子の最大幅）。
+/// 縦積みコンテナ（親の余剰幅を内容幅ぶんに収める＝子の最大幅）。子は左詰め。
 pub fn stack(gap: f32, children: Vec<Node>) -> Node {
-    Node::Stack { gap, grow: 0.0, children }
+    Node::Stack { gap, grow: 0.0, align_center: false, children }
 }
 
 /// 縦積みコンテナ（親の余剰幅を`grow`比で受け取って広がる。子（`row`/`row_grow`）は
 /// 既定の`align-items: stretch`でこの幅いっぱいに引き伸ばされる。`repeat`パネルの
 /// 「グラフの右をN行の折り返しノブ群にする」のような、横幅の要る内容を複数行へ
-/// 折り返す用途に使う）。
+/// 折り返す用途に使う）。子は左詰め。
 pub fn stack_grow(gap: f32, children: Vec<Node>) -> Node {
-    Node::Stack { gap, grow: 1.0, children }
+    Node::Stack { gap, grow: 1.0, align_center: false, children }
+}
+
+/// [`stack`]の中央寄せ版。子の幅が揃わない（`<enum>`100pxと`<knob>`62px混在等）とき、
+/// 幅の狭い子をスタックの幅（＝最大幅の子）の中央へ揃える。
+pub fn stack_centered(gap: f32, children: Vec<Node>) -> Node {
+    Node::Stack { gap, grow: 0.0, align_center: true, children }
+}
+
+/// [`stack_grow`]の中央寄せ版。
+pub fn stack_grow_centered(gap: f32, children: Vec<Node>) -> Node {
+    Node::Stack { gap, grow: 1.0, align_center: true, children }
 }
 
 fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {
@@ -146,12 +160,13 @@ fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {
             )
             .unwrap()
         }
-        Node::Stack { gap, grow, children } => {
+        Node::Stack { gap, grow, align_center, children } => {
             let kids: Vec<NodeId> = children.iter().map(|c| build(tree, c)).collect();
             tree.new_with_children(
                 Style {
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
+                    align_items: if *align_center { Some(AlignItems::Center) } else { None },
                     gap: Size { width: zero(), height: length(*gap) },
                     flex_grow: *grow,
                     ..Default::default()

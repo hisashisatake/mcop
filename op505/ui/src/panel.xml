@@ -2,11 +2,11 @@
 
   <style>
     <!-- 横並び<panels>グループ内、パネル間の隙間。 -->
-    <panels gap="8"/>
+    <panels gap="4"/>
     <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。 -->
-    <panel inner-margin="6" outer-margin="3"/>
+    <panel inner-margin="4" outer-margin="3"/>
     <!-- 全ウィジェット共通の既定マージン。 -->
-    <widget margin="5 0 0 0"/>
+    <widget margin="4"/>
     <algorithm-diagram width="130" height="100"/>
     <!-- TimeEg固定枠（Step 2）。GRAPH/KNOBSタブ切替・段数1〜8変更でこのサイズ自体は変わらない。
          高さ245＝ヘッダ20+コンテンツ190+spin行35。コンテンツ190はKNOBSモードの1段カラム
@@ -16,16 +16,47 @@
   </style>
 
   <panels match-height="true">
-    <panel span="12" title="CHANNEL">
+    <panel span="3" title="CHANNEL">
       <header>
         <title/>
       </header>
-      <row justify="between" gap="spacing">
+      <row justify="start" gap="spacing">
         <algorithm-diagram handle="algorithm"/>
-        <row grow="true" justify="between">
+        <stack gap="spacing" center="true">
           <knob label="ALG" handle="algorithm" margin="0 60"/>
           <knob label="FB" handle="feedback" margin="0 30"/>
-        </row>
+        </stack>
+      </row>
+    </panel>
+    <panel span="3" title="MASTER EFFECT (REVERB)">
+      <header>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
+        <stack gap="spacing" center="true">
+            <knob label="REV" handle="rev_send"/>
+            <knob label="R.TIME" handle="reverb_time"/>
+        </stack>
+      </row>
+    </panel>
+    <panel span="6" title="MASTER EFFECT (CHORUS)">
+      <header>
+        <title/>
+      </header>
+      <row justify="between">
+        <stack gap="spacing" center="true">
+            <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
+            <knob label="C.DEP" handle="chorus_mod_depth"/>
+        </stack>
+        <stack gap="spacing" center="true">
+            <knob label="CHO" handle="cho_send"/>
+            <knob label="C.FB" handle="chorus_feedback"/>
+        </stack>
+        <stack gap="spacing" center="true">
+            <knob label="C.RATE" handle="chorus_mod_rate"/>
+            <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+        </stack>
       </row>
     </panel>
   </panels>
@@ -35,26 +66,29 @@
       <header>
         <title/>
       </header>
-      <row justify="start" gap="spacing">
-        <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
-             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
-        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
-        <!-- SYNC/RATE/RETRIGはtime-eg-editorの下に新しい行を足すのではなく、既存のP.DEP±ノブと
-             同じstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px固定サイズの
-             自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが伸びずグラフに重なる）。
-             <sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット（旧<enum label="NOTE">の
-             置き換え、100×70）。両者は同じsync_rateの2つの見え方なので互いに追従する。 -->
-        <stack gap="spacing">
+      <row justify="between" gap="spacing">
+        <!-- SYNC/RATE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を足すのではなく、
+             既存の2つのstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
+             固定サイズの自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが
+             伸びずグラフに重なる）。<sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット
+             （旧<enum label="NOTE">の置き換え、100×70）。両者は同じsync_rateの2つの見え方
+             なので互いに追従する。 -->
+        <stack gap="spacing" center="true">
+          <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7" height="36"/>
+          <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
+               乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
+          <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13" height="36"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
                持つため、バイポーラ表示（±）にはしない。 -->
           <knob label="P.DEPTH" handle="params.pitch_fg.depth"/>
-          <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
-          <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
-          <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
-               乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
-          <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13"/>
         </stack>
+        <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
+             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
     <panel title="GAIN FG" span="4">
@@ -62,21 +96,23 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <!-- Gain FGだけ最終段level=0固定を免除し、STAGE=1も許す。出力への乗算でボイス解放には
-             関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
-             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
-        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
-        <stack gap="spacing">
-          <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
-          <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11"/>
+        <stack gap="spacing" center="true">
+          <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
+          <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
           <!-- 行先スイッチ（旧CHIP LFO AM経路の厳密代替）。MASTER=合成後の一括乗算、
                OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
                両方ON/両方OFFも可（排他ではない）。 -->
           <checkbox label="MASTER" handle="gain_fg_to_master"/>
           <checkbox label="OP" handle="gain_fg_to_operators"/>
-          <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14"/>
         </stack>
+        <stack gap="spacing" center="true">
+          <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
+        </stack>
+        <!-- Gain FGだけ最終段level=0固定を免除し、STAGE=1も許す。出力への乗算でボイス解放には
+             関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
+             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
+        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
     <panel title="CUTOFF FG" span="4">
@@ -84,23 +120,23 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
-        <stack gap="spacing">
-          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
-          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
-          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
-          <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
-          <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15"/>
-        </stack>
-        <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
-             変調するFGなので、フィルター本体のパラメーターと隣接させた方が対応関係が分かりやすい。 -->
-        <stack gap="spacing">
+        <stack gap="spacing" center="true">
+          <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
+          <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>
+          <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
+               変調するFGなので、フィルター本体のパラメーターと同じstackに置いて対応関係を分かりやすくする。 -->
+          <enum label="TYPE" handle="filter_type" names="FILTER_TYPE_NAMES" salt="12" height="36"/>
           <knob label="CUTOFF" handle="cutoff"/>
           <knob label="RESO" handle="resonance"/>
-          <enum label="TYPE" handle="filter_type" names="FILTER_TYPE_NAMES" salt="12"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
+          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
+          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
           <checkbox label="SELF-OSC" handle="filter_self_oscillation" width="100"/>
         </stack>
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
   </panels>
@@ -113,55 +149,30 @@
           tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
-        <stack grow="true" gap="spacing">
-          <row justify="between">
+        <stack gap="spacing" center="true">
             <knob label="TL" handle="tl"/>
-            <knob label="MUL" handle="mul"/>
-            <!-- DT1/FINEは中央128＝デチューンなしのバイポーラ（dt1_to_cents/op_fine_tune_to_cents参照）。 -->
-            <knob label="DT1" handle="dt1" bipolar="true"/>
-            <knob label="KSR" handle="ksr"/>
-          </row>
-          <row justify="between">
-            <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
             <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
-            <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
-            <knob label="EGSFT" handle="eg_shift"/>
-          </row>
-          <row justify="between">
-            <knob label="LEVEL SCALE" handle="level_scale"/>
-            <stack>
-              <waveform handle="waveform" index="i"/>
-              <checkbox label="AM" handle="ame"/>
-            </stack>
-          </row>
+            <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
         </stack>
-      </row>
-    </panel>
-  </panels>
-
-  <panels>
-    <panel span="5" title="MASTER EFFECT (REVERB)">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
-        <knob label="REV" handle="rev_send"/>
-        <knob label="R.TIME" handle="reverb_time"/>
-      </row>
-    </panel>
-    <panel span="7" title="MASTER EFFECT (CHORUS)">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
-        <knob label="CHO" handle="cho_send"/>
-        <knob label="C.RATE" handle="chorus_mod_rate"/>
-        <knob label="C.DEP" handle="chorus_mod_depth"/>
-        <knob label="C.FB" handle="chorus_feedback"/>
-        <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+        <stack gap="spacing" center="true">
+            <knob label="MUL" handle="mul"/>
+            <!-- FINEは中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
+            <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
+        </stack>
+        <stack gap="spacing" center="true">
+            <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
+            <knob label="DT1" handle="dt1" bipolar="true"/>
+            <knob label="EGSFT" handle="eg_shift"/>
+        </stack>
+        <stack gap="spacing" center="true">
+            <knob label="KSR" handle="ksr"/>
+            <knob label="LEVEL SCALE" handle="level_scale"/>
+        </stack>
+        <stack gap="spacing" center="true">
+            <waveform handle="waveform" index="i"/>
+            <checkbox label="AM" handle="ame"/>
+        </stack>
+        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
       </row>
     </panel>
   </panels>

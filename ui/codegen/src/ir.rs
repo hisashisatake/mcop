@@ -95,7 +95,10 @@ pub enum Widget {
     Knob { label: String, handle: String, bipolar: bool },
     Checkbox { label: String, handle: String },
     Waveform { handle: String, index: String },
-    Enum { label: String, handle: String, names: String, salt: String },
+    /// `height`は`<stack>`縦積み時の余白調整用（既定66.0は`<knob>`とのRow内揃えを保つ値、
+    /// `<enum height="...">`で個別に縮小できる。`ui_core::selector::enum_selector`の
+    /// `egui::vec2(100.0, height)`と一致させること）。
+    Enum { label: String, handle: String, names: String, salt: String, height: f32 },
     /// TimeEgのテンポ同期レート（連続ノブ＋音価ドロップダウンの複合ウィジェット）。
     /// 候補名は`SYNC_NOTE_NAMES`固定なので`<enum>`と違い`names`属性を取らない。
     SyncRate { label: String, handle: String, salt: String },
@@ -164,7 +167,9 @@ pub enum Title {
 pub enum TreeNode {
     Leaf(LeafInfo),
     Row { justify: String, gap: Gap, grow: bool, children: Vec<TreeNode> },
-    Stack { gap: Gap, grow: bool, children: Vec<TreeNode> },
+    /// `center`は横方向（クロス軸）の揃え。既定false＝左詰め。`<stack center="true">`で
+    /// 幅の狭い子（`<knob>`62px等）を幅の広い子（`<enum>`100px等）の中央へ揃えられる。
+    Stack { gap: Gap, grow: bool, center: bool, children: Vec<TreeNode> },
 }
 
 /// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）。
@@ -232,12 +237,13 @@ impl TreeNode {
                     ui_layout::row(j, gap.numeric(), kids)
                 }
             }
-            TreeNode::Stack { gap, grow, children } => {
+            TreeNode::Stack { gap, grow, center, children } => {
                 let kids: Vec<ui_layout::Node> = children.iter().map(|c| c.to_layout_node()).collect();
-                if *grow {
-                    ui_layout::stack_grow(gap.numeric(), kids)
-                } else {
-                    ui_layout::stack(gap.numeric(), kids)
+                match (*grow, *center) {
+                    (false, false) => ui_layout::stack(gap.numeric(), kids),
+                    (true, false) => ui_layout::stack_grow(gap.numeric(), kids),
+                    (false, true) => ui_layout::stack_centered(gap.numeric(), kids),
+                    (true, true) => ui_layout::stack_grow_centered(gap.numeric(), kids),
                 }
             }
         }

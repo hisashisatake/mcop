@@ -1,9 +1,7 @@
 //! `op505-ui/src/panel.xml`（実際の正本）を`generate_rust`に通し、構造が壊れていないことを
-//! 検証する。ここで確認する木構造（OPパネルの`time-eg-editor`+11ウィジェットの`stack_grow`3行
-//! 折り返し等）は、ビルド成果物（`$OUT_DIR/panel_generated.rs`）の実測と一致させてある
-//! （2026-08-20、ym38x6-ui削除に伴い旧ym38x6-ui版のリファレンスから移行。旧版はOPパネルが
-//! 1列・17ウィジェット均等割りだったが、op505-uiはOPパネルのcolumns=2グリッド化・TimeEg
-//! エディタ化により木構造が異なる）。
+//! 検証する。ここで確認する木構造（OPパネルの`<stack center="true">`複数本+`time-eg-editor`等）は、
+//! ビルド成果物（`$OUT_DIR/panel_generated.rs`）の実測と一致させてある。panel.xmlのOPパネル内訳を
+//! 編集するたびに`op_panel_tree_matches_taffy_reference`の期待値も追従が必要（2026-08-21時点の構成）。
 
 fn panel_xml() -> String {
     std::fs::read_to_string("../../op505/ui/src/panel.xml").expect("panel.xml が見つかりません")
@@ -17,21 +15,23 @@ fn generates_without_error() {
     assert!(rust.trim_end().ends_with('}'));
 }
 
-/// OPパネルのレイアウト木が、ビルド成果物の実測（`time-eg-editor`(260x250) + 11ウィジェットの
-/// `stack_grow`3行折り返し(62x71×4 + 62x71×4 + 62x71+waveform/AMの`<stack>`(130x71+70x25))）と
-/// 一致することを確認する。
-///
-/// ノブの宣言幅62は`ui_core::knob::KNOB_CELL_SIZE`と同期する値。
+/// OPパネルのレイアウト木が、ビルド成果物の実測と一致することを確認する（2026-08-21、
+/// ユーザーによるpanel.xml手編集でOPパネルが5本の`<stack center="true">`（TL/V.GAIN/VEL・
+/// MUL/FINE・DT1/EGSFT・KSR/LEVEL SCALE・WAVE/AM）+ 末尾`time-eg-editor`(268x253)という
+/// 構成へ再構成された際に実測値へ更新。**この木構造アサーションは非常に壊れやすい**——
+/// panel.xmlのOPパネル内訳（stackの分割単位・並び順）を変えるたびに追従が必要。
+/// 外形サイズはウィジェット自然サイズ+既定マージン4px×2辺。
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
-    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![leaf(260.0, 250.0), \
-stack_grow(outer_gap, vec![\
-row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)]), \
-row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0), leaf(62.0, 71.0)]), \
-row(Justify::Between, 0.0, vec![leaf(62.0, 71.0), stack(0.0, vec![leaf(130.0, 71.0), leaf(70.0, 25.0)])])\
-])]);";
+    let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![\
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(138.0, 74.0), leaf(78.0, 28.0)]), \
+leaf(268.0, 253.0)]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
     // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される）、waveform_selectorのindex。

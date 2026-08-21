@@ -90,8 +90,8 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
         }
         Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
         Widget::Waveform { handle, index } => format!("waveform_selector(ui, &*{handle}, ({index}) as usize);"),
-        Widget::Enum { label, handle, names, salt } => {
-            format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt});")
+        Widget::Enum { label, handle, names, salt, height } => {
+            format!("enum_selector(ui, &*{handle}, \"{label}\", &{names}, {salt}, {height}f32);")
         }
         Widget::SyncRate { label, handle, salt } => {
             format!("sync_rate_selector(ui, &*{handle}, \"{label}\", {salt});")
@@ -184,8 +184,13 @@ fn tree_expr(node: &TreeNode) -> String {
             let children_str = children.iter().map(tree_expr).collect::<Vec<_>>().join(", ");
             format!("{ctor}(Justify::{}, {}, vec![{children_str}])", capitalize(justify), gap_str(gap))
         }
-        TreeNode::Stack { gap, grow, children } => {
-            let ctor = if *grow { "stack_grow" } else { "stack" };
+        TreeNode::Stack { gap, grow, center, children } => {
+            let ctor = match (*grow, *center) {
+                (false, false) => "stack",
+                (true, false) => "stack_grow",
+                (false, true) => "stack_centered",
+                (true, true) => "stack_grow_centered",
+            };
             let children_str = children.iter().map(tree_expr).collect::<Vec<_>>().join(", ");
             format!("{ctor}({}, vec![{children_str}])", gap_str(gap))
         }

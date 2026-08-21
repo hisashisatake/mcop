@@ -322,11 +322,11 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let salt = resolve_dyn_index(index, idx);
             waveform_selector(ui, store.int(&key), salt);
         }
-        Widget::Enum { label, handle, names, salt } => {
+        Widget::Enum { label, handle, names, salt, height } => {
             let key = scoped(handle, idx);
             let names_slice = resolve_names(names);
             let salt_n: usize = salt.parse().unwrap_or(0);
-            enum_selector(ui, store.int(&key), label, names_slice, salt_n);
+            enum_selector(ui, store.int(&key), label, names_slice, salt_n, *height);
         }
         Widget::SyncRate { label, handle, salt } => {
             let key = scoped(handle, idx);

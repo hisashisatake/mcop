@@ -851,8 +851,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
 /// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜8)変更で`size`自体は変わらず、
 /// VALUEモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
-/// `handle.name()`はegui memoryのId salt兼見出しラベルに使うため、呼び出し側で
-/// EGごとに一意な名前（"OP1 EG"/"PITCH FG"等）を渡すこと。
+/// `handle.name()`はegui memoryのId salt専用（GRAPH/VALUEタブの選択状態を複数EG間で
+/// 混線させないための一意化）。画面には描画しないため、呼び出し側の値そのものは
+/// 表示品質に影響しないが、複数EGを同時に置く画面では一意な文字列を渡すこと。
 /// `profile`はEG種別ごとの編集制約（`TimeEgProfile`参照）。panel.xmlの
 /// `min-stages`/`terminal-level`属性からui-codegenが埋め込む。
 pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8, profile: TimeEgProfile) {
@@ -861,7 +862,10 @@ pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mappin
 
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(handle.name()).size(9.0));
+            // handle.name()はegui memoryのId salt（GRAPH/VALUEタブ状態の一意性）専用に留め、
+            // 見出しラベルとしての描画はしない（XMLのhandle属性がRustのフィールドパス文字列
+            // そのままのため、"params.pitch_fg.eg"のような読みにくい表示になっていた）。
+            // どのEGかはpanel.xmlの<panel title="...">が示す。
             ui.selectable_value(&mut mode, Mode::Graph, "GRAPH");
             ui.selectable_value(&mut mode, Mode::Value, "VALUE");
         });

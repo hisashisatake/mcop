@@ -274,11 +274,15 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
             let names = req_attr(el, "names")?;
             let salt = el.attribute("salt").unwrap_or("0").to_string();
+            // 既定66.0は<knob>とのRow内揃え用。<stack>縦積み時は`height`属性で個別に縮められる
+            // （中身はラベル+ComboBoxのみで66pxより実際にはずっと低いため、既定のままだと
+            // 下に大きな余白が残る。<checkbox width="...">と同じ前例踏襲）。
+            let height = attr_f32_or(el, "height", 66.0)?;
             (
-                Widget::Enum { label: label.clone(), handle, names, salt },
+                Widget::Enum { label: label.clone(), handle, names, salt, height },
                 label,
                 "enum".to_string(),
-                Size { w: 100.0, h: 66.0 },
+                Size { w: 100.0, h: height },
             )
         }
         "sync-rate" => {
@@ -377,6 +381,10 @@ fn build_row_tree(el: Node, ctx: &Ctx, style: &Style) -> Result<TreeNode, String
         };
         let grow = el.attribute("grow") == Some("true");
         let justify = el.attribute("justify").unwrap_or("start").to_string();
+        // <stack center="true">は子の幅が揃わないとき（<knob>62pxと<enum>100px混在等）、
+        // 幅の狭い子をスタック幅（最大幅の子）の中央へ揃える。<row>には無関係（rowのjustifyは
+        // 主軸=横方向の分配で、centerは既に別の意味を持つため属性を分けてある）。
+        let center = el.attribute("center") == Some("true");
         let kids = element_children(el);
         if kids.is_empty() {
             return Err(format!("<{tag}>には1個以上の子要素が必要です"));
@@ -388,7 +396,7 @@ fn build_row_tree(el: Node, ctx: &Ctx, style: &Style) -> Result<TreeNode, String
         if tag == "row" {
             Ok(TreeNode::Row { justify, gap, grow, children })
         } else {
-            Ok(TreeNode::Stack { gap, grow, children })
+            Ok(TreeNode::Stack { gap, grow, center, children })
         }
     } else {
         Ok(TreeNode::Leaf(build_leaf_info(el, ctx, style)?))
