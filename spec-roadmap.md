@@ -59,7 +59,8 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
   → マウスによる2Dジェスチャー入力UIの実装
   → キャリブレーション（C-F-G基準点）の実装
 
-フェーズ2: パフォーマンスLFO（現: FG／質感LFO）・マスターエフェクト実装（完了）
+フェーズ2: パフォーマンスLFO（現: FG／質感LFO。**質感LFOは2026-08-20にTimeEgの`texture`フィールド
+  〈S&H/Random/Chaos〉へ統合され退役済み**、詳細はspec-sound.md参照）・マスターエフェクト実装（完了）
   → PerformanceLfo / PerformanceLfoTarget をsound-coreに実装
   → MasterEffects（Reverb/Chorus）をsound-coreに実装
   → リバーブの聴感調整完了: Freeverb方式からFDN方式（Householder行列、8ライン）へ刷新し
@@ -174,6 +175,10 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
     (c) 音色LFO(tone_lfo.rs)を「チップ内LFO」へ改名（spec表記のみ、コード改名はステップ6）。VCO固有＝VCO
         差し替えで消えるレイヤー帰属を名指しする呼称とした
     → 詳細はspec-sound.mdの「ファンクションジェネレーター」節・「質感LFO」節を参照
+    **【2026-08-20追記】質感LFO1基は退役し、S&H/ランダム/カオスの3波形はTimeEgの`texture`フィールド
+    （ループ区間の各段を区間内レベル範囲で乱数抽選する方式）へ統合された。矩形/台形は先行してFGへ
+    畳み込み済みだったため、この時点で「質感LFO」という独立レイヤー自体が不要になった
+    （境界規則は消滅、詳細はspec-sound.md参照）**
   → ステップ6「コア実装」完了（`sound-core`/`ym38x6-core`に閉じた4コミット、2026-07-14）:
     (1) `sound-core::Eg`にLoop/Floor/Curve・`retrigger()`（残響レベル保持での再Attack）・
         `rate_scale`引数を追加。`Vcf`/`Vca`の`process()`を`EgParams`ベースの引数へ変更

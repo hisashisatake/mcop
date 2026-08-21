@@ -28,7 +28,7 @@
 
 - [spec-roadmap.md](spec-roadmap.md)：実装フェーズ一覧と現在地
 - [spec-sound.md](spec-sound.md)：OP505音源エンジンの仕様（パラメーター・MIDI実装・波形メモリ専用音色バンク等）。
-  VCO抽象・FG（Pitch/Cutoff/Gain）・質感LFO・三層モデル等の`sound-core`/`sound-fm`共有層の記述はop505に
+  VCO抽象・FG（Pitch/Cutoff/Gain、質感texture含む）・三層モデル等の`sound-core`/`sound-fm`共有層の記述はop505に
   適用される。ym38x6固有だった`.38x6`ファイル形式・OPQコンバーター設計等の記述は、ym38x6削除
   （2026-08-20）に伴い過去の設計判断の記録として残っている箇所がある
 - [spec-app.md](spec-app.md)：作曲支援アプリのUI設計仕様
@@ -120,7 +120,7 @@ VSTプラグイン:  nice-plug（op505-vstはフェーズ1・2完了）
 ```
 sound-core（モジュレーション/処理層 + VCO抽象）
   VCO抽象トレイト        ← 「ピッチ付き発振源」のインターフェース
-  モジュレーション層      ← FG（Pitch/Cutoff/Gain、一発にもループにもなるEG）・質感LFO（5波形専用）・VCF・VCA・表情コントローラー・ルーティング
+  モジュレーション層      ← FG（Pitch/Cutoff/Gain、一発にもループにもなるEG。ループ区間はtextureでS&H/Random/Chaosの3種を追加可能）・VCF・VCA・表情コントローラー・ルーティング
   MasterEffects          ← Reverb/Chorus（出力後段）
         ▲ implements VCO
         │
@@ -130,7 +130,7 @@ op505-core（VCO実装＝FM発振源、N点Time/Level方式EG）
 
 **モジュレーションの三層モデル：** モジュレーション層の値は、帰属を①音色（パッチ）／②パート状態
 （MIDIチャンネル単位のCC）／③ジェスチャー（揮発）の三層に分けて管理する（決め台詞「パッチが定義し、
-CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/Gain）・質感LFOをはじめ各モジュレーション量は、
+CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/Gain）をはじめ各モジュレーション量は、
 ①基準値に②③を加算した実効値で作用するため、ホイールを触らなくてもパッチ定義の揺れは鳴る（GM2互換）。
 詳細は[spec-sound.md「モジュレーションの三層モデル」](spec-sound.md#モジュレーションの三層モデル音色パート状態ジェスチャー)を参照。
 
@@ -152,7 +152,8 @@ CCが補正し、ジェスチャーが今を動かす」）。FG（Pitch/Cutoff/
   `Vcf`/`Vca`は`AudioProcessor`（全ボイス合算後のマスター段バッファ一括加工）とは別の粒度
   （ボイス単位・キーオン連動EG・サンプル単位）のトレイトである点に注意。
 - **モジュレーション層本体**: チャンネルLFO三層再編・VCF/VCAファンクションジェネレーター統合
-  （FG=Pitch/Cutoff/Gain＋質感LFOへの再編）・velocity→音量「量」（`OperatorParams.velocity_gain`）は
+  （FG=Pitch/Cutoff/Gainへの再編。旧質感LFOは2026-08-20にFGの`texture`フィールドへ統合され退役済み）・
+  velocity→音量「量」（`OperatorParams.velocity_gain`）は
   いずれも完了済み（詳細はspec-roadmap.md参照）。これらは**ボイス内・キーオン連動EG/持続する揺れ・
   サンプル単位**の処理であり、`AudioProcessor`とは別レイヤー。
 - **将来**: VCOを別の発振源（PCM・減算合成・物理モデル等）に置換しても、同じモジュレーション層・
