@@ -3,15 +3,117 @@
 mod op505_presets;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use op505_core::{op505_presets_dir, Op505BipolarFg, Op505Engine, Op505Patch, Op505PresetBank};
+use op505_core::{
+    op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505Patch, Op505PresetBank,
+};
 use op505_presets::{build_op505_registry, Op505BankRegistry};
 use sound_core::{
     cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, seconds_to_time, volume_depth,
-    AudioProcessor, ChorusType, MasterEffects, ReverbType, TextureLfo, TimeEgParams, TimeStage,
+    AudioProcessor, ChorusType, MasterEffects, ReverbType, TimeEgParams, TimeStage,
     Vco, BIPOLAR_NEUTRAL_RAW, MAX_STAGES, RETRIGGER_MODE_RESET,
 };
-use sound_fm::FmLfoDestination;
+use sound_fm::chip_lfo::chip_lfo_freq_to_hz;
 use std::sync::{Arc, Mutex};
+
+/// Destination（`0`〜`4`、`FmLfoDestination`の値と同じ並び）。旧`sound_fm::FmLfoDestination`は
+/// 質感LFO退役に伴い削除済みのため、gesture-app内だけで使う最小限の解釈をここに持つ
+/// （NRPN(0,0)と同じ生値: Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/Cutoff=4）。
+#[derive(Clone, Copy, PartialEq)]
+enum PerformanceLfoDestination {
+    Unplugged,
+    Pitch,
+    Volume,
+    TlCarrier,
+    Cutoff,
+}
+
+impl PerformanceLfoDestination {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Pitch,
+            2 => Self::Volume,
+            3 => Self::TlCarrier,
+            4 => Self::Cutoff,
+            _ => Self::Unplugged,
+        }
+    }
+}
+
+/// Vキーの演奏系LFO（ビブラート/トレモロ/オートワウ）が上書きする直前の、音色プリセット本来の
+/// Pitch/Gain/Cutoff FG設定。質感LFO退役（`ChannelParams.texture_lfo`廃止）に伴い、演奏系LFOは
+/// 独立したLFOスロットではなく各FG自体を一時的に差し替える方式になったため、`op505_set_patch`/
+/// `op505_set_program`が呼ばれるたびにここを更新し、`op505_set_performance_lfo`は毎回ここを
+/// 基準に3つのFGを再構築する（音色プリセットのFGを演奏系LFOが恒久的に破壊しないため。
+/// 詳細はmemory `project_texture_lfo_retirement.md`）。
+#[derive(Clone, Copy)]
+struct OriginalFgs {
+    pitch_fg: Op505BipolarFg,
+    gain_fg: TimeEgParams,
+    gain_fg_to_master: bool,
+    gain_fg_to_operators: bool,
+    cutoff_fg: Op505BipolarFg,
+}
+
+impl Default for OriginalFgs {
+    fn default() -> Self {
+        Self::capture(&Op505ChannelParams::default())
+    }
+}
+
+impl OriginalFgs {
+    fn capture(ch: &Op505ChannelParams) -> Self {
+        Self {
+            pitch_fg: ch.pitch_fg,
+            gain_fg: ch.gain_fg,
+            gain_fg_to_master: ch.gain_fg_to_master,
+            gain_fg_to_operators: ch.gain_fg_to_operators,
+            cutoff_fg: ch.cutoff_fg,
+        }
+    }
+}
+
+/// 中央(128)でdelay秒待機→谷(0)へ瞬時ジャンプ→山(255)⇄谷(0)を`half_period_a`/`half_period_b`秒
+/// ずつ往復する4段バイポーラループ（Pitch FG/Cutoff FGのビブラート/オートワウ共通形）。
+fn build_bipolar_vibrato_eg(delay_seconds: f32, half_period_a: f32, half_period_b: f32) -> TimeEgParams {
+    let mut stages = [TimeStage::default(); MAX_STAGES];
+    stages[0] = TimeStage { time: seconds_to_time(delay_seconds), level: BIPOLAR_NEUTRAL_RAW, curve: 0 };
+    stages[1] = TimeStage { time: 0, level: 0, curve: 0 };
+    stages[2] = TimeStage { time: seconds_to_time(half_period_a), level: 255, curve: 0 };
+    stages[3] = TimeStage { time: seconds_to_time(half_period_b), level: 0, curve: 0 };
+    TimeEgParams {
+        stages,
+        stage_count: 4,
+        loop_enabled: 1,
+        loop_start: 2,
+        release_point: 3,
+        retrigger_mode: RETRIGGER_MODE_RESET,
+        ..TimeEgParams::default()
+    }
+}
+
+/// Gain FGのトレモロループ（`op505_core::chip_lfo_am_to_gain_fg`と同型の5段構成）。
+/// 「平坦T/4→下降T/4→上昇T/4→平坦T/4+delay」でクランプ済み三角波のAM変調を厳密に再現する。
+fn build_tremolo_gain_fg(delay_seconds: f32, hz: f32, depth: f32) -> TimeEgParams {
+    let quarter_period = 0.25 / hz;
+    let half_period = 0.5 / hz;
+    let floor_level = ((1.0 - depth) * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    let mut stages = [TimeStage::default(); MAX_STAGES];
+    stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+    stages[1] = TimeStage { time: seconds_to_time(delay_seconds + quarter_period), level: 255, curve: 0 };
+    stages[2] = TimeStage { time: seconds_to_time(quarter_period), level: floor_level, curve: 0 };
+    stages[3] = TimeStage { time: seconds_to_time(quarter_period), level: 255, curve: 0 };
+    stages[4] = TimeStage { time: seconds_to_time(half_period), level: 255, curve: 0 };
+    TimeEgParams {
+        stages,
+        stage_count: 5,
+        loop_enabled: 1,
+        loop_start: 2,
+        release_point: 4,
+        retrigger_mode: RETRIGGER_MODE_RESET,
+        ..TimeEgParams::default()
+    }
+}
 
 /// 指定チャンネルIDへキーオンする。チャンネルIDは呼び出し側（フロントエンド）が
 /// 安定したスロット番号として供給する。発音中/リリース中のチャンネルが既にあっても、
@@ -40,22 +142,26 @@ const PITCH_FG_VIBRATO_AR_SECONDS: f32 = 0.085;
 const PITCH_FG_VIBRATO_D1R_SECONDS: f32 = 0.085;
 
 /// OP505エンジンの演奏系モジュレーション（Vキーのビブラート⇔トレモロ切替）を設定する。
-/// `destination`は`FmLfoDestination`の値（Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/Cutoff=4）。
-/// Volume/TL/Cutoffは従来通り質感LFO（`ChannelParams.texture_lfo`、焼き込み専用でCC補正は
-/// 受けない）へ書き込む。Pitchのみ演奏CC（CC1/76/77/78）による補正を受ける唯一のFGスロットである
-/// Pitch FG（`ChannelParams.pitch_fg`）へ書き込む（spec-sound.md「演奏層による補正」節）。
-/// `rate`/`delay`はmain.jsのC/Bキー・Vキー由来の0〜255値、`cc77`/`cc1`/`mod_depth_range`は
-/// destination別の実単位へ変換するための入力（既存の`pitch_depth_cents`/`volume_depth`/
-/// `cutoff_depth`を流用）。
+/// `destination`は`PerformanceLfoDestination`の値（Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/
+/// Cutoff=4、旧`FmLfoDestination`と同じ生値）。
 ///
-/// Pitch destinationはCHIP LFOのピッチ経路をPitch FGへ移設した`chip_lfo_pitch_to_pitch_fg`
-/// （`op505_core::chip_lfo_pitch_to_pitch_fg`）と同型の4段ループ（中央でdelay待機→谷へ瞬時
-/// ジャンプ→山⇄谷を往復）でPitch FGを組む。速さ自体はベース周期を固定し、CC76由来の
-/// `pitch_fg_rate_scale`（`set_pitch_fg_rate_scale`、発音中の該当チャンネルへ個別に反映）で
-/// スケールする設計（旧ym38x6版のAR/D1R固定＋rate_scale方式を踏襲）。
+/// 質感LFO退役（`ChannelParams.texture_lfo`廃止）に伴い、独立したLFOスロットは無くなった。
+/// 代わりに、選ばれたdestinationに対応するFG（Pitch/Gain/Cutoff）自体をループへ差し替え、
+/// **選ばれなかったFGは`original_fgs`（`op505_set_patch`/`op505_set_program`が更新する、
+/// 音色プリセット本来の値）へ毎回戻す**。呼び出しのたびに3つのFG全てをこの規則で再構築するため、
+/// 呼び出し順序に依存せず一貫した結果になる（音色プリセットのFGを演奏系LFOが恒久的に
+/// 破壊しないための設計、詳細はmemory `project_texture_lfo_retirement.md`）。
+///
+/// - Pitch: 中央でdelay待機→谷へ瞬時ジャンプ→山⇄谷を往復する4段ループ（旧CHIP LFOピッチ経路の
+///   `chip_lfo_pitch_to_pitch_fg`と同型）。速さはベース周期を固定し、CC76由来の
+///   `pitch_fg_rate_scale`（`set_pitch_fg_rate_scale`）でスケールする。
+/// - Volume/TlCarrier: Gain FGの5段トレモロループ（旧CHIP LFO AM経路の`chip_lfo_am_to_gain_fg`と
+///   同型）。`rate`をそのまま周期のHzへ変換する（Gain FG専用のrate_scale APIが無いため）。
+/// - Cutoff: Cutoff FGの4段オートワウループ（Pitchと同型、半周期を`rate`から直接計算）。
 #[tauri::command]
 fn op505_set_performance_lfo(
     engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>,
+    original_fgs: tauri::State<'_, Mutex<OriginalFgs>>,
     channel: usize,
     rate: u8,
     delay: u8,
@@ -64,54 +170,49 @@ fn op505_set_performance_lfo(
     cc1: u8,
     mod_depth_range: u8,
 ) {
-    let dest = FmLfoDestination::from_u8(destination);
+    let dest = PerformanceLfoDestination::from_u8(destination);
+    let orig = *original_fgs.lock().unwrap();
     let mut engine = engine.lock().unwrap();
     let mut patch = engine.current_patch();
+    let delay_seconds = delay as f32 / 255.0 * 10.0;
 
-    if dest == FmLfoDestination::Pitch {
+    if dest == PerformanceLfoDestination::Pitch {
         let cents = pitch_depth_cents(cc77, cc1, mod_depth_range);
         let depth = ((cents.abs() / 1200.0) * 255.0).round().clamp(0.0, 255.0) as u8;
-        let delay_seconds = delay as f32 / 255.0 * 10.0;
-
-        let mut stages = [TimeStage::default(); MAX_STAGES];
-        stages[0] =
-            TimeStage { time: seconds_to_time(delay_seconds), level: BIPOLAR_NEUTRAL_RAW, curve: 0 };
-        stages[1] = TimeStage { time: 0, level: 0, curve: 0 };
-        stages[2] =
-            TimeStage { time: seconds_to_time(PITCH_FG_VIBRATO_AR_SECONDS), level: 255, curve: 0 };
-        stages[3] =
-            TimeStage { time: seconds_to_time(PITCH_FG_VIBRATO_D1R_SECONDS), level: 0, curve: 0 };
-
         patch.channel.pitch_fg = Op505BipolarFg {
-            eg: TimeEgParams {
-                stages,
-                stage_count: 4,
-                loop_enabled: 1,
-                loop_start: 2,
-                release_point: 3,
-                retrigger_mode: RETRIGGER_MODE_RESET,
-                ..TimeEgParams::default()
-            },
+            eg: build_bipolar_vibrato_eg(delay_seconds, PITCH_FG_VIBRATO_AR_SECONDS, PITCH_FG_VIBRATO_D1R_SECONDS),
             depth,
         };
-        engine.set_patch_live(patch);
         // CC76(Vibrato Rate)相当をrate_scaleへ変換して発音中の該当チャンネルへ即時反映する
         // （AR/D1Rの生値0〜255をmain.jsのC/Bキー(rate)域からCC76の0〜127域へ線形換算）。
         let cc76 = (rate as u32 * 127 / 255) as u8;
         engine.set_pitch_fg_rate_scale(channel, cc76_to_rate_scale(cc76));
-        return;
+    } else {
+        patch.channel.pitch_fg = orig.pitch_fg;
+        engine.set_pitch_fg_rate_scale(channel, 1.0);
     }
 
-    // dest == Pitchは上のearly returnで処理済み。
-    let depth = match dest {
-        FmLfoDestination::Volume | FmLfoDestination::TlCarrier => volume_depth(cc77, cc1) * 255.0,
-        FmLfoDestination::Cutoff => cutoff_depth(cc77, cc1),
-        FmLfoDestination::Pitch | FmLfoDestination::Unplugged => 0.0,
+    if dest == PerformanceLfoDestination::Volume || dest == PerformanceLfoDestination::TlCarrier {
+        let depth = volume_depth(cc77, cc1);
+        let hz = chip_lfo_freq_to_hz(rate);
+        patch.channel.gain_fg = build_tremolo_gain_fg(delay_seconds, hz, depth);
+        patch.channel.gain_fg_to_master = true;
+        patch.channel.gain_fg_to_operators = false;
+    } else {
+        patch.channel.gain_fg = orig.gain_fg;
+        patch.channel.gain_fg_to_master = orig.gain_fg_to_master;
+        patch.channel.gain_fg_to_operators = orig.gain_fg_to_operators;
     }
-    .round()
-    .clamp(0.0, 255.0) as u8;
 
-    patch.channel.texture_lfo = TextureLfo { rate, delay, destination, depth, ..patch.channel.texture_lfo };
+    if dest == PerformanceLfoDestination::Cutoff {
+        let depth = cutoff_depth(cc77, cc1).round().clamp(0.0, 255.0) as u8;
+        let half_period = 0.5 / chip_lfo_freq_to_hz(rate);
+        patch.channel.cutoff_fg =
+            Op505BipolarFg { eg: build_bipolar_vibrato_eg(delay_seconds, half_period, half_period), depth };
+    } else {
+        patch.channel.cutoff_fg = orig.cutoff_fg;
+    }
+
     engine.set_patch_live(patch);
 }
 
@@ -153,8 +254,17 @@ fn set_tempo(engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>, bpm: f32) {
 /// （音色エディタのノブ操作向け）。
 /// `Op505Patch`は専用DTOを介さず直接シリアライズする（op505-coreの型が既にserde対応で、
 /// 後方互換の負債も無いため。フィールド名の安定性は`op505_patch_json_keys_are_stable`テストで担保する）。
+///
+/// `original_fgs`（Vキー演奏系LFOが基準にする「音色プリセット本来のFG」）もここで更新する。
+/// エディタでGain FG等を弄っている最中にVキーを操作した場合、直前のエディタ操作結果が
+/// 新しい基準になる（トレモロ中に弄った値が新しい「オリジナル」になる、という直感的な挙動）。
 #[tauri::command]
-fn op505_set_patch(engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>, patch: Op505Patch) {
+fn op505_set_patch(
+    engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>,
+    original_fgs: tauri::State<'_, Mutex<OriginalFgs>>,
+    patch: Op505Patch,
+) {
+    *original_fgs.lock().unwrap() = OriginalFgs::capture(&patch.channel);
     engine.lock().unwrap().set_patch_live(patch);
 }
 
@@ -173,12 +283,14 @@ fn op505_get_current_patch(engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>) ->
 #[tauri::command]
 fn op505_set_program(
     engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>,
+    original_fgs: tauri::State<'_, Mutex<OriginalFgs>>,
     registry: tauri::State<'_, Mutex<Op505BankRegistry>>,
     bank_state: tauri::State<'_, Mutex<Op505PresetBank>>,
     bank: u16,
     program: u8,
 ) -> Option<Op505Patch> {
     let patch = op505_presets::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
+    *original_fgs.lock().unwrap() = OriginalFgs::capture(&patch.channel);
     engine.lock().unwrap().set_patch(patch);
     Some(patch)
 }
@@ -247,6 +359,7 @@ fn main() {
         .manage(effects)
         .manage(Mutex::new(op505_bank))
         .manage(Mutex::new(op505_registry))
+        .manage(Mutex::new(OriginalFgs::default()))
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,

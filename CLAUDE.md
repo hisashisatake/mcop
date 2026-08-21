@@ -99,12 +99,12 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
     core/              ← クレート名sound-core。WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界
       Vcoトレイト      ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Op505Engineが実装
       AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
-      texture_lfo      ← TextureLfo構造体・texture_lfo_to_shape変換（VCO実装に依存しないモジュレーション層の部品）
+      time_eg          ← TimeEg（N点Time/Level方式EG）。`texture`フィールド（0=OFF/1=S&H/2=Random/3=Chaos）が
+                            旧質感LFOのS&H/Random/Chaos波形の後継（2026-08-20退役、詳細はspec-sound.md参照）
     fm/                ← クレート名sound-fm。FM合成チップ間で共有する、EG非依存の汎用部品（op505-coreが依存）
       algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・波形生成。
                             chip_lfoはop505エンジンから退役済み（2026-08-20）で、opz2op505等の変換ツールが
                             実機レジスタ値を写像する数式ライブラリとしてのみ現役（詳細はspec-sound.md参照）
-      texture_lfo      ← FmLfoDestination（FM合成チップ固有のLFO適用先解釈のみ。TextureLfo本体はsound-coreを再エクスポート）
   ui/                  ← UIレイヤーの共有基盤（製品非依存、egui依存）
     core/              ← クレート名ui-core。ノブ・EGプレビュー・TimeEgエディタ・アルゴリズム結線図・
                           波形/enumセレクタ・パラメーターハンドルトレイト（op505-uiが依存）
@@ -349,7 +349,7 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 - `op505-ui`をeframe(WebRunner)でwasm32コンパイルし、`index.html`の`#editor-canvas`に重ねて描画
 - Eキーでオーバーレイ表示をトグル（`main.js`。keydownリスナーはキャプチャフェーズ登録— エディタにフォーカスがある間はeguiがbubbleフェーズまでイベントを伝播させないため）
 - パラメーター変更は`editor-wasm`内部でローカル状態を更新しつつdirtyフラグを立て、1フレームに1回`op505_set_patch`/`set_master_effects`のTauri IPCへ送る（src-tauriの`Op505Engine`/`MasterEffects`を更新）
-- パフォーマンスLFO（Vキーのビブラート⇔トレモロ切替）はmain.js側のホイール/C・Bキー制御と連動し、`op505_set_performance_lfo`経由でPitch FG/質感LFOへ配線される（エディタ側のノブ操作とは独立した演奏系入力）
+- 演奏系LFO（Vキーのビブラート⇔トレモロ⇔オートワウ切替）はmain.js側のホイール/C・Bキー制御と連動し、`op505_set_performance_lfo`経由でPitch/Gain/Cutoff FGを一時的に差し替える（質感LFO退役に伴い独立LFOスロットは廃止、`OriginalFgs`が音色プリセット本来のFG値を保持し毎回そこから再構築する。エディタ側のノブ操作とは独立した演奏系入力）
 
 ---
 

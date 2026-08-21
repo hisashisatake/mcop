@@ -16,9 +16,8 @@
   </style>
 
   <panels match-height="true">
-    <panel span="3" title="CHANNEL">
+    <panel span="12" title="CHANNEL">
       <header>
-        <jack kind="dest" dest-index="3" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="between" gap="spacing">
@@ -29,31 +28,11 @@
         </row>
       </row>
     </panel>
-
-    <panel span="9" title="TEXTURE LFO">
-      <header>
-        <jack kind="source"/>
-        <title/>
-      </header>
-      <row justify="between">
-        <stack>
-          <enum label="TX.WAVE" handle="texture_lfo_waveform" names="LFO_WAVEFORM_NAMES" salt="2" margin="0 0 -10 0"/>
-          <enum label="TX.FADE" handle="texture_lfo_fade_mode" names="LFO_FADE_MODE_NAMES" salt="3" margin="-10 0 -20 0"/>
-        </stack>
-        <knob label="TX.RATE" handle="texture_lfo_rate"/>
-        <knob label="TX.DEP" handle="texture_lfo_depth"/>
-        <knob label="TX.DLY" handle="texture_lfo_delay"/>
-        <knob label="TX.F.TM" handle="texture_lfo_fade_time"/>
-        <!-- TX.OFSは中央128＝オフセットなしのバイポーラ（lfo_offset_from_param参照）。 -->
-        <knob label="TX.OFS" handle="texture_lfo_offset" bipolar="true"/>
-      </row>
-    </panel>
   </panels>
 
   <panels>
     <panel title="PITCH FG" span="4">
       <header>
-        <jack kind="dest" dest-index="1" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
@@ -72,12 +51,14 @@
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7"/>
+          <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
+               乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
+          <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13"/>
         </stack>
       </row>
     </panel>
     <panel title="GAIN FG" span="4">
       <header>
-        <jack kind="dest" dest-index="2" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
@@ -94,12 +75,12 @@
                両方ON/両方OFFも可（排他ではない）。 -->
           <checkbox label="MASTER" handle="gain_fg_to_master"/>
           <checkbox label="OP" handle="gain_fg_to_operators"/>
+          <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14"/>
         </stack>
       </row>
     </panel>
     <panel title="CUTOFF FG" span="4">
       <header>
-        <jack kind="dest" dest-index="4" label="TX LFO" handle="texture_lfo_destination"/>
         <title/>
       </header>
       <row justify="start" gap="spacing">
@@ -110,6 +91,7 @@
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9"/>
+          <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15"/>
         </stack>
         <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
              変調するFGなので、フィルター本体のパラメーターと隣接させた方が対応関係が分かりやすい。 -->

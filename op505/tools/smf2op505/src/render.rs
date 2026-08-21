@@ -34,7 +34,7 @@ use op505_midi::{
     cc_to_u7 as cc_norm_to_u7, cc_to_u8 as cc_norm_to_u8, control_target, released_notes, ControlTarget,
     ExpressionDestination, PedalState, RpnTracker,
 };
-use sound_core::{cc76_to_rate_scale, lfo_fade_mode_from_index, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
 use crate::bank::PatchBank;
 use crate::smf::{parse_smf, EvKind};
@@ -101,14 +101,6 @@ struct ChannelState {
     operator_waveforms: [Option<u8>; 4],
     filter_type: Option<u8>,
     filter_self_oscillation: Option<bool>,
-    texture_lfo_destination: Option<u8>,
-    texture_lfo_waveform: Option<u8>,
-    texture_lfo_fade_mode: Option<u8>,
-    texture_lfo_rate: Option<u8>,
-    texture_lfo_depth: Option<u8>,
-    texture_lfo_delay: Option<u8>,
-    texture_lfo_fade_time: Option<u8>,
-    texture_lfo_offset: Option<u8>,
     /// OP単位F-Number上書き（NRPN(0,18)〜(0,21)、13bit、Some時のみ set_operator_f_number）。
     operator_f_number_override: [Option<u16>; 4],
 
@@ -151,14 +143,6 @@ impl Default for ChannelState {
             operator_waveforms: [None; 4],
             filter_type: None,
             filter_self_oscillation: None,
-            texture_lfo_destination: None,
-            texture_lfo_waveform: None,
-            texture_lfo_fade_mode: None,
-            texture_lfo_rate: None,
-            texture_lfo_depth: None,
-            texture_lfo_fade_time: None,
-            texture_lfo_delay: None,
-            texture_lfo_offset: None,
             operator_f_number_override: [None; 4],
             at_destination: ExpressionDestination::default(),
             poly_at_destination: ExpressionDestination::default(),
@@ -196,32 +180,6 @@ fn build_effective_patch(base: &Op505Patch, st: &ChannelState) -> Op505Patch {
     }
     if let Some(v) = st.filter_self_oscillation {
         patch.channel.filter_self_oscillation = v;
-    }
-
-    // 質感LFO 焼き込み上書き（Some のときのみ）
-    if let Some(v) = st.texture_lfo_destination {
-        patch.channel.texture_lfo.destination = v;
-    }
-    if let Some(v) = st.texture_lfo_waveform {
-        patch.channel.texture_lfo.waveform = v;
-    }
-    if let Some(v) = st.texture_lfo_fade_mode {
-        patch.channel.texture_lfo.fade_mode = v;
-    }
-    if let Some(v) = st.texture_lfo_rate {
-        patch.channel.texture_lfo.rate = v;
-    }
-    if let Some(v) = st.texture_lfo_depth {
-        patch.channel.texture_lfo.depth = v;
-    }
-    if let Some(v) = st.texture_lfo_delay {
-        patch.channel.texture_lfo.delay = v;
-    }
-    if let Some(v) = st.texture_lfo_fade_time {
-        patch.channel.texture_lfo.fade_time = v;
-    }
-    if let Some(v) = st.texture_lfo_offset {
-        patch.channel.texture_lfo.offset = v;
     }
 
     patch
@@ -316,14 +274,9 @@ fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: 
             st.pitch_fg_rpn0_5 = cc_to_u7(value);
             true
         }
-        ControlTarget::TextureLfoDestination => {
-            st.texture_lfo_destination = Some(cc_to_u7(value).min(4));
-            true
-        }
-        ControlTarget::TextureLfoWaveform => {
-            st.texture_lfo_waveform = Some(cc_to_u7(value).min(4));
-            true
-        }
+        // 旧質感LFOのアドレス（NRPN(0,0)〜(0,1)・(0,22)〜(0,27)）。質感LFO退役に伴い
+        // 欠番として予約し何もしない（`ReservedFgLoopCurve`と同じ扱い）。
+        ControlTarget::ReservedTextureLfo => false,
         ControlTarget::ReverbType => {
             effects.set_reverb_type(ReverbType::from_u8(cc_to_u7(value)));
             false
@@ -378,30 +331,6 @@ fn handle_data_entry(st: &mut ChannelState, effects: &mut MasterEffects, value: 
         }
         ControlTarget::OperatorFNumber(op_index) => {
             set_operator_f_number_override(st, op_index as usize);
-            true
-        }
-        ControlTarget::TextureLfoFadeMode => {
-            st.texture_lfo_fade_mode = Some(lfo_fade_mode_from_index(cc_to_u7(value)) as u8);
-            true
-        }
-        ControlTarget::TextureLfoRate => {
-            st.texture_lfo_rate = Some(cc_to_u8(value));
-            true
-        }
-        ControlTarget::TextureLfoDepth => {
-            st.texture_lfo_depth = Some(cc_to_u8(value));
-            true
-        }
-        ControlTarget::TextureLfoDelay => {
-            st.texture_lfo_delay = Some(cc_to_u8(value));
-            true
-        }
-        ControlTarget::TextureLfoFadeTime => {
-            st.texture_lfo_fade_time = Some(cc_to_u8(value));
-            true
-        }
-        ControlTarget::TextureLfoOffset => {
-            st.texture_lfo_offset = Some(cc_to_u8(value));
             true
         }
         ControlTarget::ReservedFgLoopCurve => false,
@@ -699,19 +628,19 @@ mod tests {
         assert_eq!(eff, base);
     }
 
-    /// NRPN(0,23) 質感LFO Rate はVST式（round(cc/127*255)）でシャドウへ入り、実効パッチへ反映される。
+    /// NRPN(0,0)〜(0,1)・(0,22)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない
+    /// （`nrpn_reserved_fg_loop_curve_is_noop`と同じ扱い）。
     #[test]
-    fn nrpn_texture_lfo_rate_into_patch() {
+    fn nrpn_reserved_texture_lfo_is_noop() {
         let mut st = ChannelState::default();
         let mut fx = MasterEffects::new(44_100.0);
-        st.rpn.set_nrpn_msb(0);
-        st.rpn.set_nrpn_lsb(23);
-        let needs = handle_data_entry(&mut st, &mut fx, 100);
-        assert!(needs);
-        // round(100/127*255) = round(200.79) = 201（決定事項「CC値→内部値の変換式はVST式に統一する」）。
-        assert_eq!(st.texture_lfo_rate, Some(201));
+        for lsb in [0u8, 1, 22, 23, 24, 25, 26, 27] {
+            st.rpn.set_nrpn_msb(0);
+            st.rpn.set_nrpn_lsb(lsb);
+            assert!(!handle_data_entry(&mut st, &mut fx, 100), "NRPN(0,{lsb}) should be a no-op");
+        }
         let eff = build_effective_patch(&Op505Patch::default(), &st);
-        assert_eq!(eff.channel.texture_lfo.rate, 201);
+        assert_eq!(eff, Op505Patch::default());
     }
 
     /// NRPN(0,9) Algorithm 上書きは実効パッチの algorithm を置き換える。

@@ -12,6 +12,10 @@
 //! エイリアスすることで、`panel.xml`から生成される`panel_generated.rs`（`crate::knob::knob`
 //! 等の**裸の名前解決**と、`crate::algorithm_diagram::carriers`等の**明示パス**の両方）を
 //! 無改造のまま成立させている（`ym38x6-ui/src/lib.rs`と同じ設計）。
+// `patchbay`は現在panel.xmlにjack要素が無いため未使用（質感LFO退役でパッチベイの利用先が
+// 消えたため）。将来OP/フィードバック等への配線でジャックを復活させる布石として、
+// 描画コード自体は`ui-core`に温存する方針（memory `project_texture_lfo_retirement.md`参照）。
+#[allow(unused_imports)]
 pub(crate) use ui_core::{algorithm_diagram, knob, layout, param_handle, patchbay, selector, time_eg_editor, waveform};
 
 mod panel;

@@ -3,8 +3,8 @@ use crate::knob::{bool_checkbox, knob};
 use crate::layout::{self, leaf, row, row_grow, stack, stack_grow, Justify};
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::selector::{
-    enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, LFO_FADE_MODE_NAMES,
-    LFO_WAVEFORM_NAMES, REVERB_TYPE_NAMES, RETRIGGER_MODE_NAMES,
+    enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, REVERB_TYPE_NAMES,
+    RETRIGGER_MODE_NAMES, TEXTURE_NAMES,
 };
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
@@ -44,15 +44,6 @@ pub struct Op505PanelParams<'a> {
     // CHANNEL
     pub algorithm: Box<dyn IntParamHandle + 'a>,
     pub feedback: Box<dyn IntParamHandle + 'a>,
-    // TEXTURE LFO
-    pub texture_lfo_rate: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_depth: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_delay: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_waveform: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_fade_mode: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_fade_time: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_offset: Box<dyn IntParamHandle + 'a>,
-    pub texture_lfo_destination: Box<dyn IntParamHandle + 'a>,
     // FILTER
     pub cutoff: Box<dyn IntParamHandle + 'a>,
     pub resonance: Box<dyn IntParamHandle + 'a>,
@@ -79,7 +70,7 @@ pub struct Op505PanelParams<'a> {
     pub operators: [Op505OperatorPanelParams<'a>; 4],
 }
 
-// draw_op505_panel: パラメーターグリッド（CHANNEL・CHIP LFO / TEXTURE LFO・FILTER / PITCH FG /
+// draw_op505_panel: パラメーターグリッド（CHANNEL・FILTER / PITCH FG /
 // CUTOFF FG / GAIN FG / OP1〜4）を描画する。縦スクロールエリアを内部に含む。PRESETSサイドバー・
 // ウィンドウ枠は呼び出し側（ホスト）が用意すること（`ym38x6_ui::draw_param_panel`と同じ契約）。
 //

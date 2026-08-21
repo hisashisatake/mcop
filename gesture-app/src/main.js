@@ -39,13 +39,16 @@ const WAVEFORM_MEMORY_BANK = 16383;
 
 // ─────────────────────────────────────────────
 // 演奏系モジュレーション（Vキーでビブラート⇔トレモロ切替。
-// ビブラート(Pitch)はPitch FG、トレモロ(Volume)は質感LFOへ配線される。
-// バックエンド側の分岐はgesture-app/src-tauri/src/main.rsのym38x6_set_performance_lfo参照）
+// ビブラート(Pitch)はPitch FGのループ、トレモロ(Volume)はGain FGのループへ配線される
+// （質感LFO退役に伴い独立したLFOスロットは無くなり、選ばれなかった側のFGは音色プリセット
+// 本来の値へ戻される。バックエンド側はgesture-app/src-tauri/src/main.rsの
+// op505_set_performance_lfo参照）。
 // ─────────────────────────────────────────────
 const LFO_RATE_DEFAULT = 140; // 中程度の速さ
 const LFO_RATE_STEP    = 8;
 const LFO_DELAY = 0;
-// FmLfoDestination（sound-fm）の値: Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/Cutoff=4
+// PerformanceLfoDestination（main.rs、旧sound-fm::FmLfoDestinationと同じ生値）:
+// Unplugged=0/Pitch=1/Volume=2/TlCarrier=3/Cutoff=4
 const LFO_DEST_PITCH  = 1; // ビブラート
 const LFO_DEST_VOLUME = 2; // トレモロ
 const MOD_DEPTH_RANGE = 64; // RPN0,5デフォルト（約50セント相当）
@@ -628,7 +631,7 @@ function drawChordScale(W, H) {
 }
 
 function drawLfoIndicator() {
-  const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Texture LFO)' : 'Vibrato (Pitch FG)';
+  const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Gain FG)' : 'Vibrato (Pitch FG)';
   const x = 16, barW = 100, barH = 6;
 
   ctx.textAlign = 'left';

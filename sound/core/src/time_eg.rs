@@ -168,7 +168,24 @@ pub struct TimeEgParams {
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で128（無効）にする。
     #[serde(default = "default_drift")]
     pub depth_drift: u8,
+    /// ループ区間の各段を、その区間のレベル最小〜最大の間で乱数抽選した値へ置き換える「質感」。
+    /// 0=OFF／1=S&H（即ジャンプしてホールド）／2=Random（現在値から補間して滑らかに動く）／
+    /// 3=Chaos（ロジスティック写像`x=3.9x(1-x)`による決定論的カオス、段内はS&Hと同じくホールド）。
+    /// `loop_enabled=0`（ワンショット）のときは効かない（周回自体がないため）。
+    /// 段のtime（アンカー）が拍を、段のlevel範囲が振れ幅を決め、textureはその範囲内の
+    /// 「どの値へ向かうか」だけを乱数化する（旧質感LFOのS&H/Random/Chaos波形の後継、
+    /// memory `project_texture_lfo_retirement.md`参照）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（OFF）にする。
+    #[serde(default)]
+    pub texture: u8,
 }
+
+/// `texture`の意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
+/// 呼び出し側の可読性のためにここへ集約する）。
+pub const TEXTURE_OFF: u8 = 0;
+pub const TEXTURE_SAMPLE_HOLD: u8 = 1;
+pub const TEXTURE_RANDOM: u8 = 2;
+pub const TEXTURE_CHAOS: u8 = 3;
 
 /// `sync_rate`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
 /// この値自体は無視されるが、UIで初めてSYNCをONにしたときに1/4から始まるよう
@@ -208,6 +225,7 @@ impl Default for TimeEgParams {
             retrigger_mode: RETRIGGER_MODE_CONTINUE,
             level_drift: default_drift(),
             depth_drift: default_drift(),
+            texture: TEXTURE_OFF,
         }
     }
 }
@@ -300,6 +318,64 @@ pub fn loop_pivot_level(params: &TimeEgParams, neutral_level: f32, loop_start: u
 /// 0.0〜1.0へクランプする。
 pub fn apply_loop_drift(pivot: f32, raw_level: f32, level_offset: f32, depth_gain: f32) -> f32 {
     (pivot + (raw_level - pivot) * depth_gain + level_offset).clamp(0.0, 1.0)
+}
+
+/// ループ区間（`loop_start..=release_point`）のレベルレンジ`(最小, 最大)`。`texture`が
+/// 乱数抽選する値域を決めるのに使う（`loop_pivot_level`の中点だけでなく両端が要るため別関数）。
+/// 1段ループは跳ね戻し先レベルと段自身のレベルの2値、多段ループは区間内の最小/最大。
+pub fn loop_level_range(params: &TimeEgParams, neutral_level: f32, loop_start: usize, release_point: usize) -> (f32, f32) {
+    if loop_start == release_point {
+        let bounce =
+            if loop_start == 0 { neutral_level } else { level_of(&params.stages[loop_start - 1]) };
+        let stage_level = level_of(&params.stages[loop_start]);
+        (bounce.min(stage_level), bounce.max(stage_level))
+    } else {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for stage in &params.stages[loop_start..=release_point] {
+            let l = level_of(stage);
+            lo = lo.min(l);
+            hi = hi.max(l);
+        }
+        (lo, hi)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 質感（texture）の乱数源
+//
+// S&H/Randomは一様乱数、Chaosはロジスティック写像。どちらも`TimeEg`内に持つ状態から
+// 決定論的に進む（`note_on`/`retrigger`で固定初期値へリセットするため、同じMIDI入力からは
+// 同じ乱数列が再現する。ボイス割当が`BTreeMap`で決定論化済みのため、レンダリング結果の
+// ビット一致検証（golden/perf-bench）が壊れない）。
+// ---------------------------------------------------------------------------
+
+/// xorshift32。0は不動点のため`0`が渡ってきたら固定の非ゼロ値へ差し替える。
+fn xorshift32(state: u32) -> u32 {
+    let mut x = if state == 0 { 0x9E3779B9 } else { state };
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    x
+}
+
+/// `rng_state`を1歩進め、0.0〜1.0の一様乱数を返す（S&H/Random用）。
+fn next_uniform(rng_state: &mut u32) -> f32 {
+    *rng_state = xorshift32(*rng_state);
+    (*rng_state >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// `chaos_state`（0.0〜1.0）をロジスティック写像`x=3.9x(1-x)`で1歩進め、その値を返す（Chaos用）。
+/// 不動点0.0/1.0付近に収束しないよう、極端に0や1へ寄った値は中央寄りへ引き戻す。
+fn next_chaos(chaos_state: &mut f32) -> f32 {
+    let x = chaos_state.clamp(0.001, 0.999);
+    *chaos_state = (3.9 * x * (1.0 - x)).clamp(0.001, 0.999);
+    *chaos_state
+}
+
+/// `texture`が乱数抽選した値を`(lo, hi)`へ線形マップする。
+fn texture_target_level(texture: u8, rng_state: &mut u32, chaos_state: &mut f32, lo: f32, hi: f32) -> f32 {
+    let r = if texture == TEXTURE_CHAOS { next_chaos(chaos_state) } else { next_uniform(rng_state) };
+    lo + r * (hi - lo)
 }
 
 /// ループを`cycles`周ぶん折り返した後の累積`(level_offset, depth_gain)`を返す
@@ -535,7 +611,18 @@ pub struct TimeEg {
     /// ループドリフト（`depth_drift`）の累積ゲイン。ループが1周するたびに乗算される。
     /// note_on/retriggerで1.0へリセットする。
     depth_gain: f32,
+    /// `texture`（S&H/Random）用の乱数状態。ループ区間の段へ入るたびに1歩進む。
+    /// note_on/retriggerで固定初期値へリセットし、同じ入力からは同じ乱数列を再現する
+    /// （golden/perf-benchのビット一致検証が壊れないようにするため）。
+    texture_rng: u32,
+    /// `texture`（Chaos）用のロジスティック写像状態(0.0〜1.0)。同じくnote_on/retriggerでリセット。
+    texture_chaos: f32,
 }
+
+/// `texture_rng`のnote_on/retrigger既定シード（0だと不動点のため非ゼロの固定値）。
+const TEXTURE_RNG_SEED: u32 = 0x9E3779B9;
+/// `texture_chaos`のnote_on/retrigger既定値（0.0/1.0付近だと収束が遅いため中央寄りの固定値）。
+const TEXTURE_CHAOS_SEED: f32 = 0.37;
 
 impl TimeEg {
     pub fn new() -> Self {
@@ -562,6 +649,8 @@ impl TimeEg {
             neutral_level,
             level_offset: 0.0,
             depth_gain: 1.0,
+            texture_rng: TEXTURE_RNG_SEED,
+            texture_chaos: TEXTURE_CHAOS_SEED,
         }
     }
 
@@ -577,6 +666,8 @@ impl TimeEg {
         self.idle = false;
         self.level_offset = 0.0;
         self.depth_gain = 1.0;
+        self.texture_rng = TEXTURE_RNG_SEED;
+        self.texture_chaos = TEXTURE_CHAOS_SEED;
     }
 
     /// 残響レベルを保持したまま段0へ再突入する（`eg::Eg::retrigger`と同じ思想）。
@@ -588,6 +679,8 @@ impl TimeEg {
         self.idle = false;
         self.level_offset = 0.0;
         self.depth_gain = 1.0;
+        self.texture_rng = TEXTURE_RNG_SEED;
+        self.texture_chaos = TEXTURE_CHAOS_SEED;
     }
 
     pub fn note_off(&mut self) {
@@ -717,7 +810,10 @@ impl TimeEg {
                 // 完全に平坦で音として何も起きない。跳ね戻すことで1段だけでノコギリ波を表現できる。
                 // 多段ループ（`loop_start < release_point`）は従来どおりレベル連続で周回する
                 // （区間の両端を行き来する三角波的な動きになる）。
-                if loop_start == release_point {
+                // `texture`が有効なときは跳ね戻し自体を行わない。ノコギリ波の「同じ動きの
+                // 繰り返し」を作るための仕掛けだが、textureは`enter_stage`が毎回新しい乱数
+                // ターゲットへ向かうため、現在レベルから素直に続けた方が意図に合う。
+                if loop_start == release_point && params.texture == TEXTURE_OFF {
                     let bounce_raw = if loop_start == 0 {
                         self.neutral_level
                     } else {
@@ -757,7 +853,20 @@ impl TimeEg {
         self.stage_index = next;
         self.segment_start = self.level;
         let raw_end = level_of(&params.stages[next]);
-        self.segment_end = if params.has_drift() && Self::stage_in_loop_region(params, stage_count, next) {
+        let in_loop = Self::stage_in_loop_region(params, stage_count, next);
+        self.segment_end = if params.texture != TEXTURE_OFF && in_loop {
+            let release_point = (params.release_point as usize).min(stage_count - 1);
+            let loop_start = (params.loop_start as usize).min(release_point);
+            let (lo, hi) = loop_level_range(params, self.neutral_level, loop_start, release_point);
+            let target =
+                texture_target_level(params.texture, &mut self.texture_rng, &mut self.texture_chaos, lo, hi);
+            if params.texture != TEXTURE_RANDOM {
+                // S&H/Chaos: 段の時間に関わらず即座にジャンプしてホールドする
+                // （Randomだけは`segment_start`を現在レベルのまま残し、時間をかけて補間する）。
+                self.segment_start = target;
+            }
+            target
+        } else if params.has_drift() && in_loop {
             let release_point = (params.release_point as usize).min(stage_count - 1);
             let loop_start = (params.loop_start as usize).min(release_point);
             let pivot = loop_pivot_level(params, self.neutral_level, loop_start, release_point);
@@ -1547,5 +1656,255 @@ mod tests {
         // 対象区間が実質0秒（全段time=0）でも0除算せず無補正
         let empty = TimeEgParams { sync_enabled: 1, ..Default::default() };
         assert_eq!(tempo_speed_scale(&empty, 120.0), 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // 質感（texture: S&H / Random / Chaos）
+    // -----------------------------------------------------------------------
+
+    /// `texture=OFF`が既定であること（旧`.op505`バンクのserde欠落時フォールバックと同じ値）。
+    #[test]
+    fn texture_defaults_to_off() {
+        assert_eq!(TimeEgParams::default().texture, TEXTURE_OFF);
+    }
+
+    /// `texture=OFF`のときは既存のドリフトテスト群がそのまま通ることが暗黙の回帰保証だが、
+    /// ここでは明示的に「1段ループのbounce」がtexture=OFF時は従来どおり作動することを確認する
+    /// （`advance()`の`loop_start == release_point && params.texture == TEXTURE_OFF`分岐）。
+    #[test]
+    fn texture_off_preserves_single_stage_loop_sawtooth() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0)]),
+            stage_count: 1,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 0,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let cycle_samples = drift_test_cycle_samples(sr, 30) / 2 + 10;
+        // ノコギリ波: 毎周期0.0から255/255へ直線的に登る。
+        let mut min_seen = 1.0f32;
+        for _ in 0..(cycle_samples * 4) {
+            min_seen = min_seen.min(eg.tick(sr, params, 1.0));
+        }
+        assert!(min_seen < 0.05, "texture=OFFなら毎周期0.0へ跳ね戻るはず: min_seen={min_seen}");
+    }
+
+    /// S&H: ループ区間の段内はレベルが一定（階段状）で、段境界でジャンプすること。
+    #[test]
+    fn sample_hold_holds_level_within_stage() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 200, 0), (30, 200, 0)]),
+            stage_count: 2,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 1,
+            texture: TEXTURE_SAMPLE_HOLD,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let stage_samples = (time_to_seconds(30) as f64 * sr as f64) as usize;
+        // 最初の段（アタック相当）を抜けて、ループ内の1段ぶんを観測する。
+        for _ in 0..(stage_samples + 5) {
+            eg.tick(sr, params, 1.0);
+        }
+        let held = eg.tick(sr, params, 1.0);
+        for _ in 0..(stage_samples - 10) {
+            let level = eg.tick(sr, params, 1.0);
+            assert!((level - held).abs() < 1e-6, "S&H中は段内で一定のはず: held={held} level={level}");
+        }
+    }
+
+    /// S&Hが実際にランダム値へ飛ぶこと（決め打ちの1値へ張り付かないこと）を、
+    /// 十分な段数を観測して値のばらつきで確認する。
+    #[test]
+    fn sample_hold_visits_multiple_distinct_levels() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(20, 255, 0), (10, 200, 0), (10, 0, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            texture: TEXTURE_SAMPLE_HOLD,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let stage_samples = (time_to_seconds(10) as f64 * sr as f64) as usize + 5;
+        let attack_samples = (time_to_seconds(20) as f64 * sr as f64) as usize + 5;
+        for _ in 0..attack_samples {
+            eg.tick(sr, params, 1.0);
+        }
+
+        let mut distinct = std::collections::BTreeSet::new();
+        for _ in 0..40 {
+            let level = eg.tick(sr, params, 1.0);
+            for _ in 0..(stage_samples - 1) {
+                eg.tick(sr, params, 1.0);
+            }
+            distinct.insert((level * 1000.0).round() as i32);
+        }
+        assert!(distinct.len() > 3, "S&Hは複数の異なるレベルを訪れるはず: distinct={}", distinct.len());
+    }
+
+    /// Random: S&Hと違い、段の間はレベルが動き続ける（一定に留まらない）こと。
+    /// 段のレベルをあえて異ならせ（lo/hiに幅を持たせ）、乱数ターゲットが現在値と
+    /// 一致してしまう確率を下げた上で、複数周期にわたり観測する。
+    #[test]
+    fn random_interpolates_within_stage_unlike_sample_hold() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 20, 0)]),
+            stage_count: 2,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 1,
+            texture: TEXTURE_RANDOM,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        // 最初の段0到達（`pending_start`経由、texture未適用）を抜ける。
+        let stage_samples = (time_to_seconds(30) as f64 * sr as f64) as usize;
+        for _ in 0..(stage_samples + 5) {
+            eg.tick(sr, params, 1.0);
+        }
+
+        let mut saw_change = false;
+        for _ in 0..8 {
+            let start = eg.tick(sr, params, 1.0);
+            for _ in 0..(stage_samples - 10) {
+                let level = eg.tick(sr, params, 1.0);
+                if (level - start).abs() > 1e-4 {
+                    saw_change = true;
+                }
+            }
+            // 次の段へ（ループ境界をまたぐ）。
+            for _ in 0..10 {
+                eg.tick(sr, params, 1.0);
+            }
+        }
+        assert!(saw_change, "Randomは段の途中でレベルが動き続けるはず（複数周期観測）");
+    }
+
+    /// texture有効時、乱数ターゲットはループ区間のレベル最小〜最大の範囲内に収まること。
+    /// note_on直後の段0到達（`pending_start`経由、アタック相当）はtexture未適用の生値を
+    /// 辿るため、最初の1周ぶんはスキップしてから観測する（drift系テストの
+    /// `drift_test_attack_samples`と同じ考え方）。
+    #[test]
+    fn texture_targets_stay_within_loop_level_range() {
+        let sr = 44100.0;
+        let (lo, hi) = (50u8, 220u8);
+        let params = TimeEgParams {
+            stages: stages_with(&[(10, hi, 0), (10, lo, 0), (10, hi, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 2,
+            texture: TEXTURE_RANDOM,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        // 段0→段1→段2（アタック相当、3段ぶん）をスキップしてループ折返し後だけ観測する。
+        let stage_samples = (time_to_seconds(10) as f64 * sr as f64) as usize;
+        for _ in 0..(stage_samples * 3 + 15) {
+            eg.tick(sr, params, 1.0);
+        }
+
+        let (lo_f, hi_f) = (lo as f32 / 255.0, hi as f32 / 255.0);
+        for _ in 0..200_000 {
+            let level = eg.tick(sr, params, 1.0);
+            assert!(
+                level >= lo_f - 1e-3 && level <= hi_f + 1e-3,
+                "texture targetはループ区間のレベル範囲内のはず: level={level} range=[{lo_f},{hi_f}]"
+            );
+        }
+    }
+
+    /// Chaos: ロジスティック写像なので決定論的。同じnote_onからは同じレベル列が再現する。
+    #[test]
+    fn chaos_is_deterministic_across_note_on() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(10, 255, 0), (10, 200, 0), (10, 0, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            texture: TEXTURE_CHAOS,
+         ..Default::default()};
+
+        let run = || {
+            let mut eg = TimeEg::new();
+            eg.note_on();
+            let mut samples = Vec::new();
+            for _ in 0..20_000 {
+                samples.push(eg.tick(sr, params, 1.0));
+            }
+            samples
+        };
+
+        assert_eq!(run(), run(), "Chaosは決定論的で、同じnote_onからは同じ列を再現するはず");
+    }
+
+    /// note_on/retriggerで乱数状態がリセットされ、1回目と同じ列が再現すること
+    /// （`level_drift`累積のリセットテストと同型）。
+    #[test]
+    fn note_on_resets_texture_rng() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(10, 255, 0), (10, 200, 0), (10, 50, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+            texture: TEXTURE_SAMPLE_HOLD,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let mut first_run = Vec::new();
+        for _ in 0..5_000 {
+            first_run.push(eg.tick(sr, params, 1.0));
+        }
+
+        // 大きく進めて乱数状態をnote_on時と違う位置まで動かしておく。
+        for _ in 0..20_000 {
+            eg.tick(sr, params, 1.0);
+        }
+
+        eg.note_on();
+        let mut second_run = Vec::new();
+        for _ in 0..5_000 {
+            second_run.push(eg.tick(sr, params, 1.0));
+        }
+
+        assert_eq!(first_run, second_run, "note_onは乱数状態を固定初期値へリセットするはず");
+    }
+
+    /// ワンショット（`loop_enabled=0`）ではtextureが効かない（周回自体がないため）。
+    #[test]
+    fn texture_has_no_effect_without_loop() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(20, 255, 0), (20, 0, 0)]),
+            stage_count: 2,
+            loop_enabled: 0,
+            release_point: 1,
+            texture: TEXTURE_SAMPLE_HOLD,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let mut level = 0.0;
+        for _ in 0..20_000 {
+            level = eg.tick(sr, params, 1.0);
+        }
+        assert!((level - 0.0).abs() < 1e-3, "ワンショットではrelease_pointの生レベルへ着地するはず: {level}");
     }
 }

@@ -162,24 +162,6 @@ pub(crate) struct Op505VstParams {
     #[id = "gain_fg_to_operators"]
     pub gain_fg_to_operators: BoolParam,
 
-    // ---- Texture LFO ----
-    #[id = "texture_lfo_rate"]
-    pub texture_lfo_rate: IntParam,
-    #[id = "texture_lfo_depth"]
-    pub texture_lfo_depth: IntParam,
-    #[id = "texture_lfo_delay"]
-    pub texture_lfo_delay: IntParam,
-    #[id = "texture_lfo_waveform"]
-    pub texture_lfo_waveform: IntParam,
-    #[id = "texture_lfo_fade_mode"]
-    pub texture_lfo_fade_mode: IntParam,
-    #[id = "texture_lfo_fade_time"]
-    pub texture_lfo_fade_time: IntParam,
-    #[id = "texture_lfo_offset"]
-    pub texture_lfo_offset: IntParam,
-    #[id = "texture_lfo_destination"]
-    pub texture_lfo_destination: IntParam,
-
     // ---- オペレーター単位（11個 × 4op = 44個） ----
     #[nested(array, group = "Operator")]
     pub operators: [OperatorVstParams; 4],
@@ -222,16 +204,6 @@ impl Default for Op505VstParams {
             cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             gain_fg_to_master: BoolParam::new("Gain FG to Master", true),
             gain_fg_to_operators: BoolParam::new("Gain FG to Operators", false),
-            texture_lfo_rate: IntParam::new("Texture LFO Rate", 0, IntRange::Linear { min: 0, max: 255 }),
-            texture_lfo_depth: IntParam::new("Texture LFO Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            texture_lfo_delay: IntParam::new("Texture LFO Delay", 0, IntRange::Linear { min: 0, max: 255 }),
-            texture_lfo_waveform: IntParam::new("Texture LFO Waveform", 0, IntRange::Linear { min: 0, max: 4 }),
-            texture_lfo_fade_mode: IntParam::new("Texture LFO Fade Mode", 0, IntRange::Linear { min: 0, max: 3 }),
-            texture_lfo_fade_time: IntParam::new("Texture LFO Fade Time", 0, IntRange::Linear { min: 0, max: 255 }),
-            texture_lfo_offset: bipolar_int(IntParam::new("Texture LFO Offset", 128, IntRange::Linear { min: 0, max: 255 })),
-            // 0 = FmLfoDestination::Unplugged（新規挿入時は「どこにも接続されていない」が既定。
-            // 2026-08-18並べ替え後、Unplugged=0）。
-            texture_lfo_destination: IntParam::new("Texture LFO Destination", 0, IntRange::Linear { min: 0, max: 4 }),
             operators: Default::default(),
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),

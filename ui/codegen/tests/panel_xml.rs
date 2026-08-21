@@ -68,10 +68,14 @@ fn channel_title_present() {
     assert!(rust.contains("ui.label(egui::RichText::new(\"CHANNEL\").strong());"));
 }
 
-/// `<header><title/>...`（空タグ）が親の`title=`属性から見出しを解決することを確認する
-/// （PITCH FG等、タイトル+ジャックを同じ行に並べるケース）。インデント込みで一致を見るのは
-/// 生成レイアウトのネスト段数（ScrollArea/group/vertical/horizontal）を暗黙に固定してしまう
-/// ため、行ごとに`trim()`して緩く照合する。
+/// `<header><title/>...`（空タグ）が親の`title=`属性から見出しを解決することを確認する。
+/// インデント込みで一致を見るのは生成レイアウトのネスト段数（ScrollArea/group/vertical/
+/// horizontal）を暗黙に固定してしまうため、行ごとに`trim()`して緩く照合する。
+///
+/// 質感LFO退役（2026-08-21）でPITCH FG等の`<header>`から`<jack>`が消え、`<title/>`のみに
+/// なった。パッチベイ機構自体（`ui-core::patchbay`）は将来のOP/フィードバック配線の布石として
+/// 温存する方針のため、`xml_with_jack_keeps_patchbay_output`（インラインXMLフィクスチャ、
+/// `time_eg_editor_and_root_attrs.rs`）がjack生成コードパスの回帰を引き続き担保する。
 #[test]
 fn header_title_from_attr_resolves() {
     let xml = panel_xml();
@@ -81,25 +85,20 @@ fn header_title_from_attr_resolves() {
         .iter()
         .position(|l| *l == "ui.label(egui::RichText::new(\"PITCH FG\").strong());")
         .expect("PITCH FGの見出し行が見つかりません");
-    // dest-index=1（Pitch、2026-08-18のFmLfoDestination並べ替え後。旧0=Pitch→新1=Pitch）。
-    assert_eq!(
-        lines[idx - 1],
-        "crate::patchbay::texture_lfo_dest_jack(ui, &*params.texture_lfo_destination, 1, \"TX LFO\", &mut tx_jacks);"
-    );
-    assert_eq!(lines[idx - 2], "ui.horizontal(|ui| {");
+    assert_eq!(lines[idx - 1], "ui.horizontal(|ui| {");
     assert_eq!(lines[idx + 1], "});");
 }
 
-/// XMLに書かれたパネル（OP repeat + CHANNEL(span12) + TEXTURE LFO + FILTER +
+/// XMLに書かれたパネル（OP repeat + CHANNEL(span12) + FILTER +
 /// PITCH FG + CUTOFF FG + GAIN FG + MASTER EFFECT(REVERB/CHORUS)）が全て生成されている
-/// （要素の脱落がない）ことを確認する。CHIP LFOパネルは2026-08-20のCHIP LFO完全退役で
-/// XMLから削除済み（GAIN FGパネルのMASTER/OPチェックボックスが厳密代替）。
+/// （要素の脱落がない）ことを確認する。CHIP LFOパネルは2026-08-20のCHIP LFO完全退役、
+/// TEXTURE LFOパネル（jack機構含む）は2026-08-21の質感LFO完全退役でXMLから削除済み
+/// （GAIN FGパネルのMASTER/OPチェックボックス・各FGパネルのTEXTUREドロップダウンが厳密代替）。
 #[test]
 fn all_panels_present() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("for (i_row, i_chunk) in params.operators.chunks(2).enumerate()"));
-    assert!(rust.contains("\"TEXTURE LFO\""));
     assert!(rust.contains("\"PITCH FG\""));
     assert!(rust.contains("\"CUTOFF FG\""));
     assert!(rust.contains("\"GAIN FG\""));
@@ -107,7 +106,8 @@ fn all_panels_present() {
     assert!(rust.contains("\"MASTER EFFECT (CHORUS)\""));
     assert!(rust.contains("params.gain_fg_to_master"));
     assert!(rust.contains("params.gain_fg_to_operators"));
-    assert!(rust.contains("finish_texture_lfo_patchbay"));
+    assert!(!rust.contains("\"TEXTURE LFO\""), "TEXTURE LFOパネルは質感LFO退役で削除済みのはず");
+    assert!(!rust.contains("finish_texture_lfo_patchbay"), "panel.xmlにjackが無いためpatchbay呼び出しは生成されないはず");
 }
 
 #[test]

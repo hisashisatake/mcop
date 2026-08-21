@@ -3,10 +3,11 @@
 **⚠️ 2026-08-12の方針転換により、ym38x6は開発中止・凍結した（詳細はspec-roadmap.md冒頭「方針転換」節）。
 本ドキュメントは凍結時点のym38x6仕様として保持する。2026-08-20、凍結中だったym38x6関連のコード・データ
 一式（`ym38x6/`ディレクトリ等）を削除した。本ドキュメントの記述は削除前の設計記録として引き続き保持する。**
-「sound-core共通」と注記されたVCO抽象・FG（Pitch/Cutoff/Gain）・質感LFO・チャンネルIDとキーオン契約・
+「sound-core共通」と注記されたVCO抽象・FG（Pitch/Cutoff/Gain）・チャンネルIDとキーオン契約・
 三層モデル等の記述は`sound-core`/`sound-fm`に実装されたチップ非依存の共有仕様であり、主力チップop505にも
 そのまま適用される。`.38x6`ファイル形式・ym38x6-vstのCC/NRPN・OPQコンバーター設計等、
 `ym38x6-core`/`ym38x6-vst`固有の記述はym38x6削除に伴い現存しないコードの記録。
+質感LFOは2026-08-20にFGの`texture`フィールドへ統合され退役済み（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 op505固有のパラメーター仕様は`op505/core`のソースコード直下のドキュメントコメントを正本とする
 （専用spec文書は未着手、spec.md参照）。
 
@@ -23,7 +24,7 @@ op505固有のパラメーター仕様は`op505/core`のソースコード直下
 ## 波形メモリ専用音色バンク（38x6のOP1のみ有効）
 
 フェーズ1ではプロトタイプとして独立クレートのWMS-1（波形オシレーター + ADSR）を用いていたが、
-その実態は38x6の1オペレーター相当であり、波形フォーマット・チャンネル契約・パフォーマンスLFO（現: FG／質感LFO）は
+その実態は38x6の1オペレーター相当であり、波形フォーマット・チャンネル契約・パフォーマンスLFO（現: FG）は
 すでに38x6と共通化されていた。そのため**WMS-1（wms1-core / wms1-vst）は廃止**し、同等の音色は
 38x6の**「波形メモリ専用音色バンク」**として提供する。これは38x6エンジンの専用モードではなく、
 予約バンク`WAVEFORM_MEMORY_BANK`に「OP1のみ可聴・OP2〜4はTL=0」という通常のパッチをまとめた
@@ -360,7 +361,8 @@ OPQ由来パラメーターとは独立した38x6独自拡張。
 **Cutoffへの変調：** カットオフのキーオン連動スイープ／オートワウ／アシッドは **Cutoff FG**
 （[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）が担う。旧「Filter EG」の後継で、
 5段EG＋Loop/Floor/Curveを持ち、Depthは**バイポーラ**（中心128、カットオフを開く/閉じる両方向）。
-質感LFO（Destination=Cutoff）の5波形変調とも加算的に共存する（決め台詞「FG＝軌跡の変調／LFO＝5波形の飛び道具」）。
+ループ区間に`texture`（S&H/Random/Chaos）を指定すれば、乱数抽選された値へ向かう不規則な変調も表現できる
+（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 
 **実装方式：** State Variable Filter（SVF、`sound-core::Svf`）
 - LP/HP/BPを同一回路から同時出力できる構造で、Filter Typeによる切り替えと相性が良い
@@ -386,13 +388,9 @@ VCAが閉じなくても問題ない。**注意：** RRを速くすると（例�
 ゼロへ閉じ、各オペレーター本来のリリース尾を打ち消す（リリース瞬断）。ユーザーがGain FGのAR/RR等を変えることで、
 キャリアEGとは独立にアタック/リリースの「量」を上書きする効果音的な表現に使える（その際は上記の瞬断に留意）。
 
-**質感LFOのVolume行きの合流点：** [質感LFO](#質感lfo5波形専用焼き込み)の
-Destination=Volume（5波形の飛び道具）は、このVcaゲインへ**乗算合流**する
-（`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`）。適用点はSVFフィルターの**後**（Vca段）である。
-
-> **自励発振時の挙動差：** Volume変調の適用点がVCF前（旧方式のVCF前volume_gain）からVCF後（Vca段）へ
-> 変わったため、Self-Oscillation ONでフィルターが自己発振している音に対しても、新方式では変調が掛かる
-> （旧方式では自励発振成分はVCF後に生じるため、VCF前のVolume変調が乗らなかった）。
+Gain FGのループ区間に`texture`を指定すればS&H/Random/Chaosの不規則な音量ゆらぎも表現できる
+（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照。旧質感LFOのDestination=Volumeが担っていた乗算合流は、
+2026-08-20の退役でGain FG自体のtextureへ統合された）。
 
 ---
 
@@ -404,7 +402,9 @@ Pitch / Cutoff / Gain——に集約する。3スロットは共通の部品「�
 
 FGは「**一発（ワンショット）にもループにもなる**」変調源で、アナログシンセ的なスイープ／うねり
 （アシッドフィルター・シンセタム・トレモロ）を一次源として持てる。ループさせればLFOに相当するが、
-LFOのサイン波では出せない「上りと下りが非対称な軌跡」を出せる点が固有価値（[質感LFO](#質感lfo5波形専用焼き込み)との境界参照）。
+LFOのサイン波では出せない「上りと下りが非対称な軌跡」を出せる点が固有価値。ループ区間に`texture`
+（S&H/Random/Chaos）を指定すれば、決め打ちの軌跡ではなく乱数抽選された不規則な揺れも表現できる
+（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 
 ### 共通部品：ループ可能EG
 
@@ -416,7 +416,7 @@ FGの本体は、38x6本体のFM EGと同じ**5段OPM形式EG**（`sound-core::E
 | Loop | 0/1（既定0） | 0=ワンショット（従来のADSR挙動そのまま）／1=ループ |
 | Floor | 0〜255（既定0） | ループ時の折り返しの底レベル（0=完全開閉、上げるほど浅い連続的なうねり） |
 | Curve | 0/1（既定0） | 0=線形（角の立つ三角）／1=サイン風（レイズドコサイン `0.5-0.5cos(π·進行度)` で角を丸める） |
-| Delay | 0〜255（既定0） | キーオンからAR開始までの遅延。0〜10秒（線形、チップ内LFO/質感LFOのDelayと同じマッピング）。CC78の補正対象（下記） |
+| Delay | 0〜255（既定0） | キーオンからAR開始までの遅延。0〜10秒（線形）。CC78の補正対象（下記） |
 
 - **Loop=0（既定）**：キーオンで AR→D1R→D1L→D2R と推移し、キーオフで RR。**従来の5段EGと完全に同一**
   （既存パッチは Loop=0 扱いで挙動不変）。
@@ -445,10 +445,9 @@ Gain は音量に負値が無いためDepthを持たず、Floor が深さを担�
   `実効Cutoff = clamp(Cutoffベース + FG出力 × (Depth-128)/128, 0, 255)`。
 - **Gain FG**：旧「VCA EG」の後継。出力はVcaゲインへ直結（ループ=トレモロ／ワンショット=通常アンプEG）。
 
-各行き先では、FG・[質感LFO](#質感lfo5波形専用焼き込み)が**加算的に共存**する
-（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が積み重なる。Pitchは
-Pitch FG＋質感LFO(Dest=Pitch) が積み重なる。旧チップ内LFO(PMS/PMD)は2026-08-20に
-Pitch FGへ完全統合されたため別レイヤーとしては存在しない）。
+旧チップ内LFO(PMS/PMD)は2026-08-20にPitch FGの2段三角ループへ完全統合され、旧質感LFOのS&H/Random/Chaosも
+同日、各FGループ区間の`texture`フィールドへ統合されたため、FGとは別レイヤーの加算的モジュレーション源は
+もはや存在しない（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 
 ### 演奏層による補正（Pitch FGのみ）
 
@@ -591,7 +590,7 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 
 | パラメーター群 | 層 | 保存先 | 設定経路 |
 |---|---|---|---|
-| オペレーター12種×4 / Algorithm / Feedback / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目** / **質感LFO8項目** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
+| オペレーター12種×4 / Algorithm / Feedback / フィルターDSP4項目 / **Pitch/Cutoff/Gain FG 各項目（`texture`含む）** | ①音色 | `.38x6`（`Ym38x6Patch`） | DAWパラメーター・NRPN |
 | CC7/10/11（音量・パン・エクスプレッション）/ CC91/93（センド）/ CC71/74（レゾナンス・カットオフ）/ CC72/73/75（RR/AR/D1R）/ **CC76/77/78（Pitch FG補正）** / **CC2/CC4（Expression Destination加算、下記）** / CC5/65（ポルタメント）/ RPN群 / Bank・Program | ②パート状態 | 曲データ（SMF等）のCC | MIDI CC |
 | **CC1（モジュレーションホイール）** / Pitch Bend / アフタータッチ / CC64/66/67（ペダル）/ CC103〜106（OP単位キーオン） | ③ジェスチャー | 保存しない（揮発） | MIDI |
 
@@ -631,95 +630,44 @@ Gain FGへの変換が実機挙動と一致することを裏取りするオラ�
 
 ---
 
-## 質感LFO（5波形専用・焼き込み）
+## 質感LFO（廃止済み）
 
-旧「チャンネルLFO（LFO1/LFO2）」を再編し、**軌跡（Floor⇄peak）では表せない波形だけ**を担う1基のLFO
-（旧称: パフォーマンスLFO → チャンネルLFO → 質感LFO）。ビブラート/トレモロ/オートワウの持続的な揺れは
-[FG](#ファンクションジェネレーターfgpitchcutoffgain)のループモードへ移行したため、質感LFOが担うのは
-**FGで出せない5波形**——矩形・台形・S&H・ランダム・カオス——に限定される。
+旧「チャンネルLFO（LFO1/LFO2）」を再編し、**軌跡（Floor⇄peak）では表せない波形だけ**を担う独立1基のLFO
+として存在した（旧称: パフォーマンスLFO → チャンネルLFO → 質感LFO）。矩形・台形はFGのループへ先行して
+畳み込み済みだったが、S&H・ランダム・カオスの3波形だけは「乱数源が無い」という一点でFG側に表現できず、
+独立レイヤーとして残っていた。
 
-> **境界規則（FG↔質感LFO）：** 「**パラメーター化された時間軌跡なら FG、そうでない（固定ルックアップ
-> 波形／生成器）なら 質感LFO**」。三角・のこぎり・サインはFGのループ（Floor⇄peakをAR/D1Rで往復）で
-> 出せるため質感LFOは持たない。両者の重なりはゼロ。S&H/ランダム/カオスは値が乱数抽選や写像反復で
-> 決まる「生成器」で、FGの軌跡パラメーター（Floor/AR/D1R/Curve）が生かせないためLFO側に隔離する。
+op505エンジンから**2026-08-20に完全退役した**。TimeEg（[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）へ
+`texture`フィールド（`TimeEgParams::texture`、0=OFF/1=S&H/2=Random/3=Chaos）が新設され、ループ区間の
+各段を自前のxorshift32乱数（S&H/Random）またはロジスティック写像`x=3.9x(1-x)`（Chaos）で決定論的に
+生成した値へ置き換える方式に統合された。ターゲットとなる値域は段のtime（アンカー＝拍）とlevel範囲
+（振れ幅）がそのまま担うため、質感LFOが持っていたRate/Depth/Destination/Waveform/Fade Mode/Fade
+Time/Offsetという専用パラメーター群は丸ごと不要になった——「質感LFOという独立レイヤー」自体が消滅し、
+FGの`texture`という1バイトのモード切り替えに収束した。
 
-**焼き込み専用：** 質感LFOは**①音色（パッチ）が所有**し、演奏CC（CC1/76/77/78）による補正は受けない
-（それらは[Pitch FG](#ファンクションジェネレーターfgpitchcutoffgain)へ）。既定 Depth=0 で不可視＝初心者の
-既定経路には現れない飛び道具。5波形は予測不能系のため手で動かす必要がなく、旧LFO2的な set-and-forget として扱う。
+**S&H/Random/Chaosの違い（`loop_enabled=1`のときのみ有効）：**
 
-### パッチ所有パラメーター（8項目）
-
-全項目を`ChannelParams`が所有する（`.38x6`に保存）。既定はDepth=0（鳴らない）＝旧パッチ挙動と互換。
-
-| 項目 | 値域 | 既定 | 備考 |
-|------|------|------|------|
-| Waveform | 0〜4（5種） | 0=矩形波 | 下記Waveform enum |
-| Destination | 0〜4 | 0=未接続 | 下記Destination enum |
-| Rate | 0〜255 | 0 | 0.01Hz〜20Hz（指数） |
-| Depth | 0〜255 | 0 | 揺れ量（既定0＝鳴らない） |
-| Delay | 0〜255 | 0 | キーオンから効果開始までの遅延。0〜10秒（線形）。Fadeとは独立 |
-| Fade Mode | 0〜3 | 0=ON-IN | 下記Fade Mode enum |
-| Fade Time | 0〜255 | 0 | 0〜10秒（線形）。0=フェード無効 |
-| Offset | 0〜255（中心128） | 128 | 波形の中心シフト-100〜100（生値-1.0〜1.0に`offset/100.0`を加算してクランプ） |
-
-**Waveform enum（5種）：**
-
-旧チャンネルLFOの8波形から、FGへ移行する三角/サイン/のこぎりを除いた5波形に絞り、0起点で再番号付けした。
-
-| 値 | 波形 |
+| 値 | 挙動 |
 |---|---|
-| 0（デフォルト） | 矩形波 |
-| 1 | 台形波 |
-| 2 | S&H（ランダム、階段状） |
-| 3 | Random（周期ごとの目標値を位相で線形補間する滑らかなランダムウォーク） |
-| 4 | Chaos（ロジスティック写像`x=3.9x(1-x)`による決定論的カオス、周期内はホールド） |
+| 0（既定） | OFF。従来どおりループ段のlevelをそのまま辿る |
+| 1 | S&H：ループ区間の各段へ入るたび、区間のレベル範囲内で乱数抽選した値へ**即座にジャンプしホールド**する |
+| 2 | Random：S&Hと異なり、現在値から乱数ターゲットへ**段の時間をかけて補間**しながら動く |
+| 3 | Chaos：S&Hと同じくホールドするが、ターゲット値をロジスティック写像で決定論的に生成する |
 
-**Destination enum：**
+**FGのテンポ同期（SYNC/RATE）との組み合わせ：** `sync_enabled=1`にすると、対象区間（ループなら1周、
+ループ無効なら保持区間全体）の実時間が`sync_rate`（1/32T〜4/1の20音価アンカー＋幾何補間）ちょうどに
+伸縮される。textureと組み合わせると「S&Hのステップがテンポの1/16に正確に乗る」といった表現ができる
+（質感LFO時代はRateがBPM非依存の固定Hzだったため、これができないことが退役の直接の動機だった）。
 
-`FmLfoDestination`のdiscriminantは、Rust内部表現であると同時に**NRPN(0,0)の生値**であり
-**`.op505`/`.38x6`ファイルの`destination`フィールドとしてシリアライズされる値**でもある
-（2026-08-18、Unplugged=0起点へ並べ替え。並べ替えると既存データ・DAWオートメーション・
-SMF内のNRPNデータエントリの意味が変わるため、変更する際は影響範囲を洗い出すこと）。
+**決定論性：** `TimeEg`は`texture_rng`（xorshift32）・`texture_chaos`（ロジスティック写像状態）を内部に持ち、
+`note_on`/`retrigger`で固定シードへリセットする。同じMIDI入力からは常に同じ乱数列が再現するため、
+golden/perf-benchのビット一致検証を壊さない。
 
-| 値 | 宛先 | 適用点 |
-|---|---|---|
-| 0（デフォルト） | 未接続（Unplugged） | どこにも適用されない・38x6拡張のみ |
-| 1 | Pitch | F-Number全Op |
-| 2 | Volume | **Vcaゲイン乗算合流・VCF後** |
-| 3 | TL（キャリア一括） | TL（VCF前）・38x6拡張のみ |
-| 4 | Cutoff | Cutoff（VCF前）・38x6拡張のみ |
+既存`.op505`バンクには`texture`フィールドが存在しないため`#[serde(default)]`で0（OFF）にフォールバックし、
+旧パッチの出力はビット単位で不変（`texture=0`のときS&H/Random/Chaos関連の計算は一切実行されないガード付き）。
 
-各行き先ではFG・チップ内LFOと**加算的に共存**する（例: Cutoffは Cutoff FGのスイープ＋質感LFOのS&H が
-積み重なる）。Volume（Destination=2）は`Vcaゲイン = Gain FG出力 × (1 + LFOデルタ)`でVca段（VCF後）へ乗算合流、
-TL（Destination=3）はキャリアTL（VCF前）へ加算する（明るさ方向）。Depthは全行き先で`clamp(Depth, 0, 255)`
-（質感LFOは焼き込み専用のためCCによる加算補正はなく、演奏系CC1/76/77/78はPitch FGへ行く）。
-未接続（Destination=0）はLFO自体は`tick`し続けるがどのターゲットへも出力しない。新規パッチの既定状態でもある。
-op505-uiの質感LFOパッチベイでケーブルをTEXTURE LFOパネル自身へドロップすると、
-直前の行き先から未接続へ切り替わる。
-
-**Fade Mode enum：**
-
-Delay（既存のハードカットオーバー）とは独立して共存する。DelayがゲートそのものでFadeはゲート解除後の振幅ゲインのランプ。
-
-| 値 | 意味 |
-|---|---|
-| 0（デフォルト） | ON-IN：note_on後、Delay経過を起点に振幅ゲインが0→1にフェードイン |
-| 1 | ON-OUT：note_on後、Delay経過を起点に振幅ゲインが1→0にフェードアウト |
-| 2 | OFF-IN：note_off前は振幅ゲイン0、note_off後にFade Timeかけて0→1にフェードイン（リリーステール中のみ効く） |
-| 3 | OFF-OUT：note_off前は振幅ゲイン1、note_off後にFade Timeかけて1→0にフェードアウト（リリーステール中のみ効く） |
-
-### 実装状況
-
-既存`sound/core/src/lfo.rs`（`PerformanceLfo`、8波形実装済み）から三角/サイン/のこぎりを除いた
-**5波形に絞った1基**を`ChannelParams`が所有する。適用先は`PerformanceLfoTarget`トレイト
-（Destination 0=Pitch/1=Volume/2=TLキャリア一括/3=Cutoff/4=未接続）。`set_channel_params`が他のフィールドと
-同様に毎ブロック発音中ボイスへ伝播するため、NRPN/DAWパラメーター変更は発音中のノートにもリアルタイムに
-反映される。演奏系CC（CC1/76/77/78）は質感LFOには繋がらず[Pitch FG](#ファンクションジェネレーターfgpitchcutoffgain)へ行く。
-
-> **後方互換規則：** 質感LFOの各フィールドは`#[serde(default)]`とする。旧`ChannelParams.perf_lfo_shape`
-> （波形/Fade Mode/Fade Time/Offset）や旧`lfo1`/`lfo2`を持つ既存`.38x6`は、波形が5波形（矩形/台形/S&H/
-> Random/Chaos）に該当すれば質感LFOへ、三角/サイン/のこぎりなら対応する[FG](#ファンクションジェネレーターfgpitchcutoffgain)の
-> ループ設定へ移行読み込みする。型名`PerformanceLfo`・`perf_lfo_shape`等のコード名の整合は実装フェーズ（ステップ6）で解消する。
+詳細な設計経緯・実証プローブ（`op505/core/examples/texture_sync_probe.rs`）はmemory
+`project_texture_lfo_retirement.md`参照。
 
 ---
 
@@ -745,7 +693,13 @@ SY77/TG77（AFM音源, 1989年）の設計を参考に：
 
 ## MIDI実装方針
 
-### DAWオートメーション（nice-plugパラメーター）
+> **注記：** 以下のDAWパラメーター一覧はym38x6-vst時代（旧Eg形式FG、AR/D1R/D1L/D2R/RR/Depth/Floor/Delay/Loop/Curve）
+> の記録であり、TimeEg化・質感LFO退役後のop505-vstの実パラメーター構成（DAWパラメーター75個＋persist
+> TimeEg 7本）とは一致しない。op505-vstの正確な現状はCLAUDE.md「クレート構成」op505/vst節を参照。
+> 質感LFO関連（Destination/Rate/Depth/Delay/Waveform/Fade Mode/Fade Time/Offset）は
+> [質感LFO（廃止済み）](#質感lfo廃止済み)節のとおり2026-08-20に全廃済み。
+
+### DAWオートメーション（nice-plugパラメーター、ym38x6-vst時代の記録）
 
 以下の全パラメーターをnice-plugのParam として公開し、Cubase・Logic等でのDAWオートメーションに対応する。
 
@@ -982,7 +936,9 @@ ym38x6削除〈2026-08-20〉後は資産としての記録。op505の`.op505`形
   Pitch/Cutoffはバイポーラ depth〈中心128〉、Gainはdepth無し）、`texture_lfo`は5波形専用質感LFOの8項目。
   いずれも`#[serde(default)]`により省略時は既定値（FG: loop=0で従来の5段EG挙動・depth=128でピッチ/カットオフ変調なし、
   texture_lfo: depth=0で無効）で読み込む。旧`filter_eg_*`/`vca_eg_*`/`lfo1`/`lfo2`/`perf_lfo_shape`フィールドを持つ
-  既存`.38x6`は、それぞれ`cutoff_fg`/`gain_fg`/質感LFO・FGへ移行して読み込む（後方互換規則、FG節・質感LFO節「実装状況」参照）。
+  既存`.38x6`は、それぞれ`cutoff_fg`/`gain_fg`・FGへ移行して読み込む（後方互換規則、FG節参照。
+  質感LFO(`texture_lfo`)は2026-08-20に廃止済みのため、旧`lfo1`/`lfo2`/`perf_lfo_shape`の
+  移行読み込み先はもはや存在しない。[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
   現在は`Ym38x6Patch`のフィールドのみが対象で、ユーザー定義波形スロット(32〜255)の波形データ埋め込みは
   当該機能実装後に別途対応する（未実装）。`program`は`.opm`（VOPM）の`@:`番号(0-127)を継承可能な識別子。
 
@@ -1033,9 +989,6 @@ CC99/98またはCC101/100（RPN）に127,127（Null）を送ると選択解除�
 | Poly AT Destination | Poly Key Pressureの加算先（destination enum、下記） |
 | CC2 Destination | CC2（ブレス）の加算先（destination enum、下記。既定TLキャリア一括） |
 | CC4 Destination | CC4（フット）の加算先（destination enum、下記。既定Filter Cutoff＝手動ワウ） |
-| 質感LFO Destination | 質感LFOの加算先（destination enum、質感LFOセクション参照） |
-| 質感LFO Waveform | 質感LFOの波形（0〜4、質感LFOセクション参照） |
-| 質感LFO Fade Mode | 質感LFOのFadeモード（fade mode enum、質感LFOセクション参照） |
 | Pitch/Cutoff/Gain FG Loop | 各FGのループON/OFF（0/1、FGセクション参照） |
 | Pitch/Cutoff/Gain FG Curve | 各FGのカーブ（0=線形/1=サイン風、FGセクション参照） |
 | Reverb Type | Reverbのタイプ（type enum、マスターエフェクトセクション参照） |
@@ -1050,8 +1003,7 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| 質感LFO Destination | 0, 0 | 0=未接続 / 1=Pitch / 2=Volume / 3=TL（キャリア一括、38x6拡張のみ） / 4=Cutoff（38x6拡張のみ） |
-| 質感LFO Waveform | 0, 1 | 0=矩形波 / 1=台形波 / 2=S&H / 3=Random / 4=Chaos |
+| （欠番／`ReservedTextureLfo`） | 0, 0〜1 | 旧質感LFO Destination/Waveform。2026-08-20の退役に伴い欠番として予約（再利用しない、[質感LFO（廃止済み）](#質感lfo廃止済み)節参照） |
 | Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Reverb Time | 0, 4 | 0〜255 |
@@ -1069,12 +1021,7 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Operator F-Number Op1 | 0, 19 | 同上 |
 | Operator F-Number Op2 | 0, 20 | 同上 |
 | Operator F-Number Op3 | 0, 21 | 同上 |
-| 質感LFO Fade Mode | 0, 22 | 0=ON-IN / 1=ON-OUT / 2=OFF-IN / 3=OFF-OUT |
-| 質感LFO Rate | 0, 23 | 0〜255（焼き込み専用。CC補正なし） |
-| 質感LFO Depth | 0, 24 | 0〜255（焼き込み専用。CC補正なし） |
-| 質感LFO Delay | 0, 25 | 0〜255（焼き込み専用。CC補正なし） |
-| 質感LFO Fade Time | 0, 26 | 0〜255（0=フェード無効） |
-| 質感LFO Offset | 0, 27 | 0〜255（中心128=オフセットなし） |
+| （欠番／`ReservedTextureLfo`） | 0, 22〜27 | 旧質感LFO Fade Mode/Rate/Depth/Delay/Fade Time/Offset。同上、欠番として予約 |
 | Pitch FG Loop | 0, 28 | 0=ワンショット / 1=ループ |
 | Pitch FG Curve | 0, 29 | 0=線形 / 1=サイン風 |
 | Cutoff FG Loop | 0, 30 | 0=ワンショット / 1=ループ |
@@ -1151,8 +1098,8 @@ Destination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/(0,5)はグローバ
 
 **手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
 フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。
-質感LFOのCutoff行先（Destination=4、[質感LFO](#質感lfo5波形専用焼き込み)参照）による
-「オートワウ」（自動で周期的に開閉）とは独立して積み重なり、演奏者がリアルタイムに手で
+Cutoff FGのループ（オートワウ、[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節参照）による
+自動で周期的な開閉とは独立して積み重なり、演奏者がリアルタイムに手で
 ワウ効果を制御しつつ、パッチ側の自動オートワウも同時に効かせられる。
 
 **Operator F-Number（OP単位F-Number上書き）：**

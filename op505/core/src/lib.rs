@@ -31,14 +31,12 @@ use sound_fm::mapping::{
     FM_MODULATION_INDEX_SCALE,
 };
 use sound_fm::waveform::{self, gen_builtin_waveform};
-use sound_fm::{texture_lfo_to_shape, FmLfoDestination, TextureLfo};
 use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{
-    apply_lfo_modulation, bipolar_level, convert_wave_32, cutoff_to_hz,
-    effective_cutoff_bipolar_level, pitch_depth_cents, tempo_speed_scale, volume_depth,
-    cutoff_depth, FilterType, LfoDestination, PerformanceLfo,
-    PerformanceLfoTarget, Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
+    bipolar_level, convert_wave_32, cutoff_to_hz,
+    effective_cutoff_bipolar_level, tempo_speed_scale,
+    FilterType, Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
     RETRIGGER_MODE_RESET,
 };
 
@@ -261,9 +259,6 @@ pub struct Op505ChannelParams {
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で無効(false)にする。
     #[serde(default)]
     pub gain_fg_to_operators: bool,
-    /// 質感LFO（旧チャンネルLFOを5波形に絞って再編、焼き込み専用）。型は`ym38x6-core`を再利用する
-    /// （EG非依存のため、fork-on-write方針で独自進化させたくなるまでは複製しない）。
-    pub texture_lfo: TextureLfo,
 }
 
 fn default_gain_fg_to_master() -> bool {
@@ -305,7 +300,6 @@ impl Default for Op505ChannelParams {
             gain_fg: default_gain_fg(),
             gain_fg_to_master: true,
             gain_fg_to_operators: false,
-            texture_lfo: TextureLfo::default(),
         }
     }
 }
@@ -335,16 +329,11 @@ struct Channel {
     note: u8,
     base_frequency: f32,
     velocity: u8,
-    perf_lfo: PerformanceLfo,
     /// Pitch FGのキーオン連動エンベロープ（TimeEg）。
     pitch_fg_eg: TimeEg,
     /// CC76（Vibrato Rate）由来のPitch FG速さスケール（1.0=無補正）。
     pitch_fg_rate_scale: f32,
-    pitch_mod_cents: f32,
     bend_cents: f32,
-    volume_mod_delta: f32,
-    tl_carrier_mod_delta: f32,
-    cutoff_mod_delta: f32,
     channel_gain: f32,
     /// 4op合成後に適用するSVF本体。CutoffのEG変調は`cutoff_fg_eg`が別途計算し、
     /// `effective_cutoff`で合成してから渡す（sound-coreの`VoiceFilter`のような一体型ではなく
@@ -377,11 +366,6 @@ impl Channel {
         cutoff_fg_eg.note_on();
         let mut gain_fg_eg = TimeEg::new();
         gain_fg_eg.note_on();
-        let mut perf_lfo = PerformanceLfo::new();
-        perf_lfo.set_rate(patch.channel.texture_lfo.rate);
-        perf_lfo.set_delay(patch.channel.texture_lfo.delay);
-        perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
-        perf_lfo.note_on();
         Self {
             operators,
             channel_params: patch.channel,
@@ -390,14 +374,9 @@ impl Channel {
             note,
             base_frequency: frequency,
             velocity,
-            perf_lfo,
             pitch_fg_eg,
             pitch_fg_rate_scale: 1.0,
-            pitch_mod_cents: 0.0,
             bend_cents: 0.0,
-            volume_mod_delta: 0.0,
-            tl_carrier_mod_delta: 0.0,
-            cutoff_mod_delta: 0.0,
             channel_gain: 1.0,
             svf: Svf::new(),
             cutoff_fg_eg,
@@ -424,10 +403,6 @@ impl Channel {
         retrigger_time_eg(&mut self.cutoff_fg_eg, &patch.channel.cutoff_fg.eg);
         retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg);
         retrigger_time_eg(&mut self.pitch_fg_eg, &patch.channel.pitch_fg.eg);
-        self.perf_lfo.set_rate(patch.channel.texture_lfo.rate);
-        self.perf_lfo.set_delay(patch.channel.texture_lfo.delay);
-        self.perf_lfo.set_shape(texture_lfo_to_shape(patch.channel.texture_lfo));
-        self.perf_lfo.note_on();
         self.note_is_off = false;
     }
 
@@ -438,7 +413,6 @@ impl Channel {
         self.cutoff_fg_eg.note_off();
         self.gain_fg_eg.note_off();
         self.pitch_fg_eg.note_off();
-        self.perf_lfo.note_off();
         self.note_is_off = true;
     }
 
@@ -474,30 +448,6 @@ impl Channel {
             return 0.0;
         }
 
-        let texture_lfo_value = self.perf_lfo.tick(sample_rate);
-        let texture_lfo = self.channel_params.texture_lfo;
-        self.pitch_mod_cents = 0.0;
-        self.volume_mod_delta = 0.0;
-        self.tl_carrier_mod_delta = 0.0;
-        self.cutoff_mod_delta = 0.0;
-        match FmLfoDestination::from_u8(texture_lfo.destination) {
-            FmLfoDestination::Pitch => {
-                let cents = pitch_depth_cents(texture_lfo.depth, 0, 0);
-                apply_lfo_modulation(texture_lfo_value, LfoDestination::Pitch, cents, self);
-            }
-            FmLfoDestination::Volume => {
-                let depth = volume_depth(texture_lfo.depth, 0);
-                apply_lfo_modulation(texture_lfo_value, LfoDestination::Volume, depth, self);
-            }
-            FmLfoDestination::TlCarrier => {
-                self.tl_carrier_mod_delta = texture_lfo_value * volume_depth(texture_lfo.depth, 0);
-            }
-            FmLfoDestination::Cutoff => {
-                self.cutoff_mod_delta = texture_lfo_value * cutoff_depth(texture_lfo.depth, 0);
-            }
-            FmLfoDestination::Unplugged => {}
-        }
-
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。
         // CC76由来の速度補正(pitch_fg_rate_scale)とテンポ同期(tempo_speed_scale)を乗算で共存させる。
         // レベルはバイポーラ（生値128＝無変調の中心）で符号を持ち、Depthは振れ幅の倍率。
@@ -508,7 +458,7 @@ impl Channel {
         let pitch_fg_cents =
             bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0;
         for op in self.operators.iter_mut() {
-            op.set_pitch_modulation(self.pitch_mod_cents + self.bend_cents + pitch_fg_cents);
+            op.set_pitch_modulation(self.bend_cents + pitch_fg_cents);
         }
 
         // Gain FG：VCA（合成後の一括乗算）とOP単位AM（旧CHIP LFO AM経路の厳密代替、
@@ -562,18 +512,14 @@ impl Channel {
                 })
                 .sum()
         };
-        let tl_carrier_gain = (1.0 + self.tl_carrier_mod_delta).max(0.0);
-        let volume_gain = (1.0 + self.volume_mod_delta).max(0.0);
-        let dry = carrier_sum * tl_carrier_gain * volume_gain * self.channel_gain;
+        let dry = carrier_sum * self.channel_gain;
 
         // VCF：Cutoff FG（TimeEg）を先にtickし、effective_cutoffで基準Cutoffと合成してからSvfへ。
         let cp = &self.channel_params;
-        let modulated_cutoff =
-            (cp.filter_cutoff as f32 + self.cutoff_mod_delta).round().clamp(0.0, 255.0) as u8;
         let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
         let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
         let cutoff =
-            effective_cutoff_bipolar_level(modulated_cutoff, cutoff_level, cp.cutoff_fg.depth);
+            effective_cutoff_bipolar_level(cp.filter_cutoff, cutoff_level, cp.cutoff_fg.depth);
         let cutoff_hz = cutoff_to_hz(cutoff);
         let filtered = self.svf.process(
             dry,
@@ -597,16 +543,6 @@ fn retrigger_time_eg(eg: &mut TimeEg, params: &TimeEgParams) {
         eg.note_on();
     } else {
         eg.retrigger();
-    }
-}
-
-impl PerformanceLfoTarget for Channel {
-    fn apply_pitch_modulation(&mut self, cents: f32) {
-        self.pitch_mod_cents = cents;
-    }
-
-    fn apply_volume_modulation(&mut self, delta: f32) {
-        self.volume_mod_delta = delta;
     }
 }
 
@@ -696,9 +632,6 @@ impl Op505Engine {
 
     pub fn set_channel_params(&mut self, channel: usize, params: Op505ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
-            ch.perf_lfo.set_rate(params.texture_lfo.rate);
-            ch.perf_lfo.set_delay(params.texture_lfo.delay);
-            ch.perf_lfo.set_shape(texture_lfo_to_shape(params.texture_lfo));
             ch.channel_params = params;
         }
     }

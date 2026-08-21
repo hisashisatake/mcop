@@ -132,6 +132,12 @@ pub trait TimeEgHandle {
     fn retrigger_mode_handle(&self) -> Box<dyn IntParamHandle + '_> {
         Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::RetriggerMode })
     }
+
+    /// 質感（`texture`、0=OFF/1=S&H/2=Random/3=Chaos）へのハンドル（旧質感LFOのS&H/Random/
+    /// Chaos波形の後継、memory `project_texture_lfo_retirement.md`参照）。
+    fn texture_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::Texture })
+    }
 }
 
 struct TimeEgSyncEnabledHandle<'a, T: TimeEgHandle + ?Sized> {
@@ -158,6 +164,7 @@ impl<'a, T: TimeEgHandle + ?Sized> BoolParamHandle for TimeEgSyncEnabledHandle<'
 enum TimeEgIntField {
     SyncRate,
     RetriggerMode,
+    Texture,
 }
 
 struct TimeEgIntFieldHandle<'a, T: TimeEgHandle + ?Sized> {
@@ -171,6 +178,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
         match self.field {
             TimeEgIntField::SyncRate => p.sync_rate as i32,
             TimeEgIntField::RetriggerMode => p.retrigger_mode as i32,
+            TimeEgIntField::Texture => p.texture as i32,
         }
     }
     fn min(&self) -> i32 {
@@ -180,18 +188,21 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
         match self.field {
             TimeEgIntField::SyncRate => 255,
             TimeEgIntField::RetriggerMode => 1,
+            TimeEgIntField::Texture => 3,
         }
     }
     fn default(&self) -> i32 {
         match self.field {
             TimeEgIntField::SyncRate => sound_core::sync_note_anchor(10) as i32,
             TimeEgIntField::RetriggerMode => sound_core::RETRIGGER_MODE_CONTINUE as i32,
+            TimeEgIntField::Texture => sound_core::TEXTURE_OFF as i32,
         }
     }
     fn name(&self) -> String {
         let suffix = match self.field {
             TimeEgIntField::SyncRate => "Sync Rate",
             TimeEgIntField::RetriggerMode => "Retrigger",
+            TimeEgIntField::Texture => "Texture",
         };
         format!("{} {}", self.eg.name(), suffix)
     }
@@ -201,6 +212,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
         match self.field {
             TimeEgIntField::SyncRate => crate::selector::sync_rate_display(self.value() as u8),
             TimeEgIntField::RetriggerMode => self.value().to_string(),
+            TimeEgIntField::Texture => {
+                crate::selector::TEXTURE_NAMES[self.value().clamp(0, 3) as usize].to_string()
+            }
         }
     }
     fn begin_edit(&self) {
@@ -214,6 +228,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             }
             TimeEgIntField::RetriggerMode => {
                 params.retrigger_mode = value.clamp(0, 1) as u8;
+            }
+            TimeEgIntField::Texture => {
+                params.texture = value.clamp(0, 3) as u8;
             }
         }
         self.eg.set_params(params);
