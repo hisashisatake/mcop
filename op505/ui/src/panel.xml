@@ -66,12 +66,12 @@
       <header>
         <title/>
       </header>
-      <row justify="between" gap="spacing">
+      <row justify="start" gap="spacing">
         <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
              解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
         <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <!-- SYNC/RATE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を足すのではなく、
-             既存の2つのstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
+             右のstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
              固定サイズの自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが
              伸びずグラフに重なる）。<sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット
              （旧<enum label="NOTE">の置き換え、100×70）。両者は同じsync_rateの2つの見え方
@@ -81,8 +81,6 @@
           <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
                乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
           <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13" height="36"/>
-        </stack>
-        <stack gap="spacing" center="true">
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
@@ -106,12 +104,10 @@
           <!-- 行先スイッチ（旧CHIP LFO AM経路の厳密代替）。MASTER=合成後の一括乗算、
                OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
                両方ON/両方OFFも可（排他ではない）。 -->
-          <checkbox label="MASTER" handle="gain_fg_to_master"/>
-          <checkbox label="OP" handle="gain_fg_to_operators"/>
-        </stack>
-        <stack gap="spacing" center="true">
           <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
+          <checkbox label="MASTER" handle="gain_fg_to_master"/>
+          <checkbox label="OP" handle="gain_fg_to_operators"/>
         </stack>
       </row>
     </panel>
@@ -124,17 +120,17 @@
         <stack gap="spacing" center="true">
           <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>
+          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
+          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
+          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
+        </stack>
+        <stack gap="spacing" center="true">
           <!-- FILTER欄（旧・独立パネル）をここへ統合。CUTOFF FGはこのフィルターのカットオフを
                変調するFGなので、フィルター本体のパラメーターと同じstackに置いて対応関係を分かりやすくする。 -->
           <enum label="TYPE" handle="filter_type" names="FILTER_TYPE_NAMES" salt="12" height="36"/>
           <knob label="CUTOFF" handle="cutoff"/>
           <knob label="RESO" handle="resonance"/>
-        </stack>
-        <stack gap="spacing" center="true">
-          <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
-          <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
-          <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
           <checkbox label="SELF-OSC" handle="filter_self_oscillation" width="100"/>
         </stack>
       </row>
