@@ -86,6 +86,19 @@ fn build_panel_params<'a>(
     }
 }
 
+/// PRESETSサイドバー（固定180px）の幅。
+const PRESETS_SIDEBAR_WIDTH: f32 = 180.0;
+/// ResizableWindow自身と`CentralPanel::default()`（draw_op505_panelを包む方）の
+/// `inner_margin(8)`が左右で効く分の安全マージン（実測ではなく余裕を見た概算値）。
+const WINDOW_CHROME_SLACK: f32 = 40.0;
+
+/// エディタウィンドウの最小幅。`op505_ui::PANEL_MIN_WIDTH`（panel.xmlから算出した
+/// 「ノブ等がtime-eg-editorへ食い込まずに収まる最小幅」）にPRESETSサイドバーぶんを足したもの。
+/// panel.xmlの内容が変わればここも自動追従する。
+pub(crate) fn editor_min_size() -> (f32, f32) {
+    (op505_ui::PANEL_MIN_WIDTH + PRESETS_SIDEBAR_WIDTH + WINDOW_CHROME_SLACK, 480.0)
+}
+
 pub(crate) fn create_editor(
     egui_state: Arc<EguiState>,
     params: Arc<Op505VstParams>,
@@ -101,7 +114,7 @@ pub(crate) fn create_editor(
         |_ctx, _queue, _state| {},
         move |ui, setter, _queue, state| {
             ResizableWindow::new("op505_resize")
-                .min_size((640.0, 480.0))
+                .min_size(editor_min_size())
                 .show(ui, &resize_state, |ui| {
                     // ---- プリセットブラウザ（左サイドバー・縦いっぱい） ----
                     egui::Panel::left("presets_panel")

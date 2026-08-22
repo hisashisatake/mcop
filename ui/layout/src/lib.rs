@@ -142,6 +142,14 @@ fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {
         Node::Leaf { size } => tree
             .new_leaf(Style {
                 size: Size { width: length(size.x), height: length(size.y) },
+                // taffy既定のflex_shrink=1.0だと、コンテナがleafの合計幅より狭いとき
+                // taffyが計算する`layout.size`（内部の割当幅）が縮む。しかし`collect()`は
+                // 縮んだ`layout.size`を使わずleafの宣言サイズをそのまま矩形として返すため
+                // （このファイル下部`collect()`参照）、位置(`layout.location`)だけが
+                // 縮んだ想定でずれ、ウィジェットの実描画サイズと食い違って重なって見える。
+                // 0にして「縮まない」ことを保証し、狭ければ素直にコンテナからあふれさせる
+                // （あふれた分はScrollAreaで見せる、呼び出し側の設計）。
+                flex_shrink: 0.0,
                 ..Default::default()
             })
             .unwrap(),
@@ -154,6 +162,7 @@ fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {
                     justify_content: Some(justify.to_taffy()),
                     gap: Size { width: length(*gap), height: zero() },
                     flex_grow: *grow,
+                    flex_shrink: 0.0,
                     ..Default::default()
                 },
                 &kids,
@@ -169,6 +178,7 @@ fn build(tree: &mut TaffyTree<()>, node: &Node) -> NodeId {
                     align_items: if *align_center { Some(AlignItems::Center) } else { None },
                     gap: Size { width: zero(), height: length(*gap) },
                     flex_grow: *grow,
+                    flex_shrink: 0.0,
                     ..Default::default()
                 },
                 &kids,

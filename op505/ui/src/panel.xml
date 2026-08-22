@@ -67,6 +67,9 @@
         <title/>
       </header>
       <row justify="between" gap="spacing">
+        <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
+             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <!-- SYNC/RATE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を足すのではなく、
              既存の2つのstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
              固定サイズの自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが
@@ -86,9 +89,6 @@
                持つため、バイポーラ表示（±）にはしない。 -->
           <knob label="P.DEPTH" handle="params.pitch_fg.depth"/>
         </stack>
-        <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
-             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
-        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
     <panel title="GAIN FG" span="4">
@@ -96,6 +96,10 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
+        <!-- Gain FGだけ最終段level=0固定を免除し、STAGE=1も許す。出力への乗算でボイス解放には
+             関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
+             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
+        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <stack gap="spacing" center="true">
           <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
           <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
@@ -109,10 +113,6 @@
           <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
         </stack>
-        <!-- Gain FGだけ最終段level=0固定を免除し、STAGE=1も許す。出力への乗算でボイス解放には
-             関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
-             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
-        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
     <panel title="CUTOFF FG" span="4">
@@ -120,6 +120,7 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
         <stack gap="spacing" center="true">
           <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>
@@ -136,7 +137,6 @@
           <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
           <checkbox label="SELF-OSC" handle="filter_self_oscillation" width="100"/>
         </stack>
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
       </row>
     </panel>
   </panels>
@@ -149,6 +149,7 @@
           tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
       </header>
       <row justify="start" gap="spacing">
+        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
         <stack gap="spacing" center="true">
             <knob label="TL" handle="tl"/>
             <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
@@ -172,7 +173,6 @@
             <waveform handle="waveform" index="i"/>
             <checkbox label="AM" handle="ame"/>
         </stack>
-        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
       </row>
     </panel>
   </panels>

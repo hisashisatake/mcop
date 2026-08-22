@@ -222,7 +222,12 @@ impl Default for Op505Plugin {
             cc11: [127; 16],
             pedals: [PedalState::default(); 16],
             preset_bank: Op505PresetBank::default(),
-            egui_state: EguiState::from_size(1200, 680),
+            // 既定サイズもeditor_min_size()以上にしておく（下回るとエディタが開いた瞬間から
+            // 横スクロールを要求する状態になり体験が悪いため）。
+            egui_state: {
+                let (min_w, _) = editor::editor_min_size();
+                EguiState::from_size(min_w.ceil() as u32, 680)
+            },
         }
     }
 }

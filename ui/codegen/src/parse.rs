@@ -459,9 +459,36 @@ fn auto_insert_title(body: &mut Vec<BodyStmt>, title: &str) {
     body.insert(0, BodyStmt::Header { items: vec![HeaderItem::Title(Title::Static(title.to_string()))] });
 }
 
+/// `<panel span="...">`の生の指定形態。整数（12分割グリッド）とパーセントは
+/// 同じ`<panels>`内では混在できない（[`resolve_spans`]で検証）。
+#[derive(Clone, Copy, Debug)]
+enum SpanRaw {
+    /// `span="4"`（12分割グリッドでのマス数）。
+    Grid(u32),
+    /// `span="33%"`（直接の割合、0〜100）。
+    Percent(f32),
+}
+
+fn parse_span_raw(v: &str) -> Result<SpanRaw, String> {
+    if let Some(pct) = v.strip_suffix('%') {
+        let p: f32 = pct
+            .parse()
+            .map_err(|_| format!("<panel>のspanは0〜12の整数か\"N%\"のパーセントで指定してください: \"{v}\""))?;
+        if !(0.0..=100.0).contains(&p) {
+            return Err(format!("<panel>のspanのパーセント指定は0〜100の範囲で指定してください: \"{v}\""));
+        }
+        Ok(SpanRaw::Percent(p))
+    } else {
+        let n: u32 = v
+            .parse()
+            .map_err(|_| format!("<panel>のspanは0〜12の整数か\"N%\"のパーセントで指定してください: \"{v}\""))?;
+        Ok(SpanRaw::Grid(n))
+    }
+}
+
 /// `<panel>`をパースする。`span`属性は生の文字列のみ読み取り、まだ解決しない
 /// （`<panels>`内の他の`<panel>`のspanが出揃ってから[`resolve_spans`]でグループ単位に解決する）。
-fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<u32>), String> {
+fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<SpanRaw>), String> {
     let repeat = el.attribute("repeat").map(|s| s.to_string());
     let as_ = el.attribute("as").map(|s| s.to_string());
     if repeat.is_some() && as_.is_none() {
@@ -470,9 +497,7 @@ fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<u32>), String> 
     let index = el.attribute("index").unwrap_or("i").to_string();
     let title = el.attribute("title").unwrap_or("").to_string();
     let span_raw = match el.attribute("span") {
-        Some(v) => Some(
-            v.parse::<u32>().map_err(|_| "<panel>のspanは0〜12の整数で指定してください".to_string())?,
-        ),
+        Some(v) => Some(parse_span_raw(v)?),
         None => None,
     };
     let columns = match el.attribute("columns") {
@@ -492,24 +517,20 @@ fn parse_panel(el: Node, style: &Style) -> Result<(Panel, Option<u32>), String> 
     let ctx = Ctx { base, index: index.clone(), title: title.clone() };
     let mut body = parse_body(el, &ctx, style)?;
     auto_insert_title(&mut body, &title);
-    Ok((Panel { repeat, as_, index, title, span: 0, columns, body }, span_raw))
+    Ok((Panel { repeat, as_, index, title, span_fraction: 0.0, columns, body }, span_raw))
 }
 
-/// `<panels>`内の各`<panel>`の`span`を解決する。CSSの12カラムグリッド（Bootstrap等）を参考にした規約:
-/// - 全`<panel>`が`span`省略 → 12を均等割り（12が要素数で割り切れない場合はエラー、明示指定を促す）
-/// - 1個でも`span`が指定されていれば、**全`<panel>`に明示指定が必要**（一部省略は不可）で、
-///   合計はちょうど12でなければならない（書き漏れ等のミスをパースエラーで検出するため）
-fn resolve_spans(panels: &mut [Panel], spans_raw: &[Option<u32>]) -> Result<(), String> {
+/// `<panels>`内の各`<panel>`の`span`を解決し、`span_fraction`（0〜1の割合）へ変換する。規約:
+/// - 全`<panel>`が`span`省略 → 均等割り（`1.0/n`。12で割り切れるかは問わない）
+/// - 1個でも`span`が指定されていれば、**全`<panel>`に明示指定が必要**（一部省略は不可）
+/// - 明示指定は「全て整数（12分割グリッド、合計12）」か「全てパーセント（合計100%、
+///   誤差0.05%まで許容）」のどちらかに揃える必要がある（同じ`<panels>`内での混在は禁止）
+fn resolve_spans(panels: &mut [Panel], spans_raw: &[Option<SpanRaw>]) -> Result<(), String> {
     let n = panels.len();
     if spans_raw.iter().all(|s| s.is_none()) {
-        if 12 % n as u32 != 0 {
-            return Err(format!(
-                "<panels>内の<panel>が{n}個ではspanを12で均等割りできません。各<panel>にspan=\"...\"を明示してください"
-            ));
-        }
-        let even = 12 / n as u32;
+        let even = 1.0 / n as f32;
         for p in panels.iter_mut() {
-            p.span = even;
+            p.span_fraction = even;
         }
         return Ok(());
     }
@@ -519,12 +540,46 @@ fn resolve_spans(panels: &mut [Panel], spans_raw: &[Option<u32>]) -> Result<(), 
                 .to_string(),
         );
     }
-    let total: u32 = spans_raw.iter().map(|s| s.unwrap()).sum();
-    if total != 12 {
-        return Err(format!("<panels>内の<panel>のspan合計は12である必要があります（現在の合計: {total}）"));
+    let all_grid = spans_raw.iter().all(|s| matches!(s, Some(SpanRaw::Grid(_))));
+    let all_percent = spans_raw.iter().all(|s| matches!(s, Some(SpanRaw::Percent(_))));
+    if !all_grid && !all_percent {
+        return Err(
+            "<panels>内でspanの整数指定（12分割グリッド）とパーセント指定は混在できません（どちらかに揃えてください）"
+                .to_string(),
+        );
     }
-    for (p, s) in panels.iter_mut().zip(spans_raw.iter()) {
-        p.span = s.unwrap();
+    if all_grid {
+        let values: Vec<u32> = spans_raw
+            .iter()
+            .map(|s| match s {
+                Some(SpanRaw::Grid(v)) => *v,
+                _ => unreachable!("all_gridで検証済み"),
+            })
+            .collect();
+        let total: u32 = values.iter().sum();
+        if total != 12 {
+            return Err(format!("<panels>内の<panel>のspan合計は12である必要があります（現在の合計: {total}）"));
+        }
+        for (p, v) in panels.iter_mut().zip(values.iter()) {
+            p.span_fraction = *v as f32 / 12.0;
+        }
+    } else {
+        let values: Vec<f32> = spans_raw
+            .iter()
+            .map(|s| match s {
+                Some(SpanRaw::Percent(v)) => *v,
+                _ => unreachable!("all_percentで検証済み"),
+            })
+            .collect();
+        let total: f32 = values.iter().sum();
+        if (total - 100.0).abs() > 0.05 {
+            return Err(format!(
+                "<panels>内の<panel>のspan(%)合計は100%である必要があります（現在の合計: {total}%）"
+            ));
+        }
+        for (p, v) in panels.iter_mut().zip(values.iter()) {
+            p.span_fraction = *v / 100.0;
+        }
     }
     Ok(())
 }
@@ -589,11 +644,15 @@ mod span_tests {
         format!("<layout><panels>{inner}</panels></layout>")
     }
 
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-4, "{a} != {b}");
+    }
+
     #[test]
-    fn single_panel_defaults_span_to_12() {
+    fn single_panel_defaults_span_to_full_width() {
         let xml = wrap(r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
         let layout = parse_layout(&xml).unwrap();
-        assert_eq!(layout.groups[0].panels[0].span, 12);
+        approx(layout.groups[0].panels[0].span_fraction, 1.0);
     }
 
     #[test]
@@ -603,8 +662,8 @@ mod span_tests {
                <panel title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
         );
         let layout = parse_layout(&xml).unwrap();
-        assert_eq!(layout.groups[0].panels[0].span, 6);
-        assert_eq!(layout.groups[0].panels[1].span, 6);
+        approx(layout.groups[0].panels[0].span_fraction, 0.5);
+        approx(layout.groups[0].panels[1].span_fraction, 0.5);
     }
 
     #[test]
@@ -614,8 +673,8 @@ mod span_tests {
                <panel span="8" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
         );
         let layout = parse_layout(&xml).unwrap();
-        assert_eq!(layout.groups[0].panels[0].span, 4);
-        assert_eq!(layout.groups[0].panels[1].span, 8);
+        approx(layout.groups[0].panels[0].span_fraction, 4.0 / 12.0);
+        approx(layout.groups[0].panels[1].span_fraction, 8.0 / 12.0);
     }
 
     #[test]
@@ -638,8 +697,10 @@ mod span_tests {
         assert!(err.contains("一部の<panel>だけ"), "{err}");
     }
 
+    /// 12で割り切れない要素数でも、全省略なら単純な均等割りが通る（`span_fraction`は`1/n`）。
+    /// 旧実装（12分割グリッド固定）はここでエラーにしていたが、`span_fraction`化に伴い緩和した。
     #[test]
-    fn omitted_span_not_evenly_divisible_is_error() {
+    fn omitted_span_splits_evenly_even_when_not_divisible_by_12() {
         let xml = wrap(
             r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>
                <panel title="B"><row><knob label="Y" handle="y"/></row></panel>
@@ -647,8 +708,53 @@ mod span_tests {
                <panel title="D"><row><knob label="W" handle="w"/></row></panel>
                <panel title="E"><row><knob label="V" handle="v"/></row></panel>"#,
         );
+        let layout = parse_layout(&xml).unwrap();
+        for p in &layout.groups[0].panels {
+            approx(p.span_fraction, 0.2);
+        }
+    }
+
+    #[test]
+    fn percent_spans_summing_to_100_are_kept() {
+        let xml = wrap(
+            r#"<panel span="25%" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="75%" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let layout = parse_layout(&xml).unwrap();
+        approx(layout.groups[0].panels[0].span_fraction, 0.25);
+        approx(layout.groups[0].panels[1].span_fraction, 0.75);
+    }
+
+    /// 100.01%（誤差0.05%以内）は端数丸めの範囲として許容する。
+    #[test]
+    fn percent_spans_with_rounding_slack_are_kept() {
+        let xml = wrap(
+            r#"<panel span="33.34%" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="33.33%" title="B"><row><knob label="Y" handle="y"/></row></panel>
+               <panel span="33.34%" title="C"><row><knob label="Z" handle="z"/></row></panel>"#,
+        );
+        let layout = parse_layout(&xml).unwrap();
+        approx(layout.groups[0].panels[0].span_fraction, 0.3334);
+    }
+
+    #[test]
+    fn percent_spans_not_summing_to_100_is_error() {
+        let xml = wrap(
+            r#"<panel span="25%" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="25%" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
         let err = parse_layout(&xml).unwrap_err();
-        assert!(err.contains("均等割りできません"), "{err}");
+        assert!(err.contains("合計は100%"), "{err}");
+    }
+
+    #[test]
+    fn mixing_grid_and_percent_span_is_error() {
+        let xml = wrap(
+            r#"<panel span="6" title="A"><row><knob label="X" handle="x"/></row></panel>
+               <panel span="50%" title="B"><row><knob label="Y" handle="y"/></row></panel>"#,
+        );
+        let err = parse_layout(&xml).unwrap_err();
+        assert!(err.contains("混在できません"), "{err}");
     }
 
     #[test]

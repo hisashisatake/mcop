@@ -408,7 +408,7 @@ fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
         ),
     ];
     for (i, p) in g.panels.iter().enumerate() {
-        out.push(format!("let w_{i} = usable * {} / 12.0;", fmt_num(p.span as f32)));
+        out.push(format!("let w_{i} = usable * {};", fmt_num(p.span_fraction)));
     }
     if n == 1 {
         out.extend(gen_panel(&g.panels[0], "w_0", false, false, style));
@@ -437,9 +437,14 @@ pub fn generate_rust(layout: &Layout) -> String {
     let style = &layout.style;
     let parts: Vec<String> = layout.groups.iter().map(|g| gen_panels_group(g, style)).collect();
     let body = indent(&parts.join("\n\n"), 8);
+    // ScrollArea::both()（縦横）にし、`full_width`をレイアウトが重ならずに収まる最小幅
+    // （PANEL_MIN_WIDTH）で下げ止める。これを下回るウィンドウ幅では、パネル自体は
+    // PANEL_MIN_WIDTHのまま描画され、あふれた分を横スクロールで見せる
+    // （`ui-layout`側のflex_shrink:0.0とセットで「縮めて重ねる」のではなく
+    // 「縮めずにあふれさせてスクロールさせる」設計。詳細はir.rsのLayout::min_full_width）。
     let scroll_area = match &layout.scroll_id {
-        Some(id) => format!("egui::ScrollArea::vertical().id_salt(\"{id}\").show(ui, |ui| {{"),
-        None => "egui::ScrollArea::vertical().show(ui, |ui| {".to_string(),
+        Some(id) => format!("egui::ScrollArea::both().id_salt(\"{id}\").show(ui, |ui| {{"),
+        None => "egui::ScrollArea::both().show(ui, |ui| {".to_string(),
     };
     let has_jack = layout_has_any_jack(layout);
     let tx_jacks_decl = if has_jack { "let mut tx_jacks = crate::patchbay::JackLayout::new();\n    " } else { "" };
@@ -448,10 +453,18 @@ pub fn generate_rust(layout: &Layout) -> String {
     } else {
         ""
     };
+    // frame_strokeは実行時に`ui.style()`から取れるが、この定数はScrollAreaを開く前
+    // （＝`ui.style()`を呼べるuiがまだ無い場面）でも使えるコンパイル時定数にしたいため、
+    // eguiの既定`noninteractive.bg_stroke.width`(1.0)を焼き込む近似値を使う
+    // （実際のスタイルがこれと異なる場合、下げ止まり幅がわずかに前後するだけで安全側の誤差）。
+    let min_full_width = fmt_num(layout.min_full_width(style, 1.0));
     format!(
-        "pub fn {}(ui: &mut egui::Ui, params: &{}) {{\n    \
+        "/// このレイアウトが重ならずに収まる最小幅（`panel.xml`から算出、`ui-codegen`生成）。\n\
+         /// ホスト側のウィンドウ最小サイズ算出に使う。\n\
+         pub const PANEL_MIN_WIDTH: f32 = {min_full_width};\n\n\
+         pub fn {}(ui: &mut egui::Ui, params: &{}) {{\n    \
          {tx_jacks_decl}{scroll_area}\n        \
-         let full_width = ui.available_width();\n        \
+         let full_width = ui.available_width().max(PANEL_MIN_WIDTH);\n        \
          let base_spacing = ui.spacing().item_spacing;\n        \
          let frame_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke.width;\n        \
          ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);\n\n\

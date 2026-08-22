@@ -73,7 +73,7 @@ fn time_eg_editor_generates_expected_call() {
 fn root_attrs_default_to_draw_param_panel() {
     let xml = wrap("", "", r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
     let rust = ui_codegen::generate_rust(&xml).unwrap();
-    assert!(rust.starts_with("pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {"));
+    assert!(rust.contains("pub fn draw_param_panel(ui: &mut egui::Ui, params: &PanelParams) {"));
     assert!(!rust.contains("id_salt"), "省略時はid_saltを出力しないはず");
 }
 
@@ -85,8 +85,18 @@ fn root_attrs_override_fn_params_type_and_scroll_id() {
         r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#,
     );
     let rust = ui_codegen::generate_rust(&xml).unwrap();
-    assert!(rust.starts_with("pub fn draw_op505_panel(ui: &mut egui::Ui, params: &Op505PanelParams) {"));
-    assert!(rust.contains("egui::ScrollArea::vertical().id_salt(\"op505_panel\").show(ui, |ui| {"));
+    assert!(rust.contains("pub fn draw_op505_panel(ui: &mut egui::Ui, params: &Op505PanelParams) {"));
+    assert!(rust.contains("egui::ScrollArea::both().id_salt(\"op505_panel\").show(ui, |ui| {"));
+}
+
+/// ウィンドウ縮小時に重ならず横スクロールへ委ねるための下げ止まり幅（`ui/codegen/src/ir.rs`の
+/// `Layout::min_full_width`）が、`PANEL_MIN_WIDTH`定数として出力され`full_width`に反映されること。
+#[test]
+fn full_width_is_floored_by_panel_min_width() {
+    let xml = wrap("", "", r#"<panel title="A"><row><knob label="X" handle="x"/></row></panel>"#);
+    let rust = ui_codegen::generate_rust(&xml).unwrap();
+    assert!(rust.contains("pub const PANEL_MIN_WIDTH: f32 ="), "{rust}");
+    assert!(rust.contains("let full_width = ui.available_width().max(PANEL_MIN_WIDTH);"), "{rust}");
 }
 
 #[test]

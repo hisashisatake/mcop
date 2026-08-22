@@ -516,7 +516,7 @@ fn draw_panels_group(
     let overhead = style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal() + frame_stroke * 2.0;
     let usable = full_width - style.panels_gap * n.saturating_sub(1) as f32 - overhead * n as f32;
     if n == 1 {
-        let w = usable * g.panels[0].span as f32 / 12.0;
+        let w = usable * g.panels[0].span_fraction;
         draw_panel(ui, store, &g.panels[0], w, None, style, base_spacing, jacks, frame_stroke);
         return;
     }
@@ -526,7 +526,7 @@ fn draw_panels_group(
         ui.spacing_mut().item_spacing.x = style.panels_gap;
         let mut captured_height: Option<f32> = None;
         for (i, p) in g.panels.iter().enumerate() {
-            let w = usable * p.span as f32 / 12.0;
+            let w = usable * p.span_fraction;
             let min_height = if match_height && i > 0 { captured_height } else { None };
             let resp = draw_panel(ui, store, p, w, min_height, style, base_spacing, jacks, frame_stroke);
             if i == 0 && match_height {
@@ -545,10 +545,12 @@ fn margin_to_egui(m: &Margin) -> egui::Margin {
 /// 直接eguiウィジェットを描画する。`store`は呼び出し側（`preview-wasm`のApp）がフレームをまたいで
 /// 保持し、ドラッグ等の操作結果を次フレームへ引き継ぐ。
 pub fn draw_panel_from_ir(ui: &mut egui::Ui, layout_ir: &Layout, store: &mut HandleStore) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        let full_width = ui.available_width();
-        let base_spacing = ui.spacing().item_spacing;
+    egui::ScrollArea::both().show(ui, |ui| {
         let frame_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke.width;
+        // 重ならずに収まる最小幅で下げ止める（`codegen.rs`のPANEL_MIN_WIDTHと同じ計算だが、
+        // こちらは実行時の`frame_stroke`をそのまま渡せるため近似不要）。
+        let full_width = ui.available_width().max(layout_ir.min_full_width(&layout_ir.style, frame_stroke));
+        let base_spacing = ui.spacing().item_spacing;
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
         let mut jacks = JackLayout::new();
 

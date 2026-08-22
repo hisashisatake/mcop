@@ -21,5 +21,7 @@ pub(crate) use ui_core::{algorithm_diagram, knob, layout, param_handle, patchbay
 mod panel;
 
 // editor-wasm(op505_state.rs/app.rs)がハンドル実装・パネル描画で使うため再エクスポートする。
-pub use panel::{draw_op505_panel, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams};
+// PANEL_MIN_WIDTHはpanel.xmlから算出した「重ならずに収まる最小幅」（ui-codegen生成）。
+// ホスト側（op505-vst/gesture-app）がウィンドウ最小サイズを決めるのに使う。
+pub use panel::{draw_op505_panel, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, PANEL_MIN_WIDTH};
 pub use param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};

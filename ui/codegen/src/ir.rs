@@ -208,6 +208,24 @@ impl TreeNode {
         }
     }
 
+    /// 木が必要とする最小幅（`max_height`と対の再帰計算）。leafは外形w、rowは子の合計+gap
+    /// （縮められないため、コンテナがこれより狭いとコンテナからあふれる＝呼び出し側で
+    /// `ui.available_width().max(min_width())`として使う、下げ止まりの下限値）、
+    /// stackは子の最大（縦積みなので幅は最大幅の子で決まる）。
+    pub fn min_width(&self) -> f32 {
+        match self {
+            TreeNode::Leaf(l) => l.outer_size().w,
+            TreeNode::Row { gap, children, .. } => {
+                let n = children.len();
+                let sum: f32 = children.iter().map(|c| c.min_width()).sum();
+                sum + gap.numeric() * (n.saturating_sub(1)) as f32
+            }
+            TreeNode::Stack { children, .. } => {
+                children.iter().map(|c| c.min_width()).fold(0.0_f32, f32::max)
+            }
+        }
+    }
+
     /// DFS順（＝`layout::place`が呼ばれる順）で葉を列挙する。
     pub fn leaves(&self) -> Vec<&LeafInfo> {
         match self {
@@ -296,13 +314,43 @@ pub struct Panel {
     pub as_: Option<String>,
     pub index: String,
     pub title: String,
-    /// 12分割グリッドでの占有幅（Bootstrap等のcol-span相当）。
-    /// 同じ`<panels>`内の全`<panel>`のspan合計は常に12（parse.rsで検証・省略時は均等割りで解決済み）。
-    pub span: u32,
+    /// このパネルが占める幅の割合（0〜1）。`span="4"`（12分割グリッド）なら`4.0/12.0`、
+    /// `span="33%"`なら`0.33`。同じ`<panels>`内の全`<panel>`の合計は常に1.0
+    /// （parse.rsで検証・省略時は均等割りで解決済み。整数指定とパーセント指定の混在は不可）。
+    pub span_fraction: f32,
     /// `repeat`ありパネルをN列グリッドで折り返す列数（`<panel repeat="..." columns="N">`）。
     /// `repeat`なしパネルには付けられない（parse.rsで検証済み）。省略時は従来通りの縦一列。
     pub columns: Option<usize>,
     pub body: Vec<BodyStmt>,
+}
+
+impl Panel {
+    /// body中の`<row>`/`<stack>`木（`BodyStmt::Tree`）が必要とする最小幅の最大値。
+    /// `<header>`（見出し・readout・jack）は可変幅のため対象外。
+    fn body_content_min_width(&self) -> f32 {
+        self.body
+            .iter()
+            .filter_map(|stmt| match stmt {
+                BodyStmt::Tree(t) => Some(t.min_width()),
+                _ => None,
+            })
+            .fold(0.0_f32, f32::max)
+    }
+
+    /// このパネル自身の中身（枠を含まない）が必要とする最小幅。
+    /// `repeat`＋`columns`のグリッド化パネルは、1セルぶんの最小幅を`columns`個並べた
+    /// 合計（`codegen.rs`の`gen_repeat_grid`と同じ`grid_overhead`計算の逆算）になる。
+    pub fn min_width(&self, style: &Style, frame_stroke: f32) -> f32 {
+        let cell = self.body_content_min_width();
+        match self.columns {
+            Some(cols) if self.repeat.is_some() && cols > 1 => {
+                let grid_overhead =
+                    style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal() + frame_stroke * 2.0;
+                cell * cols as f32 + (grid_overhead + style.panels_gap) * (cols as f32 - 1.0)
+            }
+            _ => cell,
+        }
+    }
 }
 
 /// `<panels>`。`<panel>`を1個以上持つ（1個なら実質フル幅の単独パネル、2個以上ならNカラム）。
@@ -310,6 +358,18 @@ pub struct Panel {
 pub struct PanelsGroup {
     pub match_height: bool,
     pub panels: Vec<Panel>,
+}
+
+impl PanelsGroup {
+    /// このグループの`usable`（`gen_panels_group`のパネル外形を引いた後の中身の合計幅）が
+    /// 最低限必要とする値。各パネルについて「中身の最小幅 ÷ span比率」を計算し、
+    /// 最も厳しい（最大の）値を採用する（他パネルはその`usable`なら余裕で収まる）。
+    pub fn min_usable_width(&self, style: &Style, frame_stroke: f32) -> f32 {
+        self.panels
+            .iter()
+            .map(|p| p.min_width(style, frame_stroke) / p.span_fraction.max(f32::EPSILON))
+            .fold(0.0_f32, f32::max)
+    }
 }
 
 /// `<layout>`ルート属性。省略時は現行どおり`draw_param_panel`/`PanelParams`/id_saltなしになる
@@ -325,4 +385,23 @@ pub struct Layout {
     pub params_type: String,
     /// `egui::ScrollArea::vertical()`の`.id_salt(...)`（`<layout scroll-id="...">`、省略時なし）。
     pub scroll_id: Option<String>,
+}
+
+impl Layout {
+    /// レイアウト全体が重なりなく描画できる最小の`full_width`。全グループの
+    /// `usable + panels_gap*(n-1) + overhead*n`（`gen_panels_group`/`draw_panels_group`の
+    /// 幅計算式の逆算）のうち最大値を返す。呼び出し側は
+    /// `ui.available_width().max(layout.min_full_width(..))`として使い、これを下回る幅では
+    /// 圧縮せず（`ui-layout`のflex_shrink:0.0と合わせて）横スクロールへ委ねる。
+    pub fn min_full_width(&self, style: &Style, frame_stroke: f32) -> f32 {
+        let overhead = style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal() + frame_stroke * 2.0;
+        self.groups
+            .iter()
+            .map(|g| {
+                let n = g.panels.len();
+                let usable = g.min_usable_width(style, frame_stroke);
+                usable + style.panels_gap * (n.saturating_sub(1)) as f32 + overhead * n as f32
+            })
+            .fold(0.0_f32, f32::max)
+    }
 }
