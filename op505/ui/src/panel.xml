@@ -3,8 +3,11 @@
   <style>
     <!-- 横並び<panels>グループ内、パネル間の隙間。 -->
     <panels gap="4"/>
-    <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。 -->
-    <panel inner-margin="4" outer-margin="3"/>
+    <!-- パネル枠の内側/外側余白（全パネル共通、egui::Marginがi8ベースのため整数のみ）。
+         outer-marginは上下2・左右1（CSSショートハンド）。横の隙間＝panels gap(4)+左右マージン(1+1)=6px、
+         縦の隙間＝上下マージン(2+2)=4px（縦にはgap相当の値が無く、マージンだけで隙間ができるため、
+         完全一致はしないがほぼ近い値に詰めてある）。 -->
+    <panel inner-margin="4" outer-margin="2 1"/>
     <!-- 全ウィジェット共通の既定マージン。 -->
     <widget margin="4"/>
     <algorithm-diagram width="130" height="100"/>
@@ -16,53 +19,55 @@
   </style>
 
   <panels match-height="true">
-    <panel span="3" title="CHANNEL">
+    <panel title="CHANNEL" span="25%">
       <header>
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <algorithm-diagram handle="algorithm"/>
         <stack gap="spacing" center="true">
-          <knob label="ALG" handle="algorithm" margin="0 60"/>
-          <knob label="FB" handle="feedback" margin="0 30"/>
+            <row gap="spacing">
+                <algorithm-diagram handle="algorithm"/>
+                <knob label="ALG" handle="algorithm"/>
+                <knob label="FB" handle="feedback"/>
+            </row>
         </stack>
       </row>
     </panel>
-    <panel span="3" title="MASTER EFFECT (REVERB)">
+    <panel title="MASTER EFFECT (REVERB)" span="25%">
       <header>
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
         <stack gap="spacing" center="true">
-            <knob label="REV" handle="rev_send"/>
-            <knob label="R.TIME" handle="reverb_time"/>
+            <row gap="spacing">
+                <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
+                <knob label="REV" handle="rev_send"/>
+                <knob label="R.TIME" handle="reverb_time"/>
+            </row>
         </stack>
       </row>
     </panel>
-    <panel span="6" title="MASTER EFFECT (CHORUS)">
+    <panel title="MASTER EFFECT (CHORUS)" span="50%">
       <header>
         <title/>
       </header>
       <row justify="between">
         <stack gap="spacing" center="true">
-            <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
-            <knob label="C.DEP" handle="chorus_mod_depth"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <knob label="CHO" handle="cho_send"/>
-            <knob label="C.FB" handle="chorus_feedback"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <knob label="C.RATE" handle="chorus_mod_rate"/>
-            <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+            <row gap="spacing">
+                <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
+                <knob label="CHO" handle="cho_send"/>
+                <knob label="C.RATE" handle="chorus_mod_rate"/>
+                <knob label="C.DEP" handle="chorus_mod_depth"/>
+                <knob label="C.FB" handle="chorus_feedback"/>
+                <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
+            </row>
         </stack>
       </row>
     </panel>
   </panels>
 
   <panels>
-    <panel title="PITCH FG" span="4">
+    <panel title="PITCH FG" span="30%">
       <header>
         <title/>
       </header>
@@ -89,7 +94,7 @@
         </stack>
       </row>
     </panel>
-    <panel title="GAIN FG" span="4">
+    <panel title="GAIN FG" span="30%">
       <header>
         <title/>
       </header>
@@ -111,7 +116,7 @@
         </stack>
       </row>
     </panel>
-    <panel title="CUTOFF FG" span="4">
+    <panel title="CUTOFF FG" span="40%">
       <header>
         <title/>
       </header>
@@ -147,27 +152,25 @@
       <row justify="start" gap="spacing">
         <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
         <stack gap="spacing" center="true">
-            <knob label="TL" handle="tl"/>
-            <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
-            <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <knob label="MUL" handle="mul"/>
-            <!-- FINEは中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
-            <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
-            <knob label="DT1" handle="dt1" bipolar="true"/>
-            <knob label="EGSFT" handle="eg_shift"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <knob label="KSR" handle="ksr"/>
-            <knob label="LEVEL SCALE" handle="level_scale"/>
-        </stack>
-        <stack gap="spacing" center="true">
-            <waveform handle="waveform" index="i"/>
-            <checkbox label="AM" handle="ame"/>
+            <row gap="spacing">
+                <knob label="TL" handle="tl"/>
+                <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
+                <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
+                <knob label="MUL" handle="mul"/>
+            </row>
+            <row gap="spacing">
+                <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
+                <knob label="DT1" handle="dt1" bipolar="true"/>
+                <!-- FINEも同じく中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
+                <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
+                <knob label="EGSFT" handle="eg_shift"/>
+                <knob label="KSR" handle="ksr"/>
+            </row>
+            <row gap="spacing">
+                <knob label="LEVEL SCALE" handle="level_scale"/>
+                <waveform handle="waveform" index="i"/>
+                <checkbox label="AM" handle="ame"/>
+            </row>
         </stack>
       </row>
     </panel>
