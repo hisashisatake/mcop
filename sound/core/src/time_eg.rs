@@ -106,6 +106,70 @@ pub struct TimeStage {
     pub curve: u8,
 }
 
+/// `stages`（固定長配列）の**要素数を緩めた**デシリアライザ。
+///
+/// serdeの`[T; N]`既定実装はデシリアライズ時に要素数を厳密に照合するため、`MAX_STAGES`を
+/// 変えた瞬間に**既存の`.op505`プリセット・op505-vstがDAWプロジェクトへ書いたpersist状態・
+/// gesture-appのIPC JSONが全滅する**（しかも読み込み失敗は両方とも無言で握り潰される）。
+/// ここで「足りなければ`TimeStage::default()`でパディング、多ければ切り詰め」に緩めることで、
+/// `MAX_STAGES`の増減がデータ互換性を壊さなくなる（増やす方向も減らす方向も安全＝
+/// 変更のロールバックも可能になる）。
+///
+/// **serialize側は敢えて上書きしない**（既定の`[T; MAX_STAGES]`実装＝`serialize_tuple`が
+/// そのままJSON配列を出すので出力形式は完全に不変）。片側だけ差し替えることで
+/// 「読みは緩い／書きは正準」という非対称を明示する。
+///
+/// 構造体全体のカスタム`Deserialize`にしないのは、`TimeEgParams`が既に`#[serde(alias)]`・
+/// `#[serde(default)]`・`#[serde(default = "...")]`を多用しており、ヘルパー構造体へ
+/// 全部書き写すとフィールド追加時の同期漏れが必ず起きるため。`deserialize_with`は
+/// 兄弟フィールドの属性に一切干渉しない。
+mod stages_serde {
+    use super::{TimeStage, MAX_STAGES};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::Deserializer;
+    use std::fmt;
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<[TimeStage; MAX_STAGES], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(StagesVisitor)
+    }
+
+    struct StagesVisitor;
+
+    impl<'de> Visitor<'de> for StagesVisitor {
+        type Value = [TimeStage; MAX_STAGES];
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "a sequence of TimeStage (padded/truncated to {MAX_STAGES})")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            // パディング値は`TimeStage::default()`（level=0）。Pitch/Cutoff FGはレベルを
+            // バイポーラ解釈する（128が無変調の中心）ため、level=0は「全開マイナス」を意味する。
+            // それでも実害が無いのは、`stage_count`を超える段はエンジンもエディタも参照せず、
+            // **段を増やす唯一の経路（`ui_core`の`TimeEgFieldHandle::set(StageCount)`と
+            // `insert_stage_after`）が直前段を複製する**ため。この複製ロジックが唯一の安全弁で、
+            // 「配列の値を直接有効化する」コードを将来足すとこの罠を踏む。
+            let mut out = [TimeStage::default(); MAX_STAGES];
+            let mut i = 0usize;
+            // 余剰要素も必ず最後まで読み切る（途中で止めるとserde_json側が
+            // trailing elementsで失敗する）。
+            while let Some(stage) = seq.next_element::<TimeStage>()? {
+                if i < MAX_STAGES {
+                    out[i] = stage;
+                }
+                i += 1;
+            }
+            Ok(out)
+        }
+    }
+}
+
 /// TimeEgのパラメーター一式。`stage_count`本だけ`stages`を使う（残りは無視）。
 ///
 /// 段リストは`release_point`ただ1つで「保持区間」と「リリース区間」へ過不足なく分割される。
@@ -114,8 +178,11 @@ pub struct TimeStage {
 /// 表現できてしまった。1つに統合したことでその矛盾は表現不能になっている。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimeEgParams {
+    /// 段データ。要素数はデシリアライズ時のみ緩めてある（`MAX_STAGES`変更時の
+    /// データ互換保証はすべて`stages_serde`が担う。そちらのdocコメント参照）。
+    #[serde(deserialize_with = "stages_serde::deserialize")]
     pub stages: [TimeStage; MAX_STAGES],
-    /// 使用する段数(1〜8)。0は1として扱う。
+    /// 使用する段数(1〜`MAX_STAGES`)。0は1として扱う。
     pub stage_count: u8,
     /// 0=ワンショット（`release_point`で静止＝サステイン点）／1=`loop_start`〜`release_point`を周回。
     pub loop_enabled: u8,
