@@ -204,6 +204,18 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// 右下の手動リサイズグリップ。Tauri/WebView2の既知の不具合（decorations有りウィンドウで
+// 右端・下端(East/South)のドラッグがOSのNCHITTESTを素通りしリサイズできない。
+// 左端・上端(West/North)は正常、tauri-apps/tauri#9023）の回避策。
+// startResizeDragging()はOSのネイティブ拡縮ループを直接起動するため、
+// 壊れているNCHITTEST判定を経由せずリサイズが機能する。
+// 'East'/'South'単体は実機検証で無反応だったため使わず、動作を確認できた
+// 'SouthEast'（斜め）のみ使う——横だけ/縦だけ動かせば実質その方向だけのリサイズになる。
+document.getElementById('resize-grip').addEventListener('mousedown', async (e) => {
+  e.preventDefault();
+  await window.__TAURI__?.window?.getCurrentWindow().startResizeDragging('SouthEast');
+});
+
 // ─────────────────────────────────────────────
 // 座標系の構築
 // ─────────────────────────────────────────────

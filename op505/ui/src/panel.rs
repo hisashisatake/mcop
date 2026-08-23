@@ -1,5 +1,5 @@
 use crate::algorithm_diagram::algorithm_diagram;
-use crate::knob::{bool_checkbox, knob};
+use crate::knob::{bool_checkbox, dual_knob, knob};
 use crate::layout::{self, leaf, row, stack_centered, Justify};
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::selector::{

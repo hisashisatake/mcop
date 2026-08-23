@@ -23,7 +23,7 @@ use sound_core::TimeEgParams;
 
 use crate::algorithm_diagram::{algorithm_diagram, carriers};
 use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
-use crate::knob::{bool_checkbox, knob};
+use crate::knob::{bool_checkbox, dual_knob, knob};
 use crate::layout;
 use crate::mapping::mul_fine_ratio;
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
@@ -304,7 +304,7 @@ fn draw_raw_placeholder(ui: &mut egui::Ui, size: egui::Vec2) {
 
 fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx: Option<usize>) {
     match &leaf.widget {
-        Widget::Knob { label, handle, bipolar } => {
+        Widget::Knob { label, handle, bipolar, alt: None } => {
             let key = scoped(handle, idx);
             let h = store.int(&key);
             if *bipolar {
@@ -312,6 +312,12 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             } else {
                 knob(ui, h, label);
             }
+        }
+        Widget::Knob { label, handle, alt: Some(alt), .. } => {
+            let primary_active = eval_predicate(store, &alt.predicate, idx);
+            let key = if primary_active { scoped(handle, idx) } else { scoped(&alt.handle, idx) };
+            let h = store.int(&key);
+            dual_knob(ui, h, label, &alt.label, primary_active);
         }
         Widget::Checkbox { label, handle } => {
             let key = scoped(handle, idx);

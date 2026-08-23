@@ -81,12 +81,21 @@ fn eg_field_expr(f: &EgField) -> String {
 /// 可変サイズを描画関数へ渡すために使う。
 fn gen_widget_stmt(w: &Widget, size: Size) -> String {
     match w {
-        Widget::Knob { label, handle, bipolar } => {
+        Widget::Knob { label, handle, bipolar, alt: None } => {
             if *bipolar {
                 format!("knob(ui, &BipolarHandle::new(&*{handle}), \"{label}\");")
             } else {
                 format!("knob(ui, &*{handle}, \"{label}\");")
             }
+        }
+        // bipolarはV.GAIN/VELのような役割入れ替え対象では使わないため未対応（両方指定時の
+        // 挙動は未定義、parse.rs側で禁止していない点は将来alt+bipolarの需要が出たら見直す）。
+        Widget::Knob { label, handle, alt: Some(alt), .. } => {
+            let cond = predicate_cond_expr(&alt.predicate);
+            format!(
+                "if {cond} {{ dual_knob(ui, &*{handle}, \"{label}\", \"{}\", true); }} else {{ dual_knob(ui, &*{}, \"{label}\", \"{}\", false); }}",
+                alt.label, alt.handle, alt.label
+            )
         }
         Widget::Checkbox { label, handle } => format!("bool_checkbox(ui, &*{handle}, \"{label}\");"),
         Widget::Waveform { handle, index } => format!("waveform_selector(ui, &*{handle}, ({index}) as usize);"),
@@ -124,12 +133,18 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
     }
 }
 
+/// `Predicate`（`compute` + `negate`）をRustの真偽式へ展開する。`wrap_enabled_if`（通常の
+/// グレーアウト）と`dual_knob`生成（`Widget::Knob.alt`）の両方が同じ述語表現を共有する。
+fn predicate_cond_expr(p: &Predicate) -> String {
+    let cond = compute_expr(&p.compute);
+    if p.negate { format!("!{cond}") } else { cond }
+}
+
 fn wrap_enabled_if(stmt: String, pred: &Option<Predicate>) -> String {
     match pred {
         None => stmt,
         Some(p) => {
-            let cond = compute_expr(&p.compute);
-            let cond = if p.negate { format!("!{cond}") } else { cond };
+            let cond = predicate_cond_expr(p);
             format!("ui.add_enabled_ui({cond}, |ui| {{ {stmt} }});")
         }
     }

@@ -221,7 +221,7 @@ fn parse_title(el: Node, ctx: &Ctx) -> Result<Title, String> {
 
 fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, String> {
     let tag = el.tag_name().name();
-    let enabled_if = match el.attribute("enabled-if") {
+    let mut enabled_if = match el.attribute("enabled-if") {
         Some(raw) => Some(parse_enabled_if(raw, ctx)?),
         None => None,
     };
@@ -232,8 +232,30 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let label = req_attr(el, "label")?;
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);
             let bipolar = attr_bool_or(el, "bipolar", false)?;
+            // alt-label/alt-handle（V.GAIN/VELのような役割入れ替え2パラメーターの合体指定）は
+            // enabled-ifと必ずセットで使う。通常のenabled-if（グレーアウトのみ）とは違い、
+            // この述語の結果でleaf自体のenabled_ifではなくWidget::Knob.altの述語として消費し、
+            // 下のwrap_enabled_ifによる二重ラップを避ける（dual_knobが自前で出し分けるため）。
+            let alt_label = el.attribute("alt-label");
+            let alt_handle = el.attribute("alt-handle");
+            let alt = match (alt_label, alt_handle) {
+                (Some(alt_label), Some(alt_handle)) => {
+                    let predicate = enabled_if
+                        .take()
+                        .ok_or_else(|| "<knob alt-label alt-handle>にはenabled-if属性も必要です".to_string())?;
+                    Some(KnobAlt {
+                        label: alt_label.to_string(),
+                        handle: resolve_path(alt_handle, ctx),
+                        predicate,
+                    })
+                }
+                (None, None) => None,
+                _ => {
+                    return Err("<knob>のalt-label/alt-handleは両方指定してください".to_string());
+                }
+            };
             (
-                Widget::Knob { label: label.clone(), handle, bipolar },
+                Widget::Knob { label: label.clone(), handle, bipolar, alt },
                 label,
                 "knob".to_string(),
                 // `ui_core::knob::KNOB_CELL_SIZE`と一致させること（ui-codegenはegui非依存で

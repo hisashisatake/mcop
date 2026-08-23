@@ -190,6 +190,52 @@ pub fn knob(ui: &mut egui::Ui, handle: &dyn IntParamHandle, label: &str) {
     );
 }
 
+/// V.GAIN/VELのように、キャリア/モジュレーターの役割で入れ替わる2パラメーターを
+/// 1セル・1ノブへまとめて表示する（`ui_core::knob`の通常の`enabled-if`グレーアウトと違い、
+/// 無効な方のノブをまるごと空けるのではなく、有効な方のパラメーターへノブ自体を差し替える）。
+/// `handle`は呼び出し側（`ui-codegen`が生成するif/else、または`interpret.rs`）が
+/// `primary_active`に応じて既に選んだ方の実ハンドルを渡す——このため引数は1個で足りる。
+/// ラベルは常に`primary_label/secondary_label`の固定順で並べ、有効な方だけ通常色、
+/// 無効な方を`.weak()`で薄く表示する（パラメーターJSON側は従来通り2フィールドのまま、
+/// UI表示だけを1セルへ集約する）。
+pub fn dual_knob(
+    ui: &mut egui::Ui,
+    handle: &dyn IntParamHandle,
+    primary_label: &str,
+    secondary_label: &str,
+    primary_active: bool,
+) {
+    ui.allocate_ui_with_layout(
+        KNOB_CELL_SIZE,
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            // `ui.horizontal_wrapped`で3個のui.label()を並べると、horizontalの子uiが
+            // `interact_size.y`ぶんの最小高さを強制し、通常の`knob()`（ラベルはui.label()
+            // 単発のみ）よりラベル行が高くなってノブ以下が下にずれる（実機で指摘された
+            // 「このノブだけ下がって見える」不具合）。1個のLayoutJobにまとめて`ui.label()`を
+            // 1回だけ呼ぶことで、通常のknob()と全く同じ高さのラベル行にする。
+            let font_id = egui::FontId::proportional(9.0);
+            let normal_color = ui.visuals().text_color();
+            let weak_color = ui.visuals().weak_text_color();
+            let (primary_color, secondary_color) =
+                if primary_active { (normal_color, weak_color) } else { (weak_color, normal_color) };
+            let mut job = egui::text::LayoutJob::default();
+            job.append(primary_label, 0.0, egui::TextFormat { font_id: font_id.clone(), color: primary_color, ..Default::default() });
+            job.append("/", 0.0, egui::TextFormat { font_id: font_id.clone(), color: weak_color, ..Default::default() });
+            job.append(secondary_label, 0.0, egui::TextFormat { font_id, color: secondary_color, ..Default::default() });
+            ui.label(job);
+            ui.vertical_centered(|ui| {
+                ui.add(Knob::for_handle(handle).with_diameter(28.0));
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(((KNOB_CELL_SIZE.x - SPIN_ROW_WIDTH) * 0.5).max(0.0));
+                spin_control(ui, handle, egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+            });
+        },
+    );
+}
+
 /// `BoolParamHandle`をチェックボックスとして表示する（Loop/Curve/AM等の真偽パラメーター向け）。
 pub fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &str) {
     let mut value = handle.value();

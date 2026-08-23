@@ -154,20 +154,22 @@
         <stack gap="spacing" center="true">
             <row gap="spacing">
                 <knob label="TL" handle="tl"/>
-                <knob label="V.GAIN" handle="velocity_gain" enabled-if="is_carrier"/>
-                <knob label="VEL" handle="vel_sens" enabled-if="!is_carrier"/>
                 <knob label="MUL" handle="mul"/>
+                <knob label="EGSFT" handle="eg_shift"/>
+                <!-- キャリアはV.GAIN・モジュレーターはVELのみ意味を持つため、1ノブへ統合し
+                     有効な方のラベルだけ通常色で表示する（dual_knob、alt-label/alt-handle）。
+                     パラメーターJSON側はvelocity_gain/vel_sensの2フィールドのまま変更なし。 -->
+                <knob label="V.GAIN" handle="velocity_gain" alt-label="VEL" alt-handle="vel_sens" enabled-if="is_carrier"/>
             </row>
             <row gap="spacing">
                 <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
                 <knob label="DT1" handle="dt1" bipolar="true"/>
                 <!-- FINEも同じく中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
                 <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
-                <knob label="EGSFT" handle="eg_shift"/>
                 <knob label="KSR" handle="ksr"/>
+                <knob label="LEVEL SCALE" handle="level_scale"/>
             </row>
             <row gap="spacing">
-                <knob label="LEVEL SCALE" handle="level_scale"/>
                 <waveform handle="waveform" index="i"/>
                 <checkbox label="AM" handle="ame"/>
             </row>

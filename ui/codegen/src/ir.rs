@@ -87,12 +87,24 @@ pub enum EgField {
     Literal(String),
 }
 
+/// `<knob alt-label alt-handle>`（V.GAIN/VELのように役割で入れ替わる2パラメーターを
+/// 1セルへまとめる指定）。`predicate`は`enabled-if`属性から借用する——通常の`enabled-if`
+/// （グレーアウトのみ）と違い、`true`側と`false`側で表示するhandle自体を切り替える。
+#[derive(Clone, Debug)]
+pub struct KnobAlt {
+    pub label: String,
+    pub handle: String,
+    pub predicate: Predicate,
+}
+
 /// `<row>`/`<stack>`直下の1葉（配置対象ウィジェット1個ぶん）の種別・構造化記述子。
 #[derive(Clone, Debug)]
 pub enum Widget {
     /// `bipolar`は中央128のパラメーターを-128〜+127の符号付き表示にする
     /// （`ui_core::BipolarHandle`を挟む。P.DEP±/F.DEP±/DT1/FINE/TX.OFS向け）。
-    Knob { label: String, handle: String, bipolar: bool },
+    /// `alt`はV.GAIN/VELのような役割入れ替え2パラメーターの合体指定（[`KnobAlt`]参照）。
+    /// Someのときはenabled-ifによる通常のグレーアウトではなく`dual_knob`で描画する。
+    Knob { label: String, handle: String, bipolar: bool, alt: Option<KnobAlt> },
     Checkbox { label: String, handle: String },
     Waveform { handle: String, index: String },
     /// `height`は`<stack>`縦積み時の余白調整用（既定66.0は`<knob>`とのRow内揃えを保つ値、

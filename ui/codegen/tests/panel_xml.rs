@@ -15,12 +15,11 @@ fn generates_without_error() {
     assert!(rust.trim_end().ends_with('}'));
 }
 
-/// OPパネルのレイアウト木が、ビルド成果物の実測と一致することを確認する（2026-08-22、
-/// ウィンドウ縮小時の重なりを目視しやすくするためユーザーがtime-eg-editorを各行の先頭へ
-/// 移動した際に実測値へ更新。5本の`<stack center="true">`（TL/V.GAIN/VEL・MUL/FINE・
-/// DT1/EGSFT・KSR/LEVEL SCALE・WAVE/AM）は変わらず末尾のまま）。
+/// OPパネルのレイアウト木が、ビルド成果物の実測と一致することを確認する（2026-08-23更新、
+/// 5列stackからrow×3段（TL/MUL/EGSFT/V.GAIN・VEL統合・DT1/FINE/KSR/LEVEL SCALE・WAVE/AM）
+/// への組み替え、およびV.GAIN/VELの1ノブ統合(dual_knob)に追従）。
 /// **この木構造アサーションは非常に壊れやすい**——panel.xmlのOPパネル内訳
-/// （stackの分割単位・並び順）を変えるたびに追従が必要。
+/// （stack/rowの分割単位・並び順）を変えるたびに追従が必要。
 /// 外形サイズはウィジェット自然サイズ+既定マージン4px×2辺。
 #[test]
 fn op_panel_tree_matches_taffy_reference() {
@@ -28,19 +27,17 @@ fn op_panel_tree_matches_taffy_reference() {
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![\
 leaf(268.0, 253.0), \
-stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-stack_centered(outer_gap, vec![leaf(138.0, 74.0), leaf(78.0, 28.0)])]);";
+stack_centered(outer_gap, vec![\
+row(Justify::Start, outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+row(Justify::Start, outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+row(Justify::Start, outer_gap, vec![leaf(138.0, 74.0), leaf(78.0, 28.0)])\
+])]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
-    // VEL/V.GAINのenabled-ifラップ（is_carrier述語はインライン展開される）、waveform_selectorのindex。
+    // V.GAIN/VELは1ノブへ統合済み（dual_knob）。is_carrier述語で実ハンドル自体を出し分ける
+    // if/elseへ展開される（通常のenabled-ifグレーアウトとは異なる）。
     assert!(rust.contains(
-        "ui.add_enabled_ui(!crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.vel_sens, \"VEL\"); });"
-    ));
-    assert!(rust.contains(
-        "ui.add_enabled_ui(crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i), |ui| { knob(ui, &*op.velocity_gain, \"V.GAIN\"); });"
+        "if crate::algorithm_diagram::carriers(params.algorithm.value() as u8).contains(&i) { dual_knob(ui, &*op.velocity_gain, \"V.GAIN\", \"VEL\", true); } else { dual_knob(ui, &*op.vel_sens, \"V.GAIN\", \"VEL\", false); }"
     ));
     assert!(rust.contains("waveform_selector(ui, &*op.waveform, (i) as usize);"));
     assert!(rust.contains("bool_checkbox(ui, &*op.ame, \"AM\");"));
