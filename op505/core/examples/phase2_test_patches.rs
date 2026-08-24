@@ -30,11 +30,12 @@ fn stages(entries: &[(f32, u8, u8)]) -> [TimeStage; MAX_STAGES] {
 }
 
 /// 透過的なGain FG（常時フルレベル、ゲートは閉じない。発音終了は各OPのEGのみで決める。
-/// `op505-core::default_gain_fg`と同形、private関数のためここでも同じ形を複製する）。
+/// `op505-core::default_gain_fg`と同形（STAGES=0＝無効、エンジンが常に1.0透過を返す）、
+/// private関数のためここでも同じ形を複製する）。
 fn transparent_gain_fg() -> TimeEgParams {
     TimeEgParams {
-        stages: stages(&[(0.0, 255, 0)]),
-        stage_count: 1,
+        stages: [TimeStage { time: 0, level: 255, curve: 0 }; MAX_STAGES],
+        stage_count: 0,
         loop_enabled: 0,
         loop_start: 0,
         // release_point=最終段＝リリース区間が空。note-offで何も起きずゲートは開いたまま。

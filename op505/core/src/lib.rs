@@ -269,21 +269,18 @@ fn default_gain_fg_to_master() -> bool {
     true
 }
 
-/// `Gain FG`の透過既定：stage0(time=0,level=255)を即座に到達しそのまま静止し、
-/// リリース区間を持たない（`release_point`が最終段＝note-offが何もしない）＝ゲートを一切閉じない。
-/// 発音終了は各オペレーターのidle判定のみで行う（ym38x6の`default_gain_fg`の設計意図を踏襲）。
+/// `Gain FG`の無効(STAGES=0)既定：エンジンは`stage_count==0`を検出すると`gain_fg_out`に
+/// 常に**1.0（透過）**を使いtickを回さない（`Voice::tick`参照）ため、ゲートを一切閉じない
+/// ＝発音終了は各オペレーターのidle判定のみで行う（ym38x6の`default_gain_fg`の設計意図を踏襲）。
 ///
-/// この1段構成はGain FG専用。OP1〜4 EGとPitch/Cutoff FGはエディタ側でSTAGE>=2と最終段level=0を
-/// 強制するため必ずリリース区間を持つ（`ui_core::TimeEgProfile`参照）。Gain FGだけ例外なのは、
-/// 出力への乗算でボイス解放に関与せず、level 0が「無音」を意味してしまうため。
+/// 全段を透過レベル255で埋めるのは`neutral_bipolar_eg`と同じ理由：再有効化（STAGES 0→N）で
+/// 段データがそのまま復元されるため、末尾の段だけ0埋めのままだと「全開→無音」の落差が生じる。
+/// `stage_count=0`はOP1〜4 EGでは「1として扱う」特殊値だが、Gain FG適用箇所（`Voice::tick`）
+/// だけが「無効」の意味を持つ設計（詳細は`docs/timeeg-fg-disable-plan.md`）。
 fn default_gain_fg() -> Op505GainFg {
     TimeEgParams {
-        stages: {
-            let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
-            stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
-            stages
-        },
-        stage_count: 1,
+        stages: [TimeStage { time: 0, level: 255, curve: 0 }; sound_core::MAX_STAGES],
+        stage_count: 0,
         loop_enabled: 0,
         loop_start: 0,
         release_point: 0,
@@ -981,21 +978,32 @@ mod tests {
         buf
     }
 
-    /// Gain FG無効時(STAGES=0)は**1.0（透過）**のはずで、無音にならない。
-    /// さらに、depthの類が無いGain FGを無効化した結果は、既存の透過既定
-    /// （`default_gain_fg`＝1段255）とビット完全一致するはず（「無効」と「透過既定」は
-    /// 音として区別できないのが正しい設計）。
+    /// Gain FG無効時(STAGES=0、`default_gain_fg`の既定そのもの)は**1.0（透過）**のはずで、
+    /// 無音にならない。さらに、STAGES=0化より前の旧`.op505`資産が持っていた1段255・透過構成
+    /// （ゲートを閉じない旧既定の実際の形）とビット完全一致するはず（「無効」と「(旧)透過既定」は
+    /// 音として区別できないのが正しい設計。既存プリセットの再変換で音が変わらないことの根拠）。
     #[test]
     fn disabled_gain_fg_matches_default_transparent_bit_for_bit() {
-        let mut disabled = loud_patch(0);
-        disabled.channel.gain_fg.stage_count = 0;
+        let disabled = loud_patch(0); // gain_fgは既にdefault_gain_fg()(STAGES=0)
 
-        let default_transparent = loud_patch(0); // gain_fgは既にdefault_gain_fg()(透過既定)
+        let mut legacy_transparent = loud_patch(0);
+        legacy_transparent.channel.gain_fg = TimeEgParams {
+            stages: {
+                let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
+                stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+                stages
+            },
+            stage_count: 1,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 0,
+            ..Default::default()
+        };
 
         let out_disabled = render_512(disabled);
-        let out_default = render_512(default_transparent);
+        let out_legacy = render_512(legacy_transparent);
         assert!(out_disabled.iter().any(|&s| s != 0.0), "Gain FG無効時は無音にならないはず");
-        assert_eq!(out_disabled, out_default, "STAGES=0は透過既定とビット一致するはず");
+        assert_eq!(out_disabled, out_legacy, "STAGES=0は旧1段透過既定とビット一致するはず");
     }
 
     /// Pitch FG無効時(STAGES=0)はdepthの値に関わらず変調量ゼロのはず。depth=200を設定しても
