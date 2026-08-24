@@ -323,7 +323,7 @@ impl eframe::App for EditorApp {
 
                 // 「今開いているファイル」自身の音色一覧（presets_dir全体のブラウザではない）。
                 ui.label(egui::RichText::new("PRESETS").strong());
-                egui::ScrollArea::vertical().id_salt("presets").show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("presets").auto_shrink([false, false]).show(ui, |ui| {
                     for preset in self.presets.borrow().iter() {
                         let label = format!("{:03} {}", preset.program, preset.name);
                         let selected = preset.program == self.current_program.get();

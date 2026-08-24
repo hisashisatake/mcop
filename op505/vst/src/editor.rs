@@ -124,6 +124,7 @@ pub(crate) fn create_editor(
                             ui.label(egui::RichText::new("PRESETS").strong());
                             egui::ScrollArea::vertical()
                                 .id_salt("presets")
+                                .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     for ((bank, program), preset) in state.preset_bank.sorted_entries() {
                                         let label = format!("[{bank:04X}:{program:03}] {}", preset.name);
