@@ -131,6 +131,7 @@ fn test_lead() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
+        ..Op505ChannelParams::default()
     };
 
     Op505Patch { operators, channel }
@@ -172,6 +173,7 @@ fn test_vibrato() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
+        ..Op505ChannelParams::default()
     };
 
     Op505Patch { operators, channel }
@@ -206,6 +208,7 @@ fn test_pluck() -> Op505Patch {
         gain_fg: transparent_gain_fg(),
         gain_fg_to_master: true,
         gain_fg_to_operators: false,
+        ..Op505ChannelParams::default()
     };
 
     Op505Patch { operators, channel }

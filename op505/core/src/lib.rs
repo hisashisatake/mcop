@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 use sound_fm::algorithm::ALGORITHMS;
 use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz, pms_to_cents_range};
 use sound_fm::mapping::{
-    carrier_velocity_gain, feedback_to_scale_with_max, frequency_to_note, velocity_to_volume_gain,
-    FM_MODULATION_INDEX_SCALE,
+    carrier_velocity_gain, feedback_to_scale_with_max, fixed_note_fine_to_cents, frequency_to_note,
+    note_to_frequency, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
 };
 use sound_fm::waveform::{self, gen_builtin_waveform};
 use operator::Operator;
@@ -263,10 +263,35 @@ pub struct Op505ChannelParams {
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で無効(false)にする。
     #[serde(default)]
     pub gain_fg_to_operators: bool,
+    /// 固定音階：trueなら`note_on`で渡された周波数を無視し、`fixed_note`＋`fixed_note_fine`の
+    /// ピッチで発音する。GM2リズムチャンネル（ノート番号＝音色選択であってピッチではない）用。
+    /// ピッチベンド／Pitch FGはセント加算なので無効化中でも従来どおり効く。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で無効(false)にする。
+    #[serde(default)]
+    pub fixed_note_enable: bool,
+    /// 固定音階のMIDIノート番号（0〜127）。`fixed_note_enable=false`のときは無視される。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default = "default_fixed_note")]`で
+    /// C4(60)にする（0だと有効化直後に8.18Hzになり「壊れた」ように聞こえるため）。
+    #[serde(default = "default_fixed_note")]
+    pub fixed_note: u8,
+    /// 固定音階の微調整（0〜255、中心128＝±0、両端±100セント）。dt1/op_fine_tuneと同じ
+    /// 「中心128」の慣例に揃えている。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default = "default_fixed_note_fine")]`で
+    /// 128（無調整）にする。
+    #[serde(default = "default_fixed_note_fine")]
+    pub fixed_note_fine: u8,
 }
 
 fn default_gain_fg_to_master() -> bool {
     true
+}
+
+fn default_fixed_note() -> u8 {
+    60
+}
+
+fn default_fixed_note_fine() -> u8 {
+    sound_core::BIPOLAR_NEUTRAL_RAW
 }
 
 /// `Gain FG`の無効(STAGES=0)既定：エンジンは`stage_count==0`を検出すると`gain_fg_out`に
@@ -301,6 +326,9 @@ impl Default for Op505ChannelParams {
             gain_fg: default_gain_fg(),
             gain_fg_to_master: true,
             gain_fg_to_operators: false,
+            fixed_note_enable: false,
+            fixed_note: default_fixed_note(),
+            fixed_note_fine: default_fixed_note_fine(),
         }
     }
 }
@@ -329,6 +357,10 @@ struct Channel {
     feedback_buffer2: f32,
     note: u8,
     base_frequency: f32,
+    /// note_on/retriggerで渡された生の周波数（固定音階が無効なら`base_frequency`と同じ）。
+    /// 固定音階のフィールドがライブ編集で変化したとき、`set_channel_params`が
+    /// ここから実効ピッチを再計算する（`effective_pitch`参照）。
+    keyed_frequency: f32,
     velocity: u8,
     /// Pitch FGのキーオン連動エンベロープ（TimeEg）。
     pitch_fg_eg: TimeEg,
@@ -348,14 +380,29 @@ struct Channel {
     note_is_off: bool,
 }
 
+/// 固定音階が有効なら`frequency`（note_onで渡された生の周波数）を無視し、
+/// `fixed_note`＋`fixed_note_fine`から実効周波数を導出する。KSR/level_scale用の`note`も
+/// 同じ実効周波数から`frequency_to_note`で導出し、経路を1本に保つ。
+/// `fixed_note_enable=false`のときは`(frequency, frequency_to_note(frequency))`を返し、
+/// 従来と完全に同一の挙動になる。
+fn effective_pitch(frequency: f32, channel: &Op505ChannelParams) -> (f32, u8) {
+    if channel.fixed_note_enable {
+        let f = note_to_frequency(channel.fixed_note)
+            * 2f32.powf(fixed_note_fine_to_cents(channel.fixed_note_fine) / 1200.0);
+        (f, frequency_to_note(f))
+    } else {
+        (frequency, frequency_to_note(frequency))
+    }
+}
+
 impl Channel {
     fn new(frequency: f32, velocity: u8, patch: Op505Patch) -> Self {
-        let note = frequency_to_note(frequency);
+        let (effective_frequency, note) = effective_pitch(frequency, &patch.channel);
         let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
         let operators = std::array::from_fn(|i| {
             let mut op = Operator::new(patch.operators[i]);
             op.set_carrier(algo.carriers.contains(&i));
-            op.note_on(frequency, velocity);
+            op.note_on(effective_frequency, velocity);
             op
         });
         // Pitch/Cutoff FGはレベルをバイポーラ解釈するため、キーオン起点を中央(128)にする
@@ -373,7 +420,8 @@ impl Channel {
             feedback_buffer: 0.0,
             feedback_buffer2: 0.0,
             note,
-            base_frequency: frequency,
+            base_frequency: effective_frequency,
+            keyed_frequency: frequency,
             velocity,
             pitch_fg_eg,
             pitch_fg_rate_scale: 1.0,
@@ -390,16 +438,17 @@ impl Channel {
     /// 既定のCONTINUEなら現在レベルを保ったまま段0へ向かう（実機OPMのKey-On挙動、
     /// オペレーターの`retrigger()`と同じ使い分け）。
     fn retrigger(&mut self, frequency: f32, velocity: u8, patch: Op505Patch) {
-        let note = frequency_to_note(frequency);
+        let (effective_frequency, note) = effective_pitch(frequency, &patch.channel);
         let algo = &ALGORITHMS[(patch.channel.algorithm as usize).min(7)];
         for (i, op) in self.operators.iter_mut().enumerate() {
             op.params = patch.operators[i];
             op.set_carrier(algo.carriers.contains(&i));
-            op.retrigger(frequency, velocity);
+            op.retrigger(effective_frequency, velocity);
         }
         self.channel_params = patch.channel;
         self.note = note;
-        self.base_frequency = frequency;
+        self.base_frequency = effective_frequency;
+        self.keyed_frequency = frequency;
         self.velocity = velocity;
         retrigger_time_eg(&mut self.cutoff_fg_eg, &patch.channel.cutoff_fg.eg);
         retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg);
@@ -651,9 +700,24 @@ impl Op505Engine {
         self.current_patch
     }
 
+    /// チャンネルパラメーターを差し替える。固定音階3フィールド（`fixed_note_enable`/
+    /// `fixed_note`/`fixed_note_fine`）が変化したときだけ、発音中のピッチを再計算して
+    /// 各オペレーターへ反映する（差分検知なので変化が無ければ従来どおり出力はビット不変。
+    /// これが無いとエディタでFIXED NOTEノブを回しても発音中の音のピッチが変わらない）。
     pub fn set_channel_params(&mut self, channel: usize, params: Op505ChannelParams) {
         if let Some(ch) = self.channels.get_mut(&channel) {
+            let fixed_note_changed = ch.channel_params.fixed_note_enable != params.fixed_note_enable
+                || ch.channel_params.fixed_note != params.fixed_note
+                || ch.channel_params.fixed_note_fine != params.fixed_note_fine;
             ch.channel_params = params;
+            if fixed_note_changed {
+                let (frequency, note) = effective_pitch(ch.keyed_frequency, &params);
+                ch.base_frequency = frequency;
+                ch.note = note;
+                for op in ch.operators.iter_mut() {
+                    op.set_base_frequency(frequency);
+                }
+            }
         }
     }
 
@@ -1070,6 +1134,82 @@ mod tests {
         let json = serde_json::to_string(&patch).expect("serialize");
         let restored: Op505Patch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(patch, restored, "Op505Patch should round-trip through JSON unchanged");
+    }
+
+    // -----------------------------------------------------------------------
+    // 固定音階（fixed_note_enable、GM2リズムチャンネル用）
+    // -----------------------------------------------------------------------
+
+    /// 固定音階が有効なら、note_onへ渡す周波数に関わらず出力がビット単位で一致する
+    /// （GM2ドラムキットの「ノート番号＝音色選択であってピッチではない」を実現する根拠）。
+    #[test]
+    fn fixed_note_ignores_note_on_frequency() {
+        let mut patch = loud_patch(0);
+        patch.channel.fixed_note_enable = true;
+        patch.channel.fixed_note = 60;
+
+        let mut low = Op505Engine::new(44100.0);
+        low.set_patch(patch);
+        low.note_on(0, 220.0, 100);
+
+        let mut high = Op505Engine::new(44100.0);
+        high.set_patch(patch);
+        high.note_on(0, 880.0, 100);
+
+        let mut buf_low = vec![0.0f32; 512];
+        let mut buf_high = vec![0.0f32; 512];
+        low.render(&mut buf_low, 1);
+        high.render(&mut buf_high, 1);
+
+        assert_eq!(buf_low, buf_high, "固定音階が有効ならnote_onの周波数に関わらず同じ出力になるはず");
+    }
+
+    /// `fixed_note_enable=false`（既定）では従来どおりnote_onの周波数で音程が変わる
+    /// （新フィールドが常時ONになる回帰を防ぐ）。
+    #[test]
+    fn fixed_note_disabled_is_unchanged() {
+        let patch = loud_patch(0); // fixed_note_enable=falseが既定
+
+        let mut low = Op505Engine::new(44100.0);
+        low.set_patch(patch);
+        low.note_on(0, 220.0, 100);
+
+        let mut high = Op505Engine::new(44100.0);
+        high.set_patch(patch);
+        high.note_on(0, 880.0, 100);
+
+        let mut buf_low = vec![0.0f32; 512];
+        let mut buf_high = vec![0.0f32; 512];
+        low.render(&mut buf_low, 1);
+        high.render(&mut buf_high, 1);
+
+        assert_ne!(buf_low, buf_high, "固定音階が無効なら従来どおりnote_onの周波数で音程が変わるはず");
+    }
+
+    /// 固定音階が有効でも、ピッチベンド（セント加算）は従来どおり効く
+    /// （固定音階はキー周波数だけを差し替え、DT1/op_fine_tune/ピッチ変調と同じ加算経路は
+    /// 素通りする設計のため）。
+    #[test]
+    fn fixed_note_still_responds_to_pitch_bend() {
+        let mut patch = loud_patch(0);
+        patch.channel.fixed_note_enable = true;
+        patch.channel.fixed_note = 60;
+
+        let mut unbent = Op505Engine::new(44100.0);
+        unbent.set_patch(patch);
+        unbent.note_on(0, 440.0, 100);
+
+        let mut bent = Op505Engine::new(44100.0);
+        bent.set_patch(patch);
+        bent.note_on(0, 440.0, 100);
+        bent.set_pitch_bend(0, 200.0); // +2半音相当
+
+        let mut buf_unbent = vec![0.0f32; 512];
+        let mut buf_bent = vec![0.0f32; 512];
+        unbent.render(&mut buf_unbent, 1);
+        bent.render(&mut buf_bent, 1);
+
+        assert_ne!(buf_unbent, buf_bent, "固定音階中もピッチベンド(セント加算)は従来どおり効くはず");
     }
 
     // -----------------------------------------------------------------------

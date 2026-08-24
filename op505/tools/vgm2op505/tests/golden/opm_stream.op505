@@ -528,7 +528,10 @@
             "auto_release": 0
           },
           "gain_fg_to_master": true,
-          "gain_fg_to_operators": false
+          "gain_fg_to_operators": false,
+          "fixed_note_enable": false,
+          "fixed_note": 60,
+          "fixed_note_fine": 128
         }
       }
     }

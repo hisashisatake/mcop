@@ -214,6 +214,19 @@ pub fn frequency_to_note(frequency: f32) -> u8 {
         .clamp(0.0, 127.0) as u8
 }
 
+/// MIDIノート番号(0〜127)→周波数(Hz)。`frequency_to_note`の逆写像。A4(69)=440Hz。
+/// 固定音階（`Op505ChannelParams::fixed_note`）用。
+pub fn note_to_frequency(note: u8) -> f32 {
+    440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+/// 固定音階の微調整値(0〜255、中心128)→セント。dt1/op_fine_tuneと同じ「中心128・
+/// `(v-128)/128`慣例」に揃え、128で厳密に±0セント、両端で±100セント（=±半音）にする。
+/// 整数の`fixed_note`（半音刻み）と組み合わせて全音域を連続的に埋められる最小レンジ。
+pub fn fixed_note_fine_to_cents(v: u8) -> f32 {
+    (v as f32 - 128.0) / 128.0 * 100.0
+}
+
 /// 13bit F-Number(0〜8191)の中心値（2^12）。OP単位F-Number上書き(NRPN 0,18〜21)で
 /// 比率1.0（上書きなし、Note-On時と同じ周波数）を表す基準値（暫定）。
 pub const F_NUMBER_CENTER: u16 = 4096;
@@ -354,6 +367,27 @@ mod tests {
         assert_eq!(f_number_to_ratio(F_NUMBER_CENTER), 1.0);
         assert_eq!(f_number_to_ratio(0), 0.0);
         assert!((f_number_to_ratio(8191) - 1.99976).abs() < 1e-4);
+    }
+
+    #[test]
+    fn note_to_frequency_reference_points() {
+        assert_eq!(note_to_frequency(69), 440.0);
+        assert!((note_to_frequency(81) - 880.0).abs() < 1e-3);
+        assert!((note_to_frequency(57) - 220.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn note_to_frequency_round_trips_with_frequency_to_note() {
+        for note in 0u8..=127 {
+            assert_eq!(frequency_to_note(note_to_frequency(note)), note);
+        }
+    }
+
+    #[test]
+    fn fixed_note_fine_to_cents_bounds() {
+        assert_eq!(fixed_note_fine_to_cents(128), 0.0);
+        assert!((fixed_note_fine_to_cents(0) - (-100.0)).abs() < 1e-3);
+        assert!((fixed_note_fine_to_cents(255) - (127.0 / 128.0 * 100.0)).abs() < 1e-3);
     }
 
     #[test]
