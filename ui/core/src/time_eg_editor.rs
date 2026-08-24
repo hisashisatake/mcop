@@ -200,9 +200,10 @@ enum TimeEgField {
     StageCount,
     /// ループ開始段。0始まりの段indexをそのまま表示する（グラフ上のマーカー位置と対応）。
     LoopStart,
-    /// 保持区間とリリース区間の境界。`TimeEgParams::release_point`は0始まりの段indexだが、
-    /// **UIでは1始まりのクリック点番号として表示する**（グラフ上でユーザーが数える点の番号と
-    /// 一致させるため。`stage{i+1}`表示と同じ既存慣習）。
+    /// 保持区間とリリース区間の境界。0始まりの段indexをそのまま表示する
+    /// （L.START・段名と同じ体系。旧版は1始まりのクリック点番号として+1して見せていたが、
+    /// L.STARTと起点が揃わず紛らわしいため撤去した。plan `docs/timeeg-stage-numbering-plan.md`
+    /// ステップ3参照）。
     ReleasePoint,
     /// 段i(0-indexed)のtime。生値(0〜255)。変換後ミリ秒は`draw_value_mode`が別ラベルで表示する。
     StageTime(usize),
@@ -255,8 +256,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             // 存在するという表示と実体の食い違いが起きる（実機確認で発覚）。
             TimeEgField::StageCount => p.stage_count.max(1) as i32,
             TimeEgField::LoopStart => p.loop_start as i32,
-            // 0始まりの内部値を1始まりのクリック点番号へ変換して見せる。
-            TimeEgField::ReleasePoint => p.release_point as i32 + 1,
+            TimeEgField::ReleasePoint => p.release_point as i32,
             TimeEgField::StageTime(i) => p.stages[i].time as i32,
             TimeEgField::StageLevel(i) => p.stages[i].level as i32,
             TimeEgField::LevelDrift => p.level_drift as i32,
@@ -267,8 +267,6 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn min(&self) -> i32 {
         match self.field {
             TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
-            // クリック点(1)より手前に境界は置けない。
-            TimeEgField::ReleasePoint => 1,
             _ => 0,
         }
     }
@@ -279,7 +277,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             // ループ区間は`loop_start..=release_point`。リリース点と同じ段まで選べる
             // （1段ループ＝ノコギリ波）。
             TimeEgField::LoopStart => self.handle.params().release_point as i32,
-            TimeEgField::ReleasePoint => self.max_release_point() as i32 + 1,
+            TimeEgField::ReleasePoint => self.max_release_point() as i32,
             TimeEgField::StageTime(_) | TimeEgField::StageLevel(_) => 255,
             TimeEgField::LevelDrift | TimeEgField::DepthDrift => 255,
         }
@@ -288,7 +286,6 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn default(&self) -> i32 {
         match self.field {
             TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
-            TimeEgField::ReleasePoint => 1,
             // 128=無効（バイポーラ中心）。`sound_core::time_eg::BIPOLAR_NEUTRAL_RAW`と同じ値。
             TimeEgField::LevelDrift | TimeEgField::DepthDrift => 128,
             _ => 0,
@@ -301,8 +298,8 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
             TimeEgField::StageCount => format!("{base} STAGES"),
             TimeEgField::LoopStart => format!("{base} L.START"),
             TimeEgField::ReleasePoint => format!("{base} REL"),
-            TimeEgField::StageTime(i) => format!("{base} stage{} TIME", i + 1),
-            TimeEgField::StageLevel(i) => format!("{base} stage{} LEVEL", i + 1),
+            TimeEgField::StageTime(i) => format!("{base} stage{i} TIME"),
+            TimeEgField::StageLevel(i) => format!("{base} stage{i} LEVEL"),
             TimeEgField::LevelDrift => format!("{base} L.DRIFT"),
             TimeEgField::DepthDrift => format!("{base} D.DRIFT"),
         }
@@ -334,8 +331,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
                 p.stage_count = clamped;
             }
             TimeEgField::LoopStart => p.loop_start = clamped,
-            // 1始まりのクリック点番号を0始まりの段indexへ戻す。
-            TimeEgField::ReleasePoint => p.release_point = clamped.saturating_sub(1),
+            TimeEgField::ReleasePoint => p.release_point = clamped,
             TimeEgField::StageTime(i) => p.stages[i].time = clamped,
             TimeEgField::StageLevel(i) => p.stages[i].level = clamped,
             TimeEgField::LevelDrift => p.level_drift = clamped,
@@ -542,7 +538,7 @@ fn spin_row_enabled(params: &TimeEgParams, profile: TimeEgProfile) -> SpinRowEna
     let n = params.stage_count.clamp(profile.min_stages.max(1), MAX_STAGES as u8) as usize;
     let max_release_point = if profile.min_stages >= 2 { n.saturating_sub(2) } else { n - 1 };
     SpinRowEnabled {
-        // リリース点はクリック点(1)〜(max_release_point+1)から選ぶ（STAGE=2は(1)固定）。
+        // リリース点は0〜max_release_pointから選ぶ（STAGE=2は0固定）。
         rel: max_release_point > 0,
         // LOOPはリリース点が動かせる段数（＝STAGE>=3）で使えるようにする。1段ループも有効なので
         // release_point=0でも「段0を繰り返す」形が成立する（入口レベル0へ跳ね戻すノコギリ）。
@@ -1092,28 +1088,28 @@ mod tests {
 
     /// spin行のグレーアウト判定は「選択肢が2つ以上あるときだけ有効」で揃っているか。
     /// 特にL.STARTは、LOOPが成立していても選択肢が0だけなら無効に保つ
-    /// （REL=(2)＝release_point=1のとき。実機確認で発覚した不具合の回帰テスト）。
+    /// （REL=1（release_point=1）のとき。実機確認で発覚した不具合の回帰テスト）。
     #[test]
     fn spin_row_greys_out_fields_with_only_one_choice() {
         let profile = TimeEgProfile::default();
         let build = |stage_count: u8, release_point: u8| TimeEgParams { stage_count, release_point, ..TimeEgParams::default() };
 
-        // STAGE=2: リリース点はクリック点(1)固定、ループ不可。
+        // STAGE=2: リリース点は0固定、ループ不可。
         let e = spin_row_enabled(&build(2, 0), profile);
         assert!(!e.rel && !e.loop_toggle && !e.loop_start, "STAGE=2は全て無効のはず");
 
-        // STAGE=3 / REL=(1): 段0の1段ループは組めるので、LOOPは有効。
+        // STAGE=3 / REL=0: 段0の1段ループは組めるので、LOOPは有効。
         // ただしL.STARTは0しか選べないため無効に保つ。
         let e = spin_row_enabled(&build(3, 0), profile);
-        assert!(e.rel, "STAGE=3ならRELは(1)と(2)の2択");
+        assert!(e.rel, "STAGE=3ならRELは0と1の2択");
         assert!(e.loop_toggle, "1段ループが組めるのでLOOPは有効");
         assert!(!e.loop_start, "選択肢が0だけならL.STARTは無効に保つ");
 
-        // STAGE=3 / REL=(2): L.STARTが0（段0〜1の2段ループ）と1（段1の1段ループ＝ノコギリ）の2択。
+        // STAGE=3 / REL=1: L.STARTが0（段0〜1の2段ループ）と1（段1の1段ループ＝ノコギリ）の2択。
         let e = spin_row_enabled(&build(3, 1), profile);
         assert!(e.loop_toggle && e.loop_start, "release_point=1でL.STARTが動かせるようになる");
 
-        // STAGE=4 / REL=(3): L.STARTは0〜2の3択。
+        // STAGE=4 / REL=2: L.STARTは0〜2の3択。
         let e = spin_row_enabled(&build(4, 2), profile);
         assert!(e.loop_toggle && e.loop_start);
     }
@@ -1134,24 +1130,24 @@ mod tests {
         assert_eq!(handle.params().release_point, 0, "RELは据え置きのはず");
 
         let rel = TimeEgFieldHandle::new(&handle, TimeEgField::ReleasePoint, profile);
-        assert_eq!(rel.max(), 3, "STAGES=4ならRELはクリック点(3)まで");
-        rel.set(3);
-        assert_eq!(handle.params().release_point, 2, "クリック点(3)は内部値2");
+        assert_eq!(rel.max(), 2, "STAGES=4ならRELは2まで");
+        rel.set(2);
+        assert_eq!(handle.params().release_point, 2);
         assert!(handle.params().release_point >= 1, "ここでLOOPのグレーアウトが解除される");
     }
 
-    /// RELのspin欄は0始まりの内部値ではなく1始まりのクリック点番号を見せる
+    /// RELのspin欄はL.START・段名と同じ0始まりの内部値をそのまま見せる
     /// （グラフ上でユーザーが数える点の番号と一致させるため）。
     #[test]
-    fn release_point_field_is_displayed_one_based() {
+    fn release_point_field_is_displayed_zero_based() {
         let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
         let field = TimeEgFieldHandle::new(&handle, TimeEgField::ReleasePoint, TimeEgProfile::default());
-        assert_eq!(field.value(), 4, "release_point=3はクリック点(4)として表示するはず");
-        assert_eq!(field.min(), 1);
-        assert_eq!(field.max(), 4, "stage_count=5ならクリック点(4)まで（リリース段を1本残す）");
+        assert_eq!(field.value(), 3, "release_point=3はそのまま3として表示するはず");
+        assert_eq!(field.min(), 0);
+        assert_eq!(field.max(), 3, "stage_count=5ならRELは3まで（リリース段を1本残す）");
 
-        field.set(2);
-        assert_eq!(handle.params().release_point, 1, "クリック点(2)は内部値1のはず");
+        field.set(1);
+        assert_eq!(handle.params().release_point, 1);
     }
 
     #[test]
