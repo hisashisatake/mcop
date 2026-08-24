@@ -1612,6 +1612,94 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // stages_serde（要素数を緩めたデシリアライズ、docs/timeeg-stage-numbering-plan.mdステップ1）
+    // -----------------------------------------------------------------------
+
+    /// 要素数ちょうど`8`（旧`.op505`バンクの形）のJSONがそのまま読めること。
+    /// **`8`をリテラルで固定する**（`MAX_STAGES`を使うと、将来値を変えた瞬間に
+    /// 「その時点の要素数」を検証するテストへ化けてしまい、レガシー互換の番人が
+    /// 緑のまま消える。plan `docs/timeeg-stage-numbering-plan.md`ステップ1参照）。
+    #[test]
+    fn deserializes_legacy_eight_element_stages() {
+        let stages_json: Vec<_> = (0..8u8)
+            .map(|i| serde_json::json!({ "time": i, "level": i * 10, "curve": i % 2 }))
+            .collect();
+        assert_eq!(stages_json.len(), 8, "this test locks the legacy element count at 8, not MAX_STAGES");
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 4,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 3,
+        });
+        let params: TimeEgParams = serde_json::from_value(legacy).expect("8-element legacy stages should deserialize");
+        for i in 0..8usize {
+            assert_eq!(params.stages[i].time, i as u8, "stage {i} time should survive round-trip");
+            assert_eq!(params.stages[i].level, (i as u8) * 10, "stage {i} level should survive round-trip");
+            assert_eq!(params.stages[i].curve, (i as u8) % 2, "stage {i} curve should survive round-trip");
+        }
+    }
+
+    /// 要素数が`MAX_STAGES`を超えるJSONは先頭`MAX_STAGES`件だけを採用し、
+    /// 超過分は捨てる（エラーにはしない）。
+    #[test]
+    fn deserialize_truncates_excess_stage_elements() {
+        let stages_json: Vec<_> = (0..MAX_STAGES + 2)
+            .map(|i| serde_json::json!({ "time": i as u8, "level": 0, "curve": 0 }))
+            .collect();
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 2,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 0,
+        });
+        let params: TimeEgParams =
+            serde_json::from_value(legacy).expect("excess elements should be truncated, not rejected");
+        for i in 0..MAX_STAGES {
+            assert_eq!(params.stages[i].time, i as u8, "stage {i} should keep its original value");
+        }
+    }
+
+    /// 要素数が`MAX_STAGES`未満のJSON（`MAX_STAGES`を拡張した後、旧バンクを読んだ場合に相当）は
+    /// 不足分を`TimeStage::default()`（time=0, level=0, curve=0）でパディングする。
+    #[test]
+    fn deserialize_pads_missing_stage_elements() {
+        let stages_json: Vec<_> = (0..3u8)
+            .map(|i| serde_json::json!({ "time": i + 1, "level": 200, "curve": 0 }))
+            .collect();
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 2,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 0,
+        });
+        let params: TimeEgParams =
+            serde_json::from_value(legacy).expect("short stages array should be padded, not rejected");
+        for i in 0..3usize {
+            assert_eq!(params.stages[i].time, i as u8 + 1, "provided stage {i} should keep its value");
+        }
+        for i in 3..MAX_STAGES {
+            assert_eq!(params.stages[i], TimeStage::default(), "missing stage {i} should be padded with default");
+        }
+    }
+
+    /// serialize側は緩めていない（既定の`[T; MAX_STAGES]`実装のまま）ので、
+    /// `stage_count`に関わらず常に`MAX_STAGES`要素のJSON配列を書き出すこと。
+    /// ここが崩れると「読みは緩い／書きは正準」という非対称の前提（`stages_serde`のdoc参照）が壊れる。
+    #[test]
+    fn serializes_stages_as_fixed_max_stages_length() {
+        let params = TimeEgParams {
+            stage_count: 2,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(params).expect("TimeEgParams should serialize");
+        let stages = value["stages"].as_array().expect("stages should serialize as a JSON array");
+        assert_eq!(stages.len(), MAX_STAGES, "serialize side must always emit MAX_STAGES elements");
+    }
+
+    // -----------------------------------------------------------------------
     // テンポ同期
     // -----------------------------------------------------------------------
 
