@@ -544,9 +544,10 @@ fn spin_row_enabled(params: &TimeEgParams, profile: TimeEgProfile) -> SpinRowEna
     SpinRowEnabled {
         // リリース点はクリック点(1)〜(max_release_point+1)から選ぶ（STAGE=2は(1)固定）。
         rel: max_release_point > 0,
-        // LOOPはリリース点が動かせる段数（＝STAGE>=3）で使えるようにする。1段ループも有効なので
-        // release_point=0でも「段0を繰り返す」形が成立する（入口レベル0へ跳ね戻すノコギリ）。
-        loop_toggle: max_release_point > 0,
+        // LOOPは保持区間が1段以上あれば常に成立する（release_point=0でも「段0を繰り返す」
+        // 1段ループ＝入口レベルへ跳ね戻すノコギリ波が組める。sound-core/time_eg.rsのadvance参照）。
+        // RELが動かせるか(max_release_point>0)とは無関係。段数nが1以上ならnは常に非0。
+        loop_toggle: n >= 1,
         // L.STARTは0〜release_pointから選ぶ。release_point=0だと0しか選べないため無効に保つ
         // （選択肢が1つの欄を押せる見た目で残さない原則）。
         loop_start: params.release_point >= 1,
@@ -1093,14 +1094,18 @@ mod tests {
     /// spin行のグレーアウト判定は「選択肢が2つ以上あるときだけ有効」で揃っているか。
     /// 特にL.STARTは、LOOPが成立していても選択肢が0だけなら無効に保つ
     /// （REL=(2)＝release_point=1のとき。実機確認で発覚した不具合の回帰テスト）。
+    /// LOOPだけは例外で、保持区間が1段あれば（release_point=0でも）1段ループが組めるため
+    /// 「選択肢が2つ以上」の原則を適用しない（`spin_row_enabled`のdoc参照）。
     #[test]
     fn spin_row_greys_out_fields_with_only_one_choice() {
         let profile = TimeEgProfile::default();
         let build = |stage_count: u8, release_point: u8| TimeEgParams { stage_count, release_point, ..TimeEgParams::default() };
 
-        // STAGE=2: リリース点はクリック点(1)固定、ループ不可。
+        // STAGE=2: リリース点はクリック点(1)固定。段0の1段ループ＋段1リリースは組めるのでLOOPは有効。
         let e = spin_row_enabled(&build(2, 0), profile);
-        assert!(!e.rel && !e.loop_toggle && !e.loop_start, "STAGE=2は全て無効のはず");
+        assert!(!e.rel, "STAGE=2はRELの選択肢が1つだけなので無効のはず");
+        assert!(e.loop_toggle, "STAGE=2でも段0の1段ループ(ノコギリ)は組めるはず");
+        assert!(!e.loop_start, "STAGE=2はL.STARTの選択肢も1つだけなので無効のはず");
 
         // STAGE=3 / REL=(1): 段0の1段ループは組めるので、LOOPは有効。
         // ただしL.STARTは0しか選べないため無効に保つ。
@@ -1116,6 +1121,15 @@ mod tests {
         // STAGE=4 / REL=(3): L.STARTは0〜2の3択。
         let e = spin_row_enabled(&build(4, 2), profile);
         assert!(e.loop_toggle && e.loop_start);
+    }
+
+    /// Gain FG等（min_stages=1）はSTAGE=1（最小段数）から1段ループ(ノコギリ)が組めるはず。
+    /// OP EG(min_stages=2)がSTAGE=2から組めるのと同じ規則（「各パネルの最小段数から」）。
+    #[test]
+    fn loop_toggle_enabled_from_min_stages_for_gain_fg_profile() {
+        let p = TimeEgParams { stage_count: 1, release_point: 0, ..TimeEgParams::default() };
+        let e = spin_row_enabled(&p, TimeEgProfile::GAIN_FG);
+        assert!(e.loop_toggle, "Gain FGはSTAGE=1でも段0の1段ループが組めるはず");
     }
 
     /// STAGESを増やしてからRELを上げると、LOOPが有効になる条件(`release_point >= 1`)を満たすか。
