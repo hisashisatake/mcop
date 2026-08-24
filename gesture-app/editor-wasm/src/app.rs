@@ -104,6 +104,30 @@ impl op505_ui::IntParamHandle for BankField {
     fn end_edit(&self) {}
 }
 
+/// 現在のbankの担当ファイルへ新規音色（"VoiceNNN"）を追加し、それを画面へ反映する
+/// （PRESETSリスト末尾の「+ New Voice」用）。`source_patch`は通常クリックなら`Op505Patch::default()`、
+/// Shift+クリックなら現在編集中のパッチのコピー（呼び出し元のUIコードが分岐する）。
+async fn handle_add_preset(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, bank: u16, source_patch: Op505Patch, identity: Identity) {
+    if let Some(loaded) = ipc::add_preset(&patch, &dirty, bank, source_patch).await {
+        identity.apply(loaded);
+    }
+}
+
+/// 現在選択中(current_program)の音色をDELETEキーで削除する（確認ダイアログはバックエンド側の
+/// ネイティブYes/Noダイアログ、`ipc::delete_preset`参照）。削除できたら、残った音色一覧の先頭へ
+/// 自動的に切り替える（削除された音色を編集し続ける状態を避けるため）。1件も残らなければ
+/// リストを空にするだけで画面のパッチはそのまま（切り替え先が無いため）。
+async fn handle_delete_preset(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, bank: u16, program: u8, identity: Identity) {
+    let Some(remaining) = ipc::delete_preset(bank, program).await else { return };
+    match remaining.first() {
+        Some(first) => handle_navigate(patch, dirty, identity, bank, first.program, false).await,
+        None => {
+            *identity.presets.borrow_mut() = remaining;
+            crate::shift_keys::request_repaint();
+        }
+    }
+}
+
 /// presets_dir内/外を区別しない任意の`.op505`ファイルをネイティブOpenダイアログで選ぶ。
 /// `bank`はダイアログの初期ディレクトリ決定にのみ使う。
 async fn handle_open_patch_file(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, bank: u16, identity: Identity) {
@@ -321,6 +345,20 @@ impl eframe::App for EditorApp {
                 }
                 ui.separator();
 
+                // 選択中(current_program)の音色をDELETEキーで削除する（対象はマウス位置に依存せず、
+                // 常にハイライト中の音色に固定）。名前編集欄など他のテキスト入力にフォーカスがある間は
+                // 文字削除と衝突しうるため無効化する。
+                let any_text_focused = ui.memory(|m| m.focused().is_some());
+                if !any_text_focused && !self.presets.borrow().is_empty() && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                    wasm_bindgen_futures::spawn_local(handle_delete_preset(
+                        patch.clone(),
+                        dirty.clone(),
+                        self.current_bank.get(),
+                        self.current_program.get(),
+                        self.identity(),
+                    ));
+                }
+
                 // 「今開いているファイル」自身の音色一覧（presets_dir全体のブラウザではない）。
                 ui.label(egui::RichText::new("PRESETS").strong());
                 egui::ScrollArea::vertical().id_salt("presets").auto_shrink([false, false]).show(ui, |ui| {
@@ -343,6 +381,14 @@ impl eframe::App for EditorApp {
                                 keep_fg,
                             ));
                         }
+                    }
+                    // リスト末尾の「音色追加」行。通常クリックは新規デフォルト音色（"VoiceNNN"）を
+                    // 追加し、Shift+クリックは代わりに現在編集中のパッチをコピーして追加する
+                    // （既存音色を土台にバリエーションを作りたい用途）。
+                    if ui.selectable_label(false, "+ New Voice").clicked() {
+                        let copy_current = ui.input(|i| i.modifiers.shift);
+                        let source_patch = if copy_current { *patch.borrow() } else { Op505Patch::default() };
+                        wasm_bindgen_futures::spawn_local(handle_add_preset(patch.clone(), dirty.clone(), self.current_bank.get(), source_patch, self.identity()));
                     }
                 });
             });

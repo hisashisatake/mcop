@@ -205,6 +205,83 @@ pub fn op505_save_patch_overwrite(
     Ok(SavedFileDto { patch_name, file_name, bank, program })
 }
 
+/// `add_preset_entry`が新規追加した`Op505PresetEntry`。program番号は既存エントリの最大値+1
+/// （空なら0）、名前は"VoiceNNN"（NNNは新program番号を3桁ゼロ埋め）。program番号はu8のため、
+/// 既に255まで埋まっている場合はエラーを返す。`patch`は呼び出し元が決める（デフォルト初期化か、
+/// 現在編集中のパッチのコピーか＝PRESETSリストの「+ New Voice」通常クリック/Shift+クリックの分岐）。
+fn add_preset_entry(file: &mut Op505PresetFile, patch: Op505Patch) -> Result<Op505PresetEntry, String> {
+    let list = entries_mut(file);
+    let next_program = match list.iter().map(|e| e.program).max() {
+        Some(max) => max.checked_add(1).ok_or("これ以上音色を追加できません（program番号が上限に達しました）")?,
+        None => 0,
+    };
+    let entry = Op505PresetEntry { program: next_program, name: format!("Voice{next_program:03}"), patch };
+    list.push(entry.clone());
+    list.sort_by_key(|e| e.program);
+    Ok(entry)
+}
+
+/// 現在のbankの担当ファイルへ新規エントリを追加して保存する（PRESETSリスト末尾の「+ New Voice」用）。
+/// `patch`はフロント側が決める（通常クリック＝デフォルト初期化、Shift+クリック＝現在編集中のパッチの
+/// コピー）。採番・命名は`add_preset_entry`参照。担当ファイルが無いbank（先にOpen/Save Asが必要）は
+/// エラー（`op505_save_patch_overwrite`と同じ制約）。
+#[tauri::command]
+pub fn op505_add_preset(registry: tauri::State<'_, Mutex<Op505BankRegistry>>, bank: u16, patch: Op505Patch) -> Result<Op505LoadedPatchDto, String> {
+    let mut reg = registry.lock().unwrap();
+    let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
+    let entry = add_preset_entry(&mut bank_file.file, patch)?;
+    let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
+    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
+    Ok(Op505LoadedPatchDto { patch: entry.patch, patch_name: entry.name, file_name, bank, program: entry.program })
+}
+
+/// 現在選択中の音色をDELETEキーで削除する（PRESETSリストの選択行＝ハイライト表示中の音色が対象、
+/// マウスカーソルの位置には依存しない）。ネイティブのYes/No確認ダイアログを表示し、Yesが押されたときのみ
+/// 削除してファイルへ保存し、削除後の音色一覧を返す。No/ダイアログを閉じた場合は`Ok(None)`
+/// （削除は起きていない）。ダイアログ表示中に他コマンドがブロックされないよう、レジストリのロックは
+/// ダイアログ表示の前後で一度ずつ短く取る（`op505_open_patch_file`と同じ方針）。
+#[tauri::command]
+pub async fn op505_delete_preset(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, Mutex<Op505BankRegistry>>,
+    bank: u16,
+    program: u8,
+) -> Result<Option<Vec<PresetEntryDto>>, String> {
+    let name = {
+        let reg = registry.lock().unwrap();
+        let bank_file = reg.get(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
+        entries(&bank_file.file)
+            .iter()
+            .find(|e| e.program == program)
+            .map(|e| e.name.clone())
+            .ok_or("削除対象のエントリが見つかりません")?
+    };
+
+    let confirmed = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(format!("音色「{program:03} {name}」を削除しますか？"))
+            .title("音色の削除")
+            .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+            .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)
+            .blocking_show()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if !confirmed {
+        return Ok(None);
+    }
+
+    let mut reg = registry.lock().unwrap();
+    let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
+    let list = entries_mut(&mut bank_file.file);
+    let idx = list.iter().position(|e| e.program == program).ok_or("削除対象のエントリが見つかりません")?;
+    list.remove(idx);
+    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
+    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
+    Ok(Some(entries(&bank_file.file).iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect()))
+}
+
 /// ネイティブSaveダイアログで保存先を選び、新規`.op505`ファイルとして書き出す
 /// （`save_patch_as`のOP505版）。今のbankの担当ファイル（レジストリ）の全エントリーを複製元とし、
 /// 今編集中のprogramだけ最新の内容に差し替えて丸ごと書き出す。保存後はそのbankの担当ファイルが
@@ -311,6 +388,49 @@ mod tests {
 
         let programs = Op505PresetFile::Programs { bank: 3, programs: vec![] };
         assert_eq!(bank_of(&with_bank(programs, 9)), 9);
+    }
+
+    #[test]
+    fn add_preset_entry_starts_at_zero_when_empty() {
+        let mut file = Op505PresetFile::Presets { bank: 0, presets: vec![] };
+        let entry = add_preset_entry(&mut file, Op505Patch::default()).unwrap();
+        assert_eq!(entry.program, 0);
+        assert_eq!(entry.name, "Voice000");
+        assert_eq!(entry.patch, Op505Patch::default());
+        assert_eq!(entries(&file).len(), 1);
+    }
+
+    #[test]
+    fn add_preset_entry_uses_max_program_plus_one() {
+        let mut file = Op505PresetFile::Presets {
+            bank: 0,
+            presets: vec![
+                Op505PresetEntry { program: 3, name: "A".to_string(), patch: Op505Patch::default() },
+                Op505PresetEntry { program: 31, name: "B".to_string(), patch: Op505Patch::default() },
+            ],
+        };
+        let entry = add_preset_entry(&mut file, Op505Patch::default()).unwrap();
+        assert_eq!(entry.program, 32);
+        assert_eq!(entry.name, "Voice032");
+        assert_eq!(entries(&file).last().unwrap().program, 32, "sortされ末尾に来るはず");
+    }
+
+    #[test]
+    fn add_preset_entry_copies_given_patch() {
+        let mut file = Op505PresetFile::Presets { bank: 0, presets: vec![] };
+        let mut source = Op505Patch::default();
+        source.operators[0].tl = 123;
+        let entry = add_preset_entry(&mut file, source).unwrap();
+        assert_eq!(entry.patch.operators[0].tl, 123, "Shift+クリックのコピー元がそのまま複製されるはず");
+    }
+
+    #[test]
+    fn add_preset_entry_errors_when_program_exhausted() {
+        let mut file = Op505PresetFile::Presets {
+            bank: 0,
+            presets: vec![Op505PresetEntry { program: 255, name: "Last".to_string(), patch: Op505Patch::default() }],
+        };
+        assert!(add_preset_entry(&mut file, Op505Patch::default()).is_err());
     }
 
     #[test]

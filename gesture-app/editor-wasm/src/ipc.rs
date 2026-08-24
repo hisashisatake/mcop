@@ -300,6 +300,42 @@ pub async fn save_patch_overwrite(
     Some(PatchIdentity { file_name: Some(saved.file_name), patch_name: saved.patch_name, bank: saved.bank, program: saved.program })
 }
 
+#[derive(Serialize)]
+struct AddPresetArgs {
+    bank: u16,
+    patch: op505_core::Op505Patch,
+}
+
+/// 現在のbankの担当ファイルへ新規エントリ（"+ New Voice"）を追加して`patch`へ書き込み、`dirty`を立てる
+/// （`load_preset`と同じくエンジンへも反映されるようにするため）。`source_patch`は通常クリックなら
+/// `Op505Patch::default()`、Shift+クリックなら現在編集中のパッチのコピーを呼び出し側が渡す
+/// （app.rs参照）。program番号・名前（"VoiceNNN"）はバックエンド側（`op505_add_preset`）が決める。
+/// そのbankにまだファイルが無ければ（`op505_save_patch_overwrite`と同じ制約でエラーを返すため）Noneが返る。
+pub async fn add_preset(
+    patch: &Rc<RefCell<op505_core::Op505Patch>>,
+    dirty: &Rc<Cell<bool>>,
+    bank: u16,
+    source_patch: op505_core::Op505Patch,
+) -> Option<PatchIdentity> {
+    let loaded = invoke_query::<LoadedPatchDto>("op505_add_preset", &AddPresetArgs { bank, patch: source_patch }).await?;
+    *patch.borrow_mut() = loaded.patch;
+    dirty.set(true);
+    Some(PatchIdentity { file_name: loaded.file_name, patch_name: loaded.patch_name, bank: loaded.bank, program: loaded.program })
+}
+
+#[derive(Serialize)]
+struct DeletePresetArgs {
+    bank: u16,
+    program: u8,
+}
+
+/// 現在選択中(current_program)の音色をDELETEキーで削除する。確認ダイアログはバックエンド側
+/// （`op505_delete_preset`）がネイティブYes/Noダイアログとして表示する。No/キャンセルなら
+/// `None`が返る（削除は起きていない）。Yesで削除されれば、削除後の音色一覧を返す。
+pub async fn delete_preset(bank: u16, program: u8) -> Option<Vec<PresetEntry>> {
+    invoke_query::<Option<Vec<PresetEntry>>>("op505_delete_preset", &DeletePresetArgs { bank, program }).await.flatten()
+}
+
 /// ネイティブSaveダイアログで保存先を選び、現在の`patch`の内容を新規ファイルとして書き出す。
 /// `patch_name`（名前入力欄の内容）をそのままエントリ名として使い、`bank`/`program`は今表示されている
 /// スピンの値をそのまま書き込む（自動採番はしない＝見た目と動作を一致させる）。`default_file_name`は

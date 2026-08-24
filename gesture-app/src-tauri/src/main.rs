@@ -375,6 +375,8 @@ fn main() {
             op505_presets::op505_open_patch_file,
             op505_presets::op505_save_patch_overwrite,
             op505_presets::op505_save_patch_as,
+            op505_presets::op505_add_preset,
+            op505_presets::op505_delete_preset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
