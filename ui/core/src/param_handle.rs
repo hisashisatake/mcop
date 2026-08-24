@@ -99,7 +99,7 @@ pub trait BoolParamHandle {
 }
 
 /// `TimeEgParams`（N点Time/Level方式EG、OP505用）1本ぶんへのハンドル。
-/// 段×フィールドごとに`IntParamHandle`を196個(28値×7本)構築する代わりに、EG単位で1個
+/// 段×フィールドごとに`IntParamHandle`を280個(40値×7本)構築する代わりに、EG単位で1個
 /// 用意すれば済む（`time_eg_editor`が内部でこのハンドルから`IntParamHandle`を都度導出する）。
 pub trait TimeEgHandle {
     /// 現在値のスナップショット（`TimeEgParams`はCopyなので値返し）。

@@ -52,12 +52,17 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
      ..Default::default()}
 }
 
-/// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝8段×3(time/level/curve)+
-/// メタ4(stage_count/loop_enabled/loop_start/release_point)=28値、7本で196値。
+/// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝10段×3(time/level/curve)+
+/// メタ10(stage_count/loop_enabled/loop_start/release_point/sync_enabled/sync_rate/
+/// retrigger_mode/level_drift/depth_drift/texture)=40値、7本で280値
+/// （8段時代は28値×7本=196値だった。段数拡張後もメタ側の実数はここに明記しないと
+/// 古いコメントのまま取り残されるため、フィールド名を列挙してある）。
 /// `Op505Patch`の全269値のうち大半を占めるが、DAWパラメーターにはせずnice-plugの
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
 /// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
+/// **DAWパラメーター数（75個）はこの束が`#[persist]`である限り不変**——段数拡張はここに
+/// 収まる値の中身が増えるだけで、DAWから見えるパラメーター一覧には影響しない。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Op505EgBank {
     pub operators: [TimeEgParams; 4],

@@ -6,7 +6,7 @@
 // ハイブリッド方式」を実装する（数値編集側は当初KNOBS=ノブ主体だったが、STAGES=8だと横に
 // 並びきらずスクロール必須になる問題が実機確認で判明し、VALUE=spin_control主体へ変更した）。
 //
-// 段×フィールドごとに`IntParamHandle`を196個(28値×7本)構築するのは高コストなので、
+// 段×フィールドごとに`IntParamHandle`を280個(40値×7本)構築するのは高コストなので、
 // `TimeEgHandle`（EG1本ぶんの値ハンドル、`param_handle.rs`）を起点に、このモジュール内だけで
 // 使う使い捨てアダプター（`TimeEgFieldHandle`/`TimeEgBoolFieldHandle`）を都度導出して
 // 既存の`spin_control`/`bool_checkbox`（`IntParamHandle`/`BoolParamHandle`前提）へ渡す。
@@ -193,7 +193,7 @@ fn draw_loop_marker(painter: &egui::Painter, center: Pos2, color: egui::Color32)
 }
 
 /// `TimeEgParams`内の1スカラーフィールドを指す種別（`TimeEgFieldHandle`が読み書きする対象）。
-/// `stage_count`(1〜8)・`loop_start`/`release_point`は0〜255統一ルールの例外
+/// `stage_count`(1〜`MAX_STAGES`)・`loop_start`/`release_point`は0〜255統一ルールの例外
 /// （連続量ではなく段インデックス。MULの0〜15と同じ性質）。
 #[derive(Clone, Copy)]
 enum TimeEgField {
@@ -631,7 +631,7 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
 /// 行ごとに微妙に変わり、LV欄以降の開始位置が段によってずれて見えた（実機確認で発覚）ため、
 /// `egui::Grid`で列位置を強制的に揃える。
 /// `size`はコンテンツ領域全体（`time_eg_editor`がヘッダ・spin行を差し引いた残り）。
-/// 段数1〜8でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
+/// 段数1〜`MAX_STAGES`でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
 fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: TimeEgProfile) {
     let params = handle.params();
     let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
@@ -848,7 +848,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
 }
 
 /// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/VALUEタブ＋STAGES等のspin行）。
-/// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜8)変更で`size`自体は変わらず、
+/// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜`MAX_STAGES`)変更で`size`自体は変わらず、
 /// VALUEモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
 /// `handle.name()`はegui memoryのId salt専用（GRAPH/VALUEタブの選択状態を複数EG間で
@@ -1023,7 +1023,7 @@ mod tests {
         let mut p = gain_switch_params();
         p.stage_count = MAX_STAGES as u8;
         let out = insert_stage_after(&p, 0, TimeEgProfile::default());
-        assert_eq!(out.stage_count, MAX_STAGES as u8, "8段のときは挿入しないはず");
+        assert_eq!(out.stage_count, MAX_STAGES as u8, "MAX_STAGES段のときは挿入しないはず");
     }
 
     #[test]

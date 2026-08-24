@@ -129,7 +129,7 @@ pub enum Widget {
         delay: EgField,
     },
     AlgorithmDiagram { handle: String },
-    /// TimeEg（可変1〜8段・ループ・多段リリース）のハイブリッドエディタ（`ui_core::time_eg_editor`）。
+    /// TimeEg（可変1〜10段・ループ・多段リリース）のハイブリッドエディタ（`ui_core::time_eg_editor`）。
     /// `handle`は`TimeEgHandle`実装（`Box<dyn TimeEgHandle>`フィールド）を指す。
     ///
     /// `min_stages`/`terminal_level_zero`はEG種別ごとの編集制約（`ui_core::TimeEgProfile`）。

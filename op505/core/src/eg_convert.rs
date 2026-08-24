@@ -150,7 +150,9 @@ pub fn convert_eg_shape(
 }
 
 /// 段の先頭にlevel=0のプラトー段を1つ挿入し、loop_start/release_pointを+1シフトする
-/// （`EgParams::delay`＝キーオンからAR開始までの遅延をTimeEgで表現する。8段上限に収まる前提）。
+/// （`EgParams::delay`＝キーオンからAR開始までの遅延をTimeEgで表現する。`MAX_STAGES`上限に
+/// 収まる前提。`convert_eg_shape`の返す段数は最大4なので、下の`count >= MAX_STAGES`打ち切りには
+/// MAX_STAGESが8でも10でも到達しない）。
 pub(crate) fn prepend_delay_stage(params: &mut TimeEgParams, delay: u8, warnings: &mut Vec<String>, label: &str) {
     let delay_time = time_for_seconds(sound_core::delay_to_seconds(delay), warnings, label, "delay");
     let count = params.stage_count as usize;

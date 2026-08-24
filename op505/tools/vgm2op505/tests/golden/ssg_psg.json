@@ -44,63 +44,6 @@
               "time": 0,
               "level": 0,
               "curve": 0
-            }
-          ],
-          "stage_count": 2,
-          "loop_enabled": 0,
-          "loop_start": 0,
-          "release_point": 0,
-          "sync_enabled": 0,
-          "sync_rate": 134,
-          "retrigger_mode": 0,
-          "level_drift": 128,
-          "depth_drift": 128,
-          "texture": 0
-        },
-        "mul": 1,
-        "dt1": 128,
-        "ksr": 0,
-        "am_enable": false,
-        "velocity_sensitivity": 0,
-        "waveform": 16,
-        "op_fine_tune": 128,
-        "eg_shift": 0,
-        "level_scale": 0,
-        "velocity_gain": 255
-      },
-      {
-        "tl": 0,
-        "eg": {
-          "stages": [
-            {
-              "time": 1,
-              "level": 255,
-              "curve": 0
-            },
-            {
-              "time": 45,
-              "level": 0,
-              "curve": 0
-            },
-            {
-              "time": 0,
-              "level": 0,
-              "curve": 0
-            },
-            {
-              "time": 0,
-              "level": 0,
-              "curve": 0
-            },
-            {
-              "time": 0,
-              "level": 0,
-              "curve": 0
-            },
-            {
-              "time": 0,
-              "level": 0,
-              "curve": 0
             },
             {
               "time": 0,
@@ -178,6 +121,16 @@
               "time": 0,
               "level": 0,
               "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
             }
           ],
           "stage_count": 2,
@@ -213,6 +166,93 @@
             },
             {
               "time": 45,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            }
+          ],
+          "stage_count": 2,
+          "loop_enabled": 0,
+          "loop_start": 0,
+          "release_point": 0,
+          "sync_enabled": 0,
+          "sync_rate": 134,
+          "retrigger_mode": 0,
+          "level_drift": 128,
+          "depth_drift": 128,
+          "texture": 0
+        },
+        "mul": 1,
+        "dt1": 128,
+        "ksr": 0,
+        "am_enable": false,
+        "velocity_sensitivity": 0,
+        "waveform": 16,
+        "op_fine_tune": 128,
+        "eg_shift": 0,
+        "level_scale": 0,
+        "velocity_gain": 255
+      },
+      {
+        "tl": 0,
+        "eg": {
+          "stages": [
+            {
+              "time": 1,
+              "level": 255,
+              "curve": 0
+            },
+            {
+              "time": 45,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 0,
+              "curve": 0
+            },
+            {
+              "time": 0,
               "level": 0,
               "curve": 0
             },
@@ -319,6 +359,16 @@
               "time": 0,
               "level": 128,
               "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 128,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 128,
+              "curve": 0
             }
           ],
           "stage_count": 2,
@@ -376,6 +426,16 @@
               "time": 0,
               "level": 128,
               "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 128,
+              "curve": 0
+            },
+            {
+              "time": 0,
+              "level": 128,
+              "curve": 0
             }
           ],
           "stage_count": 2,
@@ -401,6 +461,16 @@
           {
             "time": 0,
             "level": 255,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
+            "curve": 0
+          },
+          {
+            "time": 0,
+            "level": 0,
             "curve": 0
           },
           {

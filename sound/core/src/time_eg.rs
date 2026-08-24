@@ -2,7 +2,8 @@
 // TimeEg — ループ付きN点Time/Level形式エンベロープ（プロトタイプ）
 //
 // 5段OPM形式（`eg::Eg`）が「傾き」を指定するのに対し、こちらは「所要時間」を指定する。
-// 段(Stage)は最大8つ（CZ-101の8段に準拠）、うち任意区間をループでき、キーオフ後は
+// 段(Stage)は最大10個（当初はCZ-101の8段に準拠していたが、10段への実用性検証を経て拡張。
+// memory `project_timeeg_stage_numbering.md`参照）、うち任意区間をループでき、キーオフ後は
 // `release_start`から残りの段を順に辿る（多段リリース）。既存の`Eg`・`EgParams`・
 // `ym38x6-core`側は一切変更しない、独立した実験用の型（memory
 // `project_4point_tl_eg_decision.md`参照）。
@@ -15,8 +16,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-/// 段の最大数。CZ-101の8段に準拠。4点T/Lは`stage_count=4`で表現する。
-pub const MAX_STAGES: usize = 8;
+/// 段の最大数。当初はCZ-101の8段に準拠していたが10段へ拡張済み。4点T/Lは`stage_count=4`で表現する。
+pub const MAX_STAGES: usize = 10;
 
 /// バイポーラ解釈するEGの「無変調」を表す生レベル値。DT1・op_fine_tune等このプロジェクトの
 /// 他のバイポーラパラメーターと同じ中心128（`(v-128)/128`慣例）に揃えてある。
@@ -106,6 +107,70 @@ pub struct TimeStage {
     pub curve: u8,
 }
 
+/// `stages`（固定長配列）の**要素数を緩めた**デシリアライザ。
+///
+/// serdeの`[T; N]`既定実装はデシリアライズ時に要素数を厳密に照合するため、`MAX_STAGES`を
+/// 変えた瞬間に**既存の`.op505`プリセット・op505-vstがDAWプロジェクトへ書いたpersist状態・
+/// gesture-appのIPC JSONが全滅する**（しかも読み込み失敗は両方とも無言で握り潰される）。
+/// ここで「足りなければ`TimeStage::default()`でパディング、多ければ切り詰め」に緩めることで、
+/// `MAX_STAGES`の増減がデータ互換性を壊さなくなる（増やす方向も減らす方向も安全＝
+/// 変更のロールバックも可能になる）。
+///
+/// **serialize側は敢えて上書きしない**（既定の`[T; MAX_STAGES]`実装＝`serialize_tuple`が
+/// そのままJSON配列を出すので出力形式は完全に不変）。片側だけ差し替えることで
+/// 「読みは緩い／書きは正準」という非対称を明示する。
+///
+/// 構造体全体のカスタム`Deserialize`にしないのは、`TimeEgParams`が既に`#[serde(alias)]`・
+/// `#[serde(default)]`・`#[serde(default = "...")]`を多用しており、ヘルパー構造体へ
+/// 全部書き写すとフィールド追加時の同期漏れが必ず起きるため。`deserialize_with`は
+/// 兄弟フィールドの属性に一切干渉しない。
+mod stages_serde {
+    use super::{TimeStage, MAX_STAGES};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::Deserializer;
+    use std::fmt;
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<[TimeStage; MAX_STAGES], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(StagesVisitor)
+    }
+
+    struct StagesVisitor;
+
+    impl<'de> Visitor<'de> for StagesVisitor {
+        type Value = [TimeStage; MAX_STAGES];
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "a sequence of TimeStage (padded/truncated to {MAX_STAGES})")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            // パディング値は`TimeStage::default()`（level=0）。Pitch/Cutoff FGはレベルを
+            // バイポーラ解釈する（128が無変調の中心）ため、level=0は「全開マイナス」を意味する。
+            // それでも実害が無いのは、`stage_count`を超える段はエンジンもエディタも参照せず、
+            // **段を増やす唯一の経路（`ui_core`の`TimeEgFieldHandle::set(StageCount)`と
+            // `insert_stage_after`）が直前段を複製する**ため。この複製ロジックが唯一の安全弁で、
+            // 「配列の値を直接有効化する」コードを将来足すとこの罠を踏む。
+            let mut out = [TimeStage::default(); MAX_STAGES];
+            let mut i = 0usize;
+            // 余剰要素も必ず最後まで読み切る（途中で止めるとserde_json側が
+            // trailing elementsで失敗する）。
+            while let Some(stage) = seq.next_element::<TimeStage>()? {
+                if i < MAX_STAGES {
+                    out[i] = stage;
+                }
+                i += 1;
+            }
+            Ok(out)
+        }
+    }
+}
+
 /// TimeEgのパラメーター一式。`stage_count`本だけ`stages`を使う（残りは無視）。
 ///
 /// 段リストは`release_point`ただ1つで「保持区間」と「リリース区間」へ過不足なく分割される。
@@ -114,8 +179,11 @@ pub struct TimeStage {
 /// 表現できてしまった。1つに統合したことでその矛盾は表現不能になっている。
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimeEgParams {
+    /// 段データ。要素数はデシリアライズ時のみ緩めてある（`MAX_STAGES`変更時の
+    /// データ互換保証はすべて`stages_serde`が担う。そちらのdocコメント参照）。
+    #[serde(deserialize_with = "stages_serde::deserialize")]
     pub stages: [TimeStage; MAX_STAGES],
-    /// 使用する段数(1〜8)。0は1として扱う。
+    /// 使用する段数(1〜`MAX_STAGES`)。0は1として扱う。
     pub stage_count: u8,
     /// 0=ワンショット（`release_point`で静止＝サステイン点）／1=`loop_start`〜`release_point`を周回。
     pub loop_enabled: u8,
@@ -1542,6 +1610,94 @@ mod tests {
         assert_eq!(params.level_drift, BIPOLAR_NEUTRAL_RAW, "missing level_drift should default to neutral(128), not 0");
         assert_eq!(params.depth_drift, BIPOLAR_NEUTRAL_RAW, "missing depth_drift should default to neutral(128), not 0");
         assert!(!params.has_drift());
+    }
+
+    // -----------------------------------------------------------------------
+    // stages_serde（要素数を緩めたデシリアライズ、docs/timeeg-stage-numbering-plan.mdステップ1）
+    // -----------------------------------------------------------------------
+
+    /// 要素数ちょうど`8`（旧`.op505`バンクの形）のJSONがそのまま読めること。
+    /// **`8`をリテラルで固定する**（`MAX_STAGES`を使うと、将来値を変えた瞬間に
+    /// 「その時点の要素数」を検証するテストへ化けてしまい、レガシー互換の番人が
+    /// 緑のまま消える。plan `docs/timeeg-stage-numbering-plan.md`ステップ1参照）。
+    #[test]
+    fn deserializes_legacy_eight_element_stages() {
+        let stages_json: Vec<_> = (0..8u8)
+            .map(|i| serde_json::json!({ "time": i, "level": i * 10, "curve": i % 2 }))
+            .collect();
+        assert_eq!(stages_json.len(), 8, "this test locks the legacy element count at 8, not MAX_STAGES");
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 4,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 3,
+        });
+        let params: TimeEgParams = serde_json::from_value(legacy).expect("8-element legacy stages should deserialize");
+        for i in 0..8usize {
+            assert_eq!(params.stages[i].time, i as u8, "stage {i} time should survive round-trip");
+            assert_eq!(params.stages[i].level, (i as u8) * 10, "stage {i} level should survive round-trip");
+            assert_eq!(params.stages[i].curve, (i as u8) % 2, "stage {i} curve should survive round-trip");
+        }
+    }
+
+    /// 要素数が`MAX_STAGES`を超えるJSONは先頭`MAX_STAGES`件だけを採用し、
+    /// 超過分は捨てる（エラーにはしない）。
+    #[test]
+    fn deserialize_truncates_excess_stage_elements() {
+        let stages_json: Vec<_> = (0..MAX_STAGES + 2)
+            .map(|i| serde_json::json!({ "time": i as u8, "level": 0, "curve": 0 }))
+            .collect();
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 2,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 0,
+        });
+        let params: TimeEgParams =
+            serde_json::from_value(legacy).expect("excess elements should be truncated, not rejected");
+        for i in 0..MAX_STAGES {
+            assert_eq!(params.stages[i].time, i as u8, "stage {i} should keep its original value");
+        }
+    }
+
+    /// 要素数が`MAX_STAGES`未満のJSON（`MAX_STAGES`を拡張した後、旧バンクを読んだ場合に相当）は
+    /// 不足分を`TimeStage::default()`（time=0, level=0, curve=0）でパディングする。
+    #[test]
+    fn deserialize_pads_missing_stage_elements() {
+        let stages_json: Vec<_> = (0..3u8)
+            .map(|i| serde_json::json!({ "time": i + 1, "level": 200, "curve": 0 }))
+            .collect();
+        let legacy = serde_json::json!({
+            "stages": stages_json,
+            "stage_count": 2,
+            "loop_enabled": 0,
+            "loop_start": 0,
+            "release_point": 0,
+        });
+        let params: TimeEgParams =
+            serde_json::from_value(legacy).expect("short stages array should be padded, not rejected");
+        for i in 0..3usize {
+            assert_eq!(params.stages[i].time, i as u8 + 1, "provided stage {i} should keep its value");
+        }
+        for i in 3..MAX_STAGES {
+            assert_eq!(params.stages[i], TimeStage::default(), "missing stage {i} should be padded with default");
+        }
+    }
+
+    /// serialize側は緩めていない（既定の`[T; MAX_STAGES]`実装のまま）ので、
+    /// `stage_count`に関わらず常に`MAX_STAGES`要素のJSON配列を書き出すこと。
+    /// ここが崩れると「読みは緩い／書きは正準」という非対称の前提（`stages_serde`のdoc参照）が壊れる。
+    #[test]
+    fn serializes_stages_as_fixed_max_stages_length() {
+        let params = TimeEgParams {
+            stage_count: 2,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(params).expect("TimeEgParams should serialize");
+        let stages = value["stages"].as_array().expect("stages should serialize as a JSON array");
+        assert_eq!(stages.len(), MAX_STAGES, "serialize side must always emit MAX_STAGES elements");
     }
 
     // -----------------------------------------------------------------------
