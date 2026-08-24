@@ -61,7 +61,8 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
 /// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
-/// **DAWパラメーター数（75個）はこの束が`#[persist]`である限り不変**——段数拡張はここに
+/// **DAWパラメーター数（78個、Step 8でfixed_note_*3個追加により75→78）はこの束が`#[persist]`
+/// である限り不変**——段数拡張はここに
 /// 収まる値の中身が増えるだけで、DAWから見えるパラメーター一覧には影響しない。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Op505EgBank {
@@ -167,6 +168,15 @@ pub(crate) struct Op505VstParams {
     #[id = "gain_fg_to_operators"]
     pub gain_fg_to_operators: BoolParam,
 
+    // ---- 固定音階（GM2リズムチャンネル用。ノートオン周波数を無視して固定ピッチで鳴らす。
+    //      memory `project_gm2_rhythm_channel_implementation.md`参照） ----
+    #[id = "fixed_note_enable"]
+    pub fixed_note_enable: BoolParam,
+    #[id = "fixed_note"]
+    pub fixed_note: IntParam,
+    #[id = "fixed_note_fine"]
+    pub fixed_note_fine: IntParam,
+
     // ---- オペレーター単位（11個 × 4op = 44個） ----
     #[nested(array, group = "Operator")]
     pub operators: [OperatorVstParams; 4],
@@ -209,6 +219,9 @@ impl Default for Op505VstParams {
             cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             gain_fg_to_master: BoolParam::new("Gain FG to Master", true),
             gain_fg_to_operators: BoolParam::new("Gain FG to Operators", false),
+            fixed_note_enable: BoolParam::new("Fixed Note Enable", false),
+            fixed_note: IntParam::new("Fixed Note", 60, IntRange::Linear { min: 0, max: 127 }),
+            fixed_note_fine: bipolar_int(IntParam::new("Fixed Note Fine", 128, IntRange::Linear { min: 0, max: 255 })),
             operators: Default::default(),
             rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
             cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),

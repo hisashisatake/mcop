@@ -44,6 +44,10 @@ pub struct Op505PanelParams<'a> {
     // CHANNEL
     pub algorithm: Box<dyn IntParamHandle + 'a>,
     pub feedback: Box<dyn IntParamHandle + 'a>,
+    /// 固定音階（GM2リズムチャンネル用）。有効時はnote_onの周波数を無視して固定ピッチで鳴らす。
+    pub fixed_note_enable: Box<dyn BoolParamHandle + 'a>,
+    pub fixed_note: Box<dyn IntParamHandle + 'a>,
+    pub fixed_note_fine: Box<dyn IntParamHandle + 'a>,
     // FILTER
     pub cutoff: Box<dyn IntParamHandle + 'a>,
     pub resonance: Box<dyn IntParamHandle + 'a>,

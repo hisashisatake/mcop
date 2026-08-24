@@ -30,6 +30,14 @@
                 <knob label="ALG" handle="algorithm"/>
                 <knob label="FB" handle="feedback"/>
             </row>
+            <!-- 固定音階（GM2リズムチャンネル用）。有効時はnote_onの周波数を無視し
+                 FIXED NOTE+FINEの固定ピッチで鳴らす（memory
+                 `project_gm2_rhythm_channel_implementation.md`参照）。 -->
+            <row gap="spacing">
+                <checkbox label="FIXED" handle="fixed_note_enable"/>
+                <knob label="FIXED NOTE" handle="fixed_note"/>
+                <knob label="FINE" handle="fixed_note_fine" bipolar="true"/>
+            </row>
         </stack>
       </row>
     </panel>

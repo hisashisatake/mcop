@@ -646,6 +646,15 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
                     spin_control(ui, &BipolarHandle::new(&inner), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
                 });
             });
+            // ワンショット化。REL欄と同じ条件でグレーアウトする（リリース区間が無いと
+            // 行き先が無く従来どおり静止するだけになるため、GM2リズムチャンネル用途の
+            // memory `project_gm2_rhythm_channel_implementation.md`参照）。
+            ui.add_enabled_ui(rel_enabled, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("AUTO REL").size(8.0));
+                    spin_control(ui, &*handle.auto_release_handle(), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
+                });
+            });
         });
     });
 }

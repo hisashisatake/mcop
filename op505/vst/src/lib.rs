@@ -283,9 +283,9 @@ impl Op505Plugin {
             gain_fg: egs.gain_fg,
             gain_fg_to_master: p.gain_fg_to_master.value(),
             gain_fg_to_operators: p.gain_fg_to_operators.value(),
-            // fixed_note_*はまだDAWパラメーター化していない（Step 8で対応予定）。
-            // それまではProgram Change/NoteOn経路（build_patch()を通らない）でのみ
-            // ドラムパッチのfixed_note_*が生きる。
+            fixed_note_enable: p.fixed_note_enable.value(),
+            fixed_note: p.fixed_note.value() as u8,
+            fixed_note_fine: p.fixed_note_fine.value() as u8,
             ..Op505ChannelParams::default()
         };
 

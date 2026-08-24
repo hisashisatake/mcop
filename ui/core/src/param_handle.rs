@@ -138,6 +138,13 @@ pub trait TimeEgHandle {
     fn texture_handle(&self) -> Box<dyn IntParamHandle + '_> {
         Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::Texture })
     }
+
+    /// ワンショット化（`auto_release`、0=OFF/N≥1=保持区間をN回通過したら自動リリース）へのハンドル。
+    /// 非ゼロの間、外部note_offは無視される（GM2リズムチャンネル用、memory
+    /// `project_gm2_rhythm_channel_implementation.md`参照）。
+    fn auto_release_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::AutoRelease })
+    }
 }
 
 struct TimeEgSyncEnabledHandle<'a, T: TimeEgHandle + ?Sized> {
@@ -165,6 +172,7 @@ enum TimeEgIntField {
     SyncRate,
     RetriggerMode,
     Texture,
+    AutoRelease,
 }
 
 struct TimeEgIntFieldHandle<'a, T: TimeEgHandle + ?Sized> {
@@ -179,6 +187,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::SyncRate => p.sync_rate as i32,
             TimeEgIntField::RetriggerMode => p.retrigger_mode as i32,
             TimeEgIntField::Texture => p.texture as i32,
+            TimeEgIntField::AutoRelease => p.auto_release as i32,
         }
     }
     fn min(&self) -> i32 {
@@ -189,6 +198,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::SyncRate => 255,
             TimeEgIntField::RetriggerMode => 1,
             TimeEgIntField::Texture => 3,
+            TimeEgIntField::AutoRelease => 255,
         }
     }
     fn default(&self) -> i32 {
@@ -196,6 +206,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::SyncRate => sound_core::sync_note_anchor(10) as i32,
             TimeEgIntField::RetriggerMode => sound_core::RETRIGGER_MODE_CONTINUE as i32,
             TimeEgIntField::Texture => sound_core::TEXTURE_OFF as i32,
+            TimeEgIntField::AutoRelease => 0,
         }
     }
     fn name(&self) -> String {
@@ -203,6 +214,7 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::SyncRate => "Sync Rate",
             TimeEgIntField::RetriggerMode => "Retrigger",
             TimeEgIntField::Texture => "Texture",
+            TimeEgIntField::AutoRelease => "Auto Release",
         };
         format!("{} {}", self.eg.name(), suffix)
     }
@@ -214,6 +226,13 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::RetriggerMode => self.value().to_string(),
             TimeEgIntField::Texture => {
                 crate::selector::TEXTURE_NAMES[self.value().clamp(0, 3) as usize].to_string()
+            }
+            TimeEgIntField::AutoRelease => {
+                if self.value() == 0 {
+                    "OFF".to_string()
+                } else {
+                    self.value().to_string()
+                }
             }
         }
     }
@@ -231,6 +250,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             }
             TimeEgIntField::Texture => {
                 params.texture = value.clamp(0, 3) as u8;
+            }
+            TimeEgIntField::AutoRelease => {
+                params.auto_release = value.clamp(0, 255) as u8;
             }
         }
         self.eg.set_params(params);
