@@ -26,7 +26,7 @@ use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometr
 /// px単位で厳密には一致しない（フォントメトリクス依存）が、GRAPH/VALUE切替・段数変更で
 /// 枠の外形自体は変わらないため実用上問題ない（Step 2の固定枠化）。
 const HEADER_HEIGHT: f32 = 20.0;
-/// STAGES/LOOP/L.START/RELの行とL.DRIFT/D.DRIFTの行、2行ぶんの`stage_spin_row`の
+/// LAST/LOOP/L.START/RELの行とL.DRIFT/D.DRIFTの行、2行ぶんの`stage_spin_row`の
 /// 見込み高さ（px）。`HEADER_HEIGHT`と同じ扱い。ラベルが1行に収まらず折り返される
 /// 不具合対策でL.DRIFT/D.DRIFTを2行目へ分けたため、1行だった頃より高さが増えている。
 const SPIN_ROW_HEIGHT: f32 = 65.0;
@@ -71,8 +71,8 @@ const LOOP_MARKER_RADIUS: f32 = 4.0;
 /// `ui-codegen`が生成コードへ埋め込む。既定（`Default`）はOP1〜4 EG/Pitch FG/Cutoff FG用。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimeEgProfile {
-    /// STAGESの下限。OP EG/Pitch FG/Cutoff FGは2で、リリース段を必ず1本持たせる
-    /// （キーオフで必ずレベル0へ着地させるため）。Gain FGだけ1を許す。
+    /// 段数(stage_count)の下限。UI表示のLASTはこれ-1が下限になる。OP EG/Pitch FG/Cutoff FGは2で、
+    /// リリース段を必ず1本持たせる（キーオフで必ずレベル0へ着地させるため）。Gain FGだけ1を許す。
     pub min_stages: u8,
     /// trueなら最終段のlevelを0に固定する（GRAPHの縦ドラッグ禁止・VALUEのLV欄をグレーアウト）。
     ///
@@ -96,7 +96,7 @@ impl TimeEgProfile {
     pub const GAIN_FG: Self = Self { min_stages: 1, terminal_level_zero: false };
 }
 
-/// EG種別ごとの不変条件を満たすようパラメーターを整える。編集操作（段の挿入/削除・STAGES変更・
+/// EG種別ごとの不変条件を満たすようパラメーターを整える。編集操作（段の挿入/削除・LAST変更・
 /// リリース点ドラッグ等）の直後に必ず通す。
 ///
 /// ここで直すのは「今の操作の結果として範囲外になった値」だけに限る。ユーザーが触っていない値を
@@ -252,9 +252,10 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         let p = self.handle.params();
         match self.field {
             // 生値0は「1として扱う」特殊値（`sound_core::time_eg::clamp_stage_count`と同じ床）。
-            // ここでmax(1)しないとSTAGES表示が0のまま、実際には1段ぶんドラッグ可能な点が
+            // ここでmax(1)しないとLAST表示が-1（0段扱い）のまま、実際には1段ぶんドラッグ可能な点が
             // 存在するという表示と実体の食い違いが起きる（実機確認で発覚）。
-            TimeEgField::StageCount => p.stage_count.max(1) as i32,
+            // LAST＝最終段のindex（0始まり）なので、段数(stage_count)から-1する。
+            TimeEgField::StageCount => p.stage_count.max(1) as i32 - 1,
             TimeEgField::LoopStart => p.loop_start as i32,
             TimeEgField::ReleasePoint => p.release_point as i32,
             TimeEgField::StageTime(i) => p.stages[i].time as i32,
@@ -266,14 +267,14 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn min(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32 - 1,
             _ => 0,
         }
     }
 
     fn max(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => MAX_STAGES as i32,
+            TimeEgField::StageCount => MAX_STAGES as i32 - 1,
             // ループ区間は`loop_start..=release_point`。リリース点と同じ段まで選べる
             // （1段ループ＝ノコギリ波）。
             TimeEgField::LoopStart => self.handle.params().release_point as i32,
@@ -285,7 +286,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn default(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32 - 1,
             // 128=無効（バイポーラ中心）。`sound_core::time_eg::BIPOLAR_NEUTRAL_RAW`と同じ値。
             TimeEgField::LevelDrift | TimeEgField::DepthDrift => 128,
             _ => 0,
@@ -295,7 +296,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn name(&self) -> String {
         let base = self.handle.name();
         match self.field {
-            TimeEgField::StageCount => format!("{base} STAGES"),
+            TimeEgField::StageCount => format!("{base} LAST"),
             TimeEgField::LoopStart => format!("{base} L.START"),
             TimeEgField::ReleasePoint => format!("{base} REL"),
             TimeEgField::StageTime(i) => format!("{base} stage{i} TIME"),
@@ -320,15 +321,17 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         match self.field {
             TimeEgField::StageCount => {
                 let old = p.stage_count.clamp(1, MAX_STAGES as u8);
+                // clampedは表示空間（LAST＝最終段index、0始まり）なので、内部の段数へ+1して戻す。
+                let new_count = clamped + 1;
                 // 新しく有効になる段は前段(old-1)を複製する（`insert_stage_after`と同じ方針）。
                 // 単純にTimeStage::defaultのまま(time=0)にすると、time=0は「瞬時」を表す特殊値
                 // のためGRAPHビュー上で直前の頂点と同じx座標に重なって描画され、増やしたはずの
                 // クリック点が見えなくなる（実機確認で発覚）。
                 let source = (old - 1) as usize;
-                for i in (old as usize)..(clamped as usize) {
+                for i in (old as usize)..(new_count as usize) {
                     p.stages[i] = p.stages[source];
                 }
-                p.stage_count = clamped;
+                p.stage_count = new_count;
             }
             TimeEgField::LoopStart => p.loop_start = clamped,
             TimeEgField::ReleasePoint => p.release_point = clamped,
@@ -549,7 +552,7 @@ fn spin_row_enabled(params: &TimeEgParams, profile: TimeEgProfile) -> SpinRowEna
     }
 }
 
-/// STAGES/LOOP/L.START/RELのspin行（GRAPH/VALUE両モード共通、旧`time_eg_block`相当）。
+/// LAST/LOOP/L.START/RELのspin行（GRAPH/VALUE両モード共通、旧`time_eg_block`相当）。
 /// 旧L.END欄は廃止した（ループ終端＝リリース点で同じ境界なので、REL1本で足りる）。
 ///
 /// 段数によって固定になる欄は、消さずに**グレーアウトして残す**。欄の位置が段数で動くと
@@ -561,7 +564,7 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("STAGES").size(8.0));
+                ui.label(egui::RichText::new("LAST").size(8.0));
                 spin_control(ui, &TimeEgFieldHandle::new(handle, TimeEgField::StageCount, profile), egui::TextStyle::Small, SPIN_WIDTH_DEFAULT);
             });
             ui.add_enabled_ui(loop_enabled, |ui| {
@@ -587,7 +590,7 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
         // 副産物。詳細はmemory `project_chip_lfo_retirement_investigation.md`）。ループが
         // 成立しないと無意味なのでLOOPと同じ条件でグレーアウトする。表示・入力とも
         // `BipolarHandle`で-128〜+127（128=無効/等倍）として見せる。
-        // STAGES/LOOP/L.START/RELと同じ行に詰めると、狭いパネル（GAIN FG等）でラベルが
+        // LAST/LOOP/L.START/RELと同じ行に詰めると、狭いパネル（GAIN FG等）でラベルが
         // 折り返され"D.DRIFT"が1文字ずつ縦積みになって読めなくなる不具合が実機確認で判明した
         // ため、1行下に分けて配置する。
         ui.horizontal(|ui| {
@@ -843,7 +846,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     });
 }
 
-/// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/VALUEタブ＋STAGES等のspin行）。
+/// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/VALUEタブ＋LAST等のspin行）。
 /// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜`MAX_STAGES`)変更で`size`自体は変わらず、
 /// VALUEモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
 /// `mapping`/`tl`は`time_eg_preview`と同じ意味（TLを持たないFGパネルはtl=255で呼ぶ）。
@@ -883,7 +886,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    /// STAGES増加時の複製ロジック検証用モックハンドル（`interpret.rs`のMockTimeEgと同じ設計）。
+    /// LAST(段数)増加時の複製ロジック検証用モックハンドル（`interpret.rs`のMockTimeEgと同じ設計）。
     struct MockTimeEg {
         value: Cell<TimeEgParams>,
     }
@@ -1114,7 +1117,7 @@ mod tests {
         assert!(e.loop_toggle && e.loop_start);
     }
 
-    /// STAGESを増やしてからRELを上げると、LOOPが有効になる条件(`release_point >= 1`)を満たすか。
+    /// LASTを増やしてからRELを上げると、LOOPが有効になる条件(`release_point >= 1`)を満たすか。
     /// spin行のグレーアウト条件が実際に解除されるところまで、編集の連鎖を通しで確認する。
     #[test]
     fn raising_stages_then_release_point_unlocks_loop() {
@@ -1124,9 +1127,9 @@ mod tests {
         assert_eq!(handle.params().stage_count, 2);
         assert_eq!(handle.params().release_point, 0);
 
-        TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, profile).set(4);
+        TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, profile).set(3); // LAST 3 -> stage_count 4
         assert_eq!(handle.params().stage_count, 4);
-        // STAGESを増やしただけではRELは動かない（ユーザーが触っていない値は書き換えない）。
+        // LASTを増やしただけではRELは動かない（ユーザーが触っていない値は書き換えない）。
         assert_eq!(handle.params().release_point, 0, "RELは据え置きのはず");
 
         let rel = TimeEgFieldHandle::new(&handle, TimeEgField::ReleasePoint, profile);
@@ -1152,14 +1155,14 @@ mod tests {
 
     #[test]
     fn stage_count_increase_duplicates_last_stage_instead_of_zero() {
-        // STAGESの＋ボタン（TimeEgFieldHandle::set経由）で段数を増やしたとき、新しい段が
+        // LASTの＋ボタン（TimeEgFieldHandle::set経由）で段数を増やしたとき、新しい段が
         // TimeStage::default()(time=0)のままだと「瞬時」特殊値でGRAPHビュー上の頂点が
         // 直前の頂点と同じx座標に重なってしまう（実機確認で発覚したバグ）。
         // 直前の有効段(old_count-1)を複製すれば、time=0のまま据え置かれる場合でも
         // 直前段自体がtime!=0であればx座標が分離される。
         let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
         let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::default());
-        field.set(6); // 5 -> 6
+        field.set(5); // LAST 4 -> 5 (stage_count 5 -> 6)
 
         let out = handle.params();
         assert_eq!(out.stage_count, 6);
@@ -1171,10 +1174,32 @@ mod tests {
     fn stage_count_decrease_does_not_touch_stage_data() {
         let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
         let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::default());
-        field.set(3); // 5 -> 3 (減少側は複製ロジックを通らない)
+        field.set(2); // LAST 4 -> 2 (stage_count 5 -> 3、減少側は複製ロジックを通らない)
 
         let out = handle.params();
         assert_eq!(out.stage_count, 3);
         assert_eq!(out.stages[0], gain_switch_params().stages[0]);
+    }
+
+    /// STAGESからLASTへ改名した欄は、生の`stage_count`ではなく最終段のindex（0始まり）を
+    /// 表示する（L.START・REL・段名と体系を揃えるため。plan
+    /// `docs/timeeg-stage-numbering-plan.md`ステップ4参照）。
+    #[test]
+    fn stage_count_field_is_displayed_zero_based() {
+        let handle = MockTimeEg { value: Cell::new(gain_switch_params()) };
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::default());
+        assert_eq!(field.value(), 4, "stage_count=5はLAST=4として表示するはず");
+        assert_eq!(field.min(), 1, "min_stages=2の下限はLAST=1");
+        assert_eq!(field.max(), (MAX_STAGES - 1) as i32, "LASTの上限はMAX_STAGES-1");
+
+        field.set(2);
+        assert_eq!(handle.params().stage_count, 3, "LAST=2はstage_count=3のはず");
+
+        // Gain FG（min_stages=1）だけLAST=0（stage_count=1、透過既定）まで下げられる。
+        let gain_handle = MockTimeEg { value: Cell::new(TimeEgParams::default()) };
+        let gain_field = TimeEgFieldHandle::new(&gain_handle, TimeEgField::StageCount, TimeEgProfile::GAIN_FG);
+        assert_eq!(gain_field.min(), 0, "Gain FG(min_stages=1)の下限はLAST=0");
+        gain_field.set(0);
+        assert_eq!(gain_handle.params().stage_count, 1, "LAST=0はstage_count=1のはず");
     }
 }

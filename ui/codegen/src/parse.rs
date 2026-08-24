@@ -353,6 +353,8 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let h = attr_f32_or(el, "height", style.time_eg_editor_size.h)?;
             // 上限10は`sound_core::time_eg::MAX_STAGES`とのリテラル二重管理（ui-codegenは
             // egui/sound-core非依存の純粋クレートという設計を守るため、依存を足さずリテラルで持つ）。
+            // min-stagesは内部の段数(stage_count)であり、UIのLAST欄が表示するのはこれ-1
+            // （最終段のindex、0始まり）。XML上の数字とUI表示は1ずれる（ステップ4の意図的な仕様）。
             let min_stages: u8 = match el.attribute("min-stages") {
                 None => 2,
                 Some(v) => v
