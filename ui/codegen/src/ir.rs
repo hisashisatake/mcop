@@ -129,13 +129,13 @@ pub enum Widget {
         delay: EgField,
     },
     AlgorithmDiagram { handle: String },
-    /// TimeEg（可変1〜10段・ループ・多段リリース）のハイブリッドエディタ（`ui_core::time_eg_editor`）。
+    /// TimeEg（可変0〜10段・ループ・多段リリース）のハイブリッドエディタ（`ui_core::time_eg_editor`）。
     /// `handle`は`TimeEgHandle`実装（`Box<dyn TimeEgHandle>`フィールド）を指す。
     ///
     /// `min_stages`/`terminal_level_zero`はEG種別ごとの編集制約（`ui_core::TimeEgProfile`）。
-    /// 既定はOP1〜4 EG/Pitch FG/Cutoff FG向けの`min-stages="2" terminal-level="zero"`で、
-    /// キーオフで必ずレベル0へ着地させる。Gain FGだけ`min-stages="1" terminal-level="free"`を
-    /// 指定し、透過既定（ゲートを一切閉じない1段EG）を表現できるようにする。
+    /// 既定はOP1〜4 EG向けの`min-stages="2" terminal-level="zero"`で、キーオフで必ずレベル0へ
+    /// 着地させる。Pitch/Cutoff/Gain FGの3種は`min-stages="0" terminal-level="free"`を指定し、
+    /// STAGES=0（無効化）とSTAGES=1（透過既定・ノコギリ等）の両方を表現できるようにする。
     TimeEgEditor { handle: String, mapping: String, tl: EgField, min_stages: u8, terminal_level_zero: bool },
     /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),

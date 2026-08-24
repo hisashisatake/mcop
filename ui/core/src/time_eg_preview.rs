@@ -100,6 +100,22 @@ pub(crate) fn neutral_start_level(mapping: EgAmplitudeMapping) -> u8 {
     }
 }
 
+/// STAGES=0（FG無効化、`TimeEgProfile::min_stages=0`のときのみ到達）のグラフが描く
+/// 「無効時の水平線」の高さ。**`neutral_start_level`を流用してはいけない**——あれは
+/// `AmplitudeLinear`（Gain FG）に0（無音）を返すが、Gain FG無効時のエンジンの実挙動は
+/// `gain_fg_out=1.0`（透過、`op505-core::Voice::tick`参照）であり0.0ではない。
+/// ここを取り違えると「無効化したら無音になった」というグラフと実音の食い違いが起きる。
+pub(crate) fn disabled_level(mapping: EgAmplitudeMapping) -> u8 {
+    match mapping {
+        // Pitch FG／Cutoff FG：無効時は変調量ゼロ＝バイポーラ中央128。
+        EgAmplitudeMapping::RawLinear => sound_core::BIPOLAR_NEUTRAL_RAW,
+        // Gain FG：無効時は×1.0の透過。振幅系のフルレベル255がそれに当たる。
+        EgAmplitudeMapping::AmplitudeLinear => 255,
+        // OP EG（DbLinear）はmin_stages>=2固定でSTAGES=0に到達しない。
+        EgAmplitudeMapping::DbLinear => 0,
+    }
+}
+
 /// TL(0〜255)とTimeEgの1段(level)からターゲットdBを求める。`level_contribution_db`は
 /// 「TLからの相対減衰」を返すため、`tl_db`に加算し`floor`（`axis_floor_db`参照）で下限クランプする
 /// （`eg_preview::eg_preview`のTL→SL算出と同じ式。TimeEgは全段が同じ式で求まる——
@@ -176,6 +192,28 @@ struct LayoutOptions {
 /// （パディング適用後の矩形）、`mapping`/`tl`は`eg_preview`と同じ意味（TLを持たないFGパネルは
 /// tl=255で呼ぶ）。`time_eg_layout`/`time_eg_editor_layout`はこの薄いラッパー。
 fn layout_impl(params: &TimeEgParams, inner: Rect, mapping: EgAmplitudeMapping, tl: u8, opts: LayoutOptions) -> TimeEgGeometry {
+    if params.stage_count == 0 {
+        // 無効状態（FGのみ、`TimeEgProfile::min_stages=0`で許容）。段が無いので折れ線ではなく
+        // 「左右の輪郭丸＋中立レベルの水平線」だけを描く。左右の丸は`draw_geometry`が
+        // `i==0`/`sustain_terminal_point`の条件でCOLOR_DOT_START（輪郭のみ）として描くため、
+        // ここではpointsとsustain_terminal_pointを対応させるだけでよい。
+        // release_point=0にすることで`draw_geometry`のセグメント色判定（`i-1>=release_point`）が
+        // 真になり、線がCOLOR_RELEASE（赤）で描かれる（「エンジンから見て無変調＝リリース同然」
+        // という位置づけに合わせた色）。
+        let floor = axis_floor_db(mapping);
+        let tl_db = tl_to_db(tl);
+        let level_db = stage_target_db(mapping, floor, tl_db, disabled_level(mapping));
+        let y = inner.bottom() - ((level_db.max(floor) - floor) / -floor) * inner.height();
+        let points = vec![Pos2::new(inner.left(), y), Pos2::new(inner.right(), y)];
+        return TimeEgGeometry {
+            points,
+            stage_of_point: vec![0, 0],
+            loop_span: None,
+            release_point: 0,
+            sustain_terminal_point: Some(1),
+            scale: inner.width(),
+        };
+    }
     let n = clamp_stage_count(params.stage_count);
     let release_point = (params.release_point as usize).min(n - 1);
     // loop_start > release_pointは設定不整合。実エンジンもrelease_pointへクランプするので合わせる。
@@ -548,6 +586,51 @@ mod tests {
         let g = time_eg_layout(&gain_switch_params(), rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
         let flat_count = g.points.windows(2).take(g.release_point).filter(|w| (w[1].y - w[0].y).abs() < 1e-3).count();
         assert!(flat_count >= 2, "静止区間が2つ以上見えるはず: flat_count={flat_count}");
+    }
+
+    /// STAGES=0（無効状態、FGのみ）は段のある通常レイアウトを一切通らず、左右2点だけの
+    /// 水平線ジオメトリを返すはず。`disabled_level`が返す高さで描かれ、`release_point=0`
+    /// （`draw_geometry`がCOLOR_RELEASEで塗る条件）・両端とも`sustain_terminal_point`扱い
+    /// （輪郭丸、`draw_geometry`のdoc参照）になっているかを確認する。
+    #[test]
+    fn disabled_state_draws_flat_line_at_disabled_level() {
+        for mapping in [EgAmplitudeMapping::RawLinear, EgAmplitudeMapping::AmplitudeLinear] {
+            let p = TimeEgParams { stage_count: 0, ..TimeEgParams::default() };
+            let g = time_eg_editor_layout(&p, rect(), mapping, 255);
+            assert_eq!(g.points.len(), 2, "{mapping:?}: 無効状態は左右2点だけのはず");
+            assert!((g.points[0].y - g.points[1].y).abs() < 1e-3, "{mapping:?}: 水平線のはず");
+            assert_eq!(g.stage_of_point, vec![0, 0]);
+            assert_eq!(g.release_point, 0, "{mapping:?}: セグメントがCOLOR_RELEASEで描かれるはず");
+            assert_eq!(g.sustain_terminal_point, Some(1), "{mapping:?}: 右端も輪郭丸扱いのはず");
+            assert_eq!(g.loop_span, None);
+
+            let floor = axis_floor_db(mapping);
+            let tl_db = tl_to_db(255);
+            let expected_db = stage_target_db(mapping, floor, tl_db, disabled_level(mapping));
+            let expected_y = rect().bottom() - ((expected_db.max(floor) - floor) / -floor) * rect().height();
+            assert!(
+                (g.points[0].y - expected_y).abs() < 1e-3,
+                "{mapping:?}: disabled_levelの高さで描かれるはず (actual={}, expected={expected_y})",
+                g.points[0].y
+            );
+        }
+    }
+
+    /// Gain FG無効時は×1.0（透過）であって0.0（無音）ではない
+    /// （`op505-core::Voice::tick`のスキップ実装と一致させる。plan
+    /// `docs/timeeg-fg-disable-plan.md`の🔴落とし穴参照）。透過(255)はバイポーラ中央(128)より
+    /// 高いレベルなので、同じ描画領域ではAmplitudeLinearの方が上（yが小さい）に描かれるはず。
+    #[test]
+    fn disabled_gain_fg_is_drawn_above_neutral_bipolar_not_at_silence() {
+        let p = TimeEgParams { stage_count: 0, ..TimeEgParams::default() };
+        let bipolar = time_eg_editor_layout(&p, rect(), EgAmplitudeMapping::RawLinear, 255);
+        let gain = time_eg_editor_layout(&p, rect(), EgAmplitudeMapping::AmplitudeLinear, 255);
+        assert!(
+            gain.points[0].y < bipolar.points[0].y,
+            "Gain FG無効(255=透過)はバイポーラ中央(128)より上に描かれるはず: gain_y={} bipolar_y={}",
+            gain.points[0].y,
+            bipolar.points[0].y
+        );
     }
 
     #[test]

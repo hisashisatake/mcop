@@ -73,8 +73,9 @@
       </header>
       <row justify="start" gap="spacing">
         <!-- 最終段level=0固定を免除しSTAGE=1も許す（terminal-level="free"）。OP EGと違いボイス
-             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。 -->
-        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
+             解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。
+             STAGE=0は無効化（変調なし、エンジンがtickをスキップする）。 -->
+        <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="0" terminal-level="free"/>
         <!-- SYNC/RATE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を足すのではなく、
              右のstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
              固定サイズの自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが
@@ -101,8 +102,10 @@
       <row justify="start" gap="spacing">
         <!-- Gain FGだけ最終段level=0固定を免除し、STAGE=1も許す。出力への乗算でボイス解放には
              関与しないため0へ向かう必要がなく、level 0が「無音」を意味してしまうため
-             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。 -->
-        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="1" terminal-level="free"/>
+             （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。
+             STAGE=0は無効化（Voice::tickがgain_fg_outを1.0固定でスキップする、0.0ではない
+             ことに注意——0.0だと無音になる）。 -->
+        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="0" terminal-level="free"/>
         <stack gap="spacing" center="true">
           <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
           <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
@@ -121,7 +124,8 @@
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="1" terminal-level="free"/>
+        <!-- STAGE=0は無効化（Pitch FGと同じ、変調なし）。 -->
+        <time-eg-editor handle="params.cutoff_fg.eg" mapping="RawLinear" tl-value="255" min-stages="0" terminal-level="free"/>
         <stack gap="spacing" center="true">
           <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>

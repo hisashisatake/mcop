@@ -71,8 +71,12 @@ const LOOP_MARKER_RADIUS: f32 = 4.0;
 /// `ui-codegen`が生成コードへ埋め込む。既定（`Default`）はOP1〜4 EG/Pitch FG/Cutoff FG用。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimeEgProfile {
-    /// STAGESの下限。OP EG/Pitch FG/Cutoff FGは2で、リリース段を必ず1本持たせる
-    /// （キーオフで必ずレベル0へ着地させるため）。Gain FGだけ1を許す。
+    /// STAGESの下限。OP EGは2で、リリース段を必ず1本持たせる（キーオフで必ずレベル0へ
+    /// 着地させ、ボイス解放条件「全4オペレーターがidle」を満たすため）。
+    /// **0はFG専用の特殊値で「無効化」を意味する**（stage_count=0、TimeEgのtick自体を
+    /// エンジン側がスキップする。op505-core::Voice::tick参照）。0を許すプロファイルでは
+    /// `normalize`/`spin_row_enabled`/`TimeEgFieldHandle`が段数0を特別扱いし、
+    /// release_point等の桁下がり計算を早期returnで回避する。
     pub min_stages: u8,
     /// trueなら最終段のlevelを0に固定する（GRAPHの縦ドラッグ禁止・VALUEのLV欄をグレーアウト）。
     ///
@@ -92,8 +96,8 @@ impl Default for TimeEgProfile {
 
 impl TimeEgProfile {
     /// Gain FG用。STAGE=1（リリース区間が空＝ゲートを一切閉じない透過既定）を許し、
-    /// 最終段のlevelも自由にする。
-    pub const GAIN_FG: Self = Self { min_stages: 1, terminal_level_zero: false };
+    /// 最終段のlevelも自由にする。STAGE=0（無効化）も許す（`min_stages`のdoc参照）。
+    pub const GAIN_FG: Self = Self { min_stages: 0, terminal_level_zero: false };
 }
 
 /// EG種別ごとの不変条件を満たすようパラメーターを整える。編集操作（段の挿入/削除・STAGES変更・
@@ -104,8 +108,14 @@ impl TimeEgProfile {
 /// 例えば`loop_enabled`のフラグ自体は消さない——ループ区間が成立しないときは
 /// エンジン側・プレビュー側とも「ループなし」として扱うので、リリース点を右へ戻せば設定も戻る。
 fn normalize(mut params: TimeEgParams, profile: TimeEgProfile) -> TimeEgParams {
-    let min_stages = profile.min_stages.clamp(1, MAX_STAGES as u8);
+    let min_stages = profile.min_stages.clamp(0, MAX_STAGES as u8);
     params.stage_count = params.stage_count.clamp(min_stages, MAX_STAGES as u8);
+    if params.stage_count == 0 {
+        // 無効状態（FGのみ、min_stages=0で許容）。段が無いのでrelease_point/loop_start/stagesは
+        // いずれも意味を持たない。触らずそのまま返す（再度1以上に戻したとき元の設定が
+        // 復元されるように。ユーザーが触っていない値を裏で書き換えない原則、このfnのdoc参照）。
+        return params;
+    }
     let n = params.stage_count as usize;
 
     // リリース点の上限。リリース段を必ず1本残すEG(min_stages>=2)はn-2まで、
@@ -231,13 +241,18 @@ impl<'a> TimeEgFieldHandle<'a> {
 
     /// 現在の段数（プロファイルの下限を効かせたもの）。
     fn stage_count(&self) -> usize {
-        self.handle.params().stage_count.clamp(self.profile.min_stages.max(1), MAX_STAGES as u8) as usize
+        self.handle.params().stage_count.clamp(self.profile.min_stages, MAX_STAGES as u8) as usize
     }
 
     /// `release_point`(0始まり段index)の上限。リリース段を必ず1本残すEGはn-2、
     /// 空リリースを許すGain FGはn-1（`normalize`と同じ規則）。
     fn max_release_point(&self) -> usize {
         let n = self.stage_count();
+        if n == 0 {
+            // 無効状態（FGのみ）。RELは意味を持たないので0を返す
+            // （`spin_row_enabled`がREL欄自体を無効にするので実際には使われない）。
+            return 0;
+        }
         if self.profile.min_stages >= 2 {
             n.saturating_sub(2)
         } else {
@@ -250,10 +265,19 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
     fn value(&self) -> i32 {
         let p = self.handle.params();
         match self.field {
-            // 生値0は「1として扱う」特殊値（`sound_core::time_eg::clamp_stage_count`と同じ床）。
-            // ここでmax(1)しないとSTAGES表示が0のまま、実際には1段ぶんドラッグ可能な点が
-            // 存在するという表示と実体の食い違いが起きる（実機確認で発覚）。
-            TimeEgField::StageCount => p.stage_count.max(1) as i32,
+            // 生値0は本来「1として扱う」特殊値（`sound_core::time_eg::clamp_stage_count`と同じ床）
+            // だが、min_stages=0を許すプロファイル（FG）では0そのものが「無効化」という
+            // 正規の意味を持つため、max(1)で潰さずそのまま表示する。min_stages>=1のプロファイル
+            // （OP EG等）では0は到達しない値のはずだが、万一の手編集データに備えmax(1)で守る
+            // （実機確認で判明: max(1)しないとSTAGES表示が0のまま、実際には1段ぶんドラッグ
+            // 可能な点が存在するという表示と実体の食い違いが起きる）。
+            TimeEgField::StageCount => {
+                if self.profile.min_stages == 0 {
+                    p.stage_count as i32
+                } else {
+                    p.stage_count.max(1) as i32
+                }
+            }
             TimeEgField::LoopStart => p.loop_start as i32,
             // 0始まりの内部値を1始まりのクリック点番号へ変換して見せる。
             TimeEgField::ReleasePoint => p.release_point as i32 + 1,
@@ -266,7 +290,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn min(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            TimeEgField::StageCount => self.profile.min_stages as i32,
             // クリック点(1)より手前に境界は置けない。
             TimeEgField::ReleasePoint => 1,
             _ => 0,
@@ -287,7 +311,7 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
 
     fn default(&self) -> i32 {
         match self.field {
-            TimeEgField::StageCount => self.profile.min_stages.max(1) as i32,
+            TimeEgField::StageCount => self.profile.min_stages as i32,
             TimeEgField::ReleasePoint => 1,
             // 128=無効（バイポーラ中心）。`sound_core::time_eg::BIPOLAR_NEUTRAL_RAW`と同じ値。
             TimeEgField::LevelDrift | TimeEgField::DepthDrift => 128,
@@ -322,6 +346,9 @@ impl IntParamHandle for TimeEgFieldHandle<'_> {
         let clamped = value.clamp(self.min(), self.max()) as u8;
         match self.field {
             TimeEgField::StageCount => {
+                // oldは複製元の計算にのみ使うため1で下げ止める（段-1は存在しない）。
+                // 無効状態(0)から1以上へ戻すときはold=1扱いになり、source=stages[0]を
+                // 複製元にする（0→1のときはループ本体が空で複製自体は起きない）。
                 let old = p.stage_count.clamp(1, MAX_STAGES as u8);
                 // 新しく有効になる段は前段(old-1)を複製する（`insert_stage_after`と同じ方針）。
                 // 単純にTimeStage::defaultのまま(time=0)にすると、time=0は「瞬時」を表す特殊値
@@ -509,7 +536,9 @@ fn insert_stage_after(params: &TimeEgParams, index: usize, profile: TimeEgProfil
 fn remove_stage(params: &TimeEgParams, index: usize, profile: TimeEgProfile) -> TimeEgParams {
     let mut out = *params;
     let n = (params.stage_count as usize).clamp(1, MAX_STAGES);
-    if n <= profile.min_stages.max(1) as usize {
+    // min_stagesの床に達していれば何もしない。0を許すプロファイル（FG）ではn=1から
+    // 0（無効状態）まで削除できる——STAGES欄の「-」ボタンと同じ床に揃える。
+    if n <= profile.min_stages as usize {
         return out;
     }
     let index = index.min(n - 1);
@@ -521,7 +550,9 @@ fn remove_stage(params: &TimeEgParams, index: usize, profile: TimeEgProfile) -> 
     let shift = |p: u8| -> u8 {
         let p = p as usize;
         let shifted = if p > index { p - 1 } else { p };
-        shifted.min(new_n - 1) as u8
+        // new_n=0（無効状態）のときは桁下がりを避けるためsaturating_subを使う
+        // （このときshifted自体も0固定になるはずだが、念のため）。
+        shifted.min(new_n.saturating_sub(1)) as u8
     };
     out.loop_start = shift(params.loop_start);
     out.release_point = shift(params.release_point);
@@ -539,15 +570,20 @@ struct SpinRowEnabled {
 /// （1つしか選べない欄を押せる見た目で残すと「数字は見えるのに動かせない死んだUI」になり、
 /// 過去に却下された形になる）。UIから切り離してテストできるよう純粋関数にしてある。
 fn spin_row_enabled(params: &TimeEgParams, profile: TimeEgProfile) -> SpinRowEnabled {
-    let n = params.stage_count.clamp(profile.min_stages.max(1), MAX_STAGES as u8) as usize;
+    let n = params.stage_count.clamp(profile.min_stages, MAX_STAGES as u8) as usize;
+    if n == 0 {
+        // 無効状態（FGのみ、min_stages=0で許容）。段が無いのでLOOP/REL/L.STARTのいずれも
+        // 意味を持たない。全欄グレーアウトする（値は保持されるので再度1以上に戻せば復元する）。
+        return SpinRowEnabled { rel: false, loop_toggle: false, loop_start: false };
+    }
     let max_release_point = if profile.min_stages >= 2 { n.saturating_sub(2) } else { n - 1 };
     SpinRowEnabled {
         // リリース点はクリック点(1)〜(max_release_point+1)から選ぶ（STAGE=2は(1)固定）。
         rel: max_release_point > 0,
         // LOOPは保持区間が1段以上あれば常に成立する（release_point=0でも「段0を繰り返す」
         // 1段ループ＝入口レベルへ跳ね戻すノコギリ波が組める。sound-core/time_eg.rsのadvance参照）。
-        // RELが動かせるか(max_release_point>0)とは無関係。段数nが1以上ならnは常に非0。
-        loop_toggle: n >= 1,
+        // RELが動かせるか(max_release_point>0)とは無関係。
+        loop_toggle: true,
         // L.STARTは0〜release_pointから選ぶ。release_point=0だと0しか選べないため無効に保つ
         // （選択肢が1つの欄を押せる見た目で残さない原則）。
         loop_start: params.release_point >= 1,
@@ -635,7 +671,8 @@ fn stage_spin_row(ui: &mut Ui, handle: &dyn TimeEgHandle, profile: TimeEgProfile
 /// 段数1〜`MAX_STAGES`でスクロール量が変わるだけで外形（`size`）自体は変わらない（Step 2の固定枠化）。
 fn draw_value_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, profile: TimeEgProfile) {
     let params = handle.params();
-    let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
+    // n=0（無効状態、FGのみ）なら段行を1本も描かない（下のfor 0..nが自然に空になる）。
+    let n = (params.stage_count as usize).clamp(profile.min_stages as usize, MAX_STAGES);
     egui::ScrollArea::vertical()
         .id_salt(("time_eg_editor", handle.name(), "value_scroll"))
         .max_height(size.y)
@@ -732,7 +769,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     // どちらが上げ方向でどちらが下げ方向かを読めるようにする（振幅系は下端=無音が自明なので不要）。
     draw_neutral_baseline(painter, inner, mapping, tl);
 
-    let n = (params.stage_count as usize).clamp(profile.min_stages.max(1) as usize, MAX_STAGES);
+    // n=0（無効状態、FGのみ）はterminal_level_zero=falseのプロファイルでしか起きないため、
+    // 下の`stage == n - 1`判定は`profile.terminal_level_zero`の短絡評価で桁下がりを回避できる。
+    let n = (params.stage_count as usize).clamp(profile.min_stages as usize, MAX_STAGES);
     let marker_y = inner.bottom() + LOOP_MARKER_OFFSET;
     // ループ区間の背景へ淡い帯を敷いて「どこが繰り返すか」を一目で分かるようにする。
     // 折れ線・頂点より前に描いて背面へ回す。`loop_span`はループが成立するときだけSome。
@@ -812,7 +851,9 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
             ui.label("(対象なし)");
             return;
         };
-        let min_stages = profile.min_stages.max(1) as usize;
+        // 0を許すプロファイル（FG）は右クリック削除でも0（無効状態）まで減らせる
+        // （STAGES欄の「-」ボタンと同じ床。`remove_stage`が実際の下がり計算を担う）。
+        let min_stages = profile.min_stages as usize;
         let curve_stage = match target {
             CtxTarget::Vertex(stage) => Some(stage),
             CtxTarget::Segment(stage) => Some(stage),
@@ -1051,6 +1092,74 @@ mod tests {
         p.stage_count = 2;
         let out = remove_stage(&p, 1, TimeEgProfile::GAIN_FG);
         assert_eq!(out.stage_count, 1, "Gain FGは1段まで減らせる（透過既定の形）");
+    }
+
+    // -----------------------------------------------------------------------
+    // min_stages=0（FG無効化）
+    // -----------------------------------------------------------------------
+
+    /// FG（min_stages=0）はSTAGES=0まで減らせる。右クリック削除もSTAGES欄の「-」ボタンと
+    /// 同じ床に揃っているはず。
+    #[test]
+    fn gain_fg_profile_can_remove_down_to_zero_stages() {
+        let p = TimeEgParams { stage_count: 1, ..TimeEgParams::default() };
+        let out = remove_stage(&p, 0, TimeEgProfile::GAIN_FG);
+        assert_eq!(out.stage_count, 0, "Gain FGは0段（無効化）まで減らせるはず");
+    }
+
+    /// OP EG（min_stages=2）はSTAGES=0を許さない。既存の下限保護がそのまま効くはず。
+    #[test]
+    fn default_profile_still_rejects_zero_stages() {
+        let p = TimeEgParams { stage_count: 2, ..TimeEgParams::default() };
+        let out = remove_stage(&p, 0, TimeEgProfile::default());
+        assert_eq!(out.stage_count, 2, "OP EGは2段が下限のまま変わらないはず");
+    }
+
+    /// `normalize`はstage_count=0（無効状態）を、ユーザーが触っていない値を書き換えず
+    /// そのまま通すはず（再度1以上に戻したとき元の設定が復元されるように）。
+    #[test]
+    fn normalize_passes_through_disabled_state_unchanged() {
+        let p = TimeEgParams {
+            stage_count: 0,
+            loop_enabled: 1,
+            loop_start: 3,
+            release_point: 4,
+            ..TimeEgParams::default()
+        };
+        let out = normalize(p, TimeEgProfile::GAIN_FG);
+        assert_eq!(out.stage_count, 0);
+        assert_eq!(out.loop_enabled, 1, "ループ設定は保持されるはず");
+        assert_eq!(out.loop_start, 3, "L.STARTは保持されるはず");
+        assert_eq!(out.release_point, 4, "RELは保持されるはず");
+    }
+
+    /// `normalize`はmin_stages>=1のプロファイルではstage_count=0を許さず、
+    /// 従来通り床(min_stages)へクランプするはず。
+    #[test]
+    fn normalize_clamps_zero_up_to_min_stages_when_disabled_not_allowed() {
+        let p = TimeEgParams { stage_count: 0, ..TimeEgParams::default() };
+        let out = normalize(p, TimeEgProfile::default());
+        assert_eq!(out.stage_count, 2, "OP EGは0を許さず2段へクランプされるはず");
+    }
+
+    /// STAGES=0（無効状態）ではLOOP/REL/L.STARTのいずれもグレーアウトするはず。
+    #[test]
+    fn spin_row_greys_out_all_fields_when_stage_count_zero() {
+        let p = TimeEgParams { stage_count: 0, ..TimeEgParams::default() };
+        let e = spin_row_enabled(&p, TimeEgProfile::GAIN_FG);
+        assert!(!e.rel && !e.loop_toggle && !e.loop_start, "STAGES=0は全欄無効のはず");
+    }
+
+    /// STAGES欄はmin_stages=0のプロファイルでは0そのものを表示・受理する
+    /// （min_stages>=1のプロファイルにある「生値0は1として扱う」特殊ルールの対象外）。
+    #[test]
+    fn stage_count_field_accepts_zero_for_gain_fg_profile() {
+        let handle = MockTimeEg { value: Cell::new(TimeEgParams { stage_count: 1, ..TimeEgParams::default() }) };
+        let field = TimeEgFieldHandle::new(&handle, TimeEgField::StageCount, TimeEgProfile::GAIN_FG);
+        assert_eq!(field.min(), 0, "Gain FGの下限は0のはず");
+        field.set(0);
+        assert_eq!(handle.params().stage_count, 0, "STAGES=0を受理するはず");
+        assert_eq!(field.value(), 0, "STAGES=0をそのまま表示するはず（1へ潰さない）");
     }
 
     /// リリース点は必ずリリース段を1本残す位置までしか置けない（既定プロファイル）。
