@@ -4,7 +4,8 @@ mod params;
 
 use op505_midi::{
     apply_expression_modulation, apply_pitch_fg_expression, apply_soft_pedal, cc_to_u7, cc_to_u8,
-    control_target, released_notes, ControlTarget, ExpressionDestination, PedalState, RpnTracker,
+    control_target, released_notes, ChannelProgramState, ControlTarget, ExpressionDestination, PedalState,
+    ProgramSelection, RpnTracker, RHYTHM_BANK_RANGE,
 };
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
@@ -136,13 +137,20 @@ struct Op505Plugin {
     data_entry_lsb: u8,                   // CC38 (Data Entry LSB) の最新値
     operator_f_number_override: [u16; 4], // 各Opの上書き値。初期値F_NUMBER_CENTER（上書きなし）
 
-    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change：MIDIチャンネルごとに管理
-    // （`ym38x6-vst`と同一設計）。
-    bank_select_msb: [u8; 16],
-    bank_select_lsb: [u8; 16],
-    /// Program Changeで選択されたパッチ（MIDIチャンネルごと）。該当プリセットが無ければ
+    // Bank Select（CC0=MSB, CC32=LSB）+ Program Change：MIDIチャンネルごとに管理する
+    // 状態機械（`op505-midi::ChannelProgramState`）。GM2リズムチャンネル判定を含めて
+    // この1本に集約する（`bank_select_msb`等を別配列で並行して持つと「真実が2箇所」になり
+    // CC0が片方にしか反映されないバグの元になるため、意図的にここへ一本化してある）。
+    program_state: [ChannelProgramState; 16],
+    /// リズムキットが`preset_bank`に1つでもロードされているか（`initialize()`/`reset()`で
+    /// `preset_bank.has_bank_in(RHYTHM_BANK_RANGE)`から算出）。ch10の初期ドラムON判定に使う
+    /// （キット未ロード環境でch10が突然無音になる回帰を防ぐ、`ChannelProgramState::new`参照）。
+    rhythm_kits_available: bool,
+    /// Program Changeで選択された旋律パッチ（MIDIチャンネルごと）。該当プリセットが無ければ
     /// `None`（`Op505PresetBank::get`と同じくフォールバックせず「見つからない」を伝える。
     /// `.op505`には`.38x6`のような波形メモリ/GM2/プレースホルダー代替が無いため）。
+    /// **リズムチャンネルでは使わない**（ノートごとに音色が変わるため、常に`None`のまま
+    /// `resolve_note_patch`がノートオンのたびに直接引く）。
     program_patch: [Option<Op505Patch>; 16],
 
     // ピッチベンド（MIDIチャンネル単位、`ym38x6-vst`と同一設計）。
@@ -213,8 +221,10 @@ impl Default for Op505Plugin {
             data_entry_msb: 0,
             data_entry_lsb: 0,
             operator_f_number_override: [F_NUMBER_CENTER; 4],
-            bank_select_msb: [0; 16],
-            bank_select_lsb: [0; 16],
+            // preset_bankがまだ空(Default)なのでrhythm_kits_available=falseは正しい既定値。
+            // 実際の値はinitialize()で再計算する。
+            program_state: std::array::from_fn(|i| ChannelProgramState::new(i, false)),
+            rhythm_kits_available: false,
             program_patch: [None; 16],
             channel_bend_cents: [0.0; 16],
             pitch_bend_range: 2.0,
@@ -280,6 +290,43 @@ impl Op505Plugin {
         };
 
         Op505Patch { operators, channel }
+    }
+
+    /// このMIDIチャンネル・ノートで鳴らすべきベースパッチ（DAWパラメーター等の後処理を
+    /// 適用する前の①層）。`None`ならこのノートは発音しない
+    /// （リズムチャンネルでキット内に未定義のノート＝GM2実機で無音になるのと同じ）。
+    ///
+    /// 旋律チャンネルは従来どおり`program_patch[midi_ch]`（Program Changeで選ばれていれば）→
+    /// `build_patch()`（DAWパラメーター由来）の優先順で必ず`Some`を返す。
+    /// リズムチャンネルはノートごとに異なる音色を`preset_bank`から直接引く（`program_patch`は
+    /// 使わない。オーディオスレッドでのアロケーションは無い：`HashMap::get` + `Op505Patch`は
+    /// `Copy`のためmemcpyのみ）。
+    fn resolve_note_patch(&self, midi_ch: usize, note: u8) -> Option<Op505Patch> {
+        let state = &self.program_state[midi_ch];
+        if state.is_rhythm() {
+            let (bank, program) = state.lookup_address(note);
+            self.preset_bank
+                .get(bank, program)
+                // GM2: キット内未定義ノートはStandard Kit(kit 0)へフォールバックする。
+                .or_else(|| {
+                    state.rhythm_fallback_address(note).and_then(|(b, p)| self.preset_bank.get(b, p))
+                })
+                .map(|preset| preset.patch)
+        } else {
+            Some(self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch()))
+        }
+    }
+
+    /// Program Change（`MidiProgramChange`/CC102代替の両方から呼ぶ）。`ChannelProgramState`で
+    /// 旋律/リズムを確定させ、旋律なら`program_patch`をキャッシュする（リズムはノートごとに
+    /// `resolve_note_patch`が直接引くため、ここではキャッシュしない＝常に`None`にする）。
+    fn apply_program_change(&mut self, midi_ch: usize, program: u8) {
+        match self.program_state[midi_ch].program_change(program) {
+            ProgramSelection::Melodic { bank, program } => {
+                self.program_patch[midi_ch] = self.preset_bank.get(bank, program).map(|preset| preset.patch);
+            }
+            ProgramSelection::Rhythm { .. } => self.program_patch[midi_ch] = None,
+        }
     }
 
     /// CC76(Vibrato Rate)由来のPitch FG速さスケールを計算する（`cc76_to_rate_scale`、
@@ -436,12 +483,21 @@ impl Plugin for Op505Plugin {
         self.render_buffer
             .resize(buffer_config.max_buffer_size as usize * num_out, 0.0);
         self.preset_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
+        self.rhythm_kits_available = self.preset_bank.has_bank_in(RHYTHM_BANK_RANGE);
+        for (i, st) in self.program_state.iter_mut().enumerate() {
+            st.reset(i, self.rhythm_kits_available);
+        }
         true
     }
 
     fn reset(&mut self) {
         self.engine = Op505Engine::new(self.sample_rate);
         self.effects = MasterEffects::new(self.sample_rate);
+        // GM2 System Reset相当。CC121(Reset All Controllers)はbank/programをリセットしない
+        // （ChannelProgramState::resetのdocコメント参照）ため、ここでのみ呼ぶ。
+        for (i, st) in self.program_state.iter_mut().enumerate() {
+            st.reset(i, self.rhythm_kits_available);
+        }
         self.pitch_fg_cc1 = [0; MIDI_CHANNEL_COUNT];
         self.pitch_fg_cc76 = [64; MIDI_CHANNEL_COUNT];
         self.pitch_fg_cc77 = [0; MIDI_CHANNEL_COUNT];
@@ -468,8 +524,6 @@ impl Plugin for Op505Plugin {
         self.data_entry_msb = 0;
         self.data_entry_lsb = 0;
         self.operator_f_number_override = [F_NUMBER_CENTER; 4];
-        self.bank_select_msb = [0; 16];
-        self.bank_select_lsb = [0; 16];
         self.program_patch = [None; 16];
         self.channel_bend_cents = [0.0; 16];
         self.pitch_bend_range = 2.0;
@@ -596,12 +650,23 @@ impl Plugin for Op505Plugin {
         for &ch_id in ids.iter() {
             let midi_ch = ch_id >> 7;
             let note = (ch_id & 127) as u8;
-            let base_patch = channel_patches[midi_ch].unwrap_or_else(|| {
-                // Program Changeで選ばれていればそれを基底に、無ければDAWパラメーター由来。
-                let patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
-                channel_patches[midi_ch] = Some(patch);
-                patch
-            });
+            // リズムチャンネルはノートごとに音色が違うため、MIDIチャンネル単位の
+            // channel_patchesキャッシュは使わずノートごとに直接解決する（resolve_note_patch）。
+            let base_patch = if self.program_state[midi_ch].is_rhythm() {
+                match self.resolve_note_patch(midi_ch, note) {
+                    Some(p) => p,
+                    // キット切替等でこのノートが指す音色が消えた。既存の発音中パラメーターを
+                    // そのまま維持する（無音にしたり別音色へ差し替えたりはしない）。
+                    None => continue,
+                }
+            } else {
+                channel_patches[midi_ch].unwrap_or_else(|| {
+                    // Program Changeで選ばれていればそれを基底に、無ければDAWパラメーター由来。
+                    let patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
+                    channel_patches[midi_ch] = Some(patch);
+                    patch
+                })
+            };
             let mut note_patch = base_patch;
             apply_expression_modulation(
                 note,
@@ -642,8 +707,14 @@ impl Plugin for Op505Plugin {
                     let bit = 1u128 << note;
                     // 弾き直したらペダル保留を解除する（`ym38x6-vst`と同一理由）。
                     self.pedals[midi_ch].note_on(note);
-                    // このMIDIチャンネルのProgram Change（CC102/CLAP）パッチを優先。なければDAW値。
-                    let mut note_on_patch = self.program_patch[midi_ch].unwrap_or_else(|| self.build_patch());
+                    // リズムチャンネルはノートごとに音色を直接解決する。キット内に未定義の
+                    // ノートなら発音しない（`Op505Patch::default()`でnote_onしてはいけない。
+                    // 全段level=0/time=0のEGはrelease_pointで静止し`is_idle()`が永久にfalseに
+                    // なりボイスが漏れるため。旋律チャンネルは従来どおりProgram Change
+                    // パッチ優先・無ければDAW値）。
+                    let Some(mut note_on_patch) = self.resolve_note_patch(midi_ch, note) else {
+                        continue;
+                    };
                     // CC78(Delay)は`TimeEg::note_on()`が読む最初のtickから効かせる必要があるため、
                     // 伝播ループでの1ブロック遅れの反映を待たずここで適用する（CC1/77も併せて統一適用）。
                     apply_pitch_fg_expression(
@@ -687,10 +758,7 @@ impl Plugin for Op505Plugin {
                     self.poly_pressure[channel as usize][note as usize] = cc_to_u8(pressure);
                 }
                 NoteEvent::MidiProgramChange { program, channel, .. } => {
-                    let bank = (self.bank_select_msb[channel as usize] as u16) * 128
-                        + self.bank_select_lsb[channel as usize] as u16;
-                    self.program_patch[channel as usize] =
-                        self.preset_bank.get(bank, program).map(|preset| preset.patch);
+                    self.apply_program_change(channel as usize, program);
                 }
                 NoteEvent::MidiCC { cc, value, channel, .. } => {
                     let midi_ch = channel as usize;
@@ -757,7 +825,8 @@ impl Plugin for Op505Plugin {
                         // CC121(Reset All Controllers)：③ジェスチャー層のみリセットする
                         // （②パート状態・①音色は保持、spec-sound.md「補強規則」）。CC64/66/67ペダル・
                         // Pitch Bend・CC1・アフタータッチが対象。CC2/CC4/CC7/CC11/CC76〜78/センド/
-                        // RPN等は保持。
+                        // RPN等は保持。GM2でもRACはbank/programをリセットしないため、
+                        // 意図的に`program_state`（リズム/旋律の状態）へは一切触れない。
                         121 => {
                             let released = self.pedals[midi_ch].cc121();
                             for note in released_notes(released) {
@@ -769,9 +838,10 @@ impl Plugin for Op505Plugin {
                             self.channel_pressure[midi_ch] = 0;
                             self.poly_pressure[midi_ch] = [0; 128];
                         }
-                        // Bank Select（CC0=MSB, CC32=LSB）：MIDIチャンネルごとに管理
-                        0 => self.bank_select_msb[midi_ch] = cc_to_u7(value),
-                        32 => self.bank_select_lsb[midi_ch] = cc_to_u7(value),
+                        // Bank Select（CC0=MSB, CC32=LSB）：これだけでは旋律/リズムは
+                        // 切り替わらない（次のProgram Changeで確定する、ChannelProgramState参照）。
+                        0 => self.program_state[midi_ch].bank_select_msb(cc_to_u7(value)),
+                        32 => self.program_state[midi_ch].bank_select_lsb(cc_to_u7(value)),
                         98 => self.rpn.set_nrpn_lsb(cc_to_u7(value)),
                         99 => self.rpn.set_nrpn_msb(cc_to_u7(value)),
                         100 => self.rpn.set_rpn_lsb(cc_to_u7(value)),
@@ -787,13 +857,7 @@ impl Plugin for Op505Plugin {
                         93 => self.effects.set_chorus_send(cc_to_u8(value)),
                         // CC102: Program Change 代替（VST3ではMidiProgramChangeが届かないため、
                         // `ym38x6-vst`と同じくGM2未定義ブロック先頭のCC102で代替する）。
-                        102 => {
-                            let prog = cc_to_u7(value);
-                            let bank = (self.bank_select_msb[midi_ch] as u16) * 128
-                                + self.bank_select_lsb[midi_ch] as u16;
-                            self.program_patch[midi_ch] =
-                                self.preset_bank.get(bank, prog).map(|preset| preset.patch);
-                        }
+                        102 => self.apply_program_change(midi_ch, cc_to_u7(value)),
                         // Operator Key On/Off（CC103〜106、≧64でキーオン/<64でキーオフ、spec-sound.md参照）。
                         // 発音中チャンネルのうち、このMIDIチャンネルに属するものだけへ適用する。
                         103..=106 => {
