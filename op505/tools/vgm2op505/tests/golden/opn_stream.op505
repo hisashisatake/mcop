@@ -376,7 +376,7 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
+              "stage_count": 0,
               "loop_enabled": 0,
               "loop_start": 0,
               "release_point": 0,
@@ -443,7 +443,7 @@
                   "curve": 0
                 }
               ],
-              "stage_count": 2,
+              "stage_count": 0,
               "loop_enabled": 0,
               "loop_start": 0,
               "release_point": 0,

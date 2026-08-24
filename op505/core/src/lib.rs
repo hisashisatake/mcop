@@ -62,21 +62,25 @@ pub struct Op505BipolarFg {
 }
 
 impl Default for Op505BipolarFg {
-    /// 無変調の新規パッチ：Depth=0（振れ幅ゼロ）かつEGレベルは中央(128)。
-    /// レベルを`TimeEgParams::default()`の0のままにすると、バイポーラ解釈では
-    /// 「全開マイナス」を意味してしまうため`neutral_bipolar_eg()`を使う。
+    /// 無変調の新規パッチ：Depth=0（振れ幅ゼロ）かつSTAGES=0（無効化、`Voice::tick`が
+    /// tick自体をスキップする）。
     fn default() -> Self {
         Self { eg: neutral_bipolar_eg(), depth: 0 }
     }
 }
 
-/// バイポーラFG（Pitch/Cutoff）の無変調EG：全段が中央レベル(128)の2段。
+/// バイポーラFG（Pitch/Cutoff）の無変調EG：STAGES=0（無効化）で、段データ自体は
+/// 全段中央レベル(128)のまま持たせる。
 ///
-/// 段数2なのは`TimeEgParams::default()`と同じ理由（1段だとリリース区間が空になる）。
-/// 全段が中央なのでキーオンからリリースまで一貫して変調量0になる。
+/// stage_count=0にするのは`Voice::tick`が「STAGES=0ならtickをスキップする」設計
+/// （`ui_core::TimeEgProfile::min_stages=0`で許容されるFG専用の特殊値、
+/// docs/timeeg-fg-disable-plan.md参照）に合わせるため。stagesを128埋めのまま残すのは、
+/// STAGES欄を1以上へ戻したときレベルを「全開マイナス」（生値0のバイポーラ解釈）から
+/// ではなく中央（無変調）から再開できるようにするため——`.max(1)`で1段扱いされる
+/// 旧仕様の名残の安全策で、無効化そのものには影響しない。
 pub fn neutral_bipolar_eg() -> TimeEgParams {
     let neutral = TimeStage { time: 0, level: sound_core::BIPOLAR_NEUTRAL_RAW, curve: 0 };
-    TimeEgParams { stages: [neutral; sound_core::MAX_STAGES], ..TimeEgParams::default() }
+    TimeEgParams { stages: [neutral; sound_core::MAX_STAGES], stage_count: 0, ..TimeEgParams::default() }
 }
 
 /// レベルが「0〜255の大きさ」として組まれたEG（振幅系の形・レガシー実機からの変換結果など）を、
