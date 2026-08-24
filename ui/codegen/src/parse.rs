@@ -351,13 +351,15 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let tl = eg_field(el, ctx, "tl")?;
             let w = attr_f32_or(el, "width", style.time_eg_editor_size.w)?;
             let h = attr_f32_or(el, "height", style.time_eg_editor_size.h)?;
+            // 上限10は`sound_core::time_eg::MAX_STAGES`とのリテラル二重管理（ui-codegenは
+            // egui/sound-core非依存の純粋クレートという設計を守るため、依存を足さずリテラルで持つ）。
             let min_stages: u8 = match el.attribute("min-stages") {
                 None => 2,
                 Some(v) => v
                     .parse()
                     .ok()
-                    .filter(|n| (1..=8).contains(n))
-                    .ok_or_else(|| "<time-eg-editor>のmin-stagesは1〜8で指定してください".to_string())?,
+                    .filter(|n| (1..=10).contains(n))
+                    .ok_or_else(|| "<time-eg-editor>のmin-stagesは1〜10で指定してください".to_string())?,
             };
             let terminal_level_zero = match el.attribute("terminal-level").unwrap_or("zero") {
                 "zero" => true,

@@ -7,7 +7,7 @@
 // `pub(crate)`昇格したeg_preview.rsの実装をそのまま共有する（同一crate内）。
 //
 // TimeEgとレート方式EGの構造上の違い（流用できない理由）:
-// - フェーズ固定4本(AR/D1R/D2R/RR)ではなく、1〜8段の可変長リスト（`TimeEgParams::stage_count`）
+// - フェーズ固定4本(AR/D1R/D2R/RR)ではなく、1〜`MAX_STAGES`段の可変長リスト（`TimeEgParams::stage_count`）
 // - 各段が`level`を独立に持つ（レート方式は「AR=常にTLへ完全到達」という前提があったが、
 //   TimeEgでは段0から既に任意のlevelを持てる）
 // - フリーズ特殊値が無い（`time=0`は「瞬時」でレート方式の`rate=0`＝フリーズとは意味が真逆。
@@ -38,7 +38,7 @@ use crate::eg_preview::{
     draw_ramp, level_contribution_db, tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE, DB_FLOOR,
 };
 
-/// `<style>`省略時の既定サイズ。TimeEgは最大8段(保持側最大16セグメント+リリース最大8セグメント)を
+/// `<style>`省略時の既定サイズ。TimeEgは最大`MAX_STAGES`段(保持側最大`MAX_STAGES*2`セグメント+リリース最大`MAX_STAGES`セグメント)を
 /// 描くため、4フェーズ固定のレート方式版（84×66）より横に広く取る。
 const DEFAULT_WIDTH: f32 = 130.0;
 const DEFAULT_HEIGHT: f32 = 66.0;

@@ -11,7 +11,7 @@
     <!-- 全ウィジェット共通の既定マージン。 -->
     <widget margin="4"/>
     <algorithm-diagram width="130" height="100"/>
-    <!-- TimeEg固定枠（Step 2）。GRAPH/KNOBSタブ切替・段数1〜8変更でこのサイズ自体は変わらない。
+    <!-- TimeEg固定枠（Step 2）。GRAPH/KNOBSタブ切替・段数1〜10変更でこのサイズ自体は変わらない。
          高さ245＝ヘッダ20+コンテンツ190+spin行35。コンテンツ190はKNOBSモードの1段カラム
          （ラベル+knob(66px)×2+checkbox、item_spacing込みで実測約175px）が収まる下限
          （Step6実機確認で175だと段カラムがはみ出しパネル高さが跳ねる不具合を発見し追い込んだ値）。 -->

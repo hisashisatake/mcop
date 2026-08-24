@@ -1,7 +1,7 @@
 //! OP505パネル用の状態とハンドル。フラットなミラー構造体を新設せず`Op505Patch`
 //! （op505-core、`Default`実装済み）をそのまま`Rc<RefCell<>>`で保持する
 //! （設計判断はplan参照: 専用DTOを作らずOp505Patchを直接シリアライズする方針と対を成す。
-//! 196値ぶんのミラー構造体を手書きしない）。
+//! 280値ぶんのミラー構造体を手書きしない）。
 //!
 //! TimeEg（`sound_core::TimeEgParams`）はOp505Patch内の7箇所（4つのOP EG＋Pitch/Cutoff/Gain FG）に
 //! ネストしているため、`Op505IntField`（フラットなi32/bool 1個への単純ハンドル）とは別に、

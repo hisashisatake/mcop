@@ -2,7 +2,8 @@
 // TimeEg — ループ付きN点Time/Level形式エンベロープ（プロトタイプ）
 //
 // 5段OPM形式（`eg::Eg`）が「傾き」を指定するのに対し、こちらは「所要時間」を指定する。
-// 段(Stage)は最大8つ（CZ-101の8段に準拠）、うち任意区間をループでき、キーオフ後は
+// 段(Stage)は最大10個（当初はCZ-101の8段に準拠していたが、10段への実用性検証を経て拡張。
+// memory `project_timeeg_stage_numbering.md`参照）、うち任意区間をループでき、キーオフ後は
 // `release_start`から残りの段を順に辿る（多段リリース）。既存の`Eg`・`EgParams`・
 // `ym38x6-core`側は一切変更しない、独立した実験用の型（memory
 // `project_4point_tl_eg_decision.md`参照）。
@@ -15,8 +16,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-/// 段の最大数。CZ-101の8段に準拠。4点T/Lは`stage_count=4`で表現する。
-pub const MAX_STAGES: usize = 8;
+/// 段の最大数。当初はCZ-101の8段に準拠していたが10段へ拡張済み。4点T/Lは`stage_count=4`で表現する。
+pub const MAX_STAGES: usize = 10;
 
 /// バイポーラ解釈するEGの「無変調」を表す生レベル値。DT1・op_fine_tune等このプロジェクトの
 /// 他のバイポーラパラメーターと同じ中心128（`(v-128)/128`慣例）に揃えてある。
