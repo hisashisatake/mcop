@@ -62,21 +62,25 @@ pub struct Op505BipolarFg {
 }
 
 impl Default for Op505BipolarFg {
-    /// 無変調の新規パッチ：Depth=0（振れ幅ゼロ）かつEGレベルは中央(128)。
-    /// レベルを`TimeEgParams::default()`の0のままにすると、バイポーラ解釈では
-    /// 「全開マイナス」を意味してしまうため`neutral_bipolar_eg()`を使う。
+    /// 無変調の新規パッチ：Depth=0（振れ幅ゼロ）かつSTAGES=0（無効化、`Voice::tick`が
+    /// tick自体をスキップする）。
     fn default() -> Self {
         Self { eg: neutral_bipolar_eg(), depth: 0 }
     }
 }
 
-/// バイポーラFG（Pitch/Cutoff）の無変調EG：全段が中央レベル(128)の2段。
+/// バイポーラFG（Pitch/Cutoff）の無変調EG：STAGES=0（無効化）で、段データ自体は
+/// 全段中央レベル(128)のまま持たせる。
 ///
-/// 段数2なのは`TimeEgParams::default()`と同じ理由（1段だとリリース区間が空になる）。
-/// 全段が中央なのでキーオンからリリースまで一貫して変調量0になる。
+/// stage_count=0にするのは`Voice::tick`が「STAGES=0ならtickをスキップする」設計
+/// （`ui_core::TimeEgProfile::min_stages=0`で許容されるFG専用の特殊値、
+/// docs/timeeg-fg-disable-plan.md参照）に合わせるため。stagesを128埋めのまま残すのは、
+/// STAGES欄を1以上へ戻したときレベルを「全開マイナス」（生値0のバイポーラ解釈）から
+/// ではなく中央（無変調）から再開できるようにするため——`.max(1)`で1段扱いされる
+/// 旧仕様の名残の安全策で、無効化そのものには影響しない。
 pub fn neutral_bipolar_eg() -> TimeEgParams {
     let neutral = TimeStage { time: 0, level: sound_core::BIPOLAR_NEUTRAL_RAW, curve: 0 };
-    TimeEgParams { stages: [neutral; sound_core::MAX_STAGES], ..TimeEgParams::default() }
+    TimeEgParams { stages: [neutral; sound_core::MAX_STAGES], stage_count: 0, ..TimeEgParams::default() }
 }
 
 /// レベルが「0〜255の大きさ」として組まれたEG（振幅系の形・レガシー実機からの変換結果など）を、
@@ -452,11 +456,19 @@ impl Channel {
         // CC76由来の速度補正(pitch_fg_rate_scale)とテンポ同期(tempo_speed_scale)を乗算で共存させる。
         // レベルはバイポーラ（生値128＝無変調の中心）で符号を持ち、Depthは振れ幅の倍率。
         // これにより1つのDepthのままFGの形だけで上下対称のビブラートが描ける。
+        //
+        // stage_count==0はUI側のSTAGES=0（無効化、`ui_core::TimeEgProfile::min_stages=0`で
+        // 許容されるFG専用の特殊値）に対応する。tick自体を呼ばずに変調量ゼロとして扱うことで、
+        // ボイス単位で毎サンプル回るTimeEg::tick()のコストを避ける（既存データはstage_count=0を
+        // 持ち得ないため、この分岐は出力をビット単位で変えない）。
         let pitch_fg = self.channel_params.pitch_fg;
-        let pitch_fg_speed = self.pitch_fg_rate_scale * tempo_speed_scale(&pitch_fg.eg, tempo_bpm);
-        let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
-        let pitch_fg_cents =
-            bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0;
+        let pitch_fg_cents = if pitch_fg.eg.stage_count == 0 {
+            0.0
+        } else {
+            let pitch_fg_speed = self.pitch_fg_rate_scale * tempo_speed_scale(&pitch_fg.eg, tempo_bpm);
+            let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
+            bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0
+        };
         for op in self.operators.iter_mut() {
             op.set_pitch_modulation(self.bend_cents + pitch_fg_cents);
         }
@@ -465,10 +477,18 @@ impl Channel {
         // memory `project_chip_lfo_retirement_investigation.md`参照）の両方の源になる、
         // 単一のTimeEg。オペレーターループより前にtickし、両方の用途で同じサンプルの値を使う
         // （tick回数は変わらないため既存パッチの出力はビット単位で不変）。
+        //
+        // stage_count==0（無効化）のときは**1.0（透過）**。0.0にすると無音になってしまう
+        // （Pitch/Cutoff FGの「変調量ゼロ」とは中立値が異なる。plan
+        // `docs/timeeg-fg-disable-plan.md`の🔴落とし穴参照）。
         let gain_fg = self.channel_params.gain_fg;
         let gain_fg_to_operators = self.channel_params.gain_fg_to_operators;
-        let gain_fg_speed = tempo_speed_scale(&gain_fg, tempo_bpm);
-        let gain_fg_out = self.gain_fg_eg.tick(sample_rate, gain_fg, gain_fg_speed);
+        let gain_fg_out = if gain_fg.stage_count == 0 {
+            1.0
+        } else {
+            let gain_fg_speed = tempo_speed_scale(&gain_fg, tempo_bpm);
+            self.gain_fg_eg.tick(sample_rate, gain_fg, gain_fg_speed)
+        };
         for op in self.operators.iter_mut() {
             let factor = if op.params.am_enable && gain_fg_to_operators { gain_fg_out } else { 1.0 };
             op.set_am_factor(factor);
@@ -515,11 +535,15 @@ impl Channel {
         let dry = carrier_sum * self.channel_gain;
 
         // VCF：Cutoff FG（TimeEg）を先にtickし、effective_cutoffで基準Cutoffと合成してからSvfへ。
+        // stage_count==0（無効化）のときはtickを呼ばず基準Cutoffをそのまま使う。
         let cp = &self.channel_params;
-        let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
-        let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
-        let cutoff =
-            effective_cutoff_bipolar_level(cp.filter_cutoff, cutoff_level, cp.cutoff_fg.depth);
+        let cutoff = if cp.cutoff_fg.eg.stage_count == 0 {
+            cp.filter_cutoff
+        } else {
+            let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
+            let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
+            effective_cutoff_bipolar_level(cp.filter_cutoff, cutoff_level, cp.cutoff_fg.depth)
+        };
         let cutoff_hz = cutoff_to_hz(cutoff);
         let filtered = self.svf.process(
             dry,
@@ -942,6 +966,67 @@ mod tests {
         let mut buf = vec![0.0f32; 512];
         engine.render(&mut buf, 1);
         assert!(buf.iter().any(|&s| s != 0.0), "expected non-silent output");
+    }
+
+    // -----------------------------------------------------------------------
+    // FG無効化（stage_count==0、`ui_core::TimeEgProfile::min_stages=0`で許容）
+    // -----------------------------------------------------------------------
+
+    fn render_512(patch: Op505Patch) -> Vec<f32> {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(patch);
+        engine.note_on(0, 440.0, 100);
+        let mut buf = vec![0.0f32; 512];
+        engine.render(&mut buf, 1);
+        buf
+    }
+
+    /// Gain FG無効時(STAGES=0)は**1.0（透過）**のはずで、無音にならない。
+    /// さらに、depthの類が無いGain FGを無効化した結果は、既存の透過既定
+    /// （`default_gain_fg`＝1段255）とビット完全一致するはず（「無効」と「透過既定」は
+    /// 音として区別できないのが正しい設計）。
+    #[test]
+    fn disabled_gain_fg_matches_default_transparent_bit_for_bit() {
+        let mut disabled = loud_patch(0);
+        disabled.channel.gain_fg.stage_count = 0;
+
+        let default_transparent = loud_patch(0); // gain_fgは既にdefault_gain_fg()(透過既定)
+
+        let out_disabled = render_512(disabled);
+        let out_default = render_512(default_transparent);
+        assert!(out_disabled.iter().any(|&s| s != 0.0), "Gain FG無効時は無音にならないはず");
+        assert_eq!(out_disabled, out_default, "STAGES=0は透過既定とビット一致するはず");
+    }
+
+    /// Pitch FG無効時(STAGES=0)はdepthの値に関わらず変調量ゼロのはず。depth=200を設定しても
+    /// 既定（変調なし）とビット一致することで、「無効はdepthを無視して常にゼロ」を確認する。
+    #[test]
+    fn disabled_pitch_fg_ignores_depth_and_applies_no_modulation() {
+        let mut disabled = loud_patch(0);
+        disabled.channel.pitch_fg.eg.stage_count = 0;
+        disabled.channel.pitch_fg.depth = 200;
+
+        let neutral_default = loud_patch(0); // pitch_fgは既にneutral_bipolar_eg()+depth=0(変調なし)
+
+        let out_disabled = render_512(disabled);
+        let out_default = render_512(neutral_default);
+        assert_eq!(out_disabled, out_default, "STAGES=0はdepthを無視し無変調(既定)とビット一致するはず");
+    }
+
+    /// Cutoff FG無効時(STAGES=0)はdepthの値に関わらず基準Cutoffのままのはず。
+    #[test]
+    fn disabled_cutoff_fg_ignores_depth_and_uses_base_cutoff() {
+        let mut patch = loud_patch(0);
+        patch.channel.filter_resonance = 200; // カットオフの差が音に出やすいよう強調
+        let mut disabled = patch.clone();
+        disabled.channel.cutoff_fg.eg.stage_count = 0;
+        disabled.channel.cutoff_fg.depth = 200;
+
+        let neutral_default = patch; // cutoff_fgは既にneutral_bipolar_eg()+depth=0(変調なし)
+
+        let out_disabled = render_512(disabled);
+        let out_default = render_512(neutral_default);
+        assert_eq!(out_disabled, out_default, "STAGES=0はdepthを無視し基準Cutoffのまま(既定)とビット一致するはず");
     }
 
     /// 全8アルゴリズム×フィルター自己発振ONで、長時間レンダリングしてもNaN/Infが出ないことを確認する。
