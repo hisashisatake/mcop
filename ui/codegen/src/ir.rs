@@ -136,8 +136,6 @@ pub enum Widget {
     /// 既定はOP1〜4 EG/Pitch FG/Cutoff FG向けの`min-stages="2" terminal-level="zero"`で、
     /// キーオフで必ずレベル0へ着地させる。Gain FGだけ`min-stages="1" terminal-level="free"`を
     /// 指定し、透過既定（ゲートを一切閉じない1段EG）を表現できるようにする。
-    /// `min_stages`は内部の段数(stage_count)であり、UIのLAST欄が表示するのはこれ-1
-    /// （最終段のindex、0始まり）。XML上の数字とUI表示は1ずれる。
     TimeEgEditor { handle: String, mapping: String, tl: EgField, min_stages: u8, terminal_level_zero: bool },
     /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),
