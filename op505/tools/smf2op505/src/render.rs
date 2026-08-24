@@ -28,11 +28,11 @@
 //!
 //! CC/NRPN の変更は当該チャンネルの発音中ボイスへ即時伝播する（[`apply_live`]）。
 
-use op505_core::{Op505Engine, Op505Patch};
+use op505_core::{Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     apply_expression_modulation, apply_pitch_fg_expression, apply_soft_pedal,
-    cc_to_u7 as cc_norm_to_u7, cc_to_u8 as cc_norm_to_u8, control_target, released_notes, ControlTarget,
-    ExpressionDestination, PedalState, RpnTracker,
+    cc_to_u7 as cc_norm_to_u7, cc_to_u8 as cc_norm_to_u8, control_target, released_notes, ChannelProgramState,
+    ControlTarget, ExpressionDestination, PedalState, ProgramSelection, RpnTracker, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -72,8 +72,9 @@ fn channel_gain(cc7: u8, cc11: u8) -> f32 {
 /// 「NRPN は現在のパッチの当該フィールドのみ書き換え」）、CC1/76/77/78 の Pitch FG 補正は
 /// 中立既定の加算値として常時適用する。
 struct ChannelState {
-    /// 現在のプログラム番号（Program Change / CC102 で更新）。
-    program: u8,
+    /// Bank Select + Program Change の状態機械（`op505-midi`、VSTと同じ型・同じ解釈）。
+    /// GM2リズムチャンネル判定（Bank Select MSB=120動的切替）を含む。
+    program_state: ChannelProgramState,
 
     rpn: RpnTracker,
     data_entry_msb: u8,
@@ -123,10 +124,13 @@ struct ChannelState {
     pedal: PedalState,
 }
 
-impl Default for ChannelState {
-    fn default() -> Self {
+impl ChannelState {
+    /// `chi`はMIDIチャンネルindex(0〜15)、`rhythm_kits_available`は`--drum-bank`でリズムキットが
+    /// 1つでもロードされているか（`op505-midi::ChannelProgramState::new`参照。falseなら
+    /// ch10(chi==9)でも旋律で始まる、キット未ロード環境での回帰防止）。
+    fn new(chi: usize, rhythm_kits_available: bool) -> Self {
         Self {
-            program: 0,
+            program_state: ChannelProgramState::new(chi, rhythm_kits_available),
             rpn: RpnTracker::default(),
             data_entry_msb: 0,
             data_entry_lsb: 0,
@@ -154,6 +158,34 @@ impl Default for ChannelState {
             cc4_destination: ExpressionDestination::FilterCutoff,
             pedal: PedalState::default(),
         }
+    }
+}
+
+/// このチャンネル・ノートのベースパッチ（NRPN上書きを重ねる前の①層）。`None`ならこの
+/// ノートは発音しない（リズムチャンネルでキット内に未定義のノート＝GM2実機で無音になる
+/// のと同じ。`Op505Patch::default()`でnote_onしてはいけない、全段level=0/time=0のEGは
+/// release_pointで静止し`is_idle()`が永久にfalseになりボイスが漏れるため）。
+///
+/// 旋律は従来どおり`PatchBank`（前方フィルのフォールバック付きで常にSome）をProgram Change
+/// 番号だけで引く（`op505-vst`同様、smf2op505は単一バンク運用のためbank番号は無視する）。
+/// リズムは`Op505PresetBank`の(bank,program)厳密ルックアップ＋kit0フォールバック。
+///
+/// ⚠️ `PatchBank`（旋律用）は「前方フィル＋最小番号フォールバック」で絶対にNoneにならない
+/// 設計（bank.rs参照）。これをリズムに転用すると「BDの音でハイハットが鳴る」ので
+/// 転用しない（`Op505PresetBank::get`の素直なNone、preset.rs参照）。
+fn base_patch_for(st: &ChannelState, note: u8, bank: &PatchBank, drums: Option<&Op505PresetBank>) -> Option<Op505Patch> {
+    match st.program_state.selection() {
+        ProgramSelection::Rhythm { .. } => {
+            let drums = drums?;
+            let (b, p) = st.program_state.lookup_address(note);
+            drums
+                .get(b, p)
+                .or_else(|| {
+                    st.program_state.rhythm_fallback_address(note).and_then(|(fb, fp)| drums.get(fb, fp))
+                })
+                .map(|preset| preset.patch)
+        }
+        ProgramSelection::Melodic { program, .. } => Some(*bank.patch(program)),
     }
 }
 
@@ -208,14 +240,19 @@ fn apply_note_post_processing(patch: &mut Op505Patch, note: u8, st: &ChannelStat
 /// CC/NRPN で変わった実効パッチ・CC76 rate_scale・AT・OP F-Number を、そのチャンネルの
 /// 発音中ボイス全てへ伝播する（ライブ反映）。`op505-vst`の毎ブロック伝播ループを
 /// 1チャンネル分に絞ったもの。非発音スロットへの set_* はエンジン側で no-op になる。
-fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &PatchBank) {
-    let base = *bank.patch(st.program);
-    let eff = build_effective_patch(&base, st);
+///
+/// リズムチャンネルはノートごとに音色が違うため、`base_patch_for`をノートごとに呼ぶ
+/// （旋律のようにチャンネル全体で1回だけ計算する最適化はできない）。キット内に未定義の
+/// ノート（`base_patch_for`がNone）はスキップし、既存の発音中パラメーターをそのまま維持する。
+fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &PatchBank, drums: Option<&Op505PresetBank>) {
     let rate_scale = cc76_to_rate_scale(st.pitch_fg_cc76);
     for note in 0..MIDI_NOTE_COUNT {
+        let note_u8 = note as u8;
+        let Some(base) = base_patch_for(st, note_u8, bank, drums) else { continue };
+        let eff = build_effective_patch(&base, st);
         let id = chi * 128 + note;
         let mut note_patch = eff;
-        apply_note_post_processing(&mut note_patch, note as u8, st);
+        apply_note_post_processing(&mut note_patch, note_u8, st);
         engine.set_channel_params(id, note_patch.channel);
         for (op_index, op) in note_patch.operators.iter().enumerate() {
             engine.set_operator_params(id, op_index, *op);
@@ -231,9 +268,18 @@ fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &Pa
 
 /// 1ボイスのノートオン。`op505-vst`のNoteOn適用と同型。
 /// 現在の AT を焼き込んだ実効パッチで発音し、ベンド量・音量ゲイン・rate_scale・
-/// OP F-Number を新ボイスへ反映する。
-fn note_on_voice(engine: &mut Op505Engine, chi: usize, note: u8, vel: u8, st: &ChannelState, bank: &PatchBank) {
-    let base = *bank.patch(st.program);
+/// OP F-Number を新ボイスへ反映する。`base_patch_for`がNoneなら発音しない
+/// （キット内に未定義のノート）。
+fn note_on_voice(
+    engine: &mut Op505Engine,
+    chi: usize,
+    note: u8,
+    vel: u8,
+    st: &ChannelState,
+    bank: &PatchBank,
+    drums: Option<&Op505PresetBank>,
+) {
+    let Some(base) = base_patch_for(st, note, bank, drums) else { return };
     let mut eff = build_effective_patch(&base, st);
     apply_note_post_processing(&mut eff, note, st);
     let id = chi * 128 + note as usize;
@@ -368,9 +414,31 @@ fn render_chunk(
 /// SMF を `bank` を音色として再生し、mono f32 サンプル列を返す。
 /// `tail_secs` はノートオフ後の残響を伸ばす秒数。
 /// `max_secs` が `Some(s)` のとき、出力を `s` 秒（テール込み）で打ち切る（試聴の時短用）。
+///
+/// GM2リズムチャンネル機能は使わない（`render_smf_with_drums`の`drums=None`と同じ）。
 pub fn render_smf(
     data: &[u8],
     bank: &PatchBank,
+    sample_rate: f32,
+    tail_secs: f32,
+    max_secs: Option<f32>,
+    max_voices: Option<usize>,
+) -> Result<Vec<f32>, String> {
+    render_smf_with_drums(data, bank, None, sample_rate, tail_secs, max_secs, max_voices)
+}
+
+/// [`render_smf`] のGM2リズムチャンネル対応版。`drums`にリズムキット集合
+/// （`--drum-bank`で読み込んだ`Op505PresetBank`、bank=15360+キット番号で登録）を渡すと、
+/// Bank Select MSB(CC0)=120 + Program Change で該当MIDIチャンネルがリズムチャンネルになる
+/// （`op505_midi::ChannelProgramState`参照。判定・アドレス解決の詳細はそちら）。
+///
+/// `drums`が`None`のときはリズムチャンネル機能を完全に無効化する：Bank Select CC0/32は
+/// 従来どおり無視し、MIDI ch10の初期ドラムONも立てない。これにより`render_smf`（`drums=None`
+/// で呼ぶだけ）の出力は本関数追加前とビット単位で不変。
+pub fn render_smf_with_drums(
+    data: &[u8],
+    bank: &PatchBank,
+    drums: Option<&Op505PresetBank>,
     sample_rate: f32,
     tail_secs: f32,
     max_secs: Option<f32>,
@@ -388,7 +456,9 @@ pub fn render_smf(
     let mut effects = MasterEffects::new(sample_rate);
     let mut out: Vec<f32> = Vec::new();
 
-    let mut channels: Vec<ChannelState> = (0..16).map(|_| ChannelState::default()).collect();
+    let rhythm_kits_available = drums.map(|d| d.has_bank_in(RHYTHM_BANK_RANGE)).unwrap_or(false);
+    let mut channels: Vec<ChannelState> =
+        (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
 
     let mut tempo_us: f64 = 500_000.0; // 既定 120BPM
     let mut spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64; // samples/tick
@@ -421,7 +491,7 @@ pub fn render_smf(
                 spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64;
             }
             EvKind::Program(ch, p) => {
-                channels[ch as usize].program = p;
+                channels[ch as usize].program_state.program_change(p);
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
@@ -429,7 +499,7 @@ pub fn render_smf(
                 // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
                 // 誤発火する）。Soft Pedal（CC67）: ON中に新規キーオンしたノートのみ対象。
                 channels[chi].pedal.note_on(note);
-                note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank);
+                note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank, drums);
             }
             EvKind::NoteOff(ch, note) => {
                 let chi = ch as usize;
@@ -448,15 +518,15 @@ pub fn render_smf(
             EvKind::ChannelPressure(ch, value) => {
                 let chi = ch as usize;
                 channels[chi].channel_pressure = cc_to_u8(value);
-                apply_live(&mut engine, chi, &channels[chi], bank);
+                apply_live(&mut engine, chi, &channels[chi], bank, drums);
             }
             EvKind::PolyPressure(ch, note, value) => {
                 let chi = ch as usize;
                 channels[chi].poly_pressure[note as usize] = cc_to_u8(value);
-                apply_live(&mut engine, chi, &channels[chi], bank);
+                apply_live(&mut engine, chi, &channels[chi], bank, drums);
             }
             EvKind::ControlChange(ch, cc, val) => {
-                handle_control_change(&mut engine, &mut effects, &mut channels, ch as usize, cc, val, bank);
+                handle_control_change(&mut engine, &mut effects, &mut channels, ch as usize, cc, val, bank, drums);
             }
         }
     }
@@ -483,6 +553,7 @@ fn handle_control_change(
     cc: u8,
     val: u8,
     bank: &PatchBank,
+    drums: Option<&Op505PresetBank>,
 ) {
     match cc {
         // CC7/CC11: GM2音量。実効ゲイン=(cc7/127)²×(cc11/127)²。発音中へ即時反映。
@@ -499,28 +570,28 @@ fn handle_control_change(
         // CC1/76/77/78: Pitch FG 演奏補正 → 発音中ボイスへ伝播。
         1 => {
             channels[chi].pitch_fg_cc1 = cc_to_u7(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         76 => {
             channels[chi].pitch_fg_cc76 = cc_to_u7(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         77 => {
             channels[chi].pitch_fg_cc77 = cc_to_u8(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         78 => {
             channels[chi].pitch_fg_cc78 = cc_to_u7(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         // CC2(ブレス)/CC4(フット): Expression Destination（NRPN(0,34)/(0,35)）へ加算 → 発音中ボイスへ伝播。
         2 => {
             channels[chi].cc2 = cc_to_u8(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         4 => {
             channels[chi].cc4 = cc_to_u8(val);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）
         98 => channels[chi].rpn.set_nrpn_lsb(cc_to_u7(val)),
@@ -530,7 +601,7 @@ fn handle_control_change(
         // CC6 Data Entry MSB: 選択中の RPN/NRPN へ値を適用。
         6 => {
             if handle_data_entry(&mut channels[chi], effects, val) {
-                apply_live(engine, chi, &channels[chi], bank);
+                apply_live(engine, chi, &channels[chi], bank, drums);
             }
         }
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
@@ -538,7 +609,7 @@ fn handle_control_change(
             channels[chi].data_entry_lsb = cc_to_u7(val);
             if let ControlTarget::OperatorFNumber(op_index) = control_target(channels[chi].rpn.selection) {
                 set_operator_f_number_override(&mut channels[chi], op_index as usize);
-                apply_live(engine, chi, &channels[chi], bank);
+                apply_live(engine, chi, &channels[chi], bank, drums);
             }
         }
         // CC64 Sustain Pedal（ホールドフラグ方式）。
@@ -563,7 +634,8 @@ fn handle_control_change(
         }
         // CC121 Reset All Controllers: ③ジェスチャー層のみリセットする（②パート状態・
         // ①音色は保持）。CC64/66/67ペダル・Pitch Bend・CC1・アフタータッチが対象。
-        // CC2/CC4/CC7/CC11/CC76〜78/センド/RPN等は保持。
+        // CC2/CC4/CC7/CC11/CC76〜78/センド/RPN等は保持。GM2でもRACはbank/programを
+        // リセットしないため、`program_state`（リズム/旋律の状態）へは意図的に触れない。
         121 => {
             let released = channels[chi].pedal.cc121();
             for note in released_notes(released) {
@@ -574,15 +646,14 @@ fn handle_control_change(
             channels[chi].channel_pressure = 0;
             channels[chi].poly_pressure = [0; 128];
             engine.set_pitch_bend_group(chi, 0.0);
-            apply_live(engine, chi, &channels[chi], bank);
+            apply_live(engine, chi, &channels[chi], bank, drums);
         }
         // CC91/93: マスターエフェクト送りレベル（master）。
         91 => effects.set_reverb_send(cc_to_u8(val)),
         93 => effects.set_chorus_send(cc_to_u8(val)),
-        // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため。smf2op505 では
-        // 単一バンクなので Bank Select CC0/32 は使わず、プログラム番号のみ更新する）。
+        // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため）。
         102 => {
-            channels[chi].program = cc_to_u7(val);
+            channels[chi].program_state.program_change(cc_to_u7(val));
         }
         // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
         103..=106 => {
@@ -610,7 +681,19 @@ fn handle_control_change(
             }
             channels[chi].pedal.cc123_reset();
         }
-        // Bank Select（CC0/32）等は smf2op505 では無視（単一バンクのため）。
+        // Bank Select（CC0=MSB, CC32=LSB）：これだけでは旋律/リズムは切り替わらない
+        // （次のProgram Changeで確定する、ChannelProgramState参照）。`drums`未指定時は
+        // 従来どおり完全に無視する（`--drum-bank`未指定の既存呼び出しをビット単位で保つため）。
+        0 => {
+            if drums.is_some() {
+                channels[chi].program_state.bank_select_msb(cc_to_u7(val));
+            }
+        }
+        32 => {
+            if drums.is_some() {
+                channels[chi].program_state.bank_select_lsb(cc_to_u7(val));
+            }
+        }
         _ => {}
     }
 }
@@ -623,7 +706,7 @@ mod tests {
     #[test]
     fn effective_patch_neutral_equals_base() {
         let base = Op505Patch::default();
-        let st = ChannelState::default();
+        let st = ChannelState::new(0, false);
         let eff = build_effective_patch(&base, &st);
         assert_eq!(eff, base);
     }
@@ -632,7 +715,7 @@ mod tests {
     /// （`nrpn_reserved_fg_loop_curve_is_noop`と同じ扱い）。
     #[test]
     fn nrpn_reserved_texture_lfo_is_noop() {
-        let mut st = ChannelState::default();
+        let mut st = ChannelState::new(0, false);
         let mut fx = MasterEffects::new(44_100.0);
         for lsb in [0u8, 1, 22, 23, 24, 25, 26, 27] {
             st.rpn.set_nrpn_msb(0);
@@ -646,7 +729,7 @@ mod tests {
     /// NRPN(0,9) Algorithm 上書きは実効パッチの algorithm を置き換える。
     #[test]
     fn nrpn_algorithm_override() {
-        let mut st = ChannelState::default();
+        let mut st = ChannelState::new(0, false);
         let mut fx = MasterEffects::new(44_100.0);
         st.rpn.set_nrpn_msb(0);
         st.rpn.set_nrpn_lsb(9);
@@ -659,7 +742,7 @@ mod tests {
     /// エフェクト系 NRPN(0,2〜8) はボイス伝播不要（false）を返す。
     #[test]
     fn nrpn_effects_return_no_voice_update() {
-        let mut st = ChannelState::default();
+        let mut st = ChannelState::new(0, false);
         let mut fx = MasterEffects::new(44_100.0);
         for lsb in [2u8, 3, 4, 5, 6, 7, 8] {
             st.rpn.set_nrpn_msb(0);
@@ -671,7 +754,7 @@ mod tests {
     /// NRPN(0,28)〜(0,33)（op505ではReservedFgLoopCurve）は何も変えずfalseを返す。
     #[test]
     fn nrpn_reserved_fg_loop_curve_is_noop() {
-        let mut st = ChannelState::default();
+        let mut st = ChannelState::new(0, false);
         let mut fx = MasterEffects::new(44_100.0);
         for lsb in 28u8..=33 {
             st.rpn.set_nrpn_msb(0);
@@ -683,7 +766,7 @@ mod tests {
     /// NRPN(0,18)＝OP0 F-Number は CC6(MSB)+CC38(LSB)の14bit→13bit clamp。
     #[test]
     fn nrpn_operator_f_number_14bit() {
-        let mut st = ChannelState::default();
+        let mut st = ChannelState::new(0, false);
         let mut fx = MasterEffects::new(44_100.0);
         st.rpn.set_nrpn_msb(0);
         st.rpn.set_nrpn_lsb(18);
@@ -1057,5 +1140,179 @@ mod tests {
             tail2 < 1e-3,
             "CC121後もpedal_downが残っている（新規ノートが保持されてしまう）: rms={tail2}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // GM2リズムチャンネル（Bank Select MSB=120動的切替）
+    // -----------------------------------------------------------------------
+
+    use op505_core::{Op505PresetEntry, Op505PresetFile};
+
+    /// bank=15360(kit 0)にBD(program=36)とHH(program=42)を持つリズムキット。
+    /// 2音は`mul`を変えて明確に別の音色にしてある（出力波形の違いで判別する）。
+    /// `instant_sustain_bank()`と同じく即発音・無限サステインのEGを与える
+    /// （`Op505Patch::default()`のEGは全段level=0のままで無音のため）。
+    fn drum_kit_bank() -> Op505PresetBank {
+        use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
+        let instant_sustain_eg = || {
+            let mut stages = [TimeStage::default(); MAX_STAGES];
+            stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+            TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0, ..Default::default() }
+        };
+
+        let mut bd = Op505Patch::default();
+        bd.channel.algorithm = 7;
+        bd.operators[0].tl = 220;
+        bd.operators[0].mul = 1;
+        bd.operators[0].eg = instant_sustain_eg();
+        let mut hh = Op505Patch::default();
+        hh.channel.algorithm = 7;
+        hh.operators[0].tl = 220;
+        hh.operators[0].mul = 5;
+        hh.operators[0].eg = instant_sustain_eg();
+
+        let file = Op505PresetFile::Presets {
+            bank: 15360,
+            presets: vec![
+                Op505PresetEntry { program: 36, name: "BD".to_string(), patch: bd },
+                Op505PresetEntry { program: 42, name: "HH".to_string(), patch: hh },
+            ],
+        };
+        let mut bank = Op505PresetBank::default();
+        bank.merge_file(file);
+        bank
+    }
+
+    /// リズムモードでは`base_patch_for`がノート番号をそのままプログラム番号として使う。
+    #[test]
+    fn base_patch_for_rhythm_uses_note_as_program() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap();
+        let drums = drum_kit_bank();
+        let mut st = ChannelState::new(0, false);
+        st.program_state.bank_select_msb(120);
+        st.program_state.program_change(0); // kit 0
+
+        let bd = base_patch_for(&st, 36, &bank, Some(&drums)).unwrap();
+        let hh = base_patch_for(&st, 42, &bank, Some(&drums)).unwrap();
+        assert_ne!(bd, hh, "リズムはノートごとに異なる音色のはず");
+        assert_eq!(bd.operators[0].mul, 1);
+        assert_eq!(hh.operators[0].mul, 5);
+    }
+
+    /// キット内に未定義のノートはStandard Kit(kit 0)へフォールバックする。
+    #[test]
+    fn base_patch_for_falls_back_to_kit_zero_for_undefined_note() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap();
+        let drums = drum_kit_bank();
+        let mut st = ChannelState::new(0, false);
+        st.program_state.bank_select_msb(120);
+        st.program_state.program_change(9); // 未定義のキット9（BD/HHが無い）
+
+        let fallback = base_patch_for(&st, 36, &bank, Some(&drums)).unwrap();
+        assert_eq!(fallback.operators[0].mul, 1, "kit0(Standard Kit)のBDへフォールバックするはず");
+    }
+
+    /// キット0にも無いノートは発音しない（Noneを返す）。
+    #[test]
+    fn base_patch_for_returns_none_for_totally_undefined_note() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap();
+        let drums = drum_kit_bank();
+        let mut st = ChannelState::new(0, false);
+        st.program_state.bank_select_msb(120);
+        st.program_state.program_change(0);
+
+        assert!(base_patch_for(&st, 20, &bank, Some(&drums)).is_none(), "BD/HH以外のノートは未定義のはず");
+    }
+
+    /// `drums`がNoneのときリズムモードでも常にNone（発音しない）。
+    #[test]
+    fn base_patch_for_rhythm_without_drums_returns_none() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap();
+        let mut st = ChannelState::new(0, false);
+        st.program_state.bank_select_msb(120);
+        st.program_state.program_change(0);
+
+        assert!(base_patch_for(&st, 36, &bank, None).is_none());
+    }
+
+    /// 旋律モードではノート番号に関わらず同じ`bank`のパッチが使われる（音程差のみ）。
+    #[test]
+    fn base_patch_for_melodic_ignores_note_number() {
+        let mut melodic_patch = Op505Patch::default();
+        melodic_patch.operators[0].tl = 100;
+        let bank = PatchBank::from_patches(&[melodic_patch]).unwrap();
+        let drums = drum_kit_bank();
+        let st = ChannelState::new(0, false); // 旋律のまま（Bank Select未送信）
+
+        let p36 = base_patch_for(&st, 36, &bank, Some(&drums)).unwrap();
+        let p42 = base_patch_for(&st, 42, &bank, Some(&drums)).unwrap();
+        assert_eq!(p36, p42, "旋律はノート番号に関わらず同一音色のはず");
+        assert_eq!(p36, melodic_patch, "drumsではなくbankのprogram 0が使われるはず");
+    }
+
+    /// CC0=120→PC=0→note36とnote42を鳴らすと、2音の出力が異なる
+    /// （リズムチャンネルがノートごとに違う音色を鳴らしている、統合レベルの検証）。
+    #[test]
+    fn rhythm_channel_note_selects_different_timbre_end_to_end() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap(); // 使われない
+        let drums = drum_kit_bank();
+        let sr = 8000.0;
+
+        let smf_bd = build_smf(&[
+            (0u32, vec![0xB0, 0, 120]), // CC0=120 (Bank Select MSB)
+            (0u32, vec![0xC0, 0]),      // PC=0 (kit 0)
+            (0u32, vec![0x90, 36, 100]),
+        ]);
+        let buf_bd = render_smf_with_drums(&smf_bd, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+
+        let smf_hh = build_smf(&[
+            (0u32, vec![0xB0, 0, 120]),
+            (0u32, vec![0xC0, 0]),
+            (0u32, vec![0x90, 42, 100]),
+        ]);
+        let buf_hh = render_smf_with_drums(&smf_hh, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+
+        assert!(buf_bd.iter().any(|s| s.abs() > 1e-4), "BD出力が無音");
+        assert!(buf_hh.iter().any(|s| s.abs() > 1e-4), "HH出力が無音");
+        let n = buf_bd.len().min(buf_hh.len());
+        assert!((0..n).any(|i| (buf_bd[i] - buf_hh[i]).abs() > 1e-4), "note36とnote42で音色が違うはず");
+    }
+
+    /// `render_smf`（`drums`無し）はCC0=120を送ってもリズムへ切り替わらず、
+    /// 従来どおり`bank`の旋律パッチで鳴る（`--drum-bank`未指定時の非回帰）。
+    #[test]
+    fn render_smf_without_drum_bank_ignores_bank_select_cc() {
+        let mut melodic_patch = Op505Patch::default();
+        melodic_patch.channel.algorithm = 7;
+        melodic_patch.operators[0].tl = 220;
+        melodic_patch.operators[0].mul = 1;
+        let bank = PatchBank::from_patches(&[melodic_patch]).unwrap();
+        let sr = 8000.0;
+
+        let smf_no_cc0 = build_smf(&[(0u32, vec![0x90, 60, 100])]);
+        let buf_no_cc0 = render_smf(&smf_no_cc0, &bank, sr, 0.1, Some(0.3), None).unwrap();
+
+        let smf_with_cc0 = build_smf(&[
+            (0u32, vec![0xB0, 0, 120]), // CC0=120（drums無しなので無視されるはず）
+            (0u32, vec![0xC0, 0]),
+            (0u32, vec![0x90, 60, 100]),
+        ]);
+        let buf_with_cc0 = render_smf(&smf_with_cc0, &bank, sr, 0.1, Some(0.3), None).unwrap();
+
+        assert_eq!(buf_no_cc0, buf_with_cc0, "drums未指定のCC0=120は無視され出力がビット一致するはず");
+    }
+
+    /// MIDI ch10はリズムキットがロードされていれば、Bank Select/Program Changeを送らなくても
+    /// 最初からリズムチャンネルとして始まる（ch10初期ON）。
+    #[test]
+    fn channel10_starts_in_rhythm_when_drum_bank_provided() {
+        let bank = PatchBank::from_patches(&[Op505Patch::default()]).unwrap();
+        let drums = drum_kit_bank();
+        let sr = 8000.0;
+
+        // MIDI ch10 = ステータスバイト0x99（Note On, channel 9）
+        let smf = build_smf(&[(0u32, vec![0x99, 36, 100])]);
+        let buf = render_smf_with_drums(&smf, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "ch10はBank Select無しでもドラムが鳴るはず");
     }
 }
