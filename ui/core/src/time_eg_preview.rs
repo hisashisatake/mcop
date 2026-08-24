@@ -137,10 +137,8 @@ pub struct TimeEgGeometry {
     /// 始点は段`loop_start`の**開始**頂点なので、`loop_start=0`なら`points[0]`（グラフ最左）になる。
     pub loop_span: Option<(usize, usize)>,
     /// リリースが始まる`points`上のindex（＝保持区間の最後の頂点）。`points[0]`が開始点ぶん
-    /// オフセットしているため、`TimeEgParams::release_point`が指す0始まり段indexに+1した値になる
-    /// （`points`配列内のindexという別の意味の+1であり、RELのspin欄が表示する値とは無関係。
-    /// spin欄は`TimeEgParams::release_point`をそのまま0始まりで表示する。
-    /// plan `docs/timeeg-stage-numbering-plan.md`ステップ3参照）。
+    /// オフセットしているため、これはそのままUI上の1始まりクリック点番号＝「リリース点」に一致する
+    /// （`TimeEgParams::release_point`が指す0始まり段indexに+1した値）。
     pub release_point: usize,
     /// リリース区間が空（`TimeEgParams::release_point`が最終段）のとき、「ノートオフ後もレベルが
     /// 変化せず持続する」ことを示すためだけにグラフ右端へ置く終端頂点のindex。段の値を編集できる
