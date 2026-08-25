@@ -23,9 +23,6 @@ let pendingPos     = null;   // {x,y} — mousemove から animation tick へ橋
 let mouseHeld      = false;
 let mousePos       = { x: 0, y: 0 };
 
-// 波形メモリ専用音色バンクが使う基本4波形名（waveform_memory_bank.pyのWAVE_NAMESと一致させる）。
-const WAVE_NAMES = ['Sine', 'Saw', 'Square', 'Triangle'];
-
 // Bank=0（GM2 Bank0）で手動チューニング済みのProgram名（preset.rsのgm2_bank0_patch参照）。
 // 未掲載のProgramはplaceholder_patchへフォールバックする。
 const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80: 'Lead 1 (Square)' };
@@ -35,9 +32,15 @@ const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80:
 // フォールバックコードは無く（op505は実行時コード生成パターン自体を廃止済み）、代わりに
 // `op505/tools/patchlab/python/waveform_memory_bank.py`が生成した実体の.op505ファイルを
 // 通常のプリセットバンクとして%USERPROFILE%\Documents\op505\presets\へ配置してある。
-// Program 0〜3=ビルトイン波形(sine/saw/square/triangle)+ピアノ風ADSR、4〜7=同波形+リード風ADSR、
-// 8以降はこの8パターンをprogram%8で繰り返す（waveform_memory_bank.pyのparams_for_program参照）。
+// Program 0〜31=op505ビルトイン波形32種(波形=program)+ピアノ風ADSR、32〜63=同波形+リード風ADSR。
+// 波形32種×ADSR2種=重複なくちょうど64通りなので、Program 64〜127は存在しない
+// （waveform_memory_bank.pyのparams_for_program参照。32種の個別名はこちらでは持たず
+// `Waveform N`表示に留める＝動作確認用の簡易UIのため、波形の内訳を詳しく見たいときは
+// waveform_memory_bank.pyの生成ログか.op505の"name"フィールドを見る）。
 const WAVEFORM_MEMORY_BANK = 16383;
+
+// リード風ADSRが始まるProgram番号。waveform_memory_bank.pyのLEAD_RANGE_STARTと一致必須。
+const WAVEFORM_MEMORY_LEAD_START = 32;
 
 // ─────────────────────────────────────────────
 // 演奏系モジュレーション（Vキーでビブラート⇔トレモロ切替。
@@ -98,9 +101,8 @@ async function applyPerformanceLfoToActiveChannels() {
 
   function programName(bank, program) {
     if (bank === WAVEFORM_MEMORY_BANK) {
-      const slot = program % 8;
-      const style = slot < 4 ? 'piano' : 'lead';
-      return `${WAVE_NAMES[slot % 4]} (${style})`;
+      const style = program < WAVEFORM_MEMORY_LEAD_START ? 'piano' : 'lead';
+      return `Waveform ${program % 32} (${style})`;
     }
     if (bank === 0) return FM_PROGRAM_NAMES[program] ?? `FM #${program}（placeholder）`;
     return `Bank ${bank} / Program ${program}`;
