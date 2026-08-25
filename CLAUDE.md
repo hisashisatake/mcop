@@ -100,7 +100,10 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
       Vcoトレイト      ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Op505Engineが実装
       AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
       time_eg          ← TimeEg（N点Time/Level方式EG）。`texture`フィールド（0=OFF/1=S&H/2=Random/3=Chaos）が
-                            旧質感LFOのS&H/Random/Chaos波形の後継（2026-08-20退役、詳細はspec-sound.md参照）
+                            旧質感LFOのS&H/Random/Chaos波形の後継（2026-08-20退役、詳細はspec-sound.md参照）。
+                            `auto_release`フィールド（0=OFF/N≥1=保持区間通過でnote-off非依存の自動
+                            リリース）はGM2リズムチャンネル向けのワンショット化機構（2026-08-24新設、
+                            詳細はspec-sound.md「TimeEgのワンショット化」節）
     fm/                ← クレート名sound-fm。FM合成チップ間で共有する、EG非依存の汎用部品（op505-coreが依存）
       algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・波形生成。
                             chip_lfoはop505エンジンから退役済み（2026-08-20）で、opz2op505等の変換ツールが
@@ -134,7 +137,10 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           限定的な例外（VSTと参照実装の解釈が食い違うと正誤の基準が消えるため。
                           詳細はspec-fm.md 8章⑤）。`ControlTarget` enumがNRPNアドレス表を一元化し、
                           `_ =>`を使わせない全列挙で解釈のずれを構造的に防ぐ。依存は`op505-core`と
-                          `sound-fm`の2本のみ
+                          `sound-fm`の2本のみ。GM2リズムチャンネル用のBank Select(CC0/32)+
+                          Program Change判定（`rhythm`モジュール、`ChannelProgramState`状態機械）も
+                          同じ理由でここに実装する（詳細はspec-sound.md「リズム（ドラム）
+                          チャンネル」節）
     tools/             ← レガシーFM音源→OP505直接変換ツール群 + 検証・音作りツール群
                           （実機レート→TimeEg直接変換、.38x6を経由しない）
       common/          ← クレート名op505-tools。op505ツール群専用の共有ユーティリティ
@@ -153,7 +159,10 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
       patchlab/        ← 音色設計ツール群（PyO3バインディング。詳細は「音色設計ツール」節）
       smf2op505/       ← `.op505`音色バンクでSMFを再生しWAVへ書き出す（クレート名smf2op505。
                           エンジン性能検証（/perf-bench）とCC/NRPN解釈の参照実装を兼ねる。
-                          CC/NRPN解釈は`op505-midi`を参照するため`op505-vst`と常に同じ解釈になる）
+                          CC/NRPN解釈は`op505-midi`を参照するため`op505-vst`と常に同じ解釈になる）。
+                          `--drum-bank <kit.op505>`（複数回指定可）でGM2リズムキットバンクを読み込み、
+                          ch10のBank Select+Program ChangeでGM2リズムチャンネルとして再生できる
+                          （未指定時はリズム機能を完全に無効化、既存出力はビット不変）
       xml-panel-dsl/   ← panel.xmlのXML DSL編集・プレビューツール（自己完結HTML + preview-native、
                           op505-ui向け。詳細はREADME.md）
   gesture-app/         ← 作曲支援Tauriアプリ
@@ -320,6 +329,8 @@ sound-core（基盤）
 op505-core（OP505実装）
   Op505Engine：4opFM合成 + フィルター + チャンネル管理
   PerformanceLfoTarget実装（共通Destination + 拡張Destination=2: TLキャリア一括、3: Cutoff）
+  固定音階（fixed_note_enable/fixed_note/fixed_note_fine）：note_onの周波数を無視し固定ピッチで
+    鳴らす。GM2リズムチャンネル用（2026-08-24新設、詳細はspec-sound.md「固定音階」節）
 ```
 
 コアは「この周波数でキーオン」「このパラメーターで発音」のAPIのみを提供する。

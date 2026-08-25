@@ -562,3 +562,13 @@ VST自身しかない。この非対称性が、fork-on-writeの原則からの�
 `sound-core`型はAPIに出さず、依存も`op505-core`と`sound-fm`（ALGORITHMSのキャリア判定のみ）の
 2本に絞っている。これにより「op505-toolsはチップ非依存の小道具のみ」という別の憲章
 （`op505/tools/common/Cargo.toml`参照）とも衝突しない。
+
+**GM2リズムチャンネル（フェーズ5.5後・2026-08-24追加）の`ChannelProgramState`も同じ線引きに従う。**
+Bank Select(CC0/CC32) + Program Changeの状態機械（`op505_midi::rhythm::ChannelProgramState`、
+`spec-sound.md`「リズム（ドラム）チャンネル」節参照）は上記と同じ理由（VSTとsmf2op505が食い違うと
+正誤の基準が消える）で`op505-midi`に置く。ただし**バンク解決の実行そのもの**（`(bank, program)`
+から実際に`Op505Patch`を引く`Op505PresetBank::get`の呼び出し）は`op505-midi`のAPIには出さず、
+呼び出し側（`op505-vst`の`resolve_note_patch`、`smf2op505`の`base_patch_for`）が担う。
+`ChannelProgramState::lookup_address`が返すのは`(bank: u16, program: u8)`という**アドレスだけ**で、
+`sound-core`/`op505-core`の型（`Op505PresetBank`含む）はここでも一切APIに出ない——「解釈のロジック」と
+「バンクデータの実行」を分離する境界線は、フェーズ5.5当初のCC/NRPN解釈と完全に同じ形を保っている。

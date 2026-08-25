@@ -53,6 +53,9 @@ fn build_panel_params<'a>(
     Op505PanelParams {
         algorithm: vi(&params.algorithm, setter),
         feedback: vi(&params.feedback, setter),
+        fixed_note_enable: vb(&params.fixed_note_enable, setter),
+        fixed_note: vi(&params.fixed_note, setter),
+        fixed_note_fine: vi(&params.fixed_note_fine, setter),
         cutoff: vi(&params.cutoff, setter),
         resonance: vi(&params.resonance, setter),
         filter_type: vi(&params.filter_type, setter),
@@ -150,6 +153,9 @@ pub(crate) fn create_editor(
                                             set!(params.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
                                             set!(params.gain_fg_to_master, ch.gain_fg_to_master);
                                             set!(params.gain_fg_to_operators, ch.gain_fg_to_operators);
+                                            set!(params.fixed_note_enable, ch.fixed_note_enable);
+                                            set!(params.fixed_note, ch.fixed_note as i32);
+                                            set!(params.fixed_note_fine, ch.fixed_note_fine as i32);
                                             for (i, op) in patch.operators.iter().enumerate() {
                                                 let op_p = &params.operators[i];
                                                 set!(op_p.tl, op.tl as i32);

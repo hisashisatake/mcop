@@ -20,6 +20,12 @@ op505固有のパラメーター仕様は`op505/core`のソースコード直下
 - ピッチベンドは`set_pitch_bend(channel, cents)`、または`set_pitch_bend_group(group, cents)`で`channel >> 7`が一致する全ボイスへ一括適用する（MIDIチャンネル単位ベンド）
 - VST（op505-vst、旧ym38x6-vstも同様）はボイスIDを`midi_ch*128 + note`で符号化する（一意性＝Note Off/同音再アタックの突き合わせ、グループ性＝`id >> 7`でMIDIチャンネルを復元しベンド一括適用、を両立）
 - gesture-appはコードの声部インデックス（0〜N-1の固定スロット）を`channel`として使う（[spec-app.md](spec-app.md)参照）
+- **GM2リズムチャンネル（op505）でのドラム同音連打：** ボイスIDが`midi_ch*128+note`のため、同じノート番号
+  （例：ハイハットの16分連打）は同一IDでこの節の残響再アタック（`Channel::retrigger()`、TimeEgの
+  `retrigger_mode=RETRIGGER_MODE_CONTINUE`相当）に入る。ドラムでは音量が不安定になりやすいため、
+  **ドラムキットのパッチは`retrigger_mode=RETRIGGER_MODE_RESET(1)`を設定する運用ルール**を推奨する
+  （[リズム（ドラム）チャンネル](#リズムドラムチャンネルgm2準拠op505-midi)節参照。異なるノート番号は
+  別ボイスIDなので、そもそも独立して発音される）。
 
 ## 波形メモリ専用音色バンク（38x6のOP1のみ有効）
 
@@ -346,6 +352,36 @@ half-squared / 2x-half / 2x-squared-half / 2x-abs-half / 2x-pos-squared-half）�
 | AM感度 | 2bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でAMS=1〜3相当の23.9〜95.6dBをdepth=1-10^(-dB/20)で振幅深度に変換） |
 | PM感度 | 3bit | 0〜255 | 指数カーブ（0は完全オフ、1〜255でPMS=1(+/-5cents)〜PMS=7(+/-700cents)相当、約7.13oct） |
 
+### 固定音階（Fixed Note、GM2リズムチャンネル用、op505固有）
+
+[リズム（ドラム）チャンネル](#リズムドラムチャンネルgm2準拠op505-midi)節が使う、
+「note_onで渡されたノート番号（周波数）を無視し、常に指定した固定ピッチで鳴らす」設定。
+GM2の「ノート番号＝楽器選択キー、各楽器は固定ピッチ」という構造を表現する。
+
+| パラメーター | 値域 | 備考 |
+|---|---|---|
+| `fixed_note_enable` | bool（既定false） | trueなら以下2つの値から実効周波数を導出し、note_onの周波数を無視する |
+| `fixed_note` | 0〜127（既定60=C4） | 固定音階のMIDIノート番号 |
+| `fixed_note_fine` | 0〜255（既定128） | ±100セントのバイポーラファインチューン（中心128＝補正なし） |
+
+- **実効周波数の導出：** `effective_pitch(frequency, channel)`が`fixed_note_enable`を見て、
+  trueなら`note_to_frequency(fixed_note) × 2^(fixed_note_fine_to_cents(fixed_note_fine)/1200)`
+  を返す（false時は従来どおり`(frequency, frequency_to_note(frequency))`で完全に同一挙動）。
+  KSR/Level Scale用の`note`もこの実効周波数から導出するため、経路が1本に保たれる
+  （実効周波数と無関係な別の`note`値がどこかに残ることはない）。
+- **ピッチベンド・Pitch FGは効き続ける：** 固定音階は「note_onが運ぶ周波数」だけを無視する。
+  ピッチベンド（`set_pitch_bend`/`set_pitch_bend_group`）やPitch FGはセント加算として
+  実効周波数の上に乗るため、固定音階中でも通常どおり効く（ドラムにピッチベンドを掛ける、
+  Pitch FGでシンセタム的なピッチスイープを付ける、といった表現をfixed_noteと併用できる）。
+- **エディタでの反映：** `Op505Engine::set_channel_params`は固定音階3フィールドの変化を
+  差分検知し、変わったときだけ発音中の各Operatorの周波数を再計算する（差分が無ければ既存出力は
+  ビット不変）。これが無いと、エディタでFIXED NOTEノブを回しても発音中の音のピッチが
+  変わらず「効いていない」ように見える。
+- **ノイズ波形（waveform 32〜63）には無関係：** ノイズ波形のオシレーターは周波数を一切
+  参照しない（`sound_fm::waveform::is_noise_waveform`）ため、fixed_noteの値自体は
+  「GM2のノート番号＝楽器選択キー」という意味だけを持ち、ノイズ系ドラム音色の音自体には
+  影響しない（Snare/HH/Crash等）。トーナルなドラム（Kick/Tom、sine等）では実際に音高を決める。
+
 ### フィルター（Vcf: State Variable Filter、ボイス単位）
 
 FM合成出力にかけるアナログシンセ的なVCF相当（`sound-core::Vcf`トレイト、具象実装`VoiceFilter`）。
@@ -671,6 +707,50 @@ golden/perf-benchのビット一致検証を壊さない。
 
 ---
 
+## TimeEgのワンショット化（auto_release）
+
+GM2リズムチャンネル（[Bank Select / Program Change「リズム（ドラム）チャンネル」](#リズムドラムチャンネルgm2準拠op505-midi)節）
+向けに、`TimeEgParams`へ`auto_release: u8`を追加した。ドラムはMIDI note-offのタイミングが
+ノート長に依存し（1/32のごく短いノートでも自然なテール長で鳴ってほしい）、かつMIDIファイルに
+よってはnote-offが期待通りに届かない・遅れることがあるため、**ノート長に依存しないワンショット
+発音**を表現する機能。
+
+- **意味論：** `0`=OFF（従来どおりnote-offを待ってリリースへ入る）。`N≥1`は、保持区間
+  （`0..=release_point`）をN回通過したら、外部note-offを待たずに自動的にリリース区間
+  （`release_point+1..stage_count`）へ入る。`loop_enabled=0`（ワンショットEG）なら通過回数Nに
+  関わらず**初回通過で即座に**リリースへ入る。`loop_enabled=1`なら`loop_start`〜`release_point`
+  をN周してからリリースへ入る。
+- **`auto_release≠0`の間は外部note-offを完全に無視する。** これがワンショット化の本体で、
+  ノート長がどれだけ短くても（極端には1/32でも）保持区間を自然に通過しリリースへ入るタイミングは
+  変わらない。ノートオン後に一度もnote-offを送らなくても、いずれ自動でidleへ到達する。
+- **優先順位：** `loop_enabled`との優先順位は「ループが成立するかどうか」であって
+  「auto_releaseが勝つかどうか」ではない。`loop_enabled=1`のときは指定どおりN周してから
+  リリースへ入り、`loop_enabled=0`のときは保持区間がそもそも1回しか通過できないため
+  Nの値によらず即リリースになる（「初回通過で即座に」という表現はこの帰結を明文化したもの）。
+- **前提：リリース区間が空でないこと。** `release_point == stage_count-1`（リリース区間が空）の
+  パッチに`auto_release`を立てても、行き先が無いため従来どおり保持区間で静止し続ける
+  （Gain FGの透過既定＝ゲートを一切閉じない用途と同じ理屈）。ドラムパッチを作る際は
+  リリース区間に最低1段を確保すること。
+- **`release_point`を最終段にする方式は採らなかった：** 「全段を保持区間に含め、最終段の
+  time経過で自動的にidleにする」という単純な代替案は、`is_idle()`の判定（現在の実装は
+  「保持区間で静止＝idleではない」）と矛盾し、**ボイスが永久に解放されずリークする**ため
+  却下した。`tick()`側に「`auto_release≠0`なら外部note-offを無視する」という専用分岐を
+  足す設計にしたのはこの理由による（`advance()`側の`release_point`到達判定に第3の遷移先
+  として素の代入で合流させ、`enter_stage()`は経由しない——ループ区間のdrift/texture加工が
+  乗ってしまうため）。
+- **`auto_release=0`のときは完全にビット不変。** 増える処理は保持区間通過回数の整数
+  インクリメント1回のみで、浮動小数点演算の実行列は変更前と一切変わらない（既存パッチの
+  出力を一切変えないことをユニットテストで固定している）。
+- **CC64（サステインペダル）との関係：** `auto_release`中はnote-off自体が無視されるため、
+  ペダルを踏んでいても実害は無い（GM2でもリズムチャンネルはホールドペダルを無視するため、
+  結果的に実機と一致する）。
+- ドラムキットのパッチでは、OP1〜4の全EGに同じ`auto_release`を設定すること。`Channel::is_idle()`
+  は「全4オペレーターがidle」で判定するため、TL=0（無音）の非キャリアOPも含めて全EGが
+  同じタイミングでリリース完了しないと、そのOPだけ保持区間に永久停滞しボイスが解放されない
+  （[リズム（ドラム）チャンネル](#リズムドラムチャンネルgm2準拠op505-midi)節の実装例も参照）。
+
+---
+
 ## アルゴリズム拡張モード（将来実装）
 
 SY77/TG77（AFM音源, 1989年）の設計を参考に：
@@ -893,6 +973,69 @@ GM2のプログラム番号定義（0〜127の楽器カテゴリ）に準拠し�
   チャンネルの両方）。DAWパラメーターでの編集に戻すには「Program」を0=Manualに戻す
   （MIDI Program Change経由で切り替えた場合はプラグインのリロードが必要、暫定。
   本格的なプリセット編集UIはフェーズ8「パラメーターUI」で別途検討）。
+
+#### リズム（ドラム）チャンネル（GM2準拠、op505-midi）
+
+GM2準拠のMIDIリズム（ドラム）チャンネルを実装する（`op505_midi::rhythm`。`ChannelProgramState`
+状態機械が両ホスト共通の唯一の正解基準、詳細はspec-fm.md 8章⑤）。既存のGM1/GM2 MIDIファイル・
+DAWプロジェクトのドラムトラックがそのまま鳴らせることと、ドラムキットを新形式を作らず
+`.op505`バンクとして扱えることを狙う。
+
+**判定：Bank Select MSB(CC0)=120 の後の Program Change でリズムチャンネルが確定する。**
+Bank Select単体（CC0のみ）ではリズムへ切り替わらない（`RHYTHM_BANK_MSB=120`を保持したまま
+PCを待つ）。
+
+- **ch10初期値：** MIDI ch10（index 9）はリセット時にドラムモードON。ただし、リズムキットが
+  1つも読み込まれていない環境では初期ONを立てない（`rhythm_kits_available`条件）。無条件に
+  立てると、キット未指定の既存SMFレンダリングでch10が無音化する回帰になるため。
+- **GM1互換の粘り：** 一度リズムになったチャンネルは、CC0=121（`MELODIC_BANK_MSB`、旋律バンク）
+  が明示的に来ない限りリズムのままで、以降のProgram Changeはkit番号だけを更新する
+  （GM1由来の「Bank Selectを送らずPCだけでドラムキットを切り替える」曲との互換のため）。
+- **ノート→音色：** 新しいデータ構造は作らない。ドラムモード中は`bank = 15360 + kit番号`
+  （`RHYTHM_BANK_BASE=15360` = Bank Select MSB=120 × 128 + kit 0）、`program = ノート番号`として
+  既存の`Op505PresetBank::get(bank, program)`を引く。CC32（LSB）はリズム解決では無視する。
+  ドラムキットは`{"bank": 15360, "presets":[{"program":36,"name":"Bass Drum 1",...}]}`という
+  通常の`.op505`ファイル（`op505/tools/patchlab/python/gm2_drum_kit.py`が試作Standard Kitを
+  生成する）。
+- **フォールバックと無音の境界：** キット内に該当ノートが無ければ`(15360+0, note)`＝kit 0
+  （Standard Kit）へフォールバックする。それでも見つからなければ**発音しない**
+  （`Op505Patch::default()`でnote_onしてはいけない。`TimeEgParams::default()`は
+  `stage_count=2, release_point=0, 全段level=0/time=0`のため、note_on直後に
+  `cur == release_point`で静止し`is_idle()`が永久にfalseになり、ボイスが解放されず
+  `max_voices`を食い潰す）。smf2op505の`PatchBank`が使う「前方フィル＋最小番号フォールバック」
+  （絶対にNoneにならない設計）はここには**転用しない**——転用すると「BDの音でハイハットが鳴る」
+  という誤動作になる。
+- **CC121（Reset All Controllers）はbank/programをリセットしない：** GM2仕様どおり。
+  `PedalState::cc121`（③ジェスチャー層のみリセット）の設計思想と一致させる。
+- **CC0=121（旋律バンク）自体は現状維持：** `bank = msb*128 + lsb`のままなので`.op505`が
+  通常は見つからず、VSTは`build_patch()`（DAWパラメーター）、smf2op505は`PatchBank`
+  （前方フィル）へフォールバックする。これは現行の挙動そのままで回帰ではない。
+- **Exclusive Classはスコープ外：** GM2のExclusive Class（Closed HH=42がOpen HH=46を切る等）は
+  実装しない。必要になれば`Op505ChannelParams`に`exclusive_class: u8`と、MIDI層での同クラス
+  note_off処理を追加する。
+- **CC123（All Notes Off）はドラムに効かない：** [`auto_release`](#timeegのワンショット化auto_release)が
+  外部note_offを無視するため。ワンショットなので自然に止まるが、DAWの「パニック」ではCC120
+  （All Sound Off、ボイスごと即座に消す）を使うのが正解。
+
+**ホスト側の実装：**
+- `op505-vst`：`bank_select_msb/lsb: [u8;16]`配列は持たず`program_state: [ChannelProgramState; 16]`
+  へ一本化する（真実を2箇所に持つと、CC0が片方にしか反映されないバグが必ず出るため）。
+  リズムチャンネルはMIDIチャンネル単位の`channel_patches`キャッシュを使わず、毎ブロック伝播
+  ループ・NoteOnハンドラともボイス単位で`resolve_note_patch(midi_ch, note)`を呼ぶ
+  （旋律チャンネルの1音色キャッシュと違い、ドラムはノートごとに別音色のため。ここを
+  1音色キャッシュのままにすると、和音でドラムを叩いたときに全ボイスが同じ音色に潰れる）。
+- `smf2op505`：`--drum-bank <kit.op505>`（複数回指定可、`merge_file`で重ねる）でリズムキットを
+  読み込む。未指定時はリズムチャンネル機能を完全に無効化し（CC0/32は従来どおり無視、ch10初期ON
+  も立てない）、既存呼び出しの出力をビット不変に保つ。読み込んだキットに`bank`範囲
+  （15360〜15487）のエントリーが1件も無ければ起動時エラーで止める（「bankを15360で宣言し
+  忘れて無音」という事故を実行前に検出するため）。
+
+**同音連打とretrigger：** ドラムの同音連打はボイスID`midi_ch*128+note`が同一になるため
+`Channel::retrigger()`に入る（[チャンネルIDとキーオン契約](#チャンネルidとキーオン契約sound-core共通)節参照）。
+既定の`RETRIGGER_MODE_CONTINUE`（残響からの再アタック）だと連打で音量が不安定になりやすいため、
+**ドラムキットのパッチは`retrigger_mode = RETRIGGER_MODE_RESET(1)`を設定する運用ルール**とする
+（エンジン変更は不要、パッチ側の値のみ。異なるノート番号＝別ボイスIDなので、そもそも独立に
+発音される）。
 
 **ユーザープリセット（Bank1以降）の読み込み（フェーズ8・パラメーターUI・音色運用、ym38x6固有仕様。
 ym38x6削除〈2026-08-20〉後は資産としての記録。op505の`.op505`形式は`op505_core::Op505PresetFile`

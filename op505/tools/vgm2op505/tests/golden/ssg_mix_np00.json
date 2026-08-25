@@ -65,7 +65,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -142,7 +143,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -219,7 +221,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -296,7 +299,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "mul": 1,
         "dt1": 128,
@@ -380,7 +384,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "depth": 0
       },
@@ -447,7 +452,8 @@
           "retrigger_mode": 0,
           "level_drift": 128,
           "depth_drift": 128,
-          "texture": 0
+          "texture": 0,
+          "auto_release": 0
         },
         "depth": 0
       },
@@ -513,10 +519,14 @@
         "retrigger_mode": 0,
         "level_drift": 128,
         "depth_drift": 128,
-        "texture": 0
+        "texture": 0,
+        "auto_release": 0
       },
       "gain_fg_to_master": true,
-      "gain_fg_to_operators": false
+      "gain_fg_to_operators": false,
+      "fixed_note_enable": false,
+      "fixed_note": 60,
+      "fixed_note_fine": 128
     }
   },
   "warnings": []

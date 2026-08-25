@@ -85,11 +85,13 @@ impl Op505PresetBank {
     /// - `Presets`: そのbankのプリセットのみ初期化し、これらのエントリーで再構築する
     /// - `Programs`: 初期化せず、(bank,program)単位でエントリーを上書きマージする
     /// 同じ(bank,program)が複数回指定された場合は、後から読み込まれたものが優先する。
-    /// ディレクトリが存在しない・読めない場合は空の集合を返す。
+    /// ディレクトリが存在しない・読めない場合は空の集合を返す。パースエラーのファイルは
+    /// 黙って読み飛ばす（GUIの背景ロードでエラーダイアログを出さない設計、`load_from_file`とは
+    /// 対照的）。
     pub fn load_from_dir(dir: &Path) -> Self {
-        let mut presets = HashMap::new();
+        let mut bank = Self::default();
         let Ok(entries) = std::fs::read_dir(dir) else {
-            return Self { presets };
+            return bank;
         };
 
         let mut paths: Vec<_> = entries
@@ -102,21 +104,43 @@ impl Op505PresetBank {
         for path in paths {
             let Ok(json) = std::fs::read_to_string(&path) else { continue };
             let Ok(file) = Op505PresetFile::from_json(&json) else { continue };
-            match file {
-                Op505PresetFile::Presets { bank, presets: list } => {
-                    presets.retain(|&(b, _), _| b != bank);
-                    for entry in list {
-                        presets.insert((bank, entry.program), Op505Preset { name: entry.name, patch: entry.patch });
-                    }
+            bank.merge_file(file);
+        }
+        bank
+    }
+
+    /// `.op505`ファイル1本を読み込んでバンクを構築する（`op505/tools/smf2op505`の
+    /// `--drum-bank`用）。`load_from_dir`と違い、読み込み・パースに失敗したら`Err`で
+    /// 素直に伝える（CLIツールは「キットを読み込もうとして黙って無音になる」事故を
+    /// 避けたいため、起動時にエラー終了できる形が必要）。
+    pub fn load_from_file(path: &Path) -> Result<Self, String> {
+        let json = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let file = Op505PresetFile::from_json(&json)
+            .map_err(|e| format!("{} のパースに失敗: {e}", path.display()))?;
+        let mut bank = Self::default();
+        bank.merge_file(file);
+        Ok(bank)
+    }
+
+    /// `Op505PresetFile`1本をこのバンクへマージする（`load_from_dir`/`load_from_file`が
+    /// 内部で使う共通ロジック）。`Presets`は当該bankを初期化してから、`Programs`は
+    /// (bank,program)単位で上書きする（型のdocコメント参照）。
+    pub fn merge_file(&mut self, file: Op505PresetFile) {
+        match file {
+            Op505PresetFile::Presets { bank, presets: list } => {
+                self.presets.retain(|&(b, _), _| b != bank);
+                for entry in list {
+                    self.presets
+                        .insert((bank, entry.program), Op505Preset { name: entry.name, patch: entry.patch });
                 }
-                Op505PresetFile::Programs { bank, programs: list } => {
-                    for entry in list {
-                        presets.insert((bank, entry.program), Op505Preset { name: entry.name, patch: entry.patch });
-                    }
+            }
+            Op505PresetFile::Programs { bank, programs: list } => {
+                for entry in list {
+                    self.presets
+                        .insert((bank, entry.program), Op505Preset { name: entry.name, patch: entry.patch });
                 }
             }
         }
-        Self { presets }
     }
 
     pub fn get(&self, bank: u16, program: u8) -> Option<&Op505Preset> {
@@ -128,6 +152,12 @@ impl Op505PresetBank {
         let mut entries: Vec<_> = self.presets.iter().map(|(&k, v)| (k, v.clone())).collect();
         entries.sort_by_key(|(k, _)| *k);
         entries
+    }
+
+    /// このバンクが指定bank番号の範囲にエントリーを1件でも持つか
+    /// （GM2リズムキット、`op505_midi::rhythm::RHYTHM_BANK_RANGE`の有無判定に使う）。
+    pub fn has_bank_in(&self, range: std::ops::RangeInclusive<u16>) -> bool {
+        self.presets.keys().any(|&(b, _)| range.contains(&b))
     }
 }
 
@@ -265,5 +295,56 @@ mod tests {
 
         let entries = bank.sorted_entries();
         assert_eq!(entries.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![(1, 0), (1, 5)]);
+    }
+
+    #[test]
+    fn load_from_file_reads_a_single_op505_file() {
+        let dir = unique_temp_dir("load_from_file");
+        let file = Op505PresetFile::Presets {
+            bank: 15360,
+            presets: vec![Op505PresetEntry { program: 36, name: "Bass Drum".to_string(), patch: sample_patch(36) }],
+        };
+        let path = dir.join("kit0.op505");
+        std::fs::write(&path, file.to_json().unwrap()).unwrap();
+
+        let bank = Op505PresetBank::load_from_file(&path).expect("should load");
+        std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
+
+        assert_eq!(bank.get(15360, 36).unwrap().name, "Bass Drum");
+    }
+
+    #[test]
+    fn load_from_file_reports_missing_file_as_err() {
+        let missing = std::env::temp_dir().join("op505_preset_test_missing_file.op505");
+        let result = Op505PresetBank::load_from_file(&missing);
+        assert!(result.is_err(), "存在しないファイルはErrで伝えるはず（load_from_dirとは対照的）");
+    }
+
+    #[test]
+    fn load_from_file_reports_invalid_json_as_err() {
+        let dir = unique_temp_dir("load_from_file_invalid");
+        let path = dir.join("broken.op505");
+        std::fs::write(&path, "not json").unwrap();
+
+        let result = Op505PresetBank::load_from_file(&path);
+        std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
+
+        assert!(result.is_err(), "パースエラーはErrで伝えるはず");
+    }
+
+    #[test]
+    fn has_bank_in_detects_presence_and_absence() {
+        let dir = unique_temp_dir("has_bank_in");
+        let file = Op505PresetFile::Presets {
+            bank: 15360,
+            presets: vec![Op505PresetEntry { program: 36, name: "Bass Drum".to_string(), patch: sample_patch(36) }],
+        };
+        std::fs::write(dir.join("kit0.op505"), file.to_json().unwrap()).unwrap();
+
+        let bank = Op505PresetBank::load_from_dir(&dir);
+        std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
+
+        assert!(bank.has_bank_in(15360..=15487), "15360はリズムバンク範囲内なのでtrueのはず");
+        assert!(!bank.has_bank_in(0..=127), "リズムバンク以外の範囲にはエントリーが無いのでfalseのはず");
     }
 }

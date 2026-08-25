@@ -189,6 +189,13 @@ impl Operator {
         self.perf_lfo_pitch_mod_cents = cents;
     }
 
+    /// 発音中のキー周波数(Hz)を上書きする。位相・EGは一切触らない（`note_on`/`retrigger`との
+    /// 違い）。固定音階（`fixed_note_enable`）のライブ編集で、発音中の音のピッチだけを
+    /// 動かすために使う（`Op505Engine::set_channel_params`参照）。
+    pub fn set_base_frequency(&mut self, frequency: f32) {
+        self.frequency = frequency;
+    }
+
     pub fn set_f_number_override(&mut self, f_number: u16) {
         self.f_number_ratio = f_number_to_ratio(f_number);
     }

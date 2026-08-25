@@ -249,6 +249,14 @@ impl Op505State {
         Op505PanelParams {
             algorithm: ch!(algorithm, "Algorithm", 0, 7, 0),
             feedback: ch!(feedback, "Feedback", 0, 255, 0),
+            fixed_note_enable: Box::new(Op505BoolField {
+                state: state.clone(),
+                dirty: dirty.clone(),
+                get: |p: &Op505Patch| p.channel.fixed_note_enable,
+                set: |p: &mut Op505Patch, v: bool| p.channel.fixed_note_enable = v,
+            }) as Box<dyn BoolParamHandle>,
+            fixed_note: ch!(fixed_note, "Fixed Note", 0, 127, 60),
+            fixed_note_fine: ch!(fixed_note_fine, "Fixed Note Fine", 0, 255, 128),
             cutoff: ch!(filter_cutoff, "Filter Cutoff", 0, 255, 255),
             resonance: ch!(filter_resonance, "Filter Resonance", 0, 255, 0),
             filter_type: ch!(filter_type, "Filter Type", 0, 255, 0),

@@ -246,6 +246,20 @@ pub struct TimeEgParams {
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（OFF）にする。
     #[serde(default)]
     pub texture: u8,
+    /// ワンショット化：保持区間（`release_point`）を通過したら、note-offを待たずに
+    /// 自動的にリリース区間へ入る。0=OFF（従来どおりnote-offで進む）／N≥1=`loop_enabled=0`
+    /// なら初回通過で即座に、`loop_enabled=1`なら`loop_start`〜`release_point`をN周したら
+    /// 自動リリース。GM2リズムチャンネル（ノート長に依存しないワンショット発音）向け。
+    ///
+    /// N≠0のときは**外部からの`note_off()`も無視する**（`TimeEg::tick`参照）。
+    /// `release_point`を最終段にしてワンショット化する方法（本ファイル:277-282の警告参照、
+    /// `is_idle()`が永久にfalseになりボイスが漏れる）を使わずに実現するための機能。
+    ///
+    /// **前提**: リリース区間（`release_point+1..stage_count`）が空でないこと。空だと
+    /// 自動リリースの行き先が無く、従来どおり保持区間で静止する（＝ボイスが解放されない）。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（OFF）にする。
+    #[serde(default)]
+    pub auto_release: u8,
 }
 
 /// `texture`の意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
@@ -294,6 +308,7 @@ impl Default for TimeEgParams {
             level_drift: default_drift(),
             depth_drift: default_drift(),
             texture: TEXTURE_OFF,
+            auto_release: 0,
         }
     }
 }
@@ -685,6 +700,9 @@ pub struct TimeEg {
     texture_rng: u32,
     /// `texture`（Chaos）用のロジスティック写像状態(0.0〜1.0)。同じくnote_on/retriggerでリセット。
     texture_chaos: f32,
+    /// `auto_release`用：保持区間（`release_point`）を通過した回数。note_on/retriggerで0へ
+    /// リセットする（「今のノートで何回通過したか」を表すため）。
+    hold_passes: u8,
 }
 
 /// `texture_rng`のnote_on/retrigger既定シード（0だと不動点のため非ゼロの固定値）。
@@ -719,6 +737,7 @@ impl TimeEg {
             depth_gain: 1.0,
             texture_rng: TEXTURE_RNG_SEED,
             texture_chaos: TEXTURE_CHAOS_SEED,
+            hold_passes: 0,
         }
     }
 
@@ -736,6 +755,7 @@ impl TimeEg {
         self.depth_gain = 1.0;
         self.texture_rng = TEXTURE_RNG_SEED;
         self.texture_chaos = TEXTURE_CHAOS_SEED;
+        self.hold_passes = 0;
     }
 
     /// 残響レベルを保持したまま段0へ再突入する（`eg::Eg::retrigger`と同じ思想）。
@@ -749,6 +769,7 @@ impl TimeEg {
         self.depth_gain = 1.0;
         self.texture_rng = TEXTURE_RNG_SEED;
         self.texture_chaos = TEXTURE_CHAOS_SEED;
+        self.hold_passes = 0;
     }
 
     pub fn note_off(&mut self) {
@@ -789,16 +810,21 @@ impl TimeEg {
 
         if self.release_pending {
             self.release_pending = false;
-            let release_point = (params.release_point as usize).min(stage_count - 1);
-            // リリース区間は`release_point+1..stage_count`。空（release_pointが最終段）のときは
-            // note-offを何もせず現在レベルのまま静止し続ける（Gain FGの透過既定＝ゲートを閉じない）。
-            if release_point + 1 < stage_count {
-                self.stage_index = release_point + 1;
-                self.segment_start = self.level;
-                self.segment_end = level_of(&params.stages[release_point + 1]);
-                self.elapsed = 0.0;
-                self.releasing = true;
-                self.idle = false;
+            // auto_release中は外部note-offを無視する（EG自身がrelease_point通過時に
+            // `advance()`側で自動的にリリースへ入るため、ノート長に依存しないワンショットに
+            // なる。GM2リズムチャンネルの「Note-Offを無視するワンショット」用）。
+            if params.auto_release == 0 {
+                let release_point = (params.release_point as usize).min(stage_count - 1);
+                // リリース区間は`release_point+1..stage_count`。空（release_pointが最終段）のときは
+                // note-offを何もせず現在レベルのまま静止し続ける（Gain FGの透過既定＝ゲートを閉じない）。
+                if release_point + 1 < stage_count {
+                    self.stage_index = release_point + 1;
+                    self.segment_start = self.level;
+                    self.segment_end = level_of(&params.stages[release_point + 1]);
+                    self.elapsed = 0.0;
+                    self.releasing = true;
+                    self.idle = false;
+                }
             }
         } else if self.pending_start != PendingStart::None {
             let start_level = match self.pending_start {
@@ -862,6 +888,21 @@ impl TimeEg {
         let loop_start = (params.loop_start as usize).min(release_point);
 
         if cur == release_point {
+            self.hold_passes = self.hold_passes.saturating_add(1);
+            // auto_release: loop無効なら通過回数(N)に関わらず初回通過で、loop有効ならN周目で
+            // 自動的にリリースへ入る（外部note-offを待たない。`tick()`のrelease_pending分岐参照）。
+            // リリース区間が空（release_pointが最終段）なら行き先が無いため従来どおり扱う。
+            let auto_release_now = params.auto_release != 0
+                && (params.loop_enabled == 0 || self.hold_passes >= params.auto_release)
+                && release_point + 1 < stage_count;
+            if auto_release_now {
+                self.segment_start = self.level;
+                self.stage_index = release_point + 1;
+                self.segment_end = level_of(&params.stages[release_point + 1]);
+                self.elapsed = overflow;
+                self.releasing = true;
+                return;
+            }
             // 保持区間の終端。ループ有効なら戻り、無効ならサステイン点として静止する
             // （`eg::Eg`のD2R=0フリーズに相当）。ここから先はnote-offでしか進まない。
             if params.loop_enabled != 0 {
@@ -2062,5 +2103,132 @@ mod tests {
             level = eg.tick(sr, params, 1.0);
         }
         assert!((level - 0.0).abs() < 1e-3, "ワンショットではrelease_pointの生レベルへ着地するはず: {level}");
+    }
+
+    /// `auto_release=0`（既定）では、従来どおり`note_off()`が即座にリリースへ入り、
+    /// 最終的にidleへ到達する（`tick()`のガード分岐が既存経路を壊していないことの確認）。
+    #[test]
+    fn auto_release_zero_keeps_legacy_note_off_behavior() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(20, 255, 0), (20, 0, 0)]),
+            stage_count: 2,
+            release_point: 0,
+            auto_release: 0,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        for _ in 0..20_000 {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(!eg.is_idle(), "release_pointで静止中のはず");
+
+        eg.note_off();
+        for _ in 0..20_000 {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(eg.is_idle(), "auto_release=0では従来どおりnote_offでリリースへ入りidleになるはず");
+    }
+
+    /// `auto_release`が有効な間、外部`note_off()`は完全に無視される（呼んでも呼ばなくても
+    /// 出力がサンプル単位で一致する）。GM2リズムチャンネルの「短いノートで切られない」の根拠。
+    #[test]
+    fn auto_release_ignores_short_note_off() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (20, 200, 0), (25, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            auto_release: 1,
+         ..Default::default()};
+
+        let mut with_note_off = TimeEg::new();
+        with_note_off.note_on();
+        with_note_off.tick(sr, params, 1.0);
+        with_note_off.note_off(); // 攻撃段の途中でごく短いノートオフを送る
+
+        let mut without_note_off = TimeEg::new();
+        without_note_off.note_on();
+        without_note_off.tick(sr, params, 1.0);
+
+        for i in 0..30_000 {
+            let a = with_note_off.tick(sr, params, 1.0);
+            let b = without_note_off.tick(sr, params, 1.0);
+            assert_eq!(a, b, "auto_release中はnote_offを無視するため出力が一致するはず (sample {i})");
+        }
+        assert_eq!(with_note_off.is_idle(), without_note_off.is_idle());
+    }
+
+    /// `auto_release`が有効なら、`note_off()`を一度も呼ばなくても最終的にidleへ到達する
+    /// （ボイスが解放されないまま溜まる問題が起きないことの確認）。
+    #[test]
+    fn auto_release_reaches_idle_without_note_off() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (20, 200, 0), (25, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            auto_release: 1,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        for _ in 0..40_000 {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(eg.is_idle(), "note_offを一度も送らなくてもauto_releaseでidleへ到達するはず");
+    }
+
+    /// `auto_release=N`（N≥2）はループを N 回通過するまでリリースへ入らない
+    /// （`loop_enabled`との優先順位：ループ有効時はhold_passesがNに達するまで周回を続ける）。
+    #[test]
+    fn auto_release_counts_loop_passes() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(40, 255, 0), (40, 100, 0), (30, 0, 0)]),
+            stage_count: 3,
+            loop_enabled: 1,
+            loop_start: 0,
+            release_point: 1,
+            auto_release: 3,
+         ..Default::default()};
+        let cycle_secs = time_to_seconds(40) as f64 * 2.0;
+        let release_secs = time_to_seconds(30) as f64;
+
+        let mut eg = TimeEg::new();
+        eg.note_on();
+
+        let partial_samples = (cycle_secs * 2.5 * sr as f64) as usize;
+        for _ in 0..partial_samples {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(!eg.is_idle(), "3周未満ではまだリリースへ入らないはず");
+
+        let remaining_samples = ((cycle_secs + release_secs * 1.5) * sr as f64) as usize;
+        for _ in 0..remaining_samples {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(eg.is_idle(), "3周後は自動的にリリースへ入りidleになるはず");
+    }
+
+    /// リリース区間が空（`release_point == stage_count-1`）のまま`auto_release`を立てても、
+    /// 自動リリースの行き先が無いため従来どおり保持区間で静止し続ける（設定不整合の挙動を固定）。
+    #[test]
+    fn auto_release_with_empty_release_region_settles() {
+        let sr = 44100.0;
+        let params = TimeEgParams {
+            stages: stages_with(&[(20, 255, 0)]),
+            stage_count: 1,
+            release_point: 0,
+            auto_release: 1,
+         ..Default::default()};
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        for _ in 0..20_000 {
+            eg.tick(sr, params, 1.0);
+        }
+        assert!(
+            !eg.is_idle(),
+            "リリース区間が空ならauto_releaseの行き先が無く、従来どおり静止し続けるはず"
+        );
     }
 }

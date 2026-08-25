@@ -4,6 +4,7 @@
 //! ```text
 //! smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]
 //!           [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>]
+//!           [--drum-bank <kit.op505>]...
 //! ```
 //! - `out.wav` 省略時は `<song>` と同じディレクトリに `<songの拡張子なし名>.wav` を出力する。
 //! - プログラムチェンジ番号 = `.op505` のプログラム番号で音色を選ぶ
@@ -20,12 +21,20 @@
 //! - `--reverb-type <0-7>` リバーブタイプ（既定 3=Hall1。0:Room1〜5:Plate,6:Delay,7:PanningDelay）。
 //! - `--reverb-time <N>` リバーブタイム（0-255、既定 128）。
 //! - `--max-voices <N>` 同時発音数上限を上書きする（実験用A/B計測、既定はエンジン既定）。
+//! - `--drum-bank <kit.op505>` GM2リズムキットバンク（複数回指定可、`Op505PresetBank::merge_file`で
+//!   重ねる）。ファイル内の`"bank"`は`15360 + キット番号`（15360 = Bank Select MSB=120 ×
+//!   128 + キット0）で宣言すること。未指定時はリズムチャンネル機能を完全に無効化する
+//!   （`op505_midi::rhythm`参照）。指定してもリズムバンク範囲(15360〜15487)に1件も
+//!   エントリーが無ければエラー終了する（宣言忘れによる無音を起動時に検出するため）。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use op505_core::Op505PresetFile;
-use smf2op505::{apply_reverb, normalize_peak, render_smf, write_wav_mono16, PatchBank, ReverbConfig};
+use op505_core::{Op505PresetBank, Op505PresetFile};
+use op505_midi::RHYTHM_BANK_RANGE;
+use smf2op505::{
+    apply_reverb, normalize_peak, render_smf_with_drums, write_wav_mono16, PatchBank, ReverbConfig,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -35,6 +44,7 @@ fn main() -> ExitCode {
             eprintln!("smf2op505: {msg}");
             eprintln!("usage: smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]");
             eprintln!("       [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>] [--max-voices <N>]");
+            eprintln!("       [--drum-bank <kit.op505>]...");
             ExitCode::FAILURE
         }
     }
@@ -52,6 +62,8 @@ struct Args {
     max_secs: Option<f32>,
     /// EXPERIMENT(max-voices): 同時発音数上限を上書きする（None=エンジン既定）。
     max_voices: Option<usize>,
+    /// GM2リズムキットバンクファイル（複数回指定可、順にmerge_fileで重ねる）。
+    drum_banks: Vec<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -62,6 +74,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut reverb = ReverbConfig::default();
     let mut max_secs: Option<f32> = None;
     let mut max_voices: Option<usize> = None;
+    let mut drum_banks: Vec<PathBuf> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -123,6 +136,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 max_voices = Some(n);
                 i += 2;
             }
+            "--drum-bank" => {
+                let v = args.get(i + 1).ok_or("--drum-bank に値がありません")?;
+                drum_banks.push(PathBuf::from(v));
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -140,7 +158,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         let stem = song.file_stem().and_then(|s| s.to_str()).unwrap_or("song");
         song.parent().unwrap_or(Path::new(".")).join(format!("{stem}.wav"))
     };
-    Ok(Args { bank, song, out, sample_rate, tail_secs, normalize, reverb, max_secs, max_voices })
+    Ok(Args { bank, song, out, sample_rate, tail_secs, normalize, reverb, max_secs, max_voices, drum_banks })
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -151,10 +169,42 @@ fn run(args: &[String]) -> Result<(), String> {
         Op505PresetFile::from_json(&json).map_err(|e| format!("{} のパースに失敗: {e}", args.bank.display()))?;
     let bank = PatchBank::from_preset_file(&file)?;
 
+    // GM2リズムキットバンク（複数回指定可）。ファイルごとにパースしてmerge_fileで重ねる。
+    let drums = if args.drum_banks.is_empty() {
+        None
+    } else {
+        let mut drums = Op505PresetBank::default();
+        for path in &args.drum_banks {
+            let json = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let file = Op505PresetFile::from_json(&json)
+                .map_err(|e| format!("{} のパースに失敗: {e}", path.display()))?;
+            drums.merge_file(file);
+        }
+        if !drums.has_bank_in(RHYTHM_BANK_RANGE) {
+            return Err(format!(
+                "--drum-bank で指定したファイルにリズムバンク({}〜{})のエントリーが1件もありません。\
+                 .op505ファイルの\"bank\"を15360+キット番号（例: kit0なら15360）で宣言してください。",
+                RHYTHM_BANK_RANGE.start(),
+                RHYTHM_BANK_RANGE.end()
+            ));
+        }
+        for path in &args.drum_banks {
+            eprintln!("smf2op505: ドラムキット読み込み: {}", path.display());
+        }
+        Some(drums)
+    };
+
     let smf_data = std::fs::read(&args.song).map_err(|e| format!("{}: {e}", args.song.display()))?;
 
-    let mut buf =
-        render_smf(&smf_data, &bank, args.sample_rate, args.tail_secs, args.max_secs, args.max_voices)?;
+    let mut buf = render_smf_with_drums(
+        &smf_data,
+        &bank,
+        drums.as_ref(),
+        args.sample_rate,
+        args.tail_secs,
+        args.max_secs,
+        args.max_voices,
+    )?;
     // マスターリバーブ（send>0 のときのみ）。DAW での聴感を再現する後段適用。
     apply_reverb(&mut buf, 1, args.sample_rate, &args.reverb);
     if args.normalize {

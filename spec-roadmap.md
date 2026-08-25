@@ -43,7 +43,13 @@ gesture-appも単一エンジン（OP505）構成へ単純化した**。同日�
 Gain FGのOP単位配線（`gain_fg_to_operators`）へ、それぞれ近似ではなく数式的に厳密な変換で移設し、
 `Op505ChannelParams`の該当6フィールドをフォーマットごと削除した（op505-core/op505-ui/op505-vst/
 gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応、詳細はmemory
-`project_chip_lfo_retirement_investigation.md`参照）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計）。
+`project_chip_lfo_retirement_investigation.md`参照）。**さらにGM2準拠のMIDIリズム（ドラム）
+チャンネル**（Bank Select+Program Change判定・`auto_release`によるワンショット化・
+`fixed_note`による固定音階、`op505-midi::rhythm`が両ホスト共通の解釈基盤）を`sound-core`/
+`op505-core`/`op505-midi`/`op505-vst`/`smf2op505`/UI（ui-core・op505-ui・editor-wasm）の
+全層へ実装し、CLI経由の実機検証（auto_release A/B比較・ボイス安全性・和音ドラムのコード確認等）
+まで完了した（feature/gm2-rhythm-channelブランチ、詳細はspec-sound.md「リズム（ドラム）
+チャンネル」節）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計、リズムキットバンクを含む）。
 
 ---
 
@@ -133,6 +139,12 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
     Synth Effects(96-103)/Ethnic(104-111)/Percussive(112-119)/Sound Effects(120-127)）は
     未着手のまま。**op505向けpatchlab移行（フェーズ5.5）が完了したため着手可能**
   → `op505/tools/patchlab/` に収録（フェーズ5.5でym38x6/tools/patchlab/から複製・移行済み）
+  → **成果物にリズムキットバンク（`bank=15360+kit番号`、GM2準拠Bank Select MSB=120）を含める**
+    （2026-08-24追加。GM2リズムチャンネル機能自体〈op505-midi::rhythm・auto_release・fixed_note、
+    spec-sound.md「リズム（ドラム）チャンネル」節参照〉はStep1-9で実装・CLI検証まで完了済み。
+    `op505/tools/patchlab/python/gm2_drum_kit.py`が試作Standard Kit(kit0)12音色を生成する。
+    フェーズ6でのBank0本体設計と合わせて、GM2の128プログラムマップ＋ドラムキット群を
+    まとめて「GM2互換の完成された音色ライブラリ」として仕上げる）
 
 フェーズ7: MC-505風モジュレーション拡張（完了・共有基盤としてop505に継承）
   → 実装層は sound-core。FMをVCOと見なし後段にアナログシンセ的なVCF/VCA/VCO変調層を被せる

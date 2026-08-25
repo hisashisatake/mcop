@@ -12,4 +12,4 @@ pub mod smf;
 pub use bank::PatchBank;
 pub use op505_tools::fx::{apply_reverb, ReverbConfig};
 pub use op505_tools::wav::{normalize_peak, write_wav_mono16};
-pub use render::render_smf;
+pub use render::{render_smf, render_smf_with_drums};
