@@ -23,18 +23,20 @@ let pendingPos     = null;   // {x,y} — mousemove から animation tick へ橋
 let mouseHeld      = false;
 let mousePos       = { x: 0, y: 0 };
 
-// OP505ビルトイン波形（スロット0〜7、waveform.rs参照）。波形メモリ音色のProgram番号に対応。
-const WAVE_NAMES = ['sine', 'half-sine', 'abs-sine', 'square', 'saw', 'quantized', 'pulse', 'octave'];
+// 波形メモリ専用音色バンクが使う基本4波形名（waveform_memory_bank.pyのWAVE_NAMESと一致させる）。
+const WAVE_NAMES = ['Sine', 'Saw', 'Square', 'Triangle'];
 
 // Bank=0（GM2 Bank0）で手動チューニング済みのProgram名（preset.rsのgm2_bank0_patch参照）。
 // 未掲載のProgramはplaceholder_patchへフォールバックする。
 const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80: 'Lead 1 (Square)' };
 
 // 波形メモリ音色専用のBank Select番号（凍結済みym38x6-coreのWAVEFORM_MEMORY_BANKと一致させていた
-// 値。op505-coreには波形メモリ専用音色バンクが未移植のため、現状このBankを指定しても
-// op505_set_programは「未登録」を返す。将来op505へ移植する可能性を見越してUIは残してある）。
-// Program 0〜7=ビルトイン波形+ピアノ風ADSR、8〜15=ビルトイン波形+リード風ADSR、
-// 16〜127=ユーザー波形スロット（preset.rsのwaveform_memory_params_for_program参照）。
+// 値）。op505向けの音色は2026-08-25に移植済み: op505-coreにはこのBankを特別扱いする
+// フォールバックコードは無く（op505は実行時コード生成パターン自体を廃止済み）、代わりに
+// `op505/tools/patchlab/python/waveform_memory_bank.py`が生成した実体の.op505ファイルを
+// 通常のプリセットバンクとして%USERPROFILE%\Documents\op505\presets\へ配置してある。
+// Program 0〜3=ビルトイン波形(sine/saw/square/triangle)+ピアノ風ADSR、4〜7=同波形+リード風ADSR、
+// 8以降はこの8パターンをprogram%8で繰り返す（waveform_memory_bank.pyのparams_for_program参照）。
 const WAVEFORM_MEMORY_BANK = 16383;
 
 // ─────────────────────────────────────────────
@@ -96,9 +98,9 @@ async function applyPerformanceLfoToActiveChannels() {
 
   function programName(bank, program) {
     if (bank === WAVEFORM_MEMORY_BANK) {
-      if (program < 8)  return `${WAVE_NAMES[program]} (piano)`;
-      if (program < 16) return `${WAVE_NAMES[program - 8]} (lead)`;
-      return `波形 #${program} (user)`;
+      const slot = program % 8;
+      const style = slot < 4 ? 'piano' : 'lead';
+      return `${WAVE_NAMES[slot % 4]} (${style})`;
     }
     if (bank === 0) return FM_PROGRAM_NAMES[program] ?? `FM #${program}（placeholder）`;
     return `Bank ${bank} / Program ${program}`;
