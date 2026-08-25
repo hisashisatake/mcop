@@ -629,6 +629,17 @@ fn wave_table_for(wave_tables: &[Option<WaveTable>], slot: u8) -> &WaveTable {
 
 const TOTAL_SLOTS: usize = 256;
 
+/// ユーザー定義波形（`set_user_wave`）に使える最初のスロット番号。波形スロットの割り当ては
+/// 0〜31がビルトイン波形（`BUILTIN_WAVEFORM_COUNT`）、32〜63がノイズ（`NOISE_WAVEFORM_BASE`
+/// から`NOISE_LEVELS`段）、64〜255が空きという構成なので、その境界を定数から導出する。
+/// リテラルで書かないのは、以前このガードが「ビルトインは8波形」時代の`slot >= 8`のまま
+/// 取り残され、スロット8〜31のビルトイン波形を上書きできる状態になっていたため。
+///
+/// ノイズ帯（32〜63）を除外するのはインデックス保護のためだけではない。`Operator::tick`は
+/// `is_noise_waveform`をテーブル参照より先に判定するので、この帯へ書き込んだ波形は
+/// 読まれることなくノイズが鳴る＝エラーも出ず無視されるサイレントな失敗になる。
+const FIRST_USER_WAVE_SLOT: u8 = waveform::NOISE_WAVEFORM_BASE + waveform::NOISE_LEVELS;
+
 /// 同時発音数の既定上限。ym38x6-coreの実測（[[project_voice_steal_and_eg_lut_optimization]]）に
 /// 基づく値をそのまま引き継ぐ（通常演奏でヘッドルームを持ちつつストレス時の負荷増大を抑える）。
 const DEFAULT_MAX_VOICES: usize = 64;
@@ -751,8 +762,15 @@ impl Op505Engine {
         }
     }
 
+    /// ユーザー定義波形を書き込む。`slot`は`FIRST_USER_WAVE_SLOT`以降でなければならない
+    /// （それより手前はビルトイン波形とノイズが占有する予約領域。スロットマップは
+    /// `FIRST_USER_WAVE_SLOT`のドキュメントコメント参照）。
     pub fn set_user_wave(&mut self, slot: u8, input: &[i8; 32]) {
-        assert!(slot >= 8, "slots 0-7 are reserved for builtin waves");
+        assert!(
+            slot >= FIRST_USER_WAVE_SLOT,
+            "slots 0-{} are reserved for builtin waves and noise",
+            FIRST_USER_WAVE_SLOT - 1
+        );
         self.wave_tables[slot as usize] = Some(convert_wave_32(input));
     }
 
@@ -1369,5 +1387,63 @@ mod tests {
         assert!((ref_min - expected_floor).abs() < 1.0, "ref_min={ref_min} expected={expected_floor}");
         assert!((min_level - ref_min).abs() < 3.0, "min_level={min_level} ref_min={ref_min}");
         assert!((max_level - ref_max).abs() < 1.0, "max_level={max_level} ref_max={ref_max}");
+    }
+
+    /// スロットマップ（0〜31=ビルトイン／32〜63=ノイズ／64〜255=ユーザー）を固定する。
+    /// ここが動いたら`set_user_wave`のガードと`sound-fm::waveform`冒頭のスロット表も追随が必要。
+    #[test]
+    fn first_user_wave_slot_is_after_builtin_and_noise() {
+        assert_eq!(FIRST_USER_WAVE_SLOT, 64);
+        assert!(FIRST_USER_WAVE_SLOT >= waveform::BUILTIN_WAVEFORM_COUNT);
+        assert!(!waveform::is_noise_waveform(FIRST_USER_WAVE_SLOT));
+    }
+
+    #[test]
+    fn set_user_wave_writes_into_a_free_slot() {
+        let mut engine = Op505Engine::new(48_000.0);
+        assert!(
+            engine.wave_tables[FIRST_USER_WAVE_SLOT as usize].is_none(),
+            "FIRST_USER_WAVE_SLOTは初期状態では空きスロットのはず"
+        );
+
+        engine.set_user_wave(FIRST_USER_WAVE_SLOT, &[100; 32]);
+
+        let table = engine.wave_tables[FIRST_USER_WAVE_SLOT as usize].as_ref().expect("書き込まれるはず");
+        // convert_wave_32は入力を/128.0で正規化する（全要素同値なら補間しても一定値）。
+        assert!((table.sample_at(0) - 100.0 / 128.0).abs() < 0.01, "sample_at(0)={}", table.sample_at(0));
+    }
+
+    /// 回帰防止: このガードは「ビルトインは8波形」時代の`slot >= 8`のまま取り残されており、
+    /// ビルトインが0〜31へ拡張された後もスロット8〜31を上書きできる状態になっていた。
+    #[test]
+    #[should_panic(expected = "reserved")]
+    fn set_user_wave_rejects_builtin_slot() {
+        let mut engine = Op505Engine::new(48_000.0);
+        engine.set_user_wave(waveform::BUILTIN_WAVEFORM_COUNT - 1, &[100; 32]);
+    }
+
+    /// ノイズ帯（32〜63）は`Operator::tick`が`is_noise_waveform`をテーブル参照より先に判定するため、
+    /// 書き込めても読まれずノイズが鳴る＝エラーの出ないサイレントな失敗になる。ガードで弾く。
+    #[test]
+    #[should_panic(expected = "reserved")]
+    fn set_user_wave_rejects_noise_slot() {
+        let mut engine = Op505Engine::new(48_000.0);
+        engine.set_user_wave(waveform::NOISE_WAVEFORM_BASE, &[100; 32]);
+    }
+
+    /// ユーザー波形の書き込みがビルトイン波形を壊さないこと（上記ガードの実効性の裏取り）。
+    #[test]
+    fn set_user_wave_leaves_builtin_waveforms_intact() {
+        let mut engine = Op505Engine::new(48_000.0);
+        let before: Vec<f32> = (0..waveform::BUILTIN_WAVEFORM_COUNT)
+            .map(|i| engine.wave_tables[i as usize].as_ref().expect("ビルトインは初期化済み").sample_at(256))
+            .collect();
+
+        engine.set_user_wave(FIRST_USER_WAVE_SLOT, &[100; 32]);
+
+        for (i, expected) in before.iter().enumerate() {
+            let actual = engine.wave_tables[i].as_ref().expect("ビルトインが消えていないこと").sample_at(256);
+            assert_eq!(actual, *expected, "ビルトイン波形{i}が書き換わっている");
+        }
     }
 }
