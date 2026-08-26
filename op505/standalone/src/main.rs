@@ -12,9 +12,12 @@
 //!
 //! CC/NRPN・プログラムチェンジの解釈は`op505-midi`の[`ChannelState`]を使う
 //! （`op505-vst`・`op505/tools/smf2op505`に続く3本目の利用側、詳細はspec-fm.md 8章）。
-//! GM2リズムチャンネルは未対応（ドラムキットを読み込まないため常に旋律チャンネル）。
+//! GM2リズムチャンネルに対応する（`op505_presets_dir()`配下に`bank=15360+キット番号`の
+//! ドラムキットバンクが1つでもあれば、Bank Select MSB(CC0)=120 + Program Changeで該当
+//! MIDIチャンネルがリズムチャンネルになる。専用のCLIオプションは無く、プリセット
+//! ディレクトリに置くだけでよい。判定・アドレス解決は`op505_midi::ChannelProgramState`参照）。
 //! 対応イベント: Note On/Off・Program Change・Pitch Bend・Channel/Poly Pressure・
-//! CC1/2/4/7/11/64/66/67/76/77/78/91/93/98〜101/103〜106/120/121/123、RPN(0,0)/(0,5)、
+//! CC0/1/2/4/7/11/32/64/66/67/76/77/78/91/93/98〜101/103〜106/120/121/123、RPN(0,0)/(0,5)、
 //! NRPN(0,2)〜(0,21)/(0,34)/(0,35)。
 
 use std::collections::VecDeque;
@@ -25,7 +28,7 @@ use midir::{MidiInput, MidiInputConnection};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, ProgramSelection,
+    EffectControlTarget, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -67,21 +70,36 @@ struct MidiState {
 
 impl MidiState {
     fn new(presets: Op505PresetBank, default_patch: Op505Patch) -> Self {
-        // GM2リズムチャンネル（ドラムキット）は読み込まないため、全チャンネル常に旋律
-        // （`rhythm_kits_available=false`でch10も旋律のまま始まる）。
-        let channels = (0..16).map(|chi| ChannelState::new(chi, false)).collect();
+        // `presets`（`op505_presets_dir()`配下の全`.op505`）にリズムキットバンク
+        // （bank=15360+キット番号）が1件でもあれば、ch10は起動時からドラムモードONで始まる
+        // （`ChannelProgramState::new`参照。専用CLIオプションは無く、プリセットディレクトリに
+        // 置くだけで有効になる）。
+        let rhythm_kits_available = presets.has_bank_in(RHYTHM_BANK_RANGE);
+        if rhythm_kits_available {
+            println!("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
+        }
+        let channels = (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
         Self { channels, presets, default_patch }
     }
 
-    /// このチャンネルの現在のProgram Change選択（常にMelodic）が指すベースパッチ。
-    /// 見つからなければ`default_patch`にフォールバックする。
-    fn base_patch(&self, chi: usize) -> Op505Patch {
+    /// このチャンネル・ノートの現在のProgram Change選択が指すベースパッチ。
+    /// - 旋律: `presets`に該当(bank,program)が無ければ`default_patch`にフォールバック。
+    /// - リズム: `presets`のkit内に該当ノートが無ければkit0へフォールバックし、それも無ければ
+    ///   `None`（このノートは発音しない。GM2実機でキット内に未定義のノートが無音になるのと同じ、
+    ///   `op505/tools/smf2op505`の`base_patch_for`と同じ意味論）。
+    fn base_patch_for(&self, chi: usize, note: u8) -> Option<Op505Patch> {
         match self.channels[chi].program_state.selection() {
             ProgramSelection::Melodic { bank, program } => {
-                self.presets.get(bank, program).map(|p| p.patch).unwrap_or(self.default_patch)
+                Some(self.presets.get(bank, program).map(|p| p.patch).unwrap_or(self.default_patch))
             }
-            // ドラムキット未読み込みのためis_rhythmには決して入らないが、型上は網羅する。
-            ProgramSelection::Rhythm { .. } => self.default_patch,
+            ProgramSelection::Rhythm { .. } => {
+                let program_state = &self.channels[chi].program_state;
+                let (b, p) = program_state.lookup_address(note);
+                self.presets
+                    .get(b, p)
+                    .or_else(|| program_state.rhythm_fallback_address(note).and_then(|(fb, fp)| self.presets.get(fb, fp)))
+                    .map(|preset| preset.patch)
+            }
         }
     }
 }
@@ -204,10 +222,10 @@ fn handle_midi_message(engine: &mut Op505Engine, effects: &mut MasterEffects, st
 
 /// 1ボイスのノートオン。現在のProgram Changeが指す音色へ、NRPN上書き・CC2/CC4/AT/
 /// Pitch FG演奏補正/Soft Pedalを重ねた実効パッチで発音する（`op505-vst`/`smf2op505`の
-/// note_on適用と同型）。
+/// note_on適用と同型）。`base_patch_for`がNoneなら発音しない（リズムキット内に未定義のノート）。
 fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8, vel: u8) {
     state.channels[chi].pedal.note_on(note);
-    let base = state.base_patch(chi);
+    let Some(base) = state.base_patch_for(chi, note) else { return };
     let st = &state.channels[chi];
     let mut eff = st.build_effective_patch(&base);
     st.apply_note_post_processing(&mut eff, note);
@@ -236,14 +254,17 @@ fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, n
 
 /// CC/NRPNで変わった実効パッチ・CC76 rate_scale・AT・OP F-Numberを、そのチャンネルの
 /// 発音中ボイス全てへ伝播する（`op505/tools/smf2op505`のapply_liveと同じ役割）。
-/// GM2リズムチャンネル非対応のため、ベースパッチはチャンネル全体で1回だけ計算する。
+///
+/// リズムチャンネルはノートごとに音色が違うため、`base_patch_for`をノートごとに呼ぶ
+/// （旋律のようにチャンネル全体で1回だけ計算する最適化はできない）。キット内に未定義の
+/// ノート（`base_patch_for`がNone）はスキップし、既存の発音中パラメーターをそのまま維持する。
 fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
-    let base = state.base_patch(chi);
-    let st = &state.channels[chi];
-    let rate_scale = cc76_to_rate_scale(st.pitch_fg_cc76);
-    let eff = st.build_effective_patch(&base);
+    let rate_scale = cc76_to_rate_scale(state.channels[chi].pitch_fg_cc76);
     for note in 0..MIDI_NOTE_COUNT {
         let note_u8 = note as u8;
+        let Some(base) = state.base_patch_for(chi, note_u8) else { continue };
+        let st = &state.channels[chi];
+        let eff = st.build_effective_patch(&base);
         let id = voice_id(chi, note_u8);
         let mut note_patch = eff;
         st.apply_note_post_processing(&mut note_patch, note_u8);
