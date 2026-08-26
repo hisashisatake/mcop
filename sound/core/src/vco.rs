@@ -43,6 +43,13 @@ pub trait Vco: Send {
     /// `channel >> 7`が一致する全チャンネルの音量ゲインを一括設定する。
     fn set_channel_volume_group(&mut self, group: usize, gain: f32);
 
+    /// 発音中チャンネルの左右パンゲイン（`sound_core::pan_gains`が返す形、中央=(1.0, 1.0)）を設定する。
+    /// 既定は無視（モノラルしか持たない実装がこのトレイトを実装しても済むように）。
+    fn set_channel_pan(&mut self, _channel: usize, _gains: (f32, f32)) {}
+
+    /// `channel >> 7`が一致する全チャンネルの左右パンゲインを一括設定する。既定は無視。
+    fn set_channel_pan_group(&mut self, _group: usize, _gains: (f32, f32)) {}
+
     /// テンポ（BPM）を設定する。TimeEgのテンポ同期（`sync_enabled`）が対象区間の速度を
     /// 決めるのに使う。既定は無視（凍結中の`Ym38x6Engine`はTimeEgを持たないため無改造で済む）。
     fn set_tempo(&mut self, _bpm: f32) {}

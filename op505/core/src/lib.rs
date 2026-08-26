@@ -22,6 +22,14 @@ pub use preset::{op505_presets_dir, Op505Preset, Op505PresetBank, Op505PresetEnt
 /// ここから供給する。
 pub use sound_core::BIPOLAR_NEUTRAL_RAW;
 
+/// MIDI CC72/73/75（Release/Attack/Decay Time）・CC10（Pan）向けの`sound-core`純粋関数の
+/// 再エクスポート。`op505-midi`はsound-coreを直接見に行けない（上記`BIPOLAR_NEUTRAL_RAW`と同じ理由）。
+/// `TimeEgParams::scale_section_times`/`peak_stage`は`Op505OperatorParams.eg`（`TimeEgParams`型、
+/// 本クレートの公開フィールド経由で値として渡ってくる）の**inherentメソッド**のため、
+/// 型名を名指しできなくても`patch.operators[i].eg.scale_section_times(...)`の形でそのまま呼べる
+/// （再エクスポートが要るのは自由関数の`cc_to_time_scale`/`pan_gains`だけ）。
+pub use sound_core::{cc_to_time_scale, pan_gains};
+
 use std::collections::BTreeMap;
 
 use sound_fm::algorithm::ALGORITHMS;
@@ -368,6 +376,9 @@ struct Channel {
     pitch_fg_rate_scale: f32,
     bend_cents: f32,
     channel_gain: f32,
+    /// MIDI CC10（Pan）由来の左右ゲイン（`sound_core::pan_gains`、中央=(1.0, 1.0)）。
+    pan_gain_l: f32,
+    pan_gain_r: f32,
     /// 4op合成後に適用するSVF本体。CutoffのEG変調は`cutoff_fg_eg`が別途計算し、
     /// `effective_cutoff`で合成してから渡す（sound-coreの`VoiceFilter`のような一体型ではなく
     /// 分解結線。sound-core側にEG方式ごとの並行実装を増やさないための設計、plan参照）。
@@ -427,6 +438,8 @@ impl Channel {
             pitch_fg_rate_scale: 1.0,
             bend_cents: 0.0,
             channel_gain: 1.0,
+            pan_gain_l: 1.0,
+            pan_gain_r: 1.0,
             svf: Svf::new(),
             cutoff_fg_eg,
             gain_fg_eg,
@@ -652,7 +665,10 @@ pub struct Op505Engine {
     wave_tables: Vec<Option<WaveTable>>,
     current_patch: Op505Patch,
     max_voices: usize,
-    mix_buf: Vec<f32>,
+    /// L/R別の合成バッファ（`BTreeMap`のID昇順走査で加算順序を固定し、パン未使用時（全ボイス
+    /// pan_gain_l=pan_gain_r=1.0）はどちらもモノラル時代の`mix_buf`と各要素がビット単位で一致する）。
+    mix_buf_l: Vec<f32>,
+    mix_buf_r: Vec<f32>,
     /// TimeEgのテンポ同期（`sync_enabled`）に使うBPM。ホストDAWのTransport（VST）や
     /// タップテンポ（gesture-app）から`set_tempo()`経由で設定される。既定120。
     tempo_bpm: f32,
@@ -670,7 +686,8 @@ impl Op505Engine {
             wave_tables,
             current_patch: Op505Patch::default(),
             max_voices: DEFAULT_MAX_VOICES,
-            mix_buf: Vec::new(),
+            mix_buf_l: Vec::new(),
+            mix_buf_r: Vec::new(),
             tempo_bpm: 120.0,
         }
     }
@@ -838,6 +855,22 @@ impl Vco for Op505Engine {
         }
     }
 
+    fn set_channel_pan(&mut self, channel: usize, gains: (f32, f32)) {
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            ch.pan_gain_l = gains.0;
+            ch.pan_gain_r = gains.1;
+        }
+    }
+
+    fn set_channel_pan_group(&mut self, group: usize, gains: (f32, f32)) {
+        for (id, ch) in self.channels.iter_mut() {
+            if id >> 7 == group {
+                ch.pan_gain_l = gains.0;
+                ch.pan_gain_r = gains.1;
+            }
+        }
+    }
+
     /// TimeEgのテンポ同期（`sync_enabled`）に使うBPMを更新する。0以下は無視する
     /// （ホストDAWのTransportが未再生等で`tempo`を返さない場合の防御、既存値を保持する）。
     fn set_tempo(&mut self, bpm: f32) {
@@ -852,19 +885,31 @@ impl Vco for Op505Engine {
         let wave_tables = &self.wave_tables;
         let tempo_bpm = self.tempo_bpm;
         let frames = output.len().div_ceil(num_channels);
-        self.mix_buf.clear();
-        self.mix_buf.resize(frames, 0.0);
+        self.mix_buf_l.clear();
+        self.mix_buf_l.resize(frames, 0.0);
+        self.mix_buf_r.clear();
+        self.mix_buf_r.resize(frames, 0.0);
         for ch in self.channels.values_mut() {
-            for mix in self.mix_buf.iter_mut() {
+            let (pan_l, pan_r) = (ch.pan_gain_l, ch.pan_gain_r);
+            for (l, r) in self.mix_buf_l.iter_mut().zip(self.mix_buf_r.iter_mut()) {
                 if ch.is_idle() {
                     break;
                 }
-                *mix += ch.tick(sample_rate, wave_tables, tempo_bpm);
+                let sample = ch.tick(sample_rate, wave_tables, tempo_bpm);
+                *l += sample * pan_l;
+                *r += sample * pan_r;
             }
         }
-        for (frame, &mix) in output.chunks_mut(num_channels).zip(self.mix_buf.iter()) {
-            for s in frame.iter_mut() {
-                *s += mix;
+        // パン未使用（全ボイスpan_gain_l=pan_gain_r=1.0）なら`l==r==`旧`mix_buf`と各要素が
+        // ビット単位で一致する。num_channels>=2はチャンネルスロットの偶奇でL/Rへ振り分け、
+        // num_channels==1は`(l+r)*0.5`（l==rのときf32で厳密にl自身、指数部の増減のみ）。
+        for (frame, (&l, &r)) in output.chunks_mut(num_channels).zip(self.mix_buf_l.iter().zip(self.mix_buf_r.iter())) {
+            if num_channels == 1 {
+                frame[0] += (l + r) * 0.5;
+            } else {
+                for (i, s) in frame.iter_mut().enumerate() {
+                    *s += if i % 2 == 0 { l } else { r };
+                }
             }
         }
         self.channels.retain(|_, ch| !ch.is_idle());
@@ -1045,6 +1090,51 @@ mod tests {
         let mut buf = vec![0.0f32; 512];
         engine.render(&mut buf, 1);
         assert!(buf.iter().any(|&s| s != 0.0), "expected non-silent output");
+    }
+
+    // -----------------------------------------------------------------------
+    // CC10 (Pan) — ステレオ化後のビット不変性とパン挙動
+    // -----------------------------------------------------------------------
+
+    /// パン未使用（既定pan_gain_l=pan_gain_r=1.0）なら、モノラル出力・ステレオ両チャンネルとも
+    /// パン導入前のモノラルミックスとビット単位で一致するはず。
+    #[test]
+    fn no_pan_matches_legacy_mono_mix_bit_for_bit() {
+        let mut mono_engine = Op505Engine::new(44100.0);
+        mono_engine.set_patch(loud_patch(0));
+        mono_engine.note_on(0, 440.0, 100);
+        mono_engine.note_on(1, 550.0, 90);
+        let mut mono = vec![0.0f32; 512];
+        mono_engine.render(&mut mono, 1);
+
+        let mut stereo_engine = Op505Engine::new(44100.0);
+        stereo_engine.set_patch(loud_patch(0));
+        stereo_engine.note_on(0, 440.0, 100);
+        stereo_engine.note_on(1, 550.0, 90);
+        let mut stereo = vec![0.0f32; 1024];
+        stereo_engine.render(&mut stereo, 2);
+
+        for (i, &m) in mono.iter().enumerate() {
+            assert_eq!(stereo[i * 2], m, "L channel should match legacy mono mix at sample {i}");
+            assert_eq!(stereo[i * 2 + 1], m, "R channel should match legacy mono mix at sample {i}");
+        }
+    }
+
+    /// ハードパン（左端/右端）で反対側チャンネルが無音になること。
+    #[test]
+    fn hard_pan_silences_opposite_channel() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100);
+        engine.set_channel_pan(0, sound_core::pan_gains(0)); // 全左
+
+        let mut buf = vec![0.0f32; 1024];
+        engine.render(&mut buf, 2);
+
+        let right_channel_energy: f32 = buf.iter().skip(1).step_by(2).map(|s| s.abs()).sum();
+        let left_channel_energy: f32 = buf.iter().step_by(2).map(|s| s.abs()).sum();
+        assert_eq!(right_channel_energy, 0.0, "hard left pan should silence the right channel");
+        assert!(left_channel_energy > 0.0, "hard left pan should still sound on the left channel");
     }
 
     // -----------------------------------------------------------------------
