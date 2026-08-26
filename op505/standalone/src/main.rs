@@ -17,8 +17,8 @@
 //! MIDIチャンネルがリズムチャンネルになる。専用のCLIオプションは無く、プリセット
 //! ディレクトリに置くだけでよい。判定・アドレス解決は`op505_midi::ChannelProgramState`参照）。
 //! 対応イベント: Note On/Off・Program Change・Pitch Bend・Channel/Poly Pressure・
-//! CC0/1/2/4/7/11/32/64/66/67/76/77/78/91/93/98〜101/103〜106/120/121/123、RPN(0,0)/(0,5)、
-//! NRPN(0,2)〜(0,21)/(0,34)/(0,35)。
+//! CC0/1/2/4/7/10/11/32/64/66/67/71/72/73/74/75/76/77/78/91/93/98〜101/103〜106/120/121/123、
+//! RPN(0,0)/(0,5)、NRPN(0,2)〜(0,21)/(0,34)/(0,35)。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -234,6 +234,7 @@ fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, no
     engine.set_patch(eff);
     engine.note_on(id, note_to_frequency(note), vel);
     engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
+    engine.set_channel_pan(id, st.pan_gains());
     engine.set_pitch_bend(id, st.bend_cents);
     engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
     for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
@@ -273,6 +274,7 @@ fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
             engine.set_operator_params(id, op_index, *op);
         }
         engine.set_pitch_fg_rate_scale(id, rate_scale);
+        engine.set_channel_pan(id, st.pan_gains());
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
                 engine.set_operator_f_number(id, op_index, *f_number);
@@ -328,6 +330,34 @@ fn handle_control_change(
         }
         4 => {
             state.channels[chi].cc4 = cc_to_u8(val);
+            apply_live(engine, state, chi);
+        }
+        // CC10(Pan): ボイス単位の左右ゲイン（patchではなくVco::set_channel_pan_group経由、
+        // コンスタントパワー則）。CC7/CC11と同じく発音中へ即時反映する。
+        10 => {
+            state.channels[chi].cc10_pan = cc_to_u7(val);
+            engine.set_channel_pan_group(chi, state.channels[chi].pan_gains());
+        }
+        // CC71(Resonance)/CC72(Release Time)/CC73(Attack Time)/CC74(Brightness)/
+        // CC75(Decay Time): `op505_midi::apply_sound_controllers`参照。値を保持し発音中へ伝播する。
+        71 => {
+            state.channels[chi].cc71_resonance = cc_to_u7(val);
+            apply_live(engine, state, chi);
+        }
+        72 => {
+            state.channels[chi].cc72_release = cc_to_u7(val);
+            apply_live(engine, state, chi);
+        }
+        73 => {
+            state.channels[chi].cc73_attack = cc_to_u7(val);
+            apply_live(engine, state, chi);
+        }
+        74 => {
+            state.channels[chi].cc74_brightness = cc_to_u7(val);
+            apply_live(engine, state, chi);
+        }
+        75 => {
+            state.channels[chi].cc75_decay = cc_to_u7(val);
             apply_live(engine, state, chi);
         }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）

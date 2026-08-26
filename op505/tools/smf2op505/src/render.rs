@@ -18,6 +18,10 @@
 //!   - Pitch Bend（チャンネル単位、RPN(0,0)でセンシティビティ設定可）
 //!   - CC1/76/77/78: Pitch FG（ビブラート）への演奏補正
 //!   - CC7/CC11: GM2音量（実効ゲイン=(cc7/127)²×(cc11/127)²）
+//!   - CC10: Pan（コンスタントパワー則、ボイス単位の左右ゲイン）
+//!   - CC71/74: Resonance/Brightness（Filter Resonance/Cutoffへの64中心相対補正）
+//!   - CC72/73/75: Release/Attack/Decay Time（保持区間をピーク検出でAttack/Decay/Releaseへ
+//!     分割し、キャリアのみの各段timeへ時間スケールを掛ける）
 //!   - CC64 Sustain / CC66 Sostenuto / CC67 Soft Pedal（ホールドフラグ方式）
 //!   - CC91/93 + NRPN(0,2)〜(0,8): マスターエフェクト（Reverb/Chorus、`MasterEffects`）
 //!   - NRPN(0,0)〜(0,27)/(0,34)/(0,35): 質感LFO・Algorithm/Waveform/Filter/AT/OP F-Number/CC2,4 Destination
@@ -100,6 +104,7 @@ fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &Pa
             engine.set_operator_params(id, op_index, *op);
         }
         engine.set_pitch_fg_rate_scale(id, rate_scale);
+        engine.set_channel_pan(id, st.pan_gains());
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
                 engine.set_operator_f_number(id, op_index, *f_number);
@@ -129,6 +134,7 @@ fn note_on_voice(
     engine.set_patch(eff);
     engine.note_on(id, freq, vel);
     engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
+    engine.set_channel_pan(id, st.pan_gains());
     engine.set_pitch_bend(id, st.bend_cents);
     engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
     for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
@@ -337,6 +343,34 @@ fn handle_control_change(
         }
         4 => {
             channels[chi].cc4 = cc_to_u8(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
+        // CC10(Pan): ボイス単位の左右ゲイン（patchではなくVco::set_channel_pan_group経由、
+        // コンスタントパワー則）。CC7/CC11と同じく発音中へ即時反映する。
+        10 => {
+            channels[chi].cc10_pan = cc_to_u7(val);
+            engine.set_channel_pan_group(chi, channels[chi].pan_gains());
+        }
+        // CC71(Resonance)/CC72(Release Time)/CC73(Attack Time)/CC74(Brightness)/
+        // CC75(Decay Time): `op505_midi::apply_sound_controllers`参照。値を保持し発音中へ伝播する。
+        71 => {
+            channels[chi].cc71_resonance = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
+        72 => {
+            channels[chi].cc72_release = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
+        73 => {
+            channels[chi].cc73_attack = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
+        74 => {
+            channels[chi].cc74_brightness = cc_to_u7(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
+        75 => {
+            channels[chi].cc75_decay = cc_to_u7(val);
             apply_live(engine, chi, &channels[chi], bank, drums);
         }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）

@@ -572,6 +572,7 @@ impl Plugin for Op505Plugin {
                         ch_id,
                         channel_gain(self.channels[midi_ch].cc7, self.channels[midi_ch].cc11),
                     );
+                    self.engine.set_channel_pan(ch_id, self.channels[midi_ch].pan_gains());
                     self.engine.set_pitch_fg_rate_scale(ch_id, self.pitch_fg_rate_scale(midi_ch));
                     for (op_index, f_number) in
                         self.channels[midi_ch].operator_f_number_override.iter().enumerate()
@@ -643,6 +644,35 @@ impl Plugin for Op505Plugin {
                         // CC78(Vibrato Delay)：Pitch FG第0段(level=0のとき)のtimeへの64中心相対補正。
                         78 => {
                             self.channels[midi_ch].pitch_fg_cc78 = cc_to_u7(value);
+                        }
+                        // CC10(Pan)：ボイス単位の左右ゲイン（patchではなくVco::set_channel_pan_group
+                        // 経由、コンスタントパワー則）。CC7/CC11と同じく受信時に即座に発音中へ反映する。
+                        10 => {
+                            self.channels[midi_ch].cc10_pan = cc_to_u7(value);
+                            self.engine.set_channel_pan_group(midi_ch, self.channels[midi_ch].pan_gains());
+                        }
+                        // CC71(Resonance)：Filter Resonanceへの64中心相対補正。伝播ループが毎ブロック
+                        // apply_note_post_processing経由で自動反映する（値を保持するのみ）。
+                        71 => {
+                            self.channels[midi_ch].cc71_resonance = cc_to_u7(value);
+                        }
+                        // CC72(Release Time)：保持区間のピーク検出で分割したRelease区間（キャリアのみ）
+                        // の時間スケール（`op505_midi::apply_sound_controllers`参照）。
+                        72 => {
+                            self.channels[midi_ch].cc72_release = cc_to_u7(value);
+                        }
+                        // CC73(Attack Time)：Attack区間（キャリアのみ）の時間スケール。
+                        73 => {
+                            self.channels[midi_ch].cc73_attack = cc_to_u7(value);
+                        }
+                        // CC74(Brightness)：Filter Cutoffへの64中心相対補正。CC4(既定Filter Cutoff)
+                        // とは加算で共存する（互いの寄与が単純加算される、64では寄与ゼロ）。
+                        74 => {
+                            self.channels[midi_ch].cc74_brightness = cc_to_u7(value);
+                        }
+                        // CC75(Decay Time)：Decay区間（キャリアのみ）の時間スケール。
+                        75 => {
+                            self.channels[midi_ch].cc75_decay = cc_to_u7(value);
                         }
                         // CC64(サステインペダル)：ホールドフラグ方式（`ym38x6-vst`と同一設計）。
                         64 => {
