@@ -10,6 +10,7 @@ pub mod pedal;
 pub mod pitch_fg;
 pub mod rhythm;
 pub mod rpn;
+pub mod sound_controller;
 pub mod value;
 
 pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget};
@@ -18,6 +19,7 @@ pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDe
 pub use overrides::PatchOverrides;
 pub use pedal::{released_notes, PedalState};
 pub use pitch_fg::apply_pitch_fg_expression;
+pub use sound_controller::apply_sound_controllers;
 pub use rhythm::{
     rhythm_bank, ChannelProgramState, ProgramSelection, MELODIC_BANK_MSB, RHYTHM_BANK_BASE, RHYTHM_BANK_MSB,
     RHYTHM_BANK_RANGE, RHYTHM_DEFAULT_CHANNEL,

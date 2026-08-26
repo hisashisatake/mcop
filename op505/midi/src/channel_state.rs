@@ -21,6 +21,7 @@ use crate::overrides::PatchOverrides;
 use crate::pedal::PedalState;
 use crate::pitch_fg::apply_pitch_fg_expression;
 use crate::rhythm::{ChannelProgramState, ProgramSelection};
+use crate::sound_controller::apply_sound_controllers;
 use crate::rpn::RpnTracker;
 use crate::value::{cc_byte_to_u7, cc_byte_to_u8};
 use op505_core::Op505Patch;
@@ -104,6 +105,14 @@ pub struct ChannelState {
 
     // --- ペダル（CC64 Sustain / CC66 Sostenuto / CC67 Soft）---
     pub pedal: PedalState,
+
+    // --- サウンドコントローラー（CC10/71/72/73/74/75、GM2）。全て64=無補正が中立既定 ---
+    pub cc10_pan: u8,
+    pub cc71_resonance: u8,
+    pub cc72_release: u8,
+    pub cc73_attack: u8,
+    pub cc74_brightness: u8,
+    pub cc75_decay: u8,
 }
 
 impl ChannelState {
@@ -136,6 +145,12 @@ impl ChannelState {
             cc2_destination: ExpressionDestination::TlCarriers,
             cc4_destination: ExpressionDestination::FilterCutoff,
             pedal: PedalState::default(),
+            cc10_pan: 64,
+            cc71_resonance: 64,
+            cc72_release: 64,
+            cc73_attack: 64,
+            cc74_brightness: 64,
+            cc75_decay: 64,
         }
     }
 
@@ -159,8 +174,8 @@ impl ChannelState {
         patch
     }
 
-    /// note_patchへ、CC2/CC4/AT/Pitch FG演奏補正/Soft Pedalを一括で後適用する
-    /// （呼び出し側の発音中ボイス伝播ループ・ノートオンの両方から共通で呼ぶ）。
+    /// note_patchへ、CC2/CC4/AT/サウンドコントローラー/Pitch FG演奏補正/Soft Pedalを
+    /// 一括で後適用する（呼び出し側の発音中ボイス伝播ループ・ノートオンの両方から共通で呼ぶ）。
     pub fn apply_note_post_processing(&self, patch: &mut Op505Patch, note: u8) {
         apply_expression_modulation(
             note,
@@ -173,10 +188,23 @@ impl ChannelState {
             &self.poly_pressure,
             patch,
         );
+        apply_sound_controllers(
+            patch,
+            self.cc71_resonance,
+            self.cc72_release,
+            self.cc73_attack,
+            self.cc74_brightness,
+            self.cc75_decay,
+        );
         apply_pitch_fg_expression(patch, self.pitch_fg_cc1, self.pitch_fg_cc77, self.pitch_fg_cc78, self.pitch_fg_rpn0_5);
         if self.pedal.soft_notes & (1u128 << note) != 0 {
             apply_soft_pedal(patch, self.pedal.cc67);
         }
+    }
+
+    /// CC10(Pan)の現在値から左右ゲインを返す（`Vco::set_channel_pan`／`_group`へそのまま渡す）。
+    pub fn pan_gains(&self) -> (f32, f32) {
+        op505_core::pan_gains(self.cc10_pan)
     }
 
     /// Program Change（Bank Select確定後の`ChannelProgramState::program_change`ラッパー）。
