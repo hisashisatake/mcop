@@ -1,19 +1,26 @@
 //! 1つのMIDIチャンネル分のCC/NRPNシャドウ状態（[`ChannelState`]）。
 //!
-//! `op505/tools/smf2op505`が使う形態（MIDIチャンネル別に16個保持し、オフライン/常駐
-//! レンダリングで音色を組み立てる用途）を対象にする。`op505-vst`はDAWパラメーター・
-//! `#[persist]`との共存が必要なため独自のシャドウ構造（プラグイングローバル＋差分検知）を
-//! 持ち続けており、ここは参照しない（詳細はspec-fm.md 8章）。
+//! `op505/tools/smf2op505`・`op505/standalone`・`op505-vst`が共通で使う形態（MIDIチャンネル
+//! 別に16個保持し、レンダリング/演奏で音色を組み立てる用途）を対象にする。`op505-vst`は
+//! DAWパラメーター・`#[persist]`との共存が必要なため、`channels: [ChannelState; 16]`とは
+//! 別にDAWパラメーター由来のベースパッチ構築（`build_patch()`）とProgram Change選択結果の
+//! キャッシュ（`program_patch`）を独自に持つ（詳細はspec-fm.md 8章）。
 //!
 //! MasterEffects（sound-core型）は本クレートのAPIに出せない制約（Cargo.tomlコメント参照）
 //! があるため、Reverb/Chorus系NRPN（NRPN(0,2)〜(0,8)）は[`DataEntryOutcome::Effect`]で
 //! 呼び出し側へ通知し、呼び出し側が自分のMasterEffectsへ適用する。
+//!
+//! [`ChannelState`]は`reset()`（`Plugin::reset`等のリアルタイムコンテキスト）から
+//! 再構築されるため、**ヒープ確保を伴うフィールド（`Vec`/`Box`/`String`/`HashMap`等）を
+//! 追加してはならない**（`poly_pressure`が`HashMap`ではなくノート番号で直接引ける
+//! 固定長配列になっているのはこのため）。
 
 use crate::control::{control_target, ControlTarget};
 use crate::expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
+use crate::overrides::PatchOverrides;
 use crate::pedal::PedalState;
 use crate::pitch_fg::apply_pitch_fg_expression;
-use crate::rhythm::ChannelProgramState;
+use crate::rhythm::{ChannelProgramState, ProgramSelection};
 use crate::rpn::RpnTracker;
 use crate::value::{cc_byte_to_u7, cc_byte_to_u8};
 use op505_core::Op505Patch;
@@ -47,6 +54,7 @@ pub enum EffectControlTarget {
 /// NRPN で上書きされる離散/焼き込みフィールドは `Option`（None=ベースパッチ値のまま＝
 /// 「NRPN は現在のパッチの当該フィールドのみ書き換え」）、CC1/76/77/78 の Pitch FG 補正は
 /// 中立既定の加算値として常時適用する。
+#[derive(Clone, PartialEq, Debug)]
 pub struct ChannelState {
     /// Bank Select + Program Change の状態機械（VSTと同じ型・同じ解釈）。
     /// GM2リズムチャンネル判定（Bank Select MSB=120動的切替）を含む。
@@ -73,12 +81,11 @@ pub struct ChannelState {
     pub pitch_fg_cc78: u8,   // CC78 Vibrato Delay（0〜127、64=無補正）
     pub pitch_fg_rpn0_5: u8, // RPN(0,5) Modulation Depth Range（GM2、既定64）
 
-    // --- NRPN 離散/焼き込み上書き（None=ベースパッチ値）---
-    pub algorithm: Option<u8>,
-    pub operator_waveforms: [Option<u8>; 4],
-    pub filter_type: Option<u8>,
-    pub filter_self_oscillation: Option<bool>,
+    // --- NRPN 離散/焼き込み上書き（Program Changeでclear()される）---
+    pub overrides: PatchOverrides,
     /// OP単位F-Number上書き（NRPN(0,18)〜(0,21)、13bit、Some時のみ set_operator_f_number）。
+    /// `PatchOverrides`には含めない（`build_effective_patch`を通らない別経路のため、
+    /// `overrides.rs`のdocコメント参照）。
     pub operator_f_number_override: [Option<u16>; 4],
 
     // --- アフタータッチ ---
@@ -118,10 +125,7 @@ impl ChannelState {
             pitch_fg_cc77: 0,
             pitch_fg_cc78: 64,
             pitch_fg_rpn0_5: 64,
-            algorithm: None,
-            operator_waveforms: [None; 4],
-            filter_type: None,
-            filter_self_oscillation: None,
+            overrides: PatchOverrides::default(),
             operator_f_number_override: [None; 4],
             at_destination: ExpressionDestination::default(),
             poly_at_destination: ExpressionDestination::default(),
@@ -135,6 +139,15 @@ impl ChannelState {
         }
     }
 
+    /// GM2 System Reset相当（プラグインの`reset()`等、リアルタイムコンテキストから呼ぶ）。
+    /// `ChannelProgramState::reset`と対になるAPIで、`[`Self::new`]と同じ状態に戻す
+    /// （CC/NRPN/ペダルを含む全フィールドを初期化する。`ChannelProgramState::reset`の
+    /// docコメントにある「CC121(Reset All Controllers)からは呼ばないこと」という注意点は
+    /// このメソッドにも同様に当てはまる）。
+    pub fn reset(&mut self, chi: usize, rhythm_kits_available: bool) {
+        *self = Self::new(chi, rhythm_kits_available);
+    }
+
     /// ベースパッチ（プログラムの音色）に、このチャンネルの NRPN 離散/焼き込み上書きを
     /// 重ねた実効パッチを組み立てる。
     ///
@@ -142,22 +155,7 @@ impl ChannelState {
     /// 後処理のため、ここでは扱わず[`ChannelState::apply_note_post_processing`]で適用する。
     pub fn build_effective_patch(&self, base: &Op505Patch) -> Op505Patch {
         let mut patch = *base;
-
-        if let Some(v) = self.algorithm {
-            patch.channel.algorithm = v;
-        }
-        for (i, wf) in self.operator_waveforms.iter().enumerate() {
-            if let Some(v) = wf {
-                patch.operators[i].waveform = *v;
-            }
-        }
-        if let Some(v) = self.filter_type {
-            patch.channel.filter_type = v;
-        }
-        if let Some(v) = self.filter_self_oscillation {
-            patch.channel.filter_self_oscillation = v;
-        }
-
+        self.overrides.apply(&mut patch);
         patch
     }
 
@@ -179,6 +177,15 @@ impl ChannelState {
         if self.pedal.soft_notes & (1u128 << note) != 0 {
             apply_soft_pedal(patch, self.pedal.cc67);
         }
+    }
+
+    /// Program Change（Bank Select確定後の`ChannelProgramState::program_change`ラッパー）。
+    /// NRPN離散上書きレイヤーを`clear()`してから旋律/リズムを確定する（「PC＝音色を選び直す」
+    /// 「その後のNRPN＝その音色への微調整」という役割分担。呼び出し側が`program_state`を
+    /// 直接触るとこのクリアが漏れるため、Program Changeは必ずこのメソッド経由で行うこと）。
+    pub fn program_change(&mut self, program_u7: u8) -> ProgramSelection {
+        self.overrides.clear();
+        self.program_state.program_change(program_u7)
     }
 
     /// NRPN(0,18)〜(0,21)：CC6(MSB)+CC38(LSB)の14bit値を13bit(0〜8191)にclampして
@@ -238,19 +245,19 @@ impl ChannelState {
                 DataEntryOutcome::Effect(EffectControlTarget::ChorusSendToReverb, cc_byte_to_u8(raw_value))
             }
             ControlTarget::Algorithm => {
-                self.algorithm = Some(cc_byte_to_u7(raw_value).min(7));
+                self.overrides.algorithm = Some(cc_byte_to_u7(raw_value).min(7));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::OperatorWaveform(op_index) => {
-                self.operator_waveforms[op_index as usize] = Some(cc_byte_to_u8(raw_value));
+                self.overrides.operator_waveforms[op_index as usize] = Some(cc_byte_to_u8(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::FilterType => {
-                self.filter_type = Some(cc_byte_to_u7(raw_value).min(2));
+                self.overrides.filter_type = Some(cc_byte_to_u7(raw_value).min(2));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::FilterSelfOscillation => {
-                self.filter_self_oscillation = Some(cc_byte_to_u7(raw_value) != 0);
+                self.overrides.filter_self_oscillation = Some(cc_byte_to_u7(raw_value) != 0);
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::AtDestination => {
@@ -294,10 +301,16 @@ impl ChannelState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rpn::RpnSelection;
 
     fn select_nrpn(st: &mut ChannelState, msb: u8, lsb: u8) {
         st.rpn.set_nrpn_msb(msb);
         st.rpn.set_nrpn_lsb(lsb);
+    }
+
+    fn select_rpn(st: &mut ChannelState, msb: u8, lsb: u8) {
+        st.rpn.set_rpn_msb(msb);
+        st.rpn.set_rpn_lsb(lsb);
     }
 
     /// 中立の ChannelState では実効パッチがベースと一致する。
@@ -331,9 +344,25 @@ mod tests {
         let mut st = ChannelState::new(0, false);
         select_nrpn(&mut st, 0, 9);
         assert_eq!(st.apply_data_entry(5), DataEntryOutcome::StateChanged { voice_update: true });
-        assert_eq!(st.algorithm, Some(5));
+        assert_eq!(st.overrides.algorithm, Some(5));
         let eff = st.build_effective_patch(&Op505Patch::default());
         assert_eq!(eff.channel.algorithm, 5);
+    }
+
+    /// 折衷案の挙動：Program Changeで上書きレイヤーがクリアされ、以降のNRPNは新たに効く。
+    #[test]
+    fn program_change_clears_overrides_but_subsequent_nrpn_still_applies() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 9);
+        st.apply_data_entry(7);
+        assert_eq!(st.overrides.algorithm, Some(7));
+
+        st.program_change(0);
+        assert_eq!(st.overrides, PatchOverrides::default(), "Program Changeで上書きはクリアされる");
+
+        select_nrpn(&mut st, 0, 9);
+        st.apply_data_entry(5);
+        assert_eq!(st.overrides.algorithm, Some(5), "PC後のNRPNは新たに効く");
     }
 
     /// エフェクト系 NRPN(0,2〜8) は`DataEntryOutcome::Effect`（ChannelState上のvoice_updateは無し）。
@@ -373,5 +402,150 @@ mod tests {
         st.apply_data_entry_lsb(127);
         assert_eq!(st.apply_data_entry(127), DataEntryOutcome::StateChanged { voice_update: true }); // 127*128+127 = 16383 → 8191
         assert_eq!(st.operator_f_number_override[0], Some(8191));
+    }
+
+    /// `reset()`はCC/NRPN/ペダルを含む全フィールドを`new()`直後と同じ状態に戻す。
+    #[test]
+    fn reset_restores_new_state() {
+        let mut st = ChannelState::new(3, false);
+        select_nrpn(&mut st, 0, 9);
+        st.apply_data_entry(5);
+        st.cc7 = 10;
+        st.cc11 = 20;
+        st.pitch_fg_cc1 = 99;
+        st.channel_pressure = 50;
+        st.poly_pressure[60] = 40;
+        let _ = st.pedal.cc64(127);
+        st.program_change(10);
+
+        st.reset(3, false);
+        assert_eq!(st, ChannelState::new(3, false));
+    }
+
+    // --- チャンネル独立性テスト（op505-vstをChannelStateへ全面移行する根拠。
+    // 「16個持てば独立」は型的にほぼ自明だが、これらは契約の凍結として存在する） ---
+
+    /// NRPN選択状態（RpnTracker）は`ChannelState`ごとに独立しており、他chの選択が漏れない。
+    /// 14bit F-Number（CC6 MSB + CC38 LSB）のような複数CCにまたがる値の組み立てで、
+    /// もし選択状態がグローバル共有だと片方のchの選択が他方のCC6を横取りしてしまう。
+    #[test]
+    fn interleaved_14bit_nrpn_from_two_channels_do_not_corrupt() {
+        let mut ch0 = ChannelState::new(0, false);
+        let mut ch1 = ChannelState::new(1, false);
+
+        select_nrpn(&mut ch0, 0, 18);
+        ch0.apply_data_entry_lsb(10);
+        select_nrpn(&mut ch1, 0, 18);
+        ch1.apply_data_entry_lsb(100);
+
+        ch0.apply_data_entry(60);
+        ch1.apply_data_entry(60);
+
+        assert_eq!(ch0.operator_f_number_override[0], Some(60 * 128 + 10));
+        assert_eq!(ch1.operator_f_number_override[0], Some(60 * 128 + 100));
+    }
+
+    #[test]
+    fn nrpn_selection_does_not_leak_across_channels() {
+        let mut ch0 = ChannelState::new(0, false);
+        let ch1 = ChannelState::new(1, false);
+
+        select_nrpn(&mut ch0, 0, 9);
+        assert_eq!(ch1.rpn.selection, RpnSelection::None);
+
+        ch0.apply_data_entry(5);
+        assert_eq!(ch0.overrides.algorithm, Some(5));
+        assert_eq!(ch1.overrides, PatchOverrides::default());
+    }
+
+    #[test]
+    fn program_change_clears_only_its_own_overrides() {
+        let mut ch0 = ChannelState::new(0, false);
+        let mut ch1 = ChannelState::new(1, false);
+        select_nrpn(&mut ch0, 0, 9);
+        ch0.apply_data_entry(5);
+        select_nrpn(&mut ch1, 0, 9);
+        ch1.apply_data_entry(6);
+
+        ch0.program_change(0);
+
+        assert_eq!(ch0.overrides, PatchOverrides::default());
+        assert_eq!(ch1.overrides.algorithm, Some(6), "ch1の上書きはch0のPCの影響を受けない");
+    }
+
+    /// CC2(ブレス)のExpression Destination（NRPN(0,34)）はchごとに独立する。
+    /// ch0だけ行先をFilterCutoffへ変更すると、同じcc2値でも実効パッチがch0/ch1で異なる。
+    #[test]
+    fn destinations_are_per_channel() {
+        let mut ch0 = ChannelState::new(0, false);
+        let mut ch1 = ChannelState::new(1, false);
+        select_nrpn(&mut ch0, 0, 34);
+        ch0.apply_data_entry(1); // FilterCutoffへ変更（既定はTlCarriers）
+        assert_eq!(ch1.cc2_destination, ExpressionDestination::TlCarriers, "ch1は既定のまま");
+
+        ch0.cc2 = 100;
+        ch1.cc2 = 100;
+        let base = Op505Patch::default();
+        let mut p0 = ch0.build_effective_patch(&base);
+        let mut p1 = ch1.build_effective_patch(&base);
+        ch0.apply_note_post_processing(&mut p0, 60);
+        ch1.apply_note_post_processing(&mut p1, 60);
+        assert_ne!(p0, p1, "cc2の行先が違うので実効パッチも違う");
+    }
+
+    #[test]
+    fn pitch_bend_range_is_per_channel() {
+        let mut ch0 = ChannelState::new(0, false);
+        let ch1 = ChannelState::new(1, false);
+        select_rpn(&mut ch0, 0, 0);
+        ch0.apply_data_entry(12);
+        assert_eq!(ch0.pitch_bend_range, 12.0);
+        assert_eq!(ch1.pitch_bend_range, 2.0);
+    }
+
+    #[test]
+    fn reset_all_controllers_is_per_channel() {
+        let mut ch0 = ChannelState::new(0, false);
+        let mut ch1 = ChannelState::new(1, false);
+        ch0.pitch_fg_cc1 = 100;
+        ch0.channel_pressure = 80;
+        ch1.pitch_fg_cc1 = 100;
+        ch1.channel_pressure = 80;
+
+        ch0.reset_all_controllers();
+
+        assert_eq!(ch0.pitch_fg_cc1, 0);
+        assert_eq!(ch0.channel_pressure, 0);
+        assert_eq!(ch1.pitch_fg_cc1, 100, "ch1はリセットされない");
+        assert_eq!(ch1.channel_pressure, 80, "ch1はリセットされない");
+    }
+
+    /// 方針「note_on経路もapply_note_post_processingへ一本化する」の前提：
+    /// CC未受信（中立状態）ならapply_note_post_processingを通してもパッチはベースと不変。
+    #[test]
+    fn apply_note_post_processing_neutral_equals_base() {
+        let st = ChannelState::new(0, false);
+        let base = Op505Patch::default();
+        let mut patch = base;
+        st.apply_note_post_processing(&mut patch, 60);
+        assert_eq!(patch, base);
+    }
+
+    /// エフェクト系NRPN(0,2)〜(0,8)は`ChannelState`自身を変化させない
+    /// （MasterEffectsはグローバル1個のまま。呼び出し側がEffect outcomeを見て自分で適用する）。
+    #[test]
+    fn effect_nrpn_reports_but_does_not_mutate_state() {
+        let mut st = ChannelState::new(0, false);
+        let before = st.clone();
+        select_nrpn(&mut st, 0, 4); // ReverbTime
+        let outcome = st.apply_data_entry(64);
+        assert!(matches!(outcome, DataEntryOutcome::Effect(EffectControlTarget::ReverbTime, _)));
+        // data_entry_msb・rpn.selectionはCC6/NRPN選択の受信状態として当然変化するので、
+        // それ以外（overrides等の音色状態）が変化していないことを確認する。
+        assert_eq!(st.overrides, before.overrides);
+        assert_eq!(st.operator_f_number_override, before.operator_f_number_override);
+        assert_eq!(st.cc2_destination, before.cc2_destination);
+        assert_eq!(st.cc4_destination, before.cc4_destination);
+        assert_eq!(st.pitch_bend_range, before.pitch_bend_range);
     }
 }

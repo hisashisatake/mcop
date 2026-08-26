@@ -5,6 +5,7 @@
 pub mod channel_state;
 pub mod control;
 pub mod expression;
+pub mod overrides;
 pub mod pedal;
 pub mod pitch_fg;
 pub mod rhythm;
@@ -14,6 +15,7 @@ pub mod value;
 pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget};
 pub use control::{control_target, needs_voice_update, ControlTarget};
 pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
+pub use overrides::PatchOverrides;
 pub use pedal::{released_notes, PedalState};
 pub use pitch_fg::apply_pitch_fg_expression;
 pub use rhythm::{

@@ -5,7 +5,7 @@
 /// エンジンへの`note_off`呼び出しはこの構造体からは行わない（エンジンを持たないため）。
 /// `cc64`/`cc66`/`cc121`は「今リリースすべきノート」をビットマスクで返すので、
 /// 呼び出し側は[`released_notes`]で走査して`engine.note_off(...)`を呼ぶ。
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct PedalState {
     pub keys_down: u128,
     pub pedal_down: bool,
