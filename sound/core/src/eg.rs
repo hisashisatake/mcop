@@ -160,6 +160,28 @@ pub fn cc76_to_rate_scale(cc76: u8) -> f32 {
     }
 }
 
+/// CC72/73/75（Release/Attack/Decay Time）の生値(0〜127、64=無補正)から、TimeEgの段の
+/// `time`へ掛ける乗算スケール係数を返す（spec-sound.md「MIDI CC（GM2準拠）」節）。
+/// [cc76_to_rate_scale]と同じ指数カーブだが**意味が逆**：あちらは*rate*（大きいほど速い）、
+/// こちらは*time*（大きいほど長い＝遅い）。GM2の"〜Time"コントローラーの向きに合わせてある。
+/// 64→1.0（無補正）、0→0.25倍（4倍速い＝短い）、127→4.0倍（4倍遅い＝長い）の指数カーブ。
+/// `cc==64`は`powf`の丸め誤差を経由せず厳密に1.0を返す（呼び出し側のビット不変ガードのため）。
+pub fn cc_to_time_scale(cc: u8) -> f32 {
+    const SCALE_MIN: f32 = 0.25;
+    const SCALE_MAX: f32 = 4.0;
+    if cc == 64 {
+        return 1.0;
+    }
+    let cc = cc.min(127) as f32;
+    if cc <= 64.0 {
+        // 0〜64 → SCALE_MIN〜1.0
+        SCALE_MIN * (1.0 / SCALE_MIN).powf(cc / 64.0)
+    } else {
+        // 64〜127 → 1.0〜SCALE_MAX
+        (SCALE_MAX).powf((cc - 64.0) / 63.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FG（ファンクションジェネレーター）スロットの型（spec-sound.md「ファンクションジェネレーター」節）
 // ---------------------------------------------------------------------------
@@ -648,6 +670,22 @@ mod tests {
         let min = cc76_to_rate_scale(0);
         let mid = cc76_to_rate_scale(64);
         let max = cc76_to_rate_scale(127);
+        assert!(min < mid);
+        assert!(mid < max);
+        assert!((min - 0.25).abs() < 1e-6);
+        assert!((max - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cc_to_time_scale_neutral_at_64_is_exact() {
+        assert_eq!(cc_to_time_scale(64), 1.0, "cc==64はpowfを経由せず厳密に1.0を返すはず");
+    }
+
+    #[test]
+    fn cc_to_time_scale_monotonic_and_bounded() {
+        let min = cc_to_time_scale(0);
+        let mid = cc_to_time_scale(64);
+        let max = cc_to_time_scale(127);
         assert!(min < mid);
         assert!(mid < max);
         assert!((min - 0.25).abs() < 1e-6);

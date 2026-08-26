@@ -320,6 +320,70 @@ impl TimeEgParams {
     pub fn has_drift(&self) -> bool {
         self.level_drift != BIPOLAR_NEUTRAL_RAW || self.depth_drift != BIPOLAR_NEUTRAL_RAW
     }
+
+    /// 保持区間（`0..=release_point`）の中で`stages[i].level`が最大の段のindexを返す。
+    /// `level`は段の**終端レベル**（`TimeEg::tick`の`segment_end = level_of(&stages[i])`）なので、
+    /// この段まで辿ればエンベロープはピークに達している＝MIDI CC73(Attack Time)の対象区間。
+    /// 同値が並ぶ場合は**最も早い段**を採る（ピークへ最初に到達した時点でAttack終了とみなす）。
+    pub fn peak_stage(&self) -> usize {
+        let release_point = (self.release_point as usize).min(MAX_STAGES - 1);
+        let mut best = 0usize;
+        let mut best_level = self.stages[0].level;
+        for (i, stage) in self.stages.iter().enumerate().take(release_point + 1).skip(1) {
+            if stage.level > best_level {
+                best_level = stage.level;
+                best = i;
+            }
+        }
+        best
+    }
+
+    /// MIDI CC72/73/75（Release/Attack/Decay Time）向けに、保持区間を[peak_stage]でAttack/Decayへ、
+    /// `release_point`でDecay/Releaseへ過不足なく3分割し、各区間の段の`time`へスケール係数を掛ける。
+    /// - Attack : `0..=peak_stage`
+    /// - Decay  : `peak_stage+1..=release_point`
+    /// - Release: `release_point+1..stage_count`
+    ///
+    /// `time==0`（瞬時）の段は`time_to_seconds(0)==0.0`→`0.0*scale==0.0`→`seconds_to_time(0.0)==0`と
+    /// 素通りする（レート方式の`rate=0`＝フリーズとは意味が真逆の特殊値だが、変換式が自動的に保つ）。
+    /// 各`scale`が厳密に`1.0`の区間は変換自体をスキップする（[has_drift]と同じ、
+    /// 既存パッチの出力をビット単位で不変に保つためのガード。往復変換の丸めに依存しない）。
+    pub fn scale_section_times(&mut self, attack: f32, decay: f32, release: f32) {
+        let stage_count = clamp_stage_count(self.stage_count);
+        let release_point = (self.release_point as usize).min(stage_count - 1);
+        let peak = self.peak_stage();
+
+        if attack != 1.0 {
+            for stage in &mut self.stages[0..=peak] {
+                stage.time = seconds_to_time(time_to_seconds(stage.time) * attack);
+            }
+        }
+        if decay != 1.0 && peak + 1 <= release_point {
+            for stage in &mut self.stages[(peak + 1)..=release_point] {
+                stage.time = seconds_to_time(time_to_seconds(stage.time) * decay);
+            }
+        }
+        if release != 1.0 && release_point + 1 < stage_count {
+            for stage in &mut self.stages[(release_point + 1)..stage_count] {
+                stage.time = seconds_to_time(time_to_seconds(stage.time) * release);
+            }
+        }
+    }
+}
+
+/// MIDI CC10（Pan）の生値(0〜127、64=中央)から、コンスタントパワー則の左右ゲインを返す。
+/// 中央=`(1.0, 1.0)`に正規化（`√2·cos(θ)`, `√2·sin(θ)`, `θ=cc10/127·π/2`）、
+/// 端（0または127）では反対側が0になり自身は`√2`倍（+3dB）になる。
+/// `cc10==64`は`cos`/`sin`の丸め誤差を経由せず厳密に`(1.0, 1.0)`を返す
+/// （呼び出し側でパンされたボイスが1つも無い間は既存出力をビット単位で不変に保つためのガード）。
+pub fn pan_gains(cc10: u8) -> (f32, f32) {
+    if cc10 == 64 {
+        return (1.0, 1.0);
+    }
+    let cc10 = cc10.min(127) as f32;
+    let theta = (cc10 / 127.0) * std::f32::consts::FRAC_PI_2;
+    let scale = std::f32::consts::SQRT_2;
+    (scale * theta.cos(), scale * theta.sin())
 }
 
 fn level_of(stage: &TimeStage) -> f32 {
@@ -2230,5 +2294,120 @@ mod tests {
             !eg.is_idle(),
             "リリース区間が空ならauto_releaseの行き先が無く、従来どおり静止し続けるはず"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // MIDI CC10/71-75向けヘルパー（peak_stage/scale_section_times/pan_gains）
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn peak_stage_monotonic_rise_picks_release_point() {
+        // 単調増加（0→80→255）のアタックのみのEG：ピークは保持区間の最終段(release_point)。
+        let params = TimeEgParams {
+            stages: stages_with(&[(50, 80, 0), (50, 255, 0), (100, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            ..Default::default()
+        };
+        assert_eq!(params.peak_stage(), 1);
+    }
+
+    #[test]
+    fn peak_stage_two_stage_attack_picks_earliest_max() {
+        // 段0(level 255)でピークに達し、段1で一旦下がってから保持区間終端(段2)へ向かうEG。
+        // ピークは段0であるべき（released levelではなく最大値到達段）。
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 255, 0), (30, 100, 0), (30, 150, 0), (50, 0, 0)]),
+            stage_count: 4,
+            release_point: 2,
+            ..Default::default()
+        };
+        assert_eq!(params.peak_stage(), 0);
+    }
+
+    #[test]
+    fn peak_stage_tie_picks_earliest() {
+        let params = TimeEgParams {
+            stages: stages_with(&[(30, 200, 0), (30, 200, 0), (30, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            ..Default::default()
+        };
+        assert_eq!(params.peak_stage(), 0, "同値ならピークへ最初に到達した段を採る");
+    }
+
+    #[test]
+    fn scale_section_times_identity_is_noop() {
+        let original = TimeEgParams {
+            stages: stages_with(&[(50, 255, 0), (80, 100, 0), (120, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            ..Default::default()
+        };
+        let mut scaled = original;
+        scaled.scale_section_times(1.0, 1.0, 1.0);
+        assert_eq!(scaled, original, "スケール1.0は既存パッチをビット単位で不変に保つはず");
+    }
+
+    #[test]
+    fn scale_section_times_splits_attack_decay_release() {
+        // 段0=Attack(peak)、段1=Decay(release_pointまで)、段2=Release。
+        let mut params = TimeEgParams {
+            stages: stages_with(&[(100, 255, 0), (100, 128, 0), (100, 0, 0)]),
+            stage_count: 3,
+            release_point: 1,
+            ..Default::default()
+        };
+        let original_decay_time = params.stages[1].time;
+        let original_release_time = params.stages[2].time;
+
+        params.scale_section_times(2.0, 1.0, 1.0);
+
+        assert_eq!(
+            params.stages[0].time,
+            seconds_to_time(time_to_seconds(100) * 2.0),
+            "Attack区間(段0)だけがスケールされるはず"
+        );
+        assert_eq!(params.stages[1].time, original_decay_time, "Decay区間はscale=1.0で不変のはず");
+        assert_eq!(params.stages[2].time, original_release_time, "Release区間はscale=1.0で不変のはず");
+    }
+
+    #[test]
+    fn scale_section_times_preserves_instant_stage() {
+        // time=0（瞬時）の段はどのスケールを掛けても0のまま。
+        let mut params = TimeEgParams {
+            stages: stages_with(&[(0, 255, 0), (50, 0, 0)]),
+            stage_count: 2,
+            release_point: 0,
+            ..Default::default()
+        };
+        params.scale_section_times(3.0, 3.0, 3.0);
+        assert_eq!(params.stages[0].time, 0);
+    }
+
+    #[test]
+    fn pan_gains_center_is_exact_unity() {
+        assert_eq!(pan_gains(64), (1.0, 1.0), "中央(CC10=64)は丸め誤差を経由せず厳密に(1.0,1.0)");
+    }
+
+    #[test]
+    fn pan_gains_extremes_silence_opposite_channel() {
+        let (l0, r0) = pan_gains(0);
+        assert!(r0.abs() < 1e-6, "CC10=0(全左)は右チャンネルが無音のはず: r={r0}");
+        assert!((l0 - std::f32::consts::SQRT_2).abs() < 1e-5, "全左は+3dB(√2倍): l={l0}");
+
+        let (l127, r127) = pan_gains(127);
+        assert!(l127.abs() < 1e-6, "CC10=127(全右)は左チャンネルが無音のはず: l={l127}");
+        assert!((r127 - std::f32::consts::SQRT_2).abs() < 1e-5, "全右は+3dB(√2倍): r={r127}");
+    }
+
+    #[test]
+    fn pan_gains_constant_power() {
+        // コンスタントパワー則：どのCC10値でもl^2+r^2は一定(=2.0、中央基準)であるはず。
+        for cc10 in [0u8, 20, 50, 64, 90, 110, 127] {
+            let (l, r) = pan_gains(cc10);
+            let power = l * l + r * r;
+            assert!((power - 2.0).abs() < 1e-4, "cc10={cc10} power={power}");
+        }
     }
 }
