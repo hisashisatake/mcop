@@ -835,17 +835,17 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC 1 | Modulation Wheel | ③ジェスチャー：Pitch FG Depthへ瞬間加算（×RPN(0,5)/127でセント換算） | 準拠（FG参照） |
 | CC 5 | Portamento Time | Portamento Time | 完全準拠（下記参照） |
 | CC 7 | Channel Volume | Volume | 完全準拠 |
-| CC 10 | Pan | Pan | 完全準拠 |
+| CC 10 | Pan | Pan | 完全準拠（下記参照） |
 | CC 11 | Expression | Expression | 完全準拠 |
 | CC 64 | Damper Pedal | Sustain | 完全準拠 |
-| CC 65 | Portamento On/Off | Portamento | 完全準拠（下記参照） |
+| CC 65 | Portamento On/Off | Portamento | **未実装**（下記参照） |
 | CC 66 | Sostenuto | Sostenuto | 完全準拠（下記参照） |
 | CC 67 | Soft Pedal | Soft Pedal | 完全準拠（下記参照） |
-| CC 71 | Resonance | Filter Resonance | 完全準拠 |
-| CC 72 | Release Time | RR（キャリア一括） | 準拠 |
-| CC 73 | Attack Time | AR（キャリア一括） | 準拠 |
-| CC 74 | Brightness | Filter Cutoff | 完全準拠 |
-| CC 75 | Decay Time | D1R（キャリア一括） | 準拠 |
+| CC 71 | Resonance | Filter Resonance | 完全準拠（下記参照） |
+| CC 72 | Release Time | Release区間（キャリア一括） | 準拠（下記参照） |
+| CC 73 | Attack Time | Attack区間（キャリア一括） | 準拠（下記参照） |
+| CC 74 | Brightness | Filter Cutoff | 完全準拠（下記参照） |
+| CC 75 | Decay Time | Decay区間（キャリア一括） | 準拠（下記参照） |
 | CC 76 | Vibrato Rate | ②パート状態：Pitch FGの速さ（AR/D1R一括）へ64中心相対補正 | 完全準拠 |
 | CC 77 | Vibrato Depth | ②パート状態：Pitch FG Depthへ0起点加算 | 完全準拠 |
 | CC 78 | Vibrato Delay | ②パート状態：Pitch FG Delayへ64中心相対補正 | 完全準拠 |
@@ -856,8 +856,8 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC 120 | All Sound Off | All Sound Off | 完全準拠 |
 | CC 121 | Reset All Controllers | Reset All Controllers | 完全準拠 |
 | CC 123 | All Notes Off | All Notes Off | 完全準拠 |
-| CC 126 | Mono Mode On | Mono Mode | 完全準拠 |
-| CC 127 | Poly Mode On | Poly Mode | 完全準拠 |
+| CC 126 | Mono Mode On | Mono Mode | **未実装** |
+| CC 127 | Poly Mode On | Poly Mode | **未実装** |
 
 **GM2未定義領域（CC102〜119）の独自割り当て：** GM2にコントローラー定義のないCC102〜119を、38x6独自機能に使う（標準コントローラーとの意味的衝突を避けるため）。先頭のCC102をProgram Change代替（VST3ではMIDI Program Changeが受信できないため）、続くCC103〜106をOperator Key On/Off（Op0〜Op3）に割り当てる。旧実装はVOPMex互換でCC92をProgram Change代替に使っていたが、CC92はGM2でEffects 2 Depth（トレモロ）に予約され衝突するため廃止し、未定義領域の先頭CC102へ移した。
 
@@ -866,6 +866,20 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 CC65 ON時、新しいノート（新チャンネル）のF-Numberは、同一MIDIチャンネルで直前に発音したノートのF-Numberから、CC5（Portamento Time、0=即座〜127=数秒程度）で指定した時間をかけて目標値へ線形にグライドする。
 直前のノートは別チャンネルで独立してリリース/サステインペダル等の影響を受けながら鳴り続けるため、グライドとの相互作用は発生しない。
 作曲支援アプリのジェスチャーUIの「ゆっくり移動 → ポルタメント」（ジェスチャーレパートリー参照）も、この仕組み（Note-On + CC65 ON + CC5）で実現する。
+
+**未実装**（`op505-core`にF-Numberを時間経過で滑らかに変化させる機構自体が無く、CC解釈の追加だけでは完結しないため。詳細はmemory `project_op505_midi_spec_gaps.md`参照）。
+
+**Pan（CC10）：**
+
+コンスタントパワー則（`sound_core::pan_gains`）でボイス単位の左右ゲインを計算し、`Vco::set_channel_pan`/`_group`経由でエンジンへ渡す。中央（CC10=64）は`(1.0, 1.0)`（既存のモノラル出力とビット単位で不変）、端（0または127）では反対側のチャンネルが0になり自身は`√2`倍（+3dB）になる。パッチではなくボイスの左右ゲインとして適用するため、`Op505Engine::render`はステレオ合成（`mix_l`/`mix_r`の2本立て）に対応している。DAWパラメーター化はしていない（CC受信のみ、実装済み。`sound_core::pan_gains`を`op505-midi::ChannelState::pan_gains`が薄くラップし、op505-vst/smf2op505/standalone共通で使う）。
+
+**Resonance（CC71）/ Brightness（CC74）：**
+
+CC71はFilter Resonance、CC74はFilter Cutoffへ、それぞれ独立に64中心のバイポーラ補正（`(cc-64)*2`を0〜255でclamp加算、64=無補正）を掛ける。CC4（既定でFilter Cutoff方向のExpression Destination）とCC74は役割が重複するが、両者は単純に加算されるだけで衝突しない（CC74が既定64のときは寄与ゼロ）。実装済み（`op505-midi::apply_sound_controllers`、op505-vst/smf2op505/standalone共通）。
+
+**Release/Attack/Decay Time（CC72/73/75）：**
+
+op505のTimeEg（N点Time/Level方式EG）には固定のAttack/Decay/Release段が無いため、保持区間（`0..=release_point`）の中で`level`が最大になる段（ピーク段）を検出し、そこを境に3分割する：Attack=`0..=peak_stage`、Decay=`peak_stage+1..=release_point`、Release=`release_point+1..stage_count`。各区間の段の`time`へ、CC値（64中心、0→0.25倍〜127→4.0倍の指数カーブ、`cc_to_time_scale`）を掛ける。対象はキャリアのみ（`ALGORITHMS[alg].carriers`、Soft Pedalと同じ絞り込み）。実装済み（`sound_core::{cc_to_time_scale, TimeEgParams::{peak_stage, scale_section_times}}`、`op505-midi::apply_sound_controllers`、op505-vst/smf2op505/standalone共通）。
 
 **Sostenuto（CC66）：**
 
@@ -884,6 +898,10 @@ CC67 ON中に新規キーオンしたノートに対してのみ、実効TL（**
 **All Sound Off（CC120）/ Reset All Controllers（CC121）/ All Notes Off（CC123）：**
 
 GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリースを経ず即座に消音**（`Op505Engine::silence_group`でボイスマップから即除去、残響も無い）、CC123は**通常のNote-Off相当**（リリースして自然減衰）。CC121は「モジュレーションの三層モデル」の**③ジェスチャー層のみ**リセットする（②パート状態・①音色は保持、上記「補強規則」参照）。対象はCC64/66/67ペダル・Pitch Bend・CC1(Mod Wheel)・アフタータッチ（Channel Pressure/Poly Key Pressure）。CC2/CC4/CC7/CC11/CC76〜78/センドレベル/RPN選択等（②パート状態）は保持する。実装済み（smf2op505 `render.rs`・op505-vst `lib.rs`）。
+
+**Mono/Poly Mode（CC126/CC127）：**
+
+**未実装。** 現行のボイス管理は「MIDIチャンネル×ノート番号」で1ノート＝1ボイスIDを作る設計（`voice_id = channel*128+note`）のため、Mono Mode（同一チャンネル内で常に1音のみ発音）にすると、同一チャンネル内の新規ノートオンで既存ボイスをどう扱うか（音を切るか、レガート的に繋げるか）という設計変更が必要（詳細はmemory `project_op505_midi_spec_gaps.md`参照）。
 
 **サステインペダル（CC64）の実装方針：**
 
