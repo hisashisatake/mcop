@@ -202,7 +202,7 @@ fn handle_midi_message(engine: &mut Op505Engine, effects: &mut MasterEffects, st
         0xC0 => {
             let &[_, program] = bytes else { return };
             println!("program change: ch{chi} program={program}");
-            state.channels[chi].program_state.program_change(program & 0x7f);
+            state.channels[chi].program_change(program & 0x7f);
         }
         0xD0 => {
             let &[_, value] = bytes else { return };

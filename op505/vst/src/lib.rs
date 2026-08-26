@@ -4,8 +4,8 @@ mod params;
 
 use op505_midi::{
     apply_expression_modulation, apply_pitch_fg_expression, apply_soft_pedal, cc_to_u7, cc_to_u8,
-    control_target, released_notes, ChannelProgramState, ControlTarget, ExpressionDestination, PedalState,
-    ProgramSelection, RpnTracker, RHYTHM_BANK_RANGE,
+    control_target, released_notes, ChannelProgramState, ControlTarget, ExpressionDestination, PatchOverrides,
+    PedalState, ProgramSelection, RpnTracker, RHYTHM_BANK_RANGE,
 };
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
@@ -64,22 +64,19 @@ struct Op505Plugin {
     // 書き込む）。オーディオスレッドでのアロケーションを避けるため使い回す（毎回`Vec::new()`しない）。
     active_ids: Vec<usize>,
 
-    // Algorithm：NRPN(0,9)に加えてDAWパラメーターとしても公開する（1シャドウ差分検知方式、
-    // `ym38x6-vst`と同型）。
-    algorithm: u8,
+    // Algorithm/Waveform/Filter Type/Self-Oscillation：NRPN(0,9)〜(0,15)由来の離散上書きレイヤー
+    // （`op505_midi::ChannelState`と共有する`PatchOverrides`。None=DAWパラメーターの値のまま）。
+    // Program Change（`apply_program_change`）と`reset()`（System Reset）でclear()される
+    // （「PC＝音色を選び直す」「その後のNRPN＝その音色への微調整」という役割分担、
+    // plan「op505-vstとop505-midiのNRPN上書きレイヤー共有化」参照）。
+    overrides: PatchOverrides,
+    // 上記4系統について「前回ブロックで見たDAW値」。process()内でDAW値がこの値から変化したら
+    // 該当overrideをNoneへクリアする（「最後に触った方が勝つ」。GUIノブ操作後にNRPN上書きが
+    // 永久に残り続けるのを防ぐ）。build_patch()はDAWパラメーターを直接読むため、これらは
+    // 差分検知専用でパッチ構築には使わない。
     last_algorithm: u8,
-
-    // Filter Type / Self-Oscillation：op505ではDAWパラメーターとして存在するため、
-    // NRPN(0,14)/(0,15)と1シャドウ差分検知で二重公開する（ym38x6ではNRPN専用だったが、
-    // op505フェーズ1でDAWパラメーター化済みのため扱いが異なる）。
-    filter_type: u8,
     last_filter_type_param: u8,
-    filter_self_oscillation: bool,
     last_filter_self_oscillation_param: bool,
-
-    // operator_waveformsはDAWパラメーター（params.operators[i].waveform）との二重管理。
-    // DAWオートメーション変化時はprocess()内の差分検知で上書き、NRPN(0,10)〜(0,13)は直接書き込む。
-    operator_waveforms: [u8; 4],
     last_operator_waveforms: [u8; 4],
 
     // Pitch FG（②③層の補正を受ける唯一のFGスロット、spec-sound.md「演奏層による補正」節）。
@@ -187,13 +184,10 @@ impl Default for Op505Plugin {
             sample_rate: DEFAULT_SR,
             cached_egs,
             active_ids: Vec::with_capacity(256),
-            algorithm: params::DEFAULT_ALGORITHM,
+            overrides: PatchOverrides::default(),
             last_algorithm: params::DEFAULT_ALGORITHM,
-            filter_type: 0,
             last_filter_type_param: 0,
-            filter_self_oscillation: true,
             last_filter_self_oscillation_param: true,
-            operator_waveforms: [0; 4],
             last_operator_waveforms: [0; 4],
             pitch_fg_cc1: [0; MIDI_CHANNEL_COUNT],
             pitch_fg_cc76: [64; MIDI_CHANNEL_COUNT],
@@ -243,8 +237,10 @@ impl Default for Op505Plugin {
 }
 
 impl Op505Plugin {
-    /// 現在のDAWパラメーター・NRPN状態・`cached_egs`から`Op505Patch`を構築する（MIDIチャンネル
-    /// 非依存。CC1/76/77/78のPitch FG演奏補正は`apply_pitch_fg_expression`で別途適用する）。
+    /// 現在のDAWパラメーター・`cached_egs`から`Op505Patch`を構築する（MIDIチャンネル非依存。
+    /// NRPN(0,9)〜(0,15)由来の`overrides`はここでは適用しない。Program Change選択中の
+    /// チャンネルでも必ず後段適用できるよう、`apply_pitch_fg_expression`と同じ「note_patchへの
+    /// 後処理」パターンへ分離してある。CC1/76/77/78のPitch FG演奏補正も同様に別途適用する）。
     fn build_patch(&self) -> Op505Patch {
         let p = &self.params;
         let egs = &self.cached_egs;
@@ -258,7 +254,7 @@ impl Op505Plugin {
                 ksr: op.ksr.value() as u8,
                 am_enable: op.ame.value(),
                 velocity_sensitivity: op.vel_sens.value() as u8,
-                waveform: self.operator_waveforms[i],
+                waveform: op.waveform.value() as u8,
                 op_fine_tune: op.op_fine_tune.value() as u8,
                 eg_shift: op.eg_shift.value() as u8,
                 level_scale: op.level_scale.value() as u8,
@@ -272,12 +268,12 @@ impl Op505Plugin {
         // 補正が丸ごとスキップされてしまうバグがあったため、apply_expression_modulation/
         // apply_soft_pedalと同じ「note_patchへの後処理」パターンへ分離した）。
         let channel = Op505ChannelParams {
-            algorithm: self.algorithm,
+            algorithm: p.algorithm.value() as u8,
             feedback: p.feedback.value() as u8,
             filter_cutoff: p.cutoff.value() as u8,
             filter_resonance: p.resonance.value() as u8,
-            filter_type: self.filter_type,
-            filter_self_oscillation: self.filter_self_oscillation,
+            filter_type: p.filter_type.value() as u8,
+            filter_self_oscillation: p.filter_self_oscillation.value(),
             pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
             cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
             gain_fg: egs.gain_fg,
@@ -321,6 +317,11 @@ impl Op505Plugin {
     /// 旋律/リズムを確定させ、旋律なら`program_patch`をキャッシュする（リズムはノートごとに
     /// `resolve_note_patch`が直接引くため、ここではキャッシュしない＝常に`None`にする）。
     fn apply_program_change(&mut self, midi_ch: usize, program: u8) {
+        // NRPN離散上書きレイヤーをクリアする（「PC＝音色を選び直す」「その後のNRPN＝その音色への
+        // 微調整」という役割分担、plan「op505-vstとop505-midiのNRPN上書きレイヤー共有化」参照）。
+        // NRPN系シャドウはMIDIチャンネル非依存のグローバルのため、どのMIDIチャンネルのPCでも
+        // 全チャンネル分クリアされる（現状のNRPN状態自体がグローバルなのと同じ設計）。
+        self.overrides.clear();
         match self.program_state[midi_ch].program_change(program) {
             ProgramSelection::Melodic { bank, program } => {
                 self.program_patch[midi_ch] = self.preset_bank.get(bank, program).map(|preset| preset.patch);
@@ -403,19 +404,19 @@ impl Op505Plugin {
             }
             // NRPN(0,9): Algorithm（0〜7、範囲外は7にclamp）
             ControlTarget::Algorithm => {
-                self.algorithm = cc_to_u7(value).min(7);
+                self.overrides.algorithm = Some(cc_to_u7(value).min(7));
             }
             // NRPN(0,10)〜(0,13): Waveform Op0〜3（0〜255）
             ControlTarget::OperatorWaveform(op_index) => {
-                self.operator_waveforms[op_index as usize] = cc_to_u8(value);
+                self.overrides.operator_waveforms[op_index as usize] = Some(cc_to_u8(value));
             }
             // NRPN(0,14): Filter Type（0=LP/1=HP/2=BP、範囲外は2にclamp）
             ControlTarget::FilterType => {
-                self.filter_type = cc_to_u7(value).min(2);
+                self.overrides.filter_type = Some(cc_to_u7(value).min(2));
             }
             // NRPN(0,15): Filter Self-Oscillation（0=OFF/1=ON）
             ControlTarget::FilterSelfOscillation => {
-                self.filter_self_oscillation = cc_to_u7(value) != 0;
+                self.overrides.filter_self_oscillation = Some(cc_to_u7(value) != 0);
             }
             // NRPN(0,16): AT Destination（Channel Pressureの加算先）
             ControlTarget::AtDestination => {
@@ -524,6 +525,7 @@ impl Plugin for Op505Plugin {
         self.data_entry_msb = 0;
         self.data_entry_lsb = 0;
         self.operator_f_number_override = [F_NUMBER_CENTER; 4];
+        self.overrides.clear();
         self.program_patch = [None; 16];
         self.channel_bend_cents = [0.0; 16];
         self.pitch_bend_range = 2.0;
@@ -556,32 +558,34 @@ impl Plugin for Op505Plugin {
             self.engine.set_tempo(tempo as f32);
         }
 
-        // Algorithm：DAWオートメーションで値が変化した場合のみ反映する（NRPN(0,9)はself.algorithmへ
-        // 直接書き込まれ、ここでの値が前回と同じ間は上書きされない。差分検知方式）。
+        // Algorithm：DAWオートメーションで値が変化したら、NRPN(0,9)由来の上書きをクリアする
+        // （「最後に触った方が勝つ」。GUIノブ操作後にNRPN上書きが永久に残り続けるのを防ぐ。
+        // build_patch()はDAWパラメーターを直接読むため、変化していない間は何もしなくてよい）。
         let algorithm = self.params.algorithm.value() as u8;
         if algorithm != self.last_algorithm {
-            self.algorithm = algorithm;
+            self.overrides.algorithm = None;
             self.last_algorithm = algorithm;
         }
 
-        // Filter Type / Self-Oscillation：algorithmと同じ1シャドウ差分検知方式。
-        // NRPN(0,14)/(0,15)直接書き込みと共存する。
+        // Filter Type / Self-Oscillation：algorithmと同じ「DAW変化でoverrideクリア」方式。
+        // NRPN(0,14)/(0,15)由来の上書きと共存する。
         let filter_type_param = self.params.filter_type.value() as u8;
         if filter_type_param != self.last_filter_type_param {
-            self.filter_type = filter_type_param;
+            self.overrides.filter_type = None;
             self.last_filter_type_param = filter_type_param;
         }
         let filter_self_oscillation_param = self.params.filter_self_oscillation.value();
         if filter_self_oscillation_param != self.last_filter_self_oscillation_param {
-            self.filter_self_oscillation = filter_self_oscillation_param;
+            self.overrides.filter_self_oscillation = None;
             self.last_filter_self_oscillation_param = filter_self_oscillation_param;
         }
 
-        // Waveform Op0〜3：algorithmと同じ差分検知方式。NRPN(0,10)〜(0,13)直接書き込みと共存する。
+        // Waveform Op0〜3：algorithmと同じ「DAW変化でoverrideクリア」方式。
+        // NRPN(0,10)〜(0,13)由来の上書きと共存する。
         for i in 0..4 {
             let wf = self.params.operators[i].waveform.value() as u8;
             if wf != self.last_operator_waveforms[i] {
-                self.operator_waveforms[i] = wf;
+                self.overrides.operator_waveforms[i] = None;
                 self.last_operator_waveforms[i] = wf;
             }
         }
@@ -668,6 +672,9 @@ impl Plugin for Op505Plugin {
                 })
             };
             let mut note_patch = base_patch;
+            // NRPN(0,9)〜(0,15)由来の上書き（Program Change選択中のチャンネルでも必ず効く。
+            // Pitch FGと同じ「note_patchへの後処理」パターン、plan参照）。
+            self.overrides.apply(&mut note_patch);
             apply_expression_modulation(
                 note,
                 &[
@@ -715,6 +722,8 @@ impl Plugin for Op505Plugin {
                     let Some(mut note_on_patch) = self.resolve_note_patch(midi_ch, note) else {
                         continue;
                     };
+                    // NRPN(0,9)〜(0,15)由来の上書き（live伝播ループと同じ、note_patch組み立て時に適用）。
+                    self.overrides.apply(&mut note_on_patch);
                     // CC78(Delay)は`TimeEg::note_on()`が読む最初のtickから効かせる必要があるため、
                     // 伝播ループでの1ブロック遅れの反映を待たずここで適用する（CC1/77も併せて統一適用）。
                     apply_pitch_fg_expression(

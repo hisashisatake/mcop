@@ -237,7 +237,7 @@ pub fn render_smf_with_drums(
                 spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64;
             }
             EvKind::Program(ch, p) => {
-                channels[ch as usize].program_state.program_change(p);
+                channels[ch as usize].program_change(p);
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
@@ -406,7 +406,7 @@ fn handle_control_change(
         93 => effects.set_chorus_send(cc_to_u8(val)),
         // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため）。
         102 => {
-            channels[chi].program_state.program_change(cc_to_u7(val));
+            channels[chi].program_change(cc_to_u7(val));
         }
         // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
         103..=106 => {

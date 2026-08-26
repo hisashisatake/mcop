@@ -11,9 +11,10 @@
 
 use crate::control::{control_target, ControlTarget};
 use crate::expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
+use crate::overrides::PatchOverrides;
 use crate::pedal::PedalState;
 use crate::pitch_fg::apply_pitch_fg_expression;
-use crate::rhythm::ChannelProgramState;
+use crate::rhythm::{ChannelProgramState, ProgramSelection};
 use crate::rpn::RpnTracker;
 use crate::value::{cc_byte_to_u7, cc_byte_to_u8};
 use op505_core::Op505Patch;
@@ -73,12 +74,11 @@ pub struct ChannelState {
     pub pitch_fg_cc78: u8,   // CC78 Vibrato Delay（0〜127、64=無補正）
     pub pitch_fg_rpn0_5: u8, // RPN(0,5) Modulation Depth Range（GM2、既定64）
 
-    // --- NRPN 離散/焼き込み上書き（None=ベースパッチ値）---
-    pub algorithm: Option<u8>,
-    pub operator_waveforms: [Option<u8>; 4],
-    pub filter_type: Option<u8>,
-    pub filter_self_oscillation: Option<bool>,
+    // --- NRPN 離散/焼き込み上書き（Program Changeでclear()される）---
+    pub overrides: PatchOverrides,
     /// OP単位F-Number上書き（NRPN(0,18)〜(0,21)、13bit、Some時のみ set_operator_f_number）。
+    /// `PatchOverrides`には含めない（`build_effective_patch`を通らない別経路のため、
+    /// `overrides.rs`のdocコメント参照）。
     pub operator_f_number_override: [Option<u16>; 4],
 
     // --- アフタータッチ ---
@@ -118,10 +118,7 @@ impl ChannelState {
             pitch_fg_cc77: 0,
             pitch_fg_cc78: 64,
             pitch_fg_rpn0_5: 64,
-            algorithm: None,
-            operator_waveforms: [None; 4],
-            filter_type: None,
-            filter_self_oscillation: None,
+            overrides: PatchOverrides::default(),
             operator_f_number_override: [None; 4],
             at_destination: ExpressionDestination::default(),
             poly_at_destination: ExpressionDestination::default(),
@@ -142,22 +139,7 @@ impl ChannelState {
     /// 後処理のため、ここでは扱わず[`ChannelState::apply_note_post_processing`]で適用する。
     pub fn build_effective_patch(&self, base: &Op505Patch) -> Op505Patch {
         let mut patch = *base;
-
-        if let Some(v) = self.algorithm {
-            patch.channel.algorithm = v;
-        }
-        for (i, wf) in self.operator_waveforms.iter().enumerate() {
-            if let Some(v) = wf {
-                patch.operators[i].waveform = *v;
-            }
-        }
-        if let Some(v) = self.filter_type {
-            patch.channel.filter_type = v;
-        }
-        if let Some(v) = self.filter_self_oscillation {
-            patch.channel.filter_self_oscillation = v;
-        }
-
+        self.overrides.apply(&mut patch);
         patch
     }
 
@@ -179,6 +161,15 @@ impl ChannelState {
         if self.pedal.soft_notes & (1u128 << note) != 0 {
             apply_soft_pedal(patch, self.pedal.cc67);
         }
+    }
+
+    /// Program Change（Bank Select確定後の`ChannelProgramState::program_change`ラッパー）。
+    /// NRPN離散上書きレイヤーを`clear()`してから旋律/リズムを確定する（「PC＝音色を選び直す」
+    /// 「その後のNRPN＝その音色への微調整」という役割分担。呼び出し側が`program_state`を
+    /// 直接触るとこのクリアが漏れるため、Program Changeは必ずこのメソッド経由で行うこと）。
+    pub fn program_change(&mut self, program_u7: u8) -> ProgramSelection {
+        self.overrides.clear();
+        self.program_state.program_change(program_u7)
     }
 
     /// NRPN(0,18)〜(0,21)：CC6(MSB)+CC38(LSB)の14bit値を13bit(0〜8191)にclampして
@@ -238,19 +229,19 @@ impl ChannelState {
                 DataEntryOutcome::Effect(EffectControlTarget::ChorusSendToReverb, cc_byte_to_u8(raw_value))
             }
             ControlTarget::Algorithm => {
-                self.algorithm = Some(cc_byte_to_u7(raw_value).min(7));
+                self.overrides.algorithm = Some(cc_byte_to_u7(raw_value).min(7));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::OperatorWaveform(op_index) => {
-                self.operator_waveforms[op_index as usize] = Some(cc_byte_to_u8(raw_value));
+                self.overrides.operator_waveforms[op_index as usize] = Some(cc_byte_to_u8(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::FilterType => {
-                self.filter_type = Some(cc_byte_to_u7(raw_value).min(2));
+                self.overrides.filter_type = Some(cc_byte_to_u7(raw_value).min(2));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::FilterSelfOscillation => {
-                self.filter_self_oscillation = Some(cc_byte_to_u7(raw_value) != 0);
+                self.overrides.filter_self_oscillation = Some(cc_byte_to_u7(raw_value) != 0);
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::AtDestination => {
@@ -331,9 +322,25 @@ mod tests {
         let mut st = ChannelState::new(0, false);
         select_nrpn(&mut st, 0, 9);
         assert_eq!(st.apply_data_entry(5), DataEntryOutcome::StateChanged { voice_update: true });
-        assert_eq!(st.algorithm, Some(5));
+        assert_eq!(st.overrides.algorithm, Some(5));
         let eff = st.build_effective_patch(&Op505Patch::default());
         assert_eq!(eff.channel.algorithm, 5);
+    }
+
+    /// 折衷案の挙動：Program Changeで上書きレイヤーがクリアされ、以降のNRPNは新たに効く。
+    #[test]
+    fn program_change_clears_overrides_but_subsequent_nrpn_still_applies() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 9);
+        st.apply_data_entry(7);
+        assert_eq!(st.overrides.algorithm, Some(7));
+
+        st.program_change(0);
+        assert_eq!(st.overrides, PatchOverrides::default(), "Program Changeで上書きはクリアされる");
+
+        select_nrpn(&mut st, 0, 9);
+        st.apply_data_entry(5);
+        assert_eq!(st.overrides.algorithm, Some(5), "PC後のNRPNは新たに効く");
     }
 
     /// エフェクト系 NRPN(0,2〜8) は`DataEntryOutcome::Effect`（ChannelState上のvoice_updateは無し）。
