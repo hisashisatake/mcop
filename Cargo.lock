@@ -3595,6 +3595,7 @@ dependencies = [
  "cpal",
  "midir",
  "op505-core",
+ "op505-midi",
  "sound-core",
 ]
 
