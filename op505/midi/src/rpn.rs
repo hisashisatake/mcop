@@ -1,6 +1,6 @@
 /// CC99/98(NRPN)・CC101/100(RPN) で選択中のパラメーター番号。
 /// CC6(Data Entry MSB)はこの選択状態に応じて値を適用する。
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum RpnSelection {
     #[default]
     None,
@@ -11,7 +11,7 @@ pub enum RpnSelection {
 /// RPN/NRPNの選択状態（CC98/99/100/101の4値）とその結果選択されているパラメーターを追跡する。
 /// MIDIチャンネル非依存のグローバル状態（Algorithm/Filter Type等のNRPN対象はパッチ全体の
 /// グローバルパラメーターのため）。
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct RpnTracker {
     rpn_msb: u8,
     rpn_lsb: u8,

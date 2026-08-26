@@ -572,3 +572,21 @@ Bank Select(CC0/CC32) + Program Changeの状態機械（`op505_midi::rhythm::Cha
 `ChannelProgramState::lookup_address`が返すのは`(bank: u16, program: u8)`という**アドレスだけ**で、
 `sound-core`/`op505-core`の型（`Op505PresetBank`含む）はここでも一切APIに出ない——「解釈のロジック」と
 「バンクデータの実行」を分離する境界線は、フェーズ5.5当初のCC/NRPN解釈と完全に同じ形を保っている。
+
+**`op505-vst`の`ChannelState`全面移行（2026-08-26）で、VSTと参照実装の解釈一致が構造レベルへ
+達成された。** フェーズ2完了時点（2026-08-12）ではCC/NRPNの「解釈そのもの」は共有していたが、
+`op505-vst`は`overrides`・`rpn`・`data_entry_msb/lsb`・`at_destination`等をプラグイン全体で
+1組の**グローバル**シャドウとして保持し、`smf2op505`/`standalone`が使う`ChannelState`
+（MIDIチャンネル別に16個）とは異なる集約構造を持っていた（表情CC自体はフェーズ2の時点で
+`[u8; 16]`等に配列化されていたが、NRPN/RPN選択状態は据え置きだった）。この差により、
+「複数MIDIチャンネルでNRPNを跨いで送るとどうなるか」という挙動がVSTと参照実装で食い違う
+余地が残っていた（例: ch1でNRPN(0,18)を選択中にch2が別のNRPNを選択すると、グローバル実装では
+ch1のCC6/CC38がch2の選択に横取りされる）。`op505-vst`を`channels: [ChannelState; 16]`
+1本へ全面移行し、この差を解消した。
+
+**非互換の周知**: 既存のDAWプロジェクトやSMFで「あるMIDIチャンネルにNRPNを送り、別チャンネルの
+音にも効かせている」ものは、移行後に効かなくなる。MIDI規格上NRPN/RPNはチャンネルメッセージ
+なのでGM2的にはこちらが正しい挙動だが、意図的な挙動変更であることをリリースノートに明記する。
+エフェクト系NRPN(0,2)〜(0,8)とCC91/93（Reverb/Chorus Send）は`MasterEffects`がプラグイン全体で
+1個のため、この移行後もグローバルのまま残る（`ChannelState::apply_data_entry`が
+`DataEntryOutcome::Effect`で呼び出し側へ委譲する設計、上記境界線の通り）。

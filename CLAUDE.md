@@ -133,7 +133,11 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           NRPN（30エントリ）・表情CC（CC1/2/4/76/77/78、全16 MIDIチャンネル
                           独立）・CC66/67/120/121/123・OP単位キーオンCC103〜106・OP単位F-Number・
                           RPN(0,0)/(0,5)・MASTER EFFECTSの共有パネル統合まで実装済み（フェーズ2）。
-                          CC/NRPN解釈は`op505-midi`クレートへ切り出し済み（フェーズ5.5、旧`src/midi.rs`は削除）
+                          CC/NRPN解釈は`op505-midi`クレートへ切り出し済み（フェーズ5.5、旧`src/midi.rs`は削除）。
+                          2026-08-26、NRPN/RPN選択状態を含むMIDI受信状態を`op505_midi::ChannelState`
+                          （smf2op505/standaloneと共有）へ全面移行し、全16 MIDIチャンネル完全独立化
+                          （エフェクト系NRPN(0,2)〜(0,8)とCC91/93はMasterEffectsが1個のためグローバル
+                          のまま。詳細はspec-fm.md 8章⑤）
     midi/              ← CC/NRPN解釈の共有クレート（クレート名op505-midi。フェーズ5.5新設）。
                           `op505-vst`と`op505/tools/smf2op505`の両方が参照する、fork-on-write方針の
                           限定的な例外（VSTと参照実装の解釈が食い違うと正誤の基準が消えるため。

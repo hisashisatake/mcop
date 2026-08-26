@@ -325,8 +325,10 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
     9フィールド。VST独自ストリップにはせず、gesture-app editor-wasmとも共有）を実装。
     表情CC/Channel Pressure/Poly Key Pressureはym38x6のグローバル単一値から全16 MIDIチャンネル
     独立へ拡張（`Op505Engine::collect_active_channels`を新設し、発音中ボイスのみ列挙して
-    MIDIチャンネル別の実効パッチを適用）。NRPN/RPN状態自体はグローバル単一のまま（パッチ全体設定の
-    ため）。詳細はop505-vstフェーズ2実装メモ・spec-sound.md「op505でのNRPNテーブル差分」参照
+    MIDIチャンネル別の実効パッチを適用）。NRPN/RPN状態自体はこの時点ではグローバル単一のまま
+    だったが、2026-08-26に`channels: [op505_midi::ChannelState; 16]`へ全面移行しMIDIチャンネル
+    別化した（詳細はspec-fm.md 8章⑤参照）。詳細はop505-vstフェーズ2実装メモ・spec-sound.md
+    「op505でのNRPNテーブル差分」参照
   → パラメーターUI・音色保存・プリセットライブラリ（.op505 の書き出しUI、op505-vstのGUIからの
     保存導線は未着手）
   → Bank Select / Program Change（gesture-app側・op505-vst側とも受信・切替は実装済み。

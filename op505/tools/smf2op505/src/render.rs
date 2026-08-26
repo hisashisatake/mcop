@@ -598,6 +598,181 @@ mod tests {
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "混在CC/NRPN出力が無音");
     }
 
+    // --- MIDIチャンネル独立性E2Eテスト ---
+    //
+    // `ChannelState`をMIDIチャンネル別に16個保持する設計（`op505-vst`もこのセッションで
+    // 同じ設計へ移行済み）の正しさを、エンジンが全chをモノラル合算する制約の下で検証する。
+    // 「他chにイベントを混ぜても、対象chだけを鳴らした出力がビット一致する」という形にし、
+    // 無関係なDSP変更に対して頑健にする。各テストは必ず対照（assert_ne!）を伴わせ、
+    // 「常に一致」で通ってしまうのを防ぐ。
+
+    /// 複数MIDIチャンネルでNRPN選択(CC98/99)を交互に送っても、CC6/CC38(Data Entry)は
+    /// 自分のチャンネルで選択中のNRPNにのみ適用される。RpnTrackerがグローバル単一だと、
+    /// ch1のNRPN選択がch0のCC6/CC38を横取りしてしまう箇所。
+    #[test]
+    fn interleaved_nrpn_selection_across_channels_is_isolated() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+
+        // A(clean): ch0だけがNRPN(0,18)=Op0 F-Numberを選択してCC38=10→CC6=60を送る。
+        let smf_a = build_smf(&[
+            (0, vec![0xB0, 99, 0]),
+            (0, vec![0xB0, 98, 18]),
+            (0, vec![0xB0, 38, 10]),
+            (0, vec![0xB0, 6, 60]),
+            (0, vec![0x90, 69, 100]),
+            (480, vec![0x80, 69, 0]),
+        ]);
+        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        // B(dirty): ch0のNRPN(0,18)選択直後、ch1がNRPN(0,14)=Filter Typeを選択してから
+        // ch0へCC38/CC6を送る（選択がchごとに独立していれば影響を受けないはず）。
+        let smf_b = build_smf(&[
+            (0, vec![0xB0, 99, 0]),
+            (0, vec![0xB0, 98, 18]),
+            (0, vec![0xB1, 99, 0]),
+            (0, vec![0xB1, 98, 14]),
+            (0, vec![0xB0, 38, 10]),
+            (0, vec![0xB0, 6, 60]),
+            (0, vec![0x90, 69, 100]),
+            (480, vec![0x80, 69, 0]),
+        ]);
+        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        assert_eq!(buf_a, buf_b, "ch1のNRPN選択がch0のCC38/CC6を横取りしてはいけない");
+    }
+
+    /// 他chへのNRPN(0,18) Operator F-Number送信は、対象chの発音に影響しない
+    /// （対照として、同じchへ送った場合はピッチが変わり出力が異なることも確認する）。
+    #[test]
+    fn operator_f_number_nrpn_does_not_leak_across_channels() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let note_on_ch0 = (0u32, vec![0x90, 69, 100]);
+        let note_off_ch0 = (480u32, vec![0x80, 69, 0]);
+
+        // A: ch0はNRPNを一切受けずに発音する（基準）。
+        let smf_a = build_smf(&[note_on_ch0.clone(), note_off_ch0.clone()]);
+        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        // B: ch1（別チャンネル）にNRPN(0,18)でF-Numberを半分にする指示を送ってからch0で発音する。
+        let smf_b = build_smf(&[
+            (0, vec![0xB1, 99, 0]),
+            (0, vec![0xB1, 98, 18]),
+            (0, vec![0xB1, 38, 0]),
+            (0, vec![0xB1, 6, 16]), // combined=16*128=2048=F_NUMBER_CENTER(4096)の半分
+            note_on_ch0.clone(),
+            note_off_ch0.clone(),
+        ]);
+        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_eq!(buf_a, buf_b, "ch1へのF-Number上書きがch0の発音に漏れてはいけない");
+
+        // C(対照): 同じ指示をch0自身へ送ると出力が変わる（テスト自体が無意味でないことの確認）。
+        let smf_c = build_smf(&[
+            (0, vec![0xB0, 99, 0]),
+            (0, vec![0xB0, 98, 18]),
+            (0, vec![0xB0, 38, 0]),
+            (0, vec![0xB0, 6, 16]),
+            note_on_ch0,
+            note_off_ch0,
+        ]);
+        let buf_c = render_smf(&smf_c, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_ne!(buf_a, buf_c, "ch0自身へのF-Number上書きは出力を変えるはず");
+    }
+
+    /// 他chへのProgram Changeは、対象chのNRPN上書き（F-Number）を消さない
+    /// （`ChannelState::program_change`が当該chのoverridesのみclearすることの検証）。
+    #[test]
+    fn program_change_on_other_channel_keeps_this_channel_overrides() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let note_on_ch0 = (0u32, vec![0x90, 69, 100]);
+        let note_off_ch0 = (480u32, vec![0x80, 69, 0]);
+        let apply_f_number_ch0 =
+            [(0, vec![0xB0, 99, 0]), (0, vec![0xB0, 98, 18]), (0, vec![0xB0, 38, 0]), (0, vec![0xB0, 6, 16])];
+
+        // A: ch0にNRPN(0,18) F-Number上書きを適用してから発音する。
+        let mut events_a = apply_f_number_ch0.to_vec();
+        events_a.push(note_on_ch0.clone());
+        events_a.push(note_off_ch0.clone());
+        let buf_a = render_smf(&build_smf(&events_a), &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        // B: 同じ上書き適用後、ch1へProgram Changeを送ってからch0で発音する
+        // （ch1のPCがch0のoverridesを巻き込んでクリアしてはいけない）。
+        let mut events_b = apply_f_number_ch0.to_vec();
+        events_b.push((0, vec![0xC1, 0])); // Program Change on ch1
+        events_b.push(note_on_ch0.clone());
+        events_b.push(note_off_ch0.clone());
+        let buf_b = render_smf(&build_smf(&events_b), &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_eq!(buf_a, buf_b, "ch1のProgram Changeがch0のNRPN上書きを消してはいけない");
+
+        // C(対照): F-Number上書きを一切せずに発音するとAとは異なる（Aの上書きが実際に
+        // 効いていることの確認。もしAの上書きが元から無効だとA==Cとなりテストが無力化する）。
+        let smf_c = build_smf(&[note_on_ch0, note_off_ch0]);
+        let buf_c = render_smf(&smf_c, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_ne!(buf_a, buf_c, "ch0のF-Number上書きは出力を変えるはず");
+    }
+
+    /// RPN(0,0) Pitch Bend Rangeは他chに影響しない
+    /// （対照として、同じchで設定した場合はベンド量が変わることも確認する）。
+    #[test]
+    fn rpn_pitch_bend_range_is_per_channel() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let bend_up = (0u32, vec![0xE0, 0x7F, 0x7F]); // ch0へ最大ピッチベンド
+        let note_on_ch0 = (0u32, vec![0x90, 69, 100]);
+        let note_off_ch0 = (480u32, vec![0x80, 69, 0]);
+
+        // A: ベンドレンジ変更なし（既定±2半音）でch0にベンド送信。
+        let smf_a = build_smf(&[bend_up.clone(), note_on_ch0.clone(), note_off_ch0.clone()]);
+        let buf_a = render_smf(&smf_a, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        // B: ch1のRPN(0,0)でベンドレンジを24半音に広げてからch0でベンド送信。
+        let smf_b = build_smf(&[
+            (0, vec![0xB1, 101, 0]),
+            (0, vec![0xB1, 100, 0]),
+            (0, vec![0xB1, 6, 24]),
+            bend_up.clone(),
+            note_on_ch0.clone(),
+            note_off_ch0.clone(),
+        ]);
+        let buf_b = render_smf(&smf_b, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_eq!(buf_a, buf_b, "ch1のPitch Bend Range変更がch0に漏れてはいけない");
+
+        // C(対照): ch0自身のRPN(0,0)を変更すると出力が変わる。
+        let smf_c = build_smf(&[
+            (0, vec![0xB0, 101, 0]),
+            (0, vec![0xB0, 100, 0]),
+            (0, vec![0xB0, 6, 24]),
+            bend_up,
+            note_on_ch0,
+            note_off_ch0,
+        ]);
+        let buf_c = render_smf(&smf_c, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_ne!(buf_a, buf_c, "ch0自身のPitch Bend Range変更は出力を変えるはず");
+    }
+
+    /// 16ch全てに異なるNRPN+noteを送ってもpanicせず、無音にならないことを確認する
+    /// （`channels[15]`の添字境界も踏むtorture smoke）。
+    #[test]
+    fn all_16_channels_nrpn_torture_smoke() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let mut events: Vec<(u32, Vec<u8>)> = Vec::new();
+        for chi in 0u8..16 {
+            events.push((0, vec![0xB0 | chi, 99, 0]));
+            events.push((0, vec![0xB0 | chi, 98, 9])); // Algorithm
+            events.push((0, vec![0xB0 | chi, 6, chi.min(7)]));
+            events.push((0, vec![0x90 | chi, 60 + chi, 100]));
+        }
+        for chi in 0u8..16 {
+            events.push((if chi == 0 { 480 } else { 0 }, vec![0x80 | chi, 60 + chi, 0]));
+        }
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "16ch同時発音が無音");
+    }
+
     fn rms(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
