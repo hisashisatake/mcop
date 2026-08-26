@@ -1,0 +1,21 @@
+[package]
+name = "op505-standalone"
+version = "0.1.0"
+edition = "2021"
+
+# op505をDomino等のMME専用MIDIシーケンサから直接鳴らすための常駐アプリ（Step 1）。
+# このアプリ自身は新規の仮想MIDIポートを作らない。loopMIDI等の既存の仮想/実MIDI入力
+# ポートをmidir経由で開き、そこから来たMIDIをop505-coreへ渡してcpalでWASAPI直出しする。
+# CC/NRPN解釈（op505-midi連携）とプログラム/バンク切り替えはStep 3で追加予定
+# （op505-vst/smf2op505と3本目のコピーになるため、fork-on-writeかop505-midiへの
+# 昇格かは実装時に判断する）。
+
+[[bin]]
+name = "op505-standalone"
+path = "src/main.rs"
+
+[dependencies]
+op505-core = { path = "../core" }
+sound-core = { path = "../../sound/core" }
+midir = "0.11"
+cpal = "0.15"
