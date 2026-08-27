@@ -833,12 +833,12 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC | GM2定義 | 38x6割り当て | GM2との関係 |
 |---|---|---|---|
 | CC 1 | Modulation Wheel | ③ジェスチャー：Pitch FG Depthへ瞬間加算（×RPN(0,5)/127でセント換算） | 準拠（FG参照） |
-| CC 5 | Portamento Time | Portamento Time | 完全準拠（下記参照） |
+| CC 5 | Portamento Time | Portamento Time | 完全準拠（下記参照、実装済み） |
 | CC 7 | Channel Volume | Volume | 完全準拠 |
 | CC 10 | Pan | Pan | 完全準拠（下記参照） |
 | CC 11 | Expression | Expression | 完全準拠 |
 | CC 64 | Damper Pedal | Sustain | 完全準拠 |
-| CC 65 | Portamento On/Off | Portamento | **未実装**（下記参照） |
+| CC 65 | Portamento On/Off | Portamento | 完全準拠（下記参照、実装済み） |
 | CC 66 | Sostenuto | Sostenuto | 完全準拠（下記参照） |
 | CC 67 | Soft Pedal | Soft Pedal | 完全準拠（下記参照） |
 | CC 71 | Resonance | Filter Resonance | 完全準拠（下記参照） |
@@ -856,18 +856,18 @@ Algorithm / Waveform（WF）per op / Filter Type（LP/HP/BP）/ Filter Self-Osci
 | CC 120 | All Sound Off | All Sound Off | 完全準拠 |
 | CC 121 | Reset All Controllers | Reset All Controllers | 完全準拠 |
 | CC 123 | All Notes Off | All Notes Off | 完全準拠 |
-| CC 126 | Mono Mode On | Mono Mode | **未実装** |
-| CC 127 | Poly Mode On | Poly Mode | **未実装** |
+| CC 126 | Mono Mode On | Mono Mode | 準拠（下記参照、実装済み） |
+| CC 127 | Poly Mode On | Poly Mode | 準拠（下記参照、実装済み） |
 
 **GM2未定義領域（CC102〜119）の独自割り当て：** GM2にコントローラー定義のないCC102〜119を、38x6独自機能に使う（標準コントローラーとの意味的衝突を避けるため）。先頭のCC102をProgram Change代替（VST3ではMIDI Program Changeが受信できないため）、続くCC103〜106をOperator Key On/Off（Op0〜Op3）に割り当てる。旧実装はVOPMex互換でCC92をProgram Change代替に使っていたが、CC92はGM2でEffects 2 Depth（トレモロ）に予約され衝突するため廃止し、未定義領域の先頭CC102へ移した。
 
 **Portamento（CC5/CC65）：**
 
-CC65 ON時、新しいノート（新チャンネル）のF-Numberは、同一MIDIチャンネルで直前に発音したノートのF-Numberから、CC5（Portamento Time、0=即座〜127=数秒程度）で指定した時間をかけて目標値へ線形にグライドする。
+CC65 ON時、新しいノート（新チャンネル）のピッチは、同一MIDIチャンネルで直前に発音したノートのピッチから、CC5（Portamento Time、0=グライド無し〜127=約5秒）で指定した時間をかけて目標値へ**セント（音程の対数）線形**にグライドする。周波数(Hz)線形ではなくセント線形を採用しているのは、周波数は対数的な量（1オクターブ＝2倍）のため、Hz線形で補間すると広い音程差のグライドで滑り方が不均一（低音側だけ急に動き高音側で間延びする）に聞こえるため。
 直前のノートは別チャンネルで独立してリリース/サステインペダル等の影響を受けながら鳴り続けるため、グライドとの相互作用は発生しない。
-作曲支援アプリのジェスチャーUIの「ゆっくり移動 → ポルタメント」（ジェスチャーレパートリー参照）も、この仕組み（Note-On + CC65 ON + CC5）で実現する。
+作曲支援アプリのジェスチャーUIの「ゆっくり移動 → ポルタメント」（ジェスチャーレパートリー参照）も、この仕組み（Note-On + CC65 ON + CC5）で実現できる（`Op505Engine::start_glide`がMIDIノート番号に依存しないHz入力のため）。
 
-**未実装**（`op505-core`にF-Numberを時間経過で滑らかに変化させる機構自体が無く、CC解釈の追加だけでは完結しないため。詳細はmemory `project_op505_midi_spec_gaps.md`参照）。
+実装済み。`op505-core`の`Channel`が`glide_cents`（目標ピッチからの現在のずれ、セント）と`glide_step_cents`（毎サンプル0へ近づける量）を持ち、既存のピッチベンド/Pitch FG変調と同じ加算列（`bend_cents + pitch_fg_cents + glide_cents`）へ合成する。非グライド時（`glide_cents==0.0`）はこの加算が恒等になるため出力はビット不変。`Op505Engine::start_glide(channel, from_frequency, seconds)`がグライドを開始する新規API（`Vco`トレイトではなくinherentメソッド）。`op505-midi::ChannelState::glide_source(note)`がCC5/CC65/直前ノートから「グライドすべきか、起点ノートは何か、秒数はいくつか」を判定し（`portamento_seconds()`がCC5→秒数の対数マッピング、127で約5秒）、op505-vst/smf2op505/op505-standaloneの3実装がnote_on時に`start_glide`を呼ぶ。CC65はRAC(CC121)でOFFに戻るが、CC5(Time)はRAC対象外（GM2のRACはOn/Offスイッチ系コントローラーのみを対象にする一般的な扱いに合わせる）。
 
 **Pan（CC10）：**
 
@@ -901,7 +901,15 @@ GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリース
 
 **Mono/Poly Mode（CC126/CC127）：**
 
-**未実装。** 現行のボイス管理は「MIDIチャンネル×ノート番号」で1ノート＝1ボイスIDを作る設計（`voice_id = channel*128+note`）のため、Mono Mode（同一チャンネル内で常に1音のみ発音）にすると、同一チャンネル内の新規ノートオンで既存ボイスをどう扱うか（音を切るか、レガート的に繋げるか）という設計変更が必要（詳細はmemory `project_op505_midi_spec_gaps.md`参照）。
+実装済み。「常に再アタック」方式を採用する（レガート＝EG非再トリガーは実装しない）：Mono Mode（CC126）中は同一MIDIチャンネル内で常に1音のみが発音し、新しいノートオンが来ると前の音は（サステインペダル等の状態に関わらず）即座にnote_offされてから新しい音がnote_onする。ボイス管理（`voice_id = channel*128+note`）は一切変更していない。
+
+**last-note priority：** 複数の鍵盤を重ねて押している状態で、発音中のノートを離すと、まだ物理的に押されている鍵盤のうち最後に押したもの（押鍵順スタックの末尾）へ再アタックで戻る。全ての鍵盤を離すと通常どおりリリースする。
+
+**サステインペダルとの関係：** Mono Modeの解放/フォールバック判定は押鍵状態（`op505_midi::MonoState`）だけで行い、サステインペダルの状態を見ない。ペダルを踏んでいても新しいノートで前の音は解放される（そうしないと2音同時に鳴りMonoでなくなるため）。
+
+**CC126/CC127のデータバイト：** 値によらずそのチャンネルをMono（CC126）/Poly（CC127）にする（一般的な音源シンセの実装に倣う。GM2のCC126はMono数Mを指定できる仕様だが、38x6では常に「MIDIチャンネル1つ＝1ボイス」のためMの値は意味を持たない）。CC126/CC127はどちらもCC123(All Notes Off)と同じ全ノートオフ処理を伴う（Poly→Mono/Mono→Polyのどちらの遷移でも、遷移前に何が鳴っていたかに関わらずそのチャンネルを一旦静かにしてから始める）。
+
+実装は`op505_midi::MonoState`（1MIDIチャンネル分の状態機械、`op505/midi/src/mono.rs`）。`PedalState`と同じ設計方針で、状態を持つだけでエンジンを直接呼ばず、呼び出し側が取るべき行動を`MonoNoteOff`（`Nothing`/`Release`/`Fallback`）で返す。エンジン改修は不要（ボイス管理・EGは無改造）。op505-vst/smf2op505/op505-standaloneの3実装が共通の`note_on_voice_core`（ペダル/Mono状態の更新を含まない、実際の発音処理のみ）を持ち、外部からのNote OnとMono Modeのlast-note priorityフォールバックの両方から呼べるようにしている。
 
 **サステインペダル（CC64）の実装方針：**
 
