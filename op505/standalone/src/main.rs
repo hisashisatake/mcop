@@ -28,7 +28,7 @@ use midir::{MidiInput, MidiInputConnection};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, MonoNoteOff, ProgramSelection, RHYTHM_BANK_RANGE,
+    EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -256,13 +256,29 @@ fn note_on_voice_core(engine: &mut Op505Engine, state: &mut MidiState, chi: usiz
     state.channels[chi].last_note = Some(note);
 }
 
-/// 外部からの実際のNote On（MIDI入力）。ペダル状態の更新とMono Modeの「常に再アタック」
-/// 処理（前の音の解放）を行ってから[`note_on_voice_core`]を呼ぶ。
+/// 外部からの実際のNote On（MIDI入力）。ペダル状態の更新とMono Modeの処理（前の音の解放、
+/// またはCC65 ON+レガート時はボイスを継続したままピッチだけ滑らせるレガート、詳細は
+/// op505-midiのmono.rsモジュールdoc）を行ってから[`note_on_voice_core`]を呼ぶ。
 fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8, vel: u8) {
     state.channels[chi].pedal.note_on(note);
     if state.channels[chi].mono.enabled {
-        if let Some(prev) = state.channels[chi].mono.note_on(note, vel) {
-            engine.note_off(voice_id(chi, prev));
+        let portamento = state.channels[chi].portamento_on;
+        match state.channels[chi].mono.note_on(note, vel, portamento) {
+            MonoNoteOn::Legato { voice } => {
+                let seconds = state.channels[chi].portamento_seconds();
+                let id = voice_id(chi, voice);
+                if engine.glide_to(id, note_to_frequency(note), seconds) {
+                    state.channels[chi].last_note = Some(note);
+                    return; // 再アタックしない
+                }
+                // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                state.channels[chi].mono.demote_legato(note);
+            }
+            MonoNoteOn::Retrigger { release } => {
+                if let Some(prev) = release {
+                    engine.note_off(voice_id(chi, prev));
+                }
+            }
         }
     }
     note_on_voice_core(engine, state, chi, note, vel);
@@ -276,7 +292,8 @@ fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, n
     state.channels[chi].poly_pressure[note as usize] = 0;
     let pedal_released = state.channels[chi].pedal.note_off(note);
     if state.channels[chi].mono.enabled {
-        match state.channels[chi].mono.note_off(note) {
+        let portamento = state.channels[chi].portamento_on;
+        match state.channels[chi].mono.note_off(note, portamento) {
             MonoNoteOff::Nothing => {}
             MonoNoteOff::Release(released_note) => {
                 engine.note_off(voice_id(chi, released_note));
@@ -284,6 +301,16 @@ fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, n
             MonoNoteOff::Fallback { release, sound, velocity } => {
                 engine.note_off(voice_id(chi, release));
                 note_on_voice_core(engine, state, chi, sound, velocity);
+            }
+            MonoNoteOff::LegatoFallback { voice, sound, velocity } => {
+                let seconds = state.channels[chi].portamento_seconds();
+                let id = voice_id(chi, voice);
+                if !engine.glide_to(id, note_to_frequency(sound), seconds) {
+                    // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                    state.channels[chi].mono.demote_legato(sound);
+                    engine.note_off(id);
+                    note_on_voice_core(engine, state, chi, sound, velocity);
+                }
             }
         }
     } else if pedal_released {

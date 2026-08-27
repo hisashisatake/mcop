@@ -35,7 +35,7 @@
 use op505_core::{Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, MonoNoteOff, ProgramSelection, RHYTHM_BANK_RANGE,
+    EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -163,8 +163,9 @@ fn note_on_voice_core(
     channels[chi].last_note = Some(note);
 }
 
-/// 外部からの実際のNote On（SMFのNote Onイベント）。ペダル状態の更新とMono Modeの
-/// 「常に再アタック」処理（前の音の解放）を行ってから[`note_on_voice_core`]を呼ぶ。
+/// 外部からの実際のNote On（SMFのNote Onイベント）。ペダル状態の更新とMono Modeの処理
+/// （前の音の解放、またはCC65 ON+レガート時はボイスを継続したままピッチだけ滑らせる
+/// レガート、詳細はmono.rsモジュールdoc）を行ってから[`note_on_voice_core`]を呼ぶ。
 fn note_on_voice(
     engine: &mut Op505Engine,
     chi: usize,
@@ -179,8 +180,23 @@ fn note_on_voice(
     // Pedal（CC67）: ON中に新規キーオンしたノートのみ対象。
     channels[chi].pedal.note_on(note);
     if channels[chi].mono.enabled {
-        if let Some(prev) = channels[chi].mono.note_on(note, vel) {
-            engine.note_off(chi * 128 + prev as usize);
+        let portamento = channels[chi].portamento_on;
+        match channels[chi].mono.note_on(note, vel, portamento) {
+            MonoNoteOn::Legato { voice } => {
+                let seconds = channels[chi].portamento_seconds();
+                let id = chi * 128 + voice as usize;
+                if engine.glide_to(id, note_to_frequency(note), seconds) {
+                    channels[chi].last_note = Some(note);
+                    return; // 再アタックしない
+                }
+                // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                channels[chi].mono.demote_legato(note);
+            }
+            MonoNoteOn::Retrigger { release } => {
+                if let Some(prev) = release {
+                    engine.note_off(chi * 128 + prev as usize);
+                }
+            }
         }
     }
     note_on_voice_core(engine, chi, note, vel, channels, bank, drums);
@@ -302,7 +318,8 @@ pub fn render_smf_with_drums(
                     // 保持する通常のPoly挙動と違い、Monoは常に「今押している鍵盤」だけが
                     // 鳴る。そうしないと前の音が保持されたまま新しい音が重なりMonoで
                     // なくなるため）。押鍵状態（MonoState）だけで解放/フォールバックを決める。
-                    match channels[chi].mono.note_off(note) {
+                    let portamento = channels[chi].portamento_on;
+                    match channels[chi].mono.note_off(note, portamento) {
                         MonoNoteOff::Nothing => {}
                         MonoNoteOff::Release(released_note) => {
                             engine.note_off(chi * 128 + released_note as usize);
@@ -310,6 +327,16 @@ pub fn render_smf_with_drums(
                         MonoNoteOff::Fallback { release, sound, velocity } => {
                             engine.note_off(chi * 128 + release as usize);
                             note_on_voice_core(&mut engine, chi, sound, velocity, &mut channels, bank, drums);
+                        }
+                        MonoNoteOff::LegatoFallback { voice, sound, velocity } => {
+                            let seconds = channels[chi].portamento_seconds();
+                            let id = chi * 128 + voice as usize;
+                            if !engine.glide_to(id, note_to_frequency(sound), seconds) {
+                                // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                                channels[chi].mono.demote_legato(sound);
+                                engine.note_off(id);
+                                note_on_voice_core(&mut engine, chi, sound, velocity, &mut channels, bank, drums);
+                            }
                         }
                     }
                 } else if pedal_released {
@@ -810,6 +837,72 @@ mod tests {
         let smf = build_smf(&events);
         let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "Poly復帰後の発音が無音");
+    }
+
+    // --- Mono Modeのレガート（方式B、Mono+CC65 ON+レガート時のみ）E2Eテスト ---
+
+    /// Mono ON + レガート（60を押したまま64を押す）で、CC65のON/OFFだけを変えて比較する
+    /// （それ以外のMIDIイベントのタイミングは完全に同一）。CC65 OFFなら通常どおり
+    /// 60をnote_off→64をnote_onする再アタック（オペレーター位相がリセットされる）、
+    /// CC65 ONならボイスを継続したままピッチだけ`glide_to`で滑らせる（位相はリセットされない）。
+    /// 位相リセットの有無は波形として残るため、出力が一致しないことでレガートが
+    /// 「本当に再アタックしていない」ことを検証できる（`instant_sustain_bank`はEGの
+    /// レベル自体は即座に最大へ張り付くため、振幅の落ち込みでは検出できない。この差分検証が
+    /// 唯一の実効的なオラクル）。
+    #[test]
+    fn mono_legato_glide_differs_from_mono_retrigger_at_the_same_note_boundary() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+
+        let events_with_portamento = |cc65: u8| {
+            vec![
+                (0u32, vec![0xB0, 126, 127]), // CC126 Mono On
+                (0, vec![0xB0, 65, cc65]),    // CC65 Portamento On/Off
+                (0, vec![0xB0, 5, 64]),       // CC5 Portamento Time
+                (0, vec![0x90, 60, 100]),     // Note On 60
+                (200, vec![0x90, 64, 100]),   // 60を押したまま64を押す（レガート）
+                (600, vec![0x80, 64, 0]),
+                (0, vec![0x80, 60, 0]),
+            ]
+        };
+
+        let smf_legato = build_smf(&events_with_portamento(127)); // CC65 ON→レガート
+        let buf_legato = render_smf(&smf_legato, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        let smf_retrigger = build_smf(&events_with_portamento(0)); // CC65 OFF→通常のretrigger
+        let buf_retrigger = render_smf(&smf_retrigger, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        assert!(buf_legato.iter().any(|s| s.abs() > 1e-4), "レガート出力が無音");
+        assert!(buf_retrigger.iter().any(|s| s.abs() > 1e-4), "比較対象(retrigger)出力が無音");
+        assert_ne!(
+            buf_legato, buf_retrigger,
+            "CC65の有無だけを変えたのに出力が一致してはいけない（レガートは位相リセット無しで\
+             ボイス継続、CC65 OFFはボイスを作り直すretriggerのはず）"
+        );
+    }
+
+    /// last-note priorityのフォールバック（3音重ね押し→上から順に離す）が、レガート条件
+    /// （Mono+CC65 ON）下でもクラッシュせず発音し続けることを確認するスモークテスト
+    /// （`mono_mode_last_note_priority_smoke`のレガート版。`MonoNoteOff::LegatoFallback`
+    /// 経路を通す）。
+    #[test]
+    fn mono_legato_last_note_priority_fallback_smoke() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xB0, 126, 127]), // CC126 Mono On
+            (0, vec![0xB0, 65, 127]),     // CC65 Portamento On
+            (0, vec![0xB0, 5, 64]),       // CC5 Portamento Time
+            (0, vec![0x90, 60, 100]),
+            (100, vec![0x90, 64, 100]), // レガート
+            (100, vec![0x90, 67, 100]), // レガート
+            (100, vec![0x80, 67, 0]),   // 67を離す→レガートで64へ戻る
+            (100, vec![0x80, 64, 0]),   // 64を離す→レガートで60へ戻る
+            (100, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "レガートのlast-note priorityでの発音が無音");
     }
 
     // --- MIDIチャンネル独立性E2Eテスト ---
