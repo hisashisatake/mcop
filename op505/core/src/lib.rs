@@ -389,6 +389,12 @@ struct Channel {
     /// tick結果をそのままゲイン乗算する（実体は乗算1行のため分解結線で十分）。
     gain_fg_eg: TimeEg,
     note_is_off: bool,
+    /// ポルタメント：目標ピッチからの現在のずれ（セント）。0.0＝非グライド。
+    /// 非グライド時は`set_pitch_modulation`の加算列へ`+0.0`が入るだけで、f32加算として
+    /// 厳密に恒等（出力ビット不変）。
+    glide_cents: f32,
+    /// 毎サンプル`glide_cents`を0へ近づける量（セント/サンプル、常に正）。
+    glide_step_cents: f32,
 }
 
 /// 固定音階が有効なら`frequency`（note_onで渡された生の周波数）を無視し、
@@ -444,6 +450,8 @@ impl Channel {
             cutoff_fg_eg,
             gain_fg_eg,
             note_is_off: false,
+            glide_cents: 0.0,
+            glide_step_cents: 0.0,
         }
     }
 
@@ -467,6 +475,10 @@ impl Channel {
         retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg);
         retrigger_time_eg(&mut self.pitch_fg_eg, &patch.channel.pitch_fg.eg);
         self.note_is_off = false;
+        // 前回のグライド残差を持ち越さない。新しいグライドが必要なら呼び出し側が
+        // note_on/retrigger直後に`start_glide`を呼び直す（set_pitch_bend等と同じ並び）。
+        self.glide_cents = 0.0;
+        self.glide_step_cents = 0.0;
     }
 
     fn note_off(&mut self) {
@@ -528,8 +540,18 @@ impl Channel {
             let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
             bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0
         };
+        // ポルタメント：`glide_cents`を毎サンプル0へ近づけながらピッチ変調へ加算する。
+        // `glide_cents==0.0`（非グライド）のときはこの分岐に入らず加算列が変化しないため、
+        // 出力はビット単位で不変。
+        if self.glide_cents != 0.0 {
+            if self.glide_cents.abs() <= self.glide_step_cents {
+                self.glide_cents = 0.0;
+            } else {
+                self.glide_cents -= self.glide_step_cents.copysign(self.glide_cents);
+            }
+        }
         for op in self.operators.iter_mut() {
-            op.set_pitch_modulation(self.bend_cents + pitch_fg_cents);
+            op.set_pitch_modulation(self.bend_cents + pitch_fg_cents + self.glide_cents);
         }
 
         // Gain FG：VCA（合成後の一括乗算）とOP単位AM（旧CHIP LFO AM経路の厳密代替、
@@ -767,6 +789,29 @@ impl Op505Engine {
         }
     }
 
+    /// 発音中のボイスへポルタメント（グライド）を開始する。`from_frequency`（Hz）から
+    /// 現在の実効周波数（`base_frequency`）へ`seconds`かけてセント線形に滑らせる。
+    /// `note_on`直後に`set_pitch_bend`等と並べて呼ぶ。
+    ///
+    /// `seconds<=0.0`・`from_frequency<=0.0`・`from_frequency`が現在の周波数と同一のときは
+    /// グライドしない（`glide_cents`が0.0のままなので出力はビット不変）。
+    ///
+    /// セント（周波数比の対数）で持つのは、既存の`set_pitch_modulation`経路（ピッチベンド・
+    /// Pitch FG）へゼロコストで相乗りでき、`Operator`のcents→比率キャッシュとも噛み合うため。
+    /// KSR/level_scaleが使うノート番号（`self.note`）はグライド中も目標ノートのまま固定する
+    /// （レートスケールがグライドで揺れないようにするため）。
+    pub fn start_glide(&mut self, channel: usize, from_frequency: f32, seconds: f32) {
+        let sample_rate = self.sample_rate;
+        if let Some(ch) = self.channels.get_mut(&channel) {
+            if seconds <= 0.0 || from_frequency <= 0.0 || from_frequency == ch.base_frequency {
+                return;
+            }
+            let cents = 1200.0 * (from_frequency / ch.base_frequency).log2();
+            ch.glide_cents = cents;
+            ch.glide_step_cents = cents.abs() / (seconds * sample_rate);
+        }
+    }
+
     pub fn note_on_operator(&mut self, channel: usize, op_index: usize) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.note_on_operator(op_index);
@@ -995,6 +1040,39 @@ mod tests {
         assert!(engine.channels.contains_key(&1), "発音中のボイスは残るはず");
         assert!(engine.channels.contains_key(&2), "新規ボイスは確保されるはず");
         assert_eq!(engine.channels.len(), 2);
+    }
+
+    #[test]
+    fn glide_reaches_target_and_then_stays_zero() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100); // base_frequency = 440.0
+        engine.start_glide(0, 220.0, 0.01); // 1オクターブ下から10msでグライド
+        assert_ne!(engine.channels[&0].glide_cents, 0.0, "グライド開始直後は非ゼロのはず");
+
+        let mut buf = vec![0.0f32; 1000]; // 44100Hzで10ms(441サンプル)より十分長い
+        engine.render(&mut buf, 1);
+
+        assert_eq!(
+            engine.channels[&0].glide_cents, 0.0,
+            "指定秒数が経過したらグライドは終端し0へ収束するはず"
+        );
+    }
+
+    #[test]
+    fn start_glide_is_noop_for_invalid_inputs() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100);
+
+        engine.start_glide(0, 220.0, 0.0); // seconds<=0.0
+        assert_eq!(engine.channels[&0].glide_cents, 0.0);
+
+        engine.start_glide(0, 0.0, 0.01); // from_frequency<=0.0
+        assert_eq!(engine.channels[&0].glide_cents, 0.0);
+
+        engine.start_glide(0, 440.0, 0.01); // 現在の周波数と同一
+        assert_eq!(engine.channels[&0].glide_cents, 0.0);
     }
 
     #[test]

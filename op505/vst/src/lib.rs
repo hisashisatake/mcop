@@ -3,8 +3,8 @@ mod param_adapter;
 mod params;
 
 use op505_midi::{
-    cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, ProgramSelection,
-    RHYTHM_BANK_RANGE,
+    cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
+    ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
@@ -270,6 +270,51 @@ impl Op505Plugin {
     /// 直接エンジンへ渡す（ChannelParamsを経由しない、pitch_bend/channel_volumeと同じ経路）。
     fn pitch_fg_rate_scale(&self, midi_ch: usize) -> f32 {
         cc76_to_rate_scale(self.channels[midi_ch].pitch_fg_cc76)
+    }
+
+    /// 1ボイスの実際の発音処理（ペダル・Mono状態の更新は含まない）。`NoteEvent::NoteOn`の
+    /// match腕から切り出したもの（`smf2op505`/`op505-standalone`の`note_on_voice_core`と同型）。
+    ///
+    /// Mono Modeのlast-note priorityフォールバック（[`MonoNoteOff::Fallback`]）からも直接
+    /// 呼べるよう、ペダル状態の更新（`pedal.note_on`）は呼び出し側で行う（フォールバック
+    /// 再発音は「新規の押鍵」ではないため、CC67(Soft Pedal)のsoft_notes判定を押鍵時点の
+    /// 状態のまま動かしたい）。
+    fn note_on_voice_core(&mut self, midi_ch: usize, note: u8, velocity_u8: u8) {
+        let freq = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
+        let ch_id = midi_channel_note_id(midi_ch as u8, note);
+        // リズムチャンネルはノートごとに音色を直接解決する。キット内に未定義の
+        // ノートなら発音しない（`Op505Patch::default()`でnote_onしてはいけない。
+        // 全段level=0/time=0のEGはrelease_pointで静止し`is_idle()`が永久にfalseに
+        // なりボイスが漏れるため。旋律チャンネルは従来どおりProgram Change
+        // パッチ優先・無ければDAW値）。
+        let Some(base_patch) = self.resolve_note_patch(midi_ch, note) else {
+            return;
+        };
+        // NRPN(0,9)〜(0,15)由来の上書き（live伝播ループと同じ、note_patch組み立て時に適用）。
+        let mut note_on_patch = self.channels[midi_ch].build_effective_patch(&base_patch);
+        // CC2/CC4/AT/Poly AT/Pitch FG(CC1/76/77/78)/Soft Pedalを第0tickから効かせる
+        // （伝播ループと同じ`apply_note_post_processing`。CC78(Delay)が
+        // `TimeEg::note_on()`の読む最初のtickから効く必要があるため、伝播ループでの
+        // 1ブロック遅れの反映を待たずここで適用する）。
+        self.channels[midi_ch].apply_note_post_processing(&mut note_on_patch, note);
+        self.engine.set_patch(note_on_patch);
+        self.engine.note_on(ch_id, freq, velocity_u8);
+        self.engine.set_pitch_bend(ch_id, self.channels[midi_ch].bend_cents);
+        self.engine.set_channel_volume(
+            ch_id,
+            channel_gain(self.channels[midi_ch].cc7, self.channels[midi_ch].cc11),
+        );
+        self.engine.set_channel_pan(ch_id, self.channels[midi_ch].pan_gains());
+        self.engine.set_pitch_fg_rate_scale(ch_id, self.pitch_fg_rate_scale(midi_ch));
+        for (op_index, f_number) in self.channels[midi_ch].operator_f_number_override.iter().enumerate() {
+            let Some(f_number) = f_number else { continue };
+            self.engine.set_operator_f_number(ch_id, op_index, *f_number);
+        }
+        if let Some((from_note, seconds)) = self.channels[midi_ch].glide_source(note) {
+            let from_freq = 440.0 * 2.0_f32.powf((from_note as f32 - 69.0) / 12.0);
+            self.engine.start_glide(ch_id, from_freq, seconds);
+        }
+        self.channels[midi_ch].last_note = Some(note);
     }
 
     /// CC6(Data Entry MSB)受信時、`ChannelState::apply_data_entry`（`op505-midi`、smf2op505/
@@ -542,49 +587,37 @@ impl Plugin for Op505Plugin {
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { channel, note, velocity, .. } if velocity > 0.0 => {
-                    let freq = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
                     let velocity_u8 = (velocity * 127.0).round() as u8;
-                    let ch_id = midi_channel_note_id(channel, note);
                     let midi_ch = channel as usize;
                     // 弾き直したらペダル保留を解除する（`ym38x6-vst`と同一理由）。
                     self.channels[midi_ch].pedal.note_on(note);
-                    // リズムチャンネルはノートごとに音色を直接解決する。キット内に未定義の
-                    // ノートなら発音しない（`Op505Patch::default()`でnote_onしてはいけない。
-                    // 全段level=0/time=0のEGはrelease_pointで静止し`is_idle()`が永久にfalseに
-                    // なりボイスが漏れるため。旋律チャンネルは従来どおりProgram Change
-                    // パッチ優先・無ければDAW値）。
-                    let Some(base_patch) = self.resolve_note_patch(midi_ch, note) else {
-                        continue;
-                    };
-                    // NRPN(0,9)〜(0,15)由来の上書き（live伝播ループと同じ、note_patch組み立て時に適用）。
-                    let mut note_on_patch = self.channels[midi_ch].build_effective_patch(&base_patch);
-                    // CC2/CC4/AT/Poly AT/Pitch FG(CC1/76/77/78)/Soft Pedalを第0tickから効かせる
-                    // （伝播ループと同じ`apply_note_post_processing`。CC78(Delay)が
-                    // `TimeEg::note_on()`の読む最初のtickから効く必要があるため、伝播ループでの
-                    // 1ブロック遅れの反映を待たずここで適用する。CC2/CC4/ATは以前は伝播ループの
-                    // 1ブロック遅れでしか反映されなかったが、参照実装（smf2op505/standalone）に
-                    // 合わせて即時適用へ揃えた）。
-                    self.channels[midi_ch].apply_note_post_processing(&mut note_on_patch, note);
-                    self.engine.set_patch(note_on_patch);
-                    self.engine.note_on(ch_id, freq, velocity_u8);
-                    self.engine.set_pitch_bend(ch_id, self.channels[midi_ch].bend_cents);
-                    self.engine.set_channel_volume(
-                        ch_id,
-                        channel_gain(self.channels[midi_ch].cc7, self.channels[midi_ch].cc11),
-                    );
-                    self.engine.set_channel_pan(ch_id, self.channels[midi_ch].pan_gains());
-                    self.engine.set_pitch_fg_rate_scale(ch_id, self.pitch_fg_rate_scale(midi_ch));
-                    for (op_index, f_number) in
-                        self.channels[midi_ch].operator_f_number_override.iter().enumerate()
-                    {
-                        let Some(f_number) = f_number else { continue };
-                        self.engine.set_operator_f_number(ch_id, op_index, *f_number);
+                    if self.channels[midi_ch].mono.enabled {
+                        if let Some(prev) = self.channels[midi_ch].mono.note_on(note, velocity_u8) {
+                            self.engine.note_off(midi_channel_note_id(channel, prev));
+                        }
                     }
+                    self.note_on_voice_core(midi_ch, note, velocity_u8);
                 }
                 NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     let midi_ch = channel as usize;
                     self.channels[midi_ch].poly_pressure[note as usize] = 0;
-                    if self.channels[midi_ch].pedal.note_off(note) {
+                    // ペダルの内部ブックキーピング（keys_down等）は常に更新する。実際に
+                    // エンジンへnote_offするかどうかはMono Mode有無で分岐する。
+                    let pedal_released = self.channels[midi_ch].pedal.note_off(note);
+                    if self.channels[midi_ch].mono.enabled {
+                        // Mono Mode: サステインペダルより優先する（CC126/127のコメント参照）。
+                        // 押鍵状態（MonoState）だけで解放/フォールバックを決める。
+                        match self.channels[midi_ch].mono.note_off(note) {
+                            MonoNoteOff::Nothing => {}
+                            MonoNoteOff::Release(released_note) => {
+                                self.engine.note_off(midi_channel_note_id(channel, released_note));
+                            }
+                            MonoNoteOff::Fallback { release, sound, velocity } => {
+                                self.engine.note_off(midi_channel_note_id(channel, release));
+                                self.note_on_voice_core(midi_ch, sound, velocity);
+                            }
+                        }
+                    } else if pedal_released {
                         self.engine.note_off(midi_channel_note_id(channel, note));
                     }
                 }
@@ -674,6 +707,14 @@ impl Plugin for Op505Plugin {
                         75 => {
                             self.channels[midi_ch].cc75_decay = cc_to_u7(value);
                         }
+                        // CC5(Portamento Time)/CC65(Portamento On/Off)：次のNoteOnでのグライドに
+                        // 使うだけなので、発音中ボイスへの即時反映は不要。
+                        5 => {
+                            self.channels[midi_ch].portamento_time = cc_to_u7(value);
+                        }
+                        65 => {
+                            self.channels[midi_ch].portamento_on = cc_to_u7(value) >= 64;
+                        }
                         // CC64(サステインペダル)：ホールドフラグ方式（`ym38x6-vst`と同一設計）。
                         64 => {
                             let released = self.channels[midi_ch].pedal.cc64(cc_to_u7(value));
@@ -752,6 +793,8 @@ impl Plugin for Op505Plugin {
                         120 => {
                             self.engine.silence_group(midi_ch);
                             self.channels[midi_ch].pedal.cc120_reset();
+                            self.channels[midi_ch].mono.reset();
+                            self.channels[midi_ch].last_note = None;
                         }
                         // CC123(All Notes Off)：通常のNote-Off相当（リリースして自然減衰）。
                         123 => {
@@ -759,6 +802,22 @@ impl Plugin for Op505Plugin {
                                 self.engine.note_off(midi_channel_note_id(channel, note));
                             }
                             self.channels[midi_ch].pedal.cc123_reset();
+                            self.channels[midi_ch].mono.reset();
+                            self.channels[midi_ch].last_note = None;
+                        }
+                        // CC126(Mono Mode On)/CC127(Poly Mode On)：データバイトの値は無視し
+                        // （一般的な音源シンセの実装に倣う）、モード切替＋そのチャンネルの
+                        // 全ノートを一括note_offする（CC123と同じ全ノートオフ処理。
+                        // Poly→Mono/Mono→Polyのどちらの遷移でも、遷移前に何が鳴っていたかに
+                        // 関わらずそのチャンネルを一旦静かにしてから始める）。
+                        // Mono ON中はサステインペダルより優先する（NoteOff側のコメント参照）。
+                        126 | 127 => {
+                            self.channels[midi_ch].mono.set_enabled(cc == 126);
+                            for note in 0u8..MIDI_NOTE_COUNT {
+                                self.engine.note_off(midi_channel_note_id(channel, note));
+                            }
+                            self.channels[midi_ch].pedal.cc123_reset();
+                            self.channels[midi_ch].last_note = None;
                         }
                         _ => {}
                     }

@@ -35,7 +35,7 @@
 use op505_core::{Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, ProgramSelection, RHYTHM_BANK_RANGE,
+    EffectControlTarget, MonoNoteOff, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -113,35 +113,77 @@ fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &Pa
     }
 }
 
-/// 1ボイスのノートオン。`op505-vst`のNoteOn適用と同型。
-/// 現在の AT を焼き込んだ実効パッチで発音し、ベンド量・音量ゲイン・rate_scale・
+/// MIDIノート番号→周波数(Hz)。`note_on_voice_core`本体・グライド起点計算の両方から使う
+/// （op505-midiはMIDIノート番号までしか扱わないため、周波数変換は呼び出し側の責務）。
+#[inline]
+fn note_to_frequency(note: u8) -> f32 {
+    440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+/// 1ボイスの実際の発音処理（ペダル・Mono状態の更新は含まない）。`op505-vst`のNoteOn適用と
+/// 同型。現在の AT を焼き込んだ実効パッチで発音し、ベンド量・音量ゲイン・rate_scale・
 /// OP F-Number を新ボイスへ反映する。`base_patch_for`がNoneなら発音しない
 /// （キット内に未定義のノート）。
+///
+/// Mono Modeのlast-note priorityフォールバック（[`MonoNoteOff::Fallback`]）からも直接
+/// 呼べるよう、ペダル状態の更新（`pedal.note_on`）は呼び出し側で行う（フォールバック
+/// 再発音は「新規の押鍵」ではないため、CC67(Soft Pedal)のsoft_notes判定を押鍵時点の
+/// 状態のまま動かしたい）。
+fn note_on_voice_core(
+    engine: &mut Op505Engine,
+    chi: usize,
+    note: u8,
+    vel: u8,
+    channels: &mut [ChannelState],
+    bank: &PatchBank,
+    drums: Option<&Op505PresetBank>,
+) {
+    let Some(base) = base_patch_for(&channels[chi], note, bank, drums) else { return };
+    let id = chi * 128 + note as usize;
+    let freq = note_to_frequency(note);
+    {
+        let st = &channels[chi];
+        let mut eff = st.build_effective_patch(&base);
+        st.apply_note_post_processing(&mut eff, note);
+        engine.set_patch(eff);
+        engine.note_on(id, freq, vel);
+        engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
+        engine.set_channel_pan(id, st.pan_gains());
+        engine.set_pitch_bend(id, st.bend_cents);
+        engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
+        for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
+            if let Some(f_number) = f {
+                engine.set_operator_f_number(id, op_index, *f_number);
+            }
+        }
+    }
+    if let Some((from_note, seconds)) = channels[chi].glide_source(note) {
+        engine.start_glide(id, note_to_frequency(from_note), seconds);
+    }
+    channels[chi].last_note = Some(note);
+}
+
+/// 外部からの実際のNote On（SMFのNote Onイベント）。ペダル状態の更新とMono Modeの
+/// 「常に再アタック」処理（前の音の解放）を行ってから[`note_on_voice_core`]を呼ぶ。
 fn note_on_voice(
     engine: &mut Op505Engine,
     chi: usize,
     note: u8,
     vel: u8,
-    st: &ChannelState,
+    channels: &mut [ChannelState],
     bank: &PatchBank,
     drums: Option<&Op505PresetBank>,
 ) {
-    let Some(base) = base_patch_for(st, note, bank, drums) else { return };
-    let mut eff = st.build_effective_patch(&base);
-    st.apply_note_post_processing(&mut eff, note);
-    let id = chi * 128 + note as usize;
-    let freq = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
-    engine.set_patch(eff);
-    engine.note_on(id, freq, vel);
-    engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
-    engine.set_channel_pan(id, st.pan_gains());
-    engine.set_pitch_bend(id, st.bend_cents);
-    engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
-    for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
-        if let Some(f_number) = f {
-            engine.set_operator_f_number(id, op_index, *f_number);
+    // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、古い保留ビットが
+    // 残っていると鍵盤を押している最中にペダルアップでnote_offが誤発火する）。Soft
+    // Pedal（CC67）: ON中に新規キーオンしたノートのみ対象。
+    channels[chi].pedal.note_on(note);
+    if channels[chi].mono.enabled {
+        if let Some(prev) = channels[chi].mono.note_on(note, vel) {
+            engine.note_off(chi * 128 + prev as usize);
         }
     }
+    note_on_voice_core(engine, chi, note, vel, channels, bank, drums);
 }
 
 /// レンダリング済みサンプル位置を `target` まで進め、その区間をマスターエフェクトに通す。
@@ -247,16 +289,30 @@ pub fn render_smf_with_drums(
             }
             EvKind::NoteOn(ch, note, vel) => {
                 let chi = ch as usize;
-                // 弾き直したらペダル保留を解除する（離鍵→ペダルアップ前に再度弾いた場合、
-                // 古い保留ビットが残っていると鍵盤を押している最中にペダルアップでnote_offが
-                // 誤発火する）。Soft Pedal（CC67）: ON中に新規キーオンしたノートのみ対象。
-                channels[chi].pedal.note_on(note);
-                note_on_voice(&mut engine, chi, note, vel, &channels[chi], bank, drums);
+                note_on_voice(&mut engine, chi, note, vel, &mut channels, bank, drums);
             }
             EvKind::NoteOff(ch, note) => {
                 let chi = ch as usize;
                 channels[chi].poly_pressure[note as usize] = 0;
-                if channels[chi].pedal.note_off(note) {
+                // ペダルの内部ブックキーピング（keys_down等）は常に更新する。実際にエンジンへ
+                // note_offするかどうかはMono Mode有無で分岐する。
+                let pedal_released = channels[chi].pedal.note_off(note);
+                if channels[chi].mono.enabled {
+                    // Mono Mode: サステインペダルより優先する（押している間はペダルで音を
+                    // 保持する通常のPoly挙動と違い、Monoは常に「今押している鍵盤」だけが
+                    // 鳴る。そうしないと前の音が保持されたまま新しい音が重なりMonoで
+                    // なくなるため）。押鍵状態（MonoState）だけで解放/フォールバックを決める。
+                    match channels[chi].mono.note_off(note) {
+                        MonoNoteOff::Nothing => {}
+                        MonoNoteOff::Release(released_note) => {
+                            engine.note_off(chi * 128 + released_note as usize);
+                        }
+                        MonoNoteOff::Fallback { release, sound, velocity } => {
+                            engine.note_off(chi * 128 + release as usize);
+                            note_on_voice_core(&mut engine, chi, sound, velocity, &mut channels, bank, drums);
+                        }
+                    }
+                } else if pedal_released {
                     engine.note_off(chi * 128 + note as usize);
                 }
             }
@@ -373,6 +429,14 @@ fn handle_control_change(
             channels[chi].cc75_decay = cc_to_u7(val);
             apply_live(engine, chi, &channels[chi], bank, drums);
         }
+        // CC5(Portamento Time)/CC65(Portamento On/Off): 次のnote_onでのグライドに使う
+        // だけなので、発音中ボイスへの即時反映（apply_live）は不要。
+        5 => {
+            channels[chi].portamento_time = cc_to_u7(val);
+        }
+        65 => {
+            channels[chi].portamento_on = cc_to_u7(val) >= 64;
+        }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）
         98 => channels[chi].rpn.set_nrpn_lsb(cc_to_u7(val)),
         99 => channels[chi].rpn.set_nrpn_msb(cc_to_u7(val)),
@@ -460,6 +524,8 @@ fn handle_control_change(
         120 => {
             engine.silence_group(chi);
             channels[chi].pedal.cc120_reset();
+            channels[chi].mono.reset();
+            channels[chi].last_note = None;
         }
         // CC123 All Notes Off: 通常のNote-Off相当（リリースして自然減衰）。
         123 => {
@@ -467,6 +533,20 @@ fn handle_control_change(
                 engine.note_off(chi * 128 + note);
             }
             channels[chi].pedal.cc123_reset();
+            channels[chi].mono.reset();
+            channels[chi].last_note = None;
+        }
+        // CC126 Mono Mode On / CC127 Poly Mode On: データバイトの値は無視し（一般的な
+        // 音源シンセの実装に倣う）、モード切替＋そのチャンネルの全ノートを一括note_off
+        // する（CC123と同じ全ノートオフ処理。Poly→Mono/Mono→Polyのどちらの遷移でも、
+        // 遷移前に何が鳴っていたかに関わらずそのチャンネルを一旦静かにしてから始める）。
+        126 | 127 => {
+            channels[chi].mono.set_enabled(cc == 126);
+            for note in 0..MIDI_NOTE_COUNT {
+                engine.note_off(chi * 128 + note);
+            }
+            channels[chi].pedal.cc123_reset();
+            channels[chi].last_note = None;
         }
         // Bank Select（CC0=MSB, CC32=LSB）：これだけでは旋律/リズムは切り替わらない
         // （次のProgram Changeで確定する、ChannelProgramState参照）。`drums`未指定時は
@@ -630,6 +710,106 @@ mod tests {
         let smf = build_smf(&events);
         let buf = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "混在CC/NRPN出力が無音");
+    }
+
+    // --- Portamento（CC5/CC65）E2Eテスト ---
+
+    /// CC65 ON + CC5 でグライドを有効にすると、直前ノート(60)から新ノート(72、1オクターブ上)
+    /// への発音がグライド無しの場合と異なる出力になる（`cc1_live_propagation`と同じ
+    /// 差分検証スタイル）。グライド中は周波数が毎サンプル変わるため位相の蓄積が
+    /// グライド無し版と恒久的にずれ、グライド終了後も出力は一致しない。
+    #[test]
+    fn portamento_glide_changes_output_of_the_next_note() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+
+        let events_no_glide = vec![
+            (0u32, vec![0x90, 60, 100]), // Note On 60
+            (200, vec![0x90, 72, 100]),  // Note On 72（グライド無し）
+            (600, vec![0x80, 60, 0]),
+            (0, vec![0x80, 72, 0]),
+        ];
+        let smf_no_glide = build_smf(&events_no_glide);
+        let buf_no_glide = render_smf(&smf_no_glide, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        let events_glide = vec![
+            (0u32, vec![0x90, 60, 100]), // Note On 60
+            (0, vec![0xB0, 65, 127]),    // CC65 Portamento On
+            (0, vec![0xB0, 5, 64]),      // CC5 Portamento Time
+            (200, vec![0x90, 72, 100]),  // Note On 72（60からグライド）
+            (600, vec![0x80, 60, 0]),
+            (0, vec![0x80, 72, 0]),
+        ];
+        let smf_glide = build_smf(&events_glide);
+        let buf_glide = render_smf(&smf_glide, &bank, sr, 0.1, Some(1.0), None).unwrap();
+
+        assert!(buf_no_glide.iter().any(|s| s.abs() > 1e-4), "グライド無し出力が無音");
+        assert!(buf_glide.iter().any(|s| s.abs() > 1e-4), "グライド有り出力が無音");
+        assert_ne!(buf_glide, buf_no_glide, "ポルタメントが出力に反映されていない");
+    }
+
+    /// CC5/CC65を一切送らないSMFは、この機能追加の前後で出力がビット単位で不変（新規
+    /// フィールドの既定値が0/falseで、`glide_source`が常にNoneを返すことの裏取り）。
+    /// `portamento_glide_changes_output_of_the_next_note`の`buf_no_glide`と同じ構成を
+    /// 独立に再現し、決定論的であることを確認する。
+    #[test]
+    fn no_portamento_cc_is_bit_identical_across_runs() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0x90, 60, 100]),
+            (200, vec![0x90, 72, 100]),
+            (600, vec![0x80, 60, 0]),
+            (0, vec![0x80, 72, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf_a = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        let buf_b = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_eq!(buf_a, buf_b);
+    }
+
+    // --- Mono/Poly Mode（CC126/CC127）E2Eテスト ---
+
+    /// CC126(Mono On)後に3音を重ねて押し、上から順に離すとlast-note priorityで
+    /// 1つ前の鍵盤へ再アタックしながら戻っていく（クラッシュせず発音し続けることを確認する
+    /// スモークテスト）。
+    #[test]
+    fn mono_mode_last_note_priority_smoke() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xB0, 126, 127]), // CC126 Mono On
+            (0, vec![0x90, 60, 100]),
+            (100, vec![0x90, 64, 100]),
+            (100, vec![0x90, 67, 100]),
+            (100, vec![0x80, 67, 0]), // 67を離す→64へフォールバック
+            (100, vec![0x80, 64, 0]), // 64を離す→60へフォールバック
+            (100, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "Mono Modeでの発音が無音");
+    }
+
+    /// CC126→CC127でPolyへ戻すと、以降は同時発音できる（Mono中に重ねた分は
+    /// 全ノートオフでリセットされているため、Poly復帰後の重ね押しは通常どおり両方鳴る）。
+    #[test]
+    fn cc127_returns_to_polyphonic_playback() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xB0, 126, 127]), // Mono On
+            (0, vec![0x90, 60, 100]),
+            (100, vec![0x90, 64, 100]), // Monoなので60は解放される
+            (100, vec![0xB0, 127, 127]), // Poly On（全ノートオフでリセット）
+            (0, vec![0x90, 60, 100]),
+            (0, vec![0x90, 64, 100]), // Polyなので両方鳴る
+            (200, vec![0x80, 60, 0]),
+            (0, vec![0x80, 64, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "Poly復帰後の発音が無音");
     }
 
     // --- MIDIチャンネル独立性E2Eテスト ---

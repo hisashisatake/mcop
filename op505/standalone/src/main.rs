@@ -28,7 +28,7 @@ use midir::{MidiInput, MidiInputConnection};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, ProgramSelection, RHYTHM_BANK_RANGE,
+    EffectControlTarget, MonoNoteOff, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
@@ -220,35 +220,73 @@ fn handle_midi_message(engine: &mut Op505Engine, effects: &mut MasterEffects, st
     }
 }
 
-/// 1ボイスのノートオン。現在のProgram Changeが指す音色へ、NRPN上書き・CC2/CC4/AT/
-/// Pitch FG演奏補正/Soft Pedalを重ねた実効パッチで発音する（`op505-vst`/`smf2op505`の
-/// note_on適用と同型）。`base_patch_for`がNoneなら発音しない（リズムキット内に未定義のノート）。
-fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8, vel: u8) {
-    state.channels[chi].pedal.note_on(note);
+/// 1ボイスの実際の発音処理（ペダル・Mono状態の更新は含まない）。現在のProgram Changeが
+/// 指す音色へ、NRPN上書き・CC2/CC4/AT/Pitch FG演奏補正/Soft Pedalを重ねた実効パッチで
+/// 発音する（`op505-vst`/`smf2op505`のnote_on適用と同型）。`base_patch_for`がNoneなら
+/// 発音しない（リズムキット内に未定義のノート）。
+///
+/// Mono Modeのlast-note priorityフォールバック（[`MonoNoteOff::Fallback`]）からも直接
+/// 呼べるよう、ペダル状態の更新（`pedal.note_on`）は呼び出し側で行う（フォールバック
+/// 再発音は「新規の押鍵」ではないため、CC67(Soft Pedal)のsoft_notes判定を押鍵時点の
+/// 状態のまま動かしたい）。
+fn note_on_voice_core(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8, vel: u8) {
     let Some(base) = state.base_patch_for(chi, note) else { return };
-    let st = &state.channels[chi];
-    let mut eff = st.build_effective_patch(&base);
-    st.apply_note_post_processing(&mut eff, note);
     let id = voice_id(chi, note);
-    println!("note on:  ch{chi} note={note} vel={vel}");
-    engine.set_patch(eff);
-    engine.note_on(id, note_to_frequency(note), vel);
-    engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
-    engine.set_channel_pan(id, st.pan_gains());
-    engine.set_pitch_bend(id, st.bend_cents);
-    engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
-    for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
-        if let Some(f_number) = f {
-            engine.set_operator_f_number(id, op_index, *f_number);
+    let freq = note_to_frequency(note);
+    {
+        let st = &state.channels[chi];
+        let mut eff = st.build_effective_patch(&base);
+        st.apply_note_post_processing(&mut eff, note);
+        println!("note on:  ch{chi} note={note} vel={vel}");
+        engine.set_patch(eff);
+        engine.note_on(id, freq, vel);
+        engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
+        engine.set_channel_pan(id, st.pan_gains());
+        engine.set_pitch_bend(id, st.bend_cents);
+        engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
+        for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
+            if let Some(f_number) = f {
+                engine.set_operator_f_number(id, op_index, *f_number);
+            }
         }
     }
+    if let Some((from_note, seconds)) = state.channels[chi].glide_source(note) {
+        engine.start_glide(id, note_to_frequency(from_note), seconds);
+    }
+    state.channels[chi].last_note = Some(note);
+}
+
+/// 外部からの実際のNote On（MIDI入力）。ペダル状態の更新とMono Modeの「常に再アタック」
+/// 処理（前の音の解放）を行ってから[`note_on_voice_core`]を呼ぶ。
+fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8, vel: u8) {
+    state.channels[chi].pedal.note_on(note);
+    if state.channels[chi].mono.enabled {
+        if let Some(prev) = state.channels[chi].mono.note_on(note, vel) {
+            engine.note_off(voice_id(chi, prev));
+        }
+    }
+    note_on_voice_core(engine, state, chi, note, vel);
 }
 
 /// ペダル保持中でなければ即座にNote Offする（保持中なら`pending_release`へ回るのみ）。
+/// Mono Mode中はサステインペダルより優先する（押鍵状態＝`MonoState`だけで解放/
+/// フォールバックを決める。理由は`handle_control_change`のCC126/127コメント参照）。
 fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8) {
     println!("note off: ch{chi} note={note}");
     state.channels[chi].poly_pressure[note as usize] = 0;
-    if state.channels[chi].pedal.note_off(note) {
+    let pedal_released = state.channels[chi].pedal.note_off(note);
+    if state.channels[chi].mono.enabled {
+        match state.channels[chi].mono.note_off(note) {
+            MonoNoteOff::Nothing => {}
+            MonoNoteOff::Release(released_note) => {
+                engine.note_off(voice_id(chi, released_note));
+            }
+            MonoNoteOff::Fallback { release, sound, velocity } => {
+                engine.note_off(voice_id(chi, release));
+                note_on_voice_core(engine, state, chi, sound, velocity);
+            }
+        }
+    } else if pedal_released {
         engine.note_off(voice_id(chi, note));
     }
 }
@@ -360,6 +398,14 @@ fn handle_control_change(
             state.channels[chi].cc75_decay = cc_to_u7(val);
             apply_live(engine, state, chi);
         }
+        // CC5(Portamento Time)/CC65(Portamento On/Off): 次のnote_onでのグライドに使う
+        // だけなので、発音中ボイスへの即時反映（apply_live）は不要。
+        5 => {
+            state.channels[chi].portamento_time = cc_to_u7(val);
+        }
+        65 => {
+            state.channels[chi].portamento_on = cc_to_u7(val) >= 64;
+        }
         // NRPN/RPN 選択（CC99/98=NRPN MSB/LSB、CC101/100=RPN MSB/LSB）
         98 => state.channels[chi].rpn.set_nrpn_lsb(cc_to_u7(val)),
         99 => state.channels[chi].rpn.set_nrpn_msb(cc_to_u7(val)),
@@ -441,6 +487,8 @@ fn handle_control_change(
         120 => {
             engine.silence_group(chi);
             state.channels[chi].pedal.cc120_reset();
+            state.channels[chi].mono.reset();
+            state.channels[chi].last_note = None;
         }
         // CC123 All Notes Off: 通常のNote-Off相当（リリースして自然減衰）。
         123 => {
@@ -448,6 +496,21 @@ fn handle_control_change(
                 engine.note_off(voice_id(chi, note as u8));
             }
             state.channels[chi].pedal.cc123_reset();
+            state.channels[chi].mono.reset();
+            state.channels[chi].last_note = None;
+        }
+        // CC126 Mono Mode On / CC127 Poly Mode On: データバイトの値は無視し（一般的な
+        // 音源シンセの実装に倣う）、モード切替＋そのチャンネルの全ノートを一括note_off
+        // する（CC123と同じ全ノートオフ処理。Poly→Mono/Mono→Polyのどちらの遷移でも、
+        // 遷移前に何が鳴っていたかに関わらずそのチャンネルを一旦静かにしてから始める）。
+        // Mono ON中はサステインペダルより優先する（`note_off_voice`参照）。
+        126 | 127 => {
+            state.channels[chi].mono.set_enabled(cc == 126);
+            for note in 0..MIDI_NOTE_COUNT {
+                engine.note_off(voice_id(chi, note as u8));
+            }
+            state.channels[chi].pedal.cc123_reset();
+            state.channels[chi].last_note = None;
         }
         // Bank Select（CC0=MSB, CC32=LSB）：これだけでは音色は切り替わらない
         // （次のProgram Changeで確定する）。GM2リズムキット未読み込みのため、MSB=120を
