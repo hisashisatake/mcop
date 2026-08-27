@@ -17,7 +17,7 @@ pub mod value;
 pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget};
 pub use control::{control_target, needs_voice_update, ControlTarget};
 pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
-pub use mono::{MonoNoteOff, MonoState};
+pub use mono::{MonoNoteOff, MonoNoteOn, MonoState};
 pub use overrides::PatchOverrides;
 pub use pedal::{released_notes, PedalState};
 pub use pitch_fg::apply_pitch_fg_expression;

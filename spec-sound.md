@@ -869,6 +869,8 @@ CC65 ON時、新しいノート（新チャンネル）のピッチは、同一M
 
 実装済み。`op505-core`の`Channel`が`glide_cents`（目標ピッチからの現在のずれ、セント）と`glide_step_cents`（毎サンプル0へ近づける量）を持ち、既存のピッチベンド/Pitch FG変調と同じ加算列（`bend_cents + pitch_fg_cents + glide_cents`）へ合成する。非グライド時（`glide_cents==0.0`）はこの加算が恒等になるため出力はビット不変。`Op505Engine::start_glide(channel, from_frequency, seconds)`がグライドを開始する新規API（`Vco`トレイトではなくinherentメソッド）。`op505-midi::ChannelState::glide_source(note)`がCC5/CC65/直前ノートから「グライドすべきか、起点ノートは何か、秒数はいくつか」を判定し（`portamento_seconds()`がCC5→秒数の対数マッピング、127で約5秒）、op505-vst/smf2op505/op505-standaloneの3実装がnote_on時に`start_glide`を呼ぶ。CC65はRAC(CC121)でOFFに戻るが、CC5(Time)はRAC対象外（GM2のRACはOn/Offスイッチ系コントローラーのみを対象にする一般的な扱いに合わせる）。
 
+**方式A（新規ボイス+グライド）と方式B（ボイス継続、レガート）の使い分け（2026-08-27）：** Poly Modeでは常に方式A（新しいボイスを作って`start_glide`でピッチだけ滑らせる。前のノートは別チャンネルとして独立にリリース/サステインされ続ける）。**Mono Mode中は、Mono ON・CC65 ON・レガート（前の鍵盤を押したまま次の鍵盤を押した状態）の3条件が揃ったときだけ方式B**（`Op505Engine::glide_to`でボイスを作り直さずEG・位相を一切触らずピッチ目標だけ差し替える、古典的モノシンセの挙動）になる。3条件のいずれか1つでも欠ければ（Mono OFF、CC65 OFF、非レガート＝前の鍵盤を離してから次を押す）方式Aのまま。レガート中はvelocityを反映しない（フレーズ開始ノートのvelocityのまま、音量・音色が途中で跳ばないようにするため）。詳細はMono/Poly Mode節参照。
+
 **Pan（CC10）：**
 
 コンスタントパワー則（`sound_core::pan_gains`）でボイス単位の左右ゲインを計算し、`Vco::set_channel_pan`/`_group`経由でエンジンへ渡す。中央（CC10=64）は`(1.0, 1.0)`（既存のモノラル出力とビット単位で不変）、端（0または127）では反対側のチャンネルが0になり自身は`√2`倍（+3dB）になる。パッチではなくボイスの左右ゲインとして適用するため、`Op505Engine::render`はステレオ合成（`mix_l`/`mix_r`の2本立て）に対応している。DAWパラメーター化はしていない（CC受信のみ、実装済み。`sound_core::pan_gains`を`op505-midi::ChannelState::pan_gains`が薄くラップし、op505-vst/smf2op505/standalone共通で使う）。
@@ -901,15 +903,19 @@ GM2の定義に合わせ、CC120とCC123を区別する：CC120は**リリース
 
 **Mono/Poly Mode（CC126/CC127）：**
 
-実装済み。「常に再アタック」方式を採用する（レガート＝EG非再トリガーは実装しない）：Mono Mode（CC126）中は同一MIDIチャンネル内で常に1音のみが発音し、新しいノートオンが来ると前の音は（サステインペダル等の状態に関わらず）即座にnote_offされてから新しい音がnote_onする。ボイス管理（`voice_id = channel*128+note`）は一切変更していない。
+実装済み。基本方針は「常に再アタック」（レガート＝EG非再トリガーは実装しない）：Mono Mode（CC126）中は同一MIDIチャンネル内で常に1音のみが発音し、新しいノートオンが来ると前の音は（サステインペダル等の状態に関わらず）即座にnote_offされてから新しい音がnote_onする。
 
-**last-note priority：** 複数の鍵盤を重ねて押している状態で、発音中のノートを離すと、まだ物理的に押されている鍵盤のうち最後に押したもの（押鍵順スタックの末尾）へ再アタックで戻る。全ての鍵盤を離すと通常どおりリリースする。
+**例外（レガート、2026-08-27）：** Mono ON・CC65（Portamento）ON・レガート（前の鍵盤を押したまま次の鍵盤を押した状態）の3条件が揃ったときだけ、ボイスを作り直さず`Op505Engine::glide_to`でピッチだけ滑らせる（EG・位相・velocityは一切触らない、古典的モノシンセの挙動）。エンジン側のボイス管理（`voice_id = channel*128+note`）自体は変更していない。レガート継続中はエンジンのボイスIDがフレーズ開始ノートのまま変わらない点に注意（新ノートのIDでは新しいボイスを確保しない）。レガート中はvelocityを反映せず、フレーズ開始ノートのvelocityのまま鳴り続ける。また`note_on_voice_core`を経由しないため、パッチ・音量・パン・OP単位F-Number上書き等の再適用も起きない（フレーズ途中でProgram Changeしても音色が切り替わらないのは方式Bとして意図した挙動。既存のライブ伝播経路がCC変更の反映を引き続き担当する）。
+
+**last-note priority：** 複数の鍵盤を重ねて押している状態で、発音中のノートを離すと、まだ物理的に押されている鍵盤のうち最後に押したもの（押鍵順スタックの末尾）へ戻る。レガート条件が揃っていればレガートで（ボイス継続）、揃っていなければ再アタックで戻る。全ての鍵盤を離すと通常どおりリリースする。
 
 **サステインペダルとの関係：** Mono Modeの解放/フォールバック判定は押鍵状態（`op505_midi::MonoState`）だけで行い、サステインペダルの状態を見ない。ペダルを踏んでいても新しいノートで前の音は解放される（そうしないと2音同時に鳴りMonoでなくなるため）。
 
 **CC126/CC127のデータバイト：** 値によらずそのチャンネルをMono（CC126）/Poly（CC127）にする（一般的な音源シンセの実装に倣う。GM2のCC126はMono数Mを指定できる仕様だが、38x6では常に「MIDIチャンネル1つ＝1ボイス」のためMの値は意味を持たない）。CC126/CC127はどちらもCC123(All Notes Off)と同じ全ノートオフ処理を伴う（Poly→Mono/Mono→Polyのどちらの遷移でも、遷移前に何が鳴っていたかに関わらずそのチャンネルを一旦静かにしてから始める）。
 
-実装は`op505_midi::MonoState`（1MIDIチャンネル分の状態機械、`op505/midi/src/mono.rs`）。`PedalState`と同じ設計方針で、状態を持つだけでエンジンを直接呼ばず、呼び出し側が取るべき行動を`MonoNoteOff`（`Nothing`/`Release`/`Fallback`）で返す。エンジン改修は不要（ボイス管理・EGは無改造）。op505-vst/smf2op505/op505-standaloneの3実装が共通の`note_on_voice_core`（ペダル/Mono状態の更新を含まない、実際の発音処理のみ）を持ち、外部からのNote OnとMono Modeのlast-note priorityフォールバックの両方から呼べるようにしている。
+実装は`op505_midi::MonoState`（1MIDIチャンネル分の状態機械、`op505/midi/src/mono.rs`）。`PedalState`と同じ設計方針で、状態を持つだけでエンジンを直接呼ばず、呼び出し側が取るべき行動を返り値で伝える。`MonoState`は「今聞こえているべき音程」（`sounding`）と「エンジン側で実際にボイス（EG含む）を保持しているノート番号」（`voice`）を分けて追跡する。非レガート時はこの2つは常に一致するが、レガート継続中は`voice`がフレーズ開始ノートのまま変わらず`sounding`だけが新しい鍵盤ごとに移っていくため、エンジンへの`note_off`/`glide_to`の対象は常に`voice`を使う（`note`をそのまま使うと、レガート後にCC65がOFFへ変わった場合などに誤ったIDをリリースしてしまう）。
+
+`note_on`は`MonoNoteOn`（`Retrigger { release }` / `Legato { voice }`）を、`note_off`は`MonoNoteOff`（`Nothing` / `Release` / `Fallback` / `LegatoFallback`）を返す。`Legato`/`LegatoFallback`はエンジンの`glide_to`が対象ボイスの消失（既にIdle等）で失敗する可能性があり、その場合は呼び出し側が`MonoState::demote_legato`で`voice`を新ノートへ付け替えてから通常の`note_on`へフォールバックする。op505-vst/smf2op505/op505-standaloneの3実装が共通の`note_on_voice_core`（ペダル/Mono状態の更新を含まない、実際の発音処理のみ）を持ち、外部からのNote OnとMono Modeのlast-note priorityフォールバックの両方から呼べるようにしている。
 
 **サステインペダル（CC64）の実装方針：**
 

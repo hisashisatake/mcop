@@ -4,7 +4,7 @@ mod params;
 
 use op505_midi::{
     cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
-    ProgramSelection, RHYTHM_BANK_RANGE,
+    MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
@@ -591,12 +591,35 @@ impl Plugin for Op505Plugin {
                     let midi_ch = channel as usize;
                     // 弾き直したらペダル保留を解除する（`ym38x6-vst`と同一理由）。
                     self.channels[midi_ch].pedal.note_on(note);
+                    // レガート継続（Mono+CC65 ON+レガート）が成立したら再アタックしない。
+                    // `process()`本体のループなので`return`で抜けると残りのイベント処理と
+                    // このブロックのレンダリングを丸ごとスキップしてしまうため、フラグで制御する。
+                    let mut legato_succeeded = false;
                     if self.channels[midi_ch].mono.enabled {
-                        if let Some(prev) = self.channels[midi_ch].mono.note_on(note, velocity_u8) {
-                            self.engine.note_off(midi_channel_note_id(channel, prev));
+                        let portamento = self.channels[midi_ch].portamento_on;
+                        match self.channels[midi_ch].mono.note_on(note, velocity_u8, portamento) {
+                            MonoNoteOn::Legato { voice } => {
+                                let seconds = self.channels[midi_ch].portamento_seconds();
+                                let id = midi_channel_note_id(channel, voice);
+                                let freq = 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0);
+                                if self.engine.glide_to(id, freq, seconds) {
+                                    self.channels[midi_ch].last_note = Some(note);
+                                    legato_succeeded = true;
+                                } else {
+                                    // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                                    self.channels[midi_ch].mono.demote_legato(note);
+                                }
+                            }
+                            MonoNoteOn::Retrigger { release } => {
+                                if let Some(prev) = release {
+                                    self.engine.note_off(midi_channel_note_id(channel, prev));
+                                }
+                            }
                         }
                     }
-                    self.note_on_voice_core(midi_ch, note, velocity_u8);
+                    if !legato_succeeded {
+                        self.note_on_voice_core(midi_ch, note, velocity_u8);
+                    }
                 }
                 NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
                     let midi_ch = channel as usize;
@@ -607,7 +630,8 @@ impl Plugin for Op505Plugin {
                     if self.channels[midi_ch].mono.enabled {
                         // Mono Mode: サステインペダルより優先する（CC126/127のコメント参照）。
                         // 押鍵状態（MonoState）だけで解放/フォールバックを決める。
-                        match self.channels[midi_ch].mono.note_off(note) {
+                        let portamento = self.channels[midi_ch].portamento_on;
+                        match self.channels[midi_ch].mono.note_off(note, portamento) {
                             MonoNoteOff::Nothing => {}
                             MonoNoteOff::Release(released_note) => {
                                 self.engine.note_off(midi_channel_note_id(channel, released_note));
@@ -615,6 +639,17 @@ impl Plugin for Op505Plugin {
                             MonoNoteOff::Fallback { release, sound, velocity } => {
                                 self.engine.note_off(midi_channel_note_id(channel, release));
                                 self.note_on_voice_core(midi_ch, sound, velocity);
+                            }
+                            MonoNoteOff::LegatoFallback { voice, sound, velocity } => {
+                                let seconds = self.channels[midi_ch].portamento_seconds();
+                                let id = midi_channel_note_id(channel, voice);
+                                let freq = 440.0 * 2.0_f32.powf((sound as f32 - 69.0) / 12.0);
+                                if !self.engine.glide_to(id, freq, seconds) {
+                                    // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                                    self.channels[midi_ch].mono.demote_legato(sound);
+                                    self.engine.note_off(id);
+                                    self.note_on_voice_core(midi_ch, sound, velocity);
+                                }
                             }
                         }
                     } else if pedal_released {

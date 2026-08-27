@@ -812,6 +812,43 @@ impl Op505Engine {
         }
     }
 
+    /// 発音中のボイスを再アタックせずに、ピッチ目標だけ`frequency`（Hz）へ移して
+    /// `seconds`かけてセント線形に滑らせる（Mono Modeのレガート演奏用）。EG・位相・
+    /// velocityは一切触らない点が`note_on`/`retrigger`との違い。
+    ///
+    /// グライドの起点には`base_frequency`（目標値）ではなく、`glide_cents`を加味した
+    /// 「今実際に聞こえているピッチ」を使う。これによりレガートフレーズの途中でさらに
+    /// 次のノートが来ても（前のグライドが終わっていなくても）ピッチが飛ばずに連結できる。
+    ///
+    /// 対象チャンネルが存在しない、またはEGが既にIdle（発音が完全に終わっている）なら
+    /// 何もせず`false`を返す。呼び出し側はこの場合、通常の`note_on`へフォールバックする。
+    pub fn glide_to(&mut self, channel: usize, frequency: f32, seconds: f32) -> bool {
+        let sample_rate = self.sample_rate;
+        let Some(ch) = self.channels.get_mut(&channel) else {
+            return false;
+        };
+        if ch.is_idle() {
+            return false;
+        }
+        let current_frequency = ch.base_frequency * 2f32.powf(ch.glide_cents / 1200.0);
+        let (effective_frequency, note) = effective_pitch(frequency, &ch.channel_params);
+        ch.base_frequency = effective_frequency;
+        ch.note = note;
+        ch.keyed_frequency = frequency;
+        for op in ch.operators.iter_mut() {
+            op.set_base_frequency(effective_frequency);
+        }
+        if seconds <= 0.0 || current_frequency <= 0.0 || current_frequency == effective_frequency {
+            ch.glide_cents = 0.0;
+            ch.glide_step_cents = 0.0;
+        } else {
+            let cents = 1200.0 * (current_frequency / effective_frequency).log2();
+            ch.glide_cents = cents;
+            ch.glide_step_cents = cents.abs() / (seconds * sample_rate);
+        }
+        true
+    }
+
     pub fn note_on_operator(&mut self, channel: usize, op_index: usize) {
         if let Some(ch) = self.channels.get_mut(&channel) {
             ch.note_on_operator(op_index);
@@ -992,6 +1029,41 @@ mod tests {
          ..Default::default()}
     }
 
+    /// アタックに時間がかかる（0から255まで50msでランプし、その後無限サスティンする）EG。
+    /// `glide_to`がEGへ手を触れない（再トリガーしない）ことを、アタック途中の`env_level()`
+    /// 推移がglide_to呼び出しの有無で完全一致するかどうかで検証するために使う。
+    fn slow_attack_eg() -> TimeEgParams {
+        TimeEgParams {
+            stages: stages_with(&[(sound_core::seconds_to_time(0.05), 255, 0), (0, 0, 0)]),
+            stage_count: 2,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 0,
+         ..Default::default()}
+    }
+
+    /// アルゴリズム7・`slow_attack_eg`のテスト用パッチ。
+    fn slow_attack_patch() -> Op505Patch {
+        let op_params = Op505OperatorParams {
+            tl: 255,
+            eg: slow_attack_eg(),
+            mul: 1,
+            dt1: 128,
+            ksr: 0,
+            am_enable: false,
+            velocity_sensitivity: 0,
+            waveform: 0,
+            op_fine_tune: 128,
+            eg_shift: 0,
+            level_scale: 0,
+            velocity_gain: 255,
+        };
+        let mut patch = Op505Patch::default();
+        patch.operators = [op_params; 4];
+        patch.channel.algorithm = 7;
+        patch
+    }
+
     /// 全Opがアルゴリズム7（全並列）で即音量最大・サスティン無限のテスト用パッチ。
     fn loud_patch(velocity_sensitivity: u8) -> Op505Patch {
         let op_params = Op505OperatorParams {
@@ -1073,6 +1145,76 @@ mod tests {
 
         engine.start_glide(0, 440.0, 0.01); // 現在の周波数と同一
         assert_eq!(engine.channels[&0].glide_cents, 0.0);
+    }
+
+    #[test]
+    fn glide_to_does_not_perturb_the_envelope() {
+        // Mono Modeのレガート用`glide_to`はEGへ一切触れない設計。同じ音色・同じ`note_on`から
+        // 始めた2つのエンジンで、片方だけアタック途中に`glide_to`を挟んでも、以降のEGレベル
+        // 推移が完全一致する（＝EGの状態機械が全く乱されていない）ことを確認する。
+        let mut engine_a = Op505Engine::new(44100.0); // 比較基準：glide_toを呼ばない
+        engine_a.set_patch(slow_attack_patch());
+        engine_a.note_on(0, 440.0, 100);
+
+        let mut engine_b = Op505Engine::new(44100.0); // アタック途中でglide_toを呼ぶ
+        engine_b.set_patch(slow_attack_patch());
+        engine_b.note_on(0, 440.0, 100);
+
+        let mut buf = vec![0.0f32; 200]; // 50msアタックの途中（約4.5ms分）
+        engine_a.render(&mut buf, 1);
+        engine_b.render(&mut buf, 1);
+        let level_before = engine_b.channels[&0].operators[0].env_level();
+        assert!(level_before > 0.0 && level_before < 1.0, "アタック途中のはず");
+
+        assert!(engine_b.glide_to(0, 880.0, 0.01), "発音中のボイスへは適用できるはず");
+
+        for _ in 0..5 {
+            engine_a.render(&mut buf, 1);
+            engine_b.render(&mut buf, 1);
+            assert_eq!(
+                engine_a.channels[&0].operators[0].env_level(),
+                engine_b.channels[&0].operators[0].env_level(),
+                "glide_toはEGの進行に影響を与えないはず（再トリガーしていない）"
+            );
+        }
+    }
+
+    #[test]
+    fn glide_to_returns_false_for_missing_or_idle_voice() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+
+        assert!(!engine.glide_to(0, 440.0, 0.01), "存在しないボイスへは適用できないはず");
+
+        engine.note_on(0, 440.0, 100);
+        engine.note_off(0);
+        let mut buf = vec![0.0f32; 100]; // instant_sustain_egのリリースは瞬時なのですぐIdleになる
+        engine.render(&mut buf, 1);
+        assert!(!engine.glide_to(0, 440.0, 0.01), "Idleになったボイスへは適用できないはず");
+    }
+
+    #[test]
+    fn glide_to_mid_glide_does_not_jump() {
+        // レガートフレーズの途中でさらに次のノートが来た（前のグライドが終わる前に
+        // `glide_to`が呼ばれた）ケース。呼び出し直後に「今聞こえているピッチ」が
+        // 飛ばないことを確認する（起点をbase_frequencyではなく現在ピッチにしているため）。
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100);
+        engine.start_glide(0, 220.0, 1.0); // 1オクターブ下から1秒かけてグライド開始
+
+        let ch = &engine.channels[&0];
+        let sounding_before = ch.base_frequency * 2f32.powf(ch.glide_cents / 1200.0);
+
+        assert!(engine.glide_to(0, 880.0, 0.5), "グライド中のボイスへも適用できるはず");
+
+        let ch = &engine.channels[&0];
+        let sounding_after = ch.base_frequency * 2f32.powf(ch.glide_cents / 1200.0);
+
+        assert!(
+            (sounding_before - sounding_after).abs() < 1e-3,
+            "glide_to呼び出し直後、聞こえているピッチが飛んではいけない（{sounding_before} vs {sounding_after}）"
+        );
     }
 
     #[test]
