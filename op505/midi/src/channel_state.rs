@@ -17,6 +17,7 @@
 
 use crate::control::{control_target, ControlTarget};
 use crate::expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
+use crate::mono::MonoState;
 use crate::overrides::PatchOverrides;
 use crate::pedal::PedalState;
 use crate::pitch_fg::apply_pitch_fg_expression;
@@ -113,6 +114,19 @@ pub struct ChannelState {
     pub cc73_attack: u8,
     pub cc74_brightness: u8,
     pub cc75_decay: u8,
+
+    // --- ポルタメント（CC5/CC65、GM2）---
+    /// CC65 Portamento On/Off（>=64でON）。
+    pub portamento_on: bool,
+    /// CC5 Portamento Time（0〜127、0=グライドなし）。
+    pub portamento_time: u8,
+    /// 直前に`note_on`したノート番号（グライド起点）。CC120/CC121/CC123の全てでクリアする
+    /// （このチャンネルの発音状態が丸ごとリセットされる操作なので、直前ノートという文脈も
+    /// 一緒に消える方が自然なため）。
+    pub last_note: Option<u8>,
+
+    // --- Mono/Poly Mode（CC126/CC127、GM2）---
+    pub mono: MonoState,
 }
 
 impl ChannelState {
@@ -151,6 +165,10 @@ impl ChannelState {
             cc73_attack: 64,
             cc74_brightness: 64,
             cc75_decay: 64,
+            portamento_on: false,
+            portamento_time: 0,
+            last_note: None,
+            mono: MonoState::default(),
         }
     }
 
@@ -205,6 +223,36 @@ impl ChannelState {
     /// CC10(Pan)の現在値から左右ゲインを返す（`Vco::set_channel_pan`／`_group`へそのまま渡す）。
     pub fn pan_gains(&self) -> (f32, f32) {
         op505_core::pan_gains(self.cc10_pan)
+    }
+
+    /// CC5(Portamento Time)からグライド秒数を導く。0=グライドなし、127で約5秒
+    /// （5ms×1000^(cc5/127)の対数スケール。実機シンセのポルタメントタイムノブに倣い、
+    /// 低い値側を細かく、高い値側を大きく動かせるようにする）。
+    pub fn portamento_seconds(&self) -> f32 {
+        if self.portamento_time == 0 {
+            0.0
+        } else {
+            0.005 * 1000f32.powf(self.portamento_time as f32 / 127.0)
+        }
+    }
+
+    /// このnote_onでグライドすべきなら`(起点ノート, 秒)`を返す。`portamento_on`かつ
+    /// `last_note`が別ノートで、かつ秒>0のときだけSome。周波数への変換は呼び出し側が
+    /// 各自の音名/周波数変換関数で行う（本クレートはMIDIノート番号までしか扱わず、
+    /// 周波数計算はop505-core/呼び出し側の責務のため）。
+    pub fn glide_source(&self, note: u8) -> Option<(u8, f32)> {
+        if !self.portamento_on {
+            return None;
+        }
+        let from = self.last_note?;
+        if from == note {
+            return None;
+        }
+        let seconds = self.portamento_seconds();
+        if seconds <= 0.0 {
+            return None;
+        }
+        Some((from, seconds))
     }
 
     /// Program Change（Bank Select確定後の`ChannelProgramState::program_change`ラッパー）。
@@ -322,6 +370,10 @@ impl ChannelState {
         self.bend_cents = 0.0;
         self.channel_pressure = 0;
         self.poly_pressure = [0; 128];
+        // CC65(Portamento On/Off)はRAC対象。CC5(Time)はRAC対象外（GM2のRACはOn/Offスイッチ系の
+        // コントローラーのみを対象にする一般的な扱いに合わせる）。
+        self.portamento_on = false;
+        self.last_note = None;
         released
     }
 }
@@ -557,6 +609,71 @@ mod tests {
         let mut patch = base;
         st.apply_note_post_processing(&mut patch, 60);
         assert_eq!(patch, base);
+    }
+
+    /// CC5(Portamento Time)→秒数：0はグライドなし、それ以外は単調増加し127で約5秒。
+    #[test]
+    fn portamento_seconds_is_zero_at_zero_and_monotonic() {
+        let mut st = ChannelState::new(0, false);
+        st.portamento_time = 0;
+        assert_eq!(st.portamento_seconds(), 0.0);
+
+        st.portamento_time = 1;
+        let low = st.portamento_seconds();
+        assert!(low > 0.0);
+
+        st.portamento_time = 64;
+        let mid = st.portamento_seconds();
+        assert!(mid > low);
+
+        st.portamento_time = 127;
+        let high = st.portamento_seconds();
+        assert!(high > mid);
+        assert!((high - 5.0).abs() < 0.1, "127で約5秒のはず: {high}");
+    }
+
+    /// `glide_source`はportamento_on・別ノート・秒>0の全条件が揃ったときだけSomeを返す。
+    #[test]
+    fn glide_source_requires_portamento_on_and_a_different_previous_note() {
+        let mut st = ChannelState::new(0, false);
+        st.portamento_time = 64;
+
+        // portamento_on=falseならNone
+        assert_eq!(st.glide_source(64), None);
+
+        st.portamento_on = true;
+        // last_noteが無ければNone（最初のノート）
+        assert_eq!(st.glide_source(64), None);
+
+        st.last_note = Some(60);
+        let (from, seconds) = st.glide_source(64).expect("グライド対象になるはず");
+        assert_eq!(from, 60);
+        assert!(seconds > 0.0);
+
+        // 同じノートへの弾き直しはNone
+        assert_eq!(st.glide_source(60), None);
+
+        // portamento_time=0（秒<=0）ならNone
+        st.portamento_time = 0;
+        assert_eq!(st.glide_source(64), None);
+    }
+
+    /// CC121(Reset All Controllers)はportamento_onとlast_noteをクリアするが
+    /// portamento_timeとmono.enabledは維持する。
+    #[test]
+    fn reset_all_controllers_clears_portamento_switch_but_not_time_or_mono_mode() {
+        let mut st = ChannelState::new(0, false);
+        st.portamento_on = true;
+        st.portamento_time = 100;
+        st.last_note = Some(60);
+        st.mono.enabled = true;
+
+        st.reset_all_controllers();
+
+        assert!(!st.portamento_on, "CC65はRAC対象");
+        assert_eq!(st.last_note, None);
+        assert_eq!(st.portamento_time, 100, "CC5はRAC対象外");
+        assert!(st.mono.enabled, "チャンネルモードはRAC対象外");
     }
 
     /// エフェクト系NRPN(0,2)〜(0,8)は`ChannelState`自身を変化させない
