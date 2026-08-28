@@ -8,7 +8,10 @@
 //!
 //! MasterEffects（sound-core型）は本クレートのAPIに出せない制約（Cargo.tomlコメント参照）
 //! があるため、Reverb/Chorus系NRPN（NRPN(0,2)〜(0,8)）は[`DataEntryOutcome::Effect`]で
-//! 呼び出し側へ通知し、呼び出し側が自分のMasterEffectsへ適用する。
+//! 呼び出し側へ通知し、呼び出し側が自分のMasterEffectsへ適用する。エフェクトはチャンネル別に
+//! `effect_route_slot`（NRPN(0,1) Channel Effect Routeで設定、既定0）へルーティングされる
+//! マルチスロット構成を前提とし、エフェクト設定NRPN・CC91/93はいずれも送信チャンネルの
+//! `effect_route_slot`が指すスロットへ適用される（詳細はspec-fm.md 8章）。
 //!
 //! [`ChannelState`]は`reset()`（`Plugin::reset`等のリアルタイムコンテキスト）から
 //! 再構築されるため、**ヒープ確保を伴うフィールド（`Vec`/`Box`/`String`/`HashMap`等）を
@@ -27,18 +30,26 @@ use crate::rpn::RpnTracker;
 use crate::value::{cc_byte_to_u7, cc_byte_to_u8};
 use op505_core::Op505Patch;
 
+/// エフェクトスロット数（MIDIチャンネル数と同数）。NRPN(0,1) Channel Effect Routeで
+/// 指定するスロット番号（0〜`EFFECT_SLOT_COUNT - 1`）と、ホスト側の`MasterEffects`配列長を
+/// この値で揃える（`op505-midi`側でクランプ境界を一元管理し、3ホストが個別に上限値を
+/// ハードコードするのを避ける）。
+pub const EFFECT_SLOT_COUNT: u8 = 16;
+
 /// [`ChannelState::apply_data_entry`]の結果。
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DataEntryOutcome {
     /// ChannelStateのみ変化した。`voice_update`がtrueなら発音中ボイスへの即時反映が必要。
     StateChanged { voice_update: bool },
-    /// エフェクト系NRPN。呼び出し側が`target`に応じて自分のMasterEffectsへ`value`を適用する。
-    Effect(EffectControlTarget, u8),
+    /// エフェクト系NRPN。呼び出し側が`effect_route_slot`（0〜`EFFECT_SLOT_COUNT - 1`）が指す
+    /// 自分のMasterEffectsへ`value`を適用する。
+    Effect(u8, EffectControlTarget, u8),
 }
 
 /// エフェクト系NRPN（NRPN(0,2)〜(0,8)）。MasterEffectsはsound-core型のため本クレートの
 /// APIに出せず、[`DataEntryOutcome::Effect`]で呼び出し側へ通知する
-/// （`ControlTarget`の対応バリアントの部分集合）。
+/// （`ControlTarget`の対応バリアントの部分集合）。適用先スロット番号は
+/// `DataEntryOutcome::Effect`の先頭要素（`u8`）が別途運ぶ。
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum EffectControlTarget {
     ReverbType,
@@ -127,6 +138,11 @@ pub struct ChannelState {
 
     // --- Mono/Poly Mode（CC126/CC127、GM2）---
     pub mono: MonoState,
+
+    /// NRPN(0,1) Channel Effect Route：このチャンネルの音声・エフェクト設定NRPN(0,2)〜(0,8)・
+    /// CC91/93の適用先エフェクトスロット番号（0〜`EFFECT_SLOT_COUNT - 1`）。既定0
+    /// （誰も送らなければ全チャンネルがスロット0に集まり、既存の単一MasterEffectsと同じ挙動）。
+    pub effect_route_slot: u8,
 }
 
 impl ChannelState {
@@ -169,6 +185,7 @@ impl ChannelState {
             portamento_time: 0,
             last_note: None,
             mono: MonoState::default(),
+            effect_route_slot: 0,
         }
     }
 
@@ -287,6 +304,12 @@ impl ChannelState {
     ///
     /// `ControlTarget::ReservedFgLoopCurve`（op505のTimeEg 7本はpersist状態でNRPNからは
     /// 触らない欠番）・`ReservedTextureLfo`（旧質感LFO、退役済み欠番）は何もしない。
+    ///
+    /// `ControlTarget::ChannelEffectRoute`（NRPN(0,1)）はこのチャンネル自身の`effect_route_slot`
+    /// を書き換えるだけで`DataEntryOutcome::StateChanged`を返す。NRPN(0,2)〜(0,8)（エフェクト
+    /// 設定7項目）は常にその時点の`effect_route_slot`を`DataEntryOutcome::Effect`の先頭要素として
+    /// 返す（「エフェクト関連の設定は送信したチャンネルのルーティング先スロットへ適用する」という
+    /// 1レジスタ統合方式、詳細はspec-fm.md 8章）。
     pub fn apply_data_entry(&mut self, raw_value: u8) -> DataEntryOutcome {
         self.data_entry_msb = cc_byte_to_u7(raw_value);
         match control_target(self.rpn.selection) {
@@ -299,26 +322,34 @@ impl ChannelState {
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::ReservedTextureLfo => DataEntryOutcome::StateChanged { voice_update: false },
+            ControlTarget::ChannelEffectRoute => {
+                self.effect_route_slot = cc_byte_to_u7(raw_value).min(EFFECT_SLOT_COUNT - 1);
+                DataEntryOutcome::StateChanged { voice_update: false }
+            }
             ControlTarget::ReverbType => {
-                DataEntryOutcome::Effect(EffectControlTarget::ReverbType, cc_byte_to_u7(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ReverbType, cc_byte_to_u7(raw_value))
             }
             ControlTarget::ChorusType => {
-                DataEntryOutcome::Effect(EffectControlTarget::ChorusType, cc_byte_to_u7(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ChorusType, cc_byte_to_u7(raw_value))
             }
             ControlTarget::ReverbTime => {
-                DataEntryOutcome::Effect(EffectControlTarget::ReverbTime, cc_byte_to_u8(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ReverbTime, cc_byte_to_u8(raw_value))
             }
             ControlTarget::ChorusModRate => {
-                DataEntryOutcome::Effect(EffectControlTarget::ChorusModRate, cc_byte_to_u8(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ChorusModRate, cc_byte_to_u8(raw_value))
             }
             ControlTarget::ChorusModDepth => {
-                DataEntryOutcome::Effect(EffectControlTarget::ChorusModDepth, cc_byte_to_u8(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ChorusModDepth, cc_byte_to_u8(raw_value))
             }
             ControlTarget::ChorusFeedback => {
-                DataEntryOutcome::Effect(EffectControlTarget::ChorusFeedback, cc_byte_to_u8(raw_value))
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::ChorusFeedback, cc_byte_to_u8(raw_value))
             }
             ControlTarget::ChorusSendToReverb => {
-                DataEntryOutcome::Effect(EffectControlTarget::ChorusSendToReverb, cc_byte_to_u8(raw_value))
+                DataEntryOutcome::Effect(
+                    self.effect_route_slot,
+                    EffectControlTarget::ChorusSendToReverb,
+                    cc_byte_to_u8(raw_value),
+                )
             }
             ControlTarget::Algorithm => {
                 self.overrides.algorithm = Some(cc_byte_to_u7(raw_value).min(7));
@@ -402,11 +433,12 @@ mod tests {
         assert_eq!(eff, base);
     }
 
-    /// NRPN(0,0)〜(0,1)・(0,22)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない。
+    /// NRPN(0,0)・(0,22)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない。
+    /// NRPN(0,1)はChannelEffectRouteへ再割り当て済みのためこのリストから除外（別テスト参照）。
     #[test]
     fn nrpn_reserved_texture_lfo_is_noop() {
         let mut st = ChannelState::new(0, false);
-        for lsb in [0u8, 1, 22, 23, 24, 25, 26, 27] {
+        for lsb in [0u8, 22, 23, 24, 25, 26, 27] {
             select_nrpn(&mut st, 0, lsb);
             assert_eq!(
                 st.apply_data_entry(100),
@@ -416,6 +448,36 @@ mod tests {
         }
         let eff = st.build_effective_patch(&Op505Patch::default());
         assert_eq!(eff, Op505Patch::default());
+    }
+
+    /// NRPN(0,1) Channel Effect Route は`effect_route_slot`を書き換え、
+    /// `EFFECT_SLOT_COUNT - 1`を超える値はクランプされる。
+    #[test]
+    fn nrpn_channel_effect_route_updates_effect_route_slot() {
+        let mut st = ChannelState::new(0, false);
+        assert_eq!(st.effect_route_slot, 0);
+
+        select_nrpn(&mut st, 0, 1);
+        assert_eq!(st.apply_data_entry(3), DataEntryOutcome::StateChanged { voice_update: false });
+        assert_eq!(st.effect_route_slot, 3);
+
+        select_nrpn(&mut st, 0, 1);
+        st.apply_data_entry(127);
+        assert_eq!(st.effect_route_slot, EFFECT_SLOT_COUNT - 1, "127はEFFECT_SLOT_COUNT-1へクランプされる");
+    }
+
+    /// エフェクト設定NRPN(0,2)〜(0,8)は、その時点の`effect_route_slot`を
+    /// `DataEntryOutcome::Effect`の先頭要素として運ぶ。
+    #[test]
+    fn effect_nrpn_outcome_carries_effect_route_slot() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 1);
+        st.apply_data_entry(3); // effect_route_slot = 3
+
+        select_nrpn(&mut st, 0, 4); // Reverb Time
+        let outcome = st.apply_data_entry(64);
+        // ReverbTimeはcc_byte_to_u8（7bit→8bit拡大）を使うため、生値64は129になる。
+        assert_eq!(outcome, DataEntryOutcome::Effect(3, EffectControlTarget::ReverbTime, cc_byte_to_u8(64)));
     }
 
     /// NRPN(0,9) Algorithm 上書きは実効パッチの algorithm を置き換える。
@@ -452,7 +514,7 @@ mod tests {
         for lsb in [2u8, 3, 4, 5, 6, 7, 8] {
             select_nrpn(&mut st, 0, lsb);
             let outcome = st.apply_data_entry(64);
-            assert!(matches!(outcome, DataEntryOutcome::Effect(_, _)), "NRPN(0,{lsb}) should be Effect");
+            assert!(matches!(outcome, DataEntryOutcome::Effect(_, _, _)), "NRPN(0,{lsb}) should be Effect");
         }
     }
 
@@ -677,20 +739,33 @@ mod tests {
     }
 
     /// エフェクト系NRPN(0,2)〜(0,8)は`ChannelState`自身を変化させない
-    /// （MasterEffectsはグローバル1個のまま。呼び出し側がEffect outcomeを見て自分で適用する）。
+    /// （MasterEffectsは呼び出し側が持つ配列で、`ChannelState`はEffect outcomeを返すのみ）。
     #[test]
     fn effect_nrpn_reports_but_does_not_mutate_state() {
         let mut st = ChannelState::new(0, false);
         let before = st.clone();
         select_nrpn(&mut st, 0, 4); // ReverbTime
         let outcome = st.apply_data_entry(64);
-        assert!(matches!(outcome, DataEntryOutcome::Effect(EffectControlTarget::ReverbTime, _)));
+        assert!(matches!(outcome, DataEntryOutcome::Effect(_, EffectControlTarget::ReverbTime, _)));
         // data_entry_msb・rpn.selectionはCC6/NRPN選択の受信状態として当然変化するので、
-        // それ以外（overrides等の音色状態）が変化していないことを確認する。
+        // それ以外（overrides等の音色状態、effect_route_slotを含む）が変化していないことを確認する。
         assert_eq!(st.overrides, before.overrides);
         assert_eq!(st.operator_f_number_override, before.operator_f_number_override);
         assert_eq!(st.cc2_destination, before.cc2_destination);
         assert_eq!(st.cc4_destination, before.cc4_destination);
         assert_eq!(st.pitch_bend_range, before.pitch_bend_range);
+        assert_eq!(st.effect_route_slot, before.effect_route_slot);
+    }
+
+    /// `effect_route_slot`は`ChannelState`ごとに独立する
+    /// （チャンネル独立性テスト群、上記の他フィールドと同じ契約凍結の目的）。
+    #[test]
+    fn effect_route_slot_is_per_channel() {
+        let mut ch0 = ChannelState::new(0, false);
+        let ch1 = ChannelState::new(1, false);
+        select_nrpn(&mut ch0, 0, 1); // Channel Effect Route
+        ch0.apply_data_entry(5);
+        assert_eq!(ch0.effect_route_slot, 5);
+        assert_eq!(ch1.effect_route_slot, 0, "ch1は既定のまま");
     }
 }

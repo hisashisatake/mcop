@@ -7,6 +7,8 @@ use op505_midi::{
     cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
     MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
+/// エフェクトスロット数。`op505_midi::EFFECT_SLOT_COUNT`（クランプ境界の一元管理元）と揃える。
+const EFFECT_SLOT_COUNT: usize = op505_midi::EFFECT_SLOT_COUNT as usize;
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
     DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE, DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
@@ -48,8 +50,15 @@ fn midi_channel_note_id(channel: u8, note: u8) -> usize {
 struct Op505Plugin {
     params: Arc<Op505VstParams>,
     engine: Op505Engine,
-    effects: MasterEffects,
+    // エフェクトスロット数分の`MasterEffects`。各MIDIチャンネルの`channels[ch].effect_route_slot`
+    // （NRPN(0,1) Channel Effect Route、既定0）が指すスロットへ音声・エフェクト設定NRPN・
+    // CC91/93が適用される（詳細はspec-fm.md 8章）。DAWパラメーター9個とCC91/93の初期値は
+    // 従来どおり`effects[0]`のみを対象にする。
+    effects: [MasterEffects; EFFECT_SLOT_COUNT],
     render_buffer: Vec<f32>,
+    // `render_routed`のスロット別出力スクラッチ（`EFFECT_SLOT_COUNT`本分を1本のVecへ連結、
+    // `render_buffer`と同じgrow-onlyパターンで使い回す）。
+    slot_render_buffer: Vec<f32>,
     sample_rate: f32,
 
     // TimeEg 7本（`params.egs`のpersist状態）のオーディオスレッド側キャッシュ。
@@ -64,9 +73,10 @@ struct Op505Plugin {
     // MIDIチャンネル別のCC/NRPNシャドウ状態（`op505_midi::ChannelState`、smf2op505/standalone
     // と共有する参照実装）。overrides/rpn/data_entry_msb/lsb/at_destination/
     // poly_at_destination/cc2_destination/cc4_destination/pitch_fg_rpn0_5/pitch_bend_range/
-    // operator_f_number_overrideを含め、CC/NRPNの解釈状態はここに一本化されている
-    // （エフェクト系NRPN(0,2)〜(0,8)とCC91/93だけは`MasterEffects`がプラグイン全体で1個の
-    // ためグローバルのまま。plan「op505-vstのMIDIチャンネル別化」参照）。
+    // operator_f_number_override/effect_route_slotを含め、CC/NRPNの解釈状態はここに
+    // 一本化されている（エフェクト系NRPN(0,2)〜(0,8)とCC91/93は各チャンネルの
+    // `effect_route_slot`（NRPN(0,1)）が指すスロットへ適用され、DAWパラメーター9個のみ
+    // `effects[0]`固定のまま。詳細はspec-fm.md 8章）。
     channels: [ChannelState; MIDI_CHANNEL_COUNT],
 
     // Algorithm/Waveform/Filter Type/Self-Oscillation：「前回ブロックで見たDAW値」。process()内で
@@ -149,8 +159,9 @@ impl Default for Op505Plugin {
         Self {
             params,
             engine: Op505Engine::new(DEFAULT_SR),
-            effects: MasterEffects::new(DEFAULT_SR),
+            effects: std::array::from_fn(|_| MasterEffects::new(DEFAULT_SR)),
             render_buffer: Vec::new(),
+            slot_render_buffer: Vec::new(),
             sample_rate: DEFAULT_SR,
             cached_egs,
             active_ids: Vec::with_capacity(256),
@@ -320,15 +331,18 @@ impl Op505Plugin {
     fn handle_data_entry(&mut self, midi_ch: usize, value: f32) {
         match self.channels[midi_ch].apply_data_entry(cc_to_u7(value)) {
             DataEntryOutcome::StateChanged { voice_update: _ } => {}
-            DataEntryOutcome::Effect(target, v) => match target {
-                EffectControlTarget::ReverbType => self.effects.set_reverb_type(ReverbType::from_u8(v)),
-                EffectControlTarget::ChorusType => self.effects.set_chorus_type(ChorusType::from_u8(v)),
-                EffectControlTarget::ReverbTime => self.effects.set_reverb_time(v),
-                EffectControlTarget::ChorusModRate => self.effects.set_chorus_mod_rate(v),
-                EffectControlTarget::ChorusModDepth => self.effects.set_chorus_mod_depth(v),
-                EffectControlTarget::ChorusFeedback => self.effects.set_chorus_feedback(v),
-                EffectControlTarget::ChorusSendToReverb => self.effects.set_chorus_send_to_reverb(v),
-            },
+            DataEntryOutcome::Effect(slot, target, v) => {
+                let fx = &mut self.effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+                match target {
+                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(v)),
+                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(v)),
+                    EffectControlTarget::ReverbTime => fx.set_reverb_time(v),
+                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(v),
+                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(v),
+                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(v),
+                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(v),
+                }
+            }
         }
     }
 }
@@ -364,7 +378,7 @@ impl Plugin for Op505Plugin {
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         self.engine = Op505Engine::new(self.sample_rate);
-        self.effects = MasterEffects::new(self.sample_rate);
+        self.effects = std::array::from_fn(|_| MasterEffects::new(self.sample_rate));
         let num_out = audio_io_layout
             .main_output_channels
             .map(|n| n.get() as usize)
@@ -389,7 +403,7 @@ impl Plugin for Op505Plugin {
 
     fn reset(&mut self) {
         self.engine = Op505Engine::new(self.sample_rate);
-        self.effects = MasterEffects::new(self.sample_rate);
+        self.effects = std::array::from_fn(|_| MasterEffects::new(self.sample_rate));
         // GM2 System Reset相当。CC121(Reset All Controllers)はbank/programをリセットしない
         // （ChannelProgramState::resetのdocコメント参照）ため、ここでのみ呼ぶ。
         let rhythm = self.rhythm_kits_available;
@@ -498,53 +512,54 @@ impl Plugin for Op505Plugin {
 
         // Reverb/Chorus Send：DAWパラメーターとCC91/93の両方から設定され得るため、
         // マスターエフェクト5パラメーターと同じ1シャドウ差分検知方式で適用する。
+        // DAWパラメーターはスロット選択UIを持たないため、常に`effects[0]`（スロット1）のみを対象にする。
         let rev_send = self.params.rev_send.value() as u8;
         if rev_send != self.last_rev_send {
-            self.effects.set_reverb_send(rev_send);
+            self.effects[0].set_reverb_send(rev_send);
             self.last_rev_send = rev_send;
         }
         let cho_send = self.params.cho_send.value() as u8;
         if cho_send != self.last_cho_send {
-            self.effects.set_chorus_send(cho_send);
+            self.effects[0].set_chorus_send(cho_send);
             self.last_cho_send = cho_send;
         }
 
-        // マスター単位パラメーター：DAWオートメーションで値が変化した場合のみeffectsへ反映する。
-        // NRPN(0,2)〜(0,8)はeffectsへ直接書き込まれ、ここでの値が前回と同じ間は上書きされない
+        // マスター単位パラメーター：DAWオートメーションで値が変化した場合のみeffects[0]へ反映する。
+        // NRPN(0,2)〜(0,8)はeffects[slot]へ直接書き込まれ、ここでの値が前回と同じ間は上書きされない
         // （差分検知方式。NRPNの変更はnice-plug側のパラメーター表示には反映されない）。
         let reverb_type = self.params.reverb_type.value() as u8;
         if reverb_type != self.last_reverb_type {
-            self.effects.set_reverb_type(ReverbType::from_u8(reverb_type));
+            self.effects[0].set_reverb_type(ReverbType::from_u8(reverb_type));
             self.last_reverb_type = reverb_type;
         }
         let reverb_time = self.params.reverb_time.value() as u8;
         if reverb_time != self.last_reverb_time {
-            self.effects.set_reverb_time(reverb_time);
+            self.effects[0].set_reverb_time(reverb_time);
             self.last_reverb_time = reverb_time;
         }
         let chorus_type = self.params.chorus_type.value() as u8;
         if chorus_type != self.last_chorus_type {
-            self.effects.set_chorus_type(ChorusType::from_u8(chorus_type));
+            self.effects[0].set_chorus_type(ChorusType::from_u8(chorus_type));
             self.last_chorus_type = chorus_type;
         }
         let chorus_mod_rate = self.params.chorus_mod_rate.value() as u8;
         if chorus_mod_rate != self.last_chorus_mod_rate {
-            self.effects.set_chorus_mod_rate(chorus_mod_rate);
+            self.effects[0].set_chorus_mod_rate(chorus_mod_rate);
             self.last_chorus_mod_rate = chorus_mod_rate;
         }
         let chorus_mod_depth = self.params.chorus_mod_depth.value() as u8;
         if chorus_mod_depth != self.last_chorus_mod_depth {
-            self.effects.set_chorus_mod_depth(chorus_mod_depth);
+            self.effects[0].set_chorus_mod_depth(chorus_mod_depth);
             self.last_chorus_mod_depth = chorus_mod_depth;
         }
         let chorus_feedback = self.params.chorus_feedback.value() as u8;
         if chorus_feedback != self.last_chorus_feedback {
-            self.effects.set_chorus_feedback(chorus_feedback);
+            self.effects[0].set_chorus_feedback(chorus_feedback);
             self.last_chorus_feedback = chorus_feedback;
         }
         let chorus_send_to_reverb = self.params.chorus_send_to_reverb.value() as u8;
         if chorus_send_to_reverb != self.last_chorus_send_to_reverb {
-            self.effects.set_chorus_send_to_reverb(chorus_send_to_reverb);
+            self.effects[0].set_chorus_send_to_reverb(chorus_send_to_reverb);
             self.last_chorus_send_to_reverb = chorus_send_to_reverb;
         }
 
@@ -811,8 +826,13 @@ impl Plugin for Op505Plugin {
                         38 => {
                             let _ = self.channels[midi_ch].apply_data_entry_lsb(cc_to_u7(value));
                         }
-                        91 => self.effects.set_reverb_send(cc_to_u8(value)),
-                        93 => self.effects.set_chorus_send(cc_to_u8(value)),
+                        // CC91/93: エフェクト送りレベル。送信チャンネルのeffect_route_slotが
+                        // 指すスロットへ適用する（既定はスロット0、`op505-midi`側で
+                        // EFFECT_SLOT_COUNT-1へクランプ済み）。
+                        91 => self.effects[self.channels[midi_ch].effect_route_slot as usize]
+                            .set_reverb_send(cc_to_u8(value)),
+                        93 => self.effects[self.channels[midi_ch].effect_route_slot as usize]
+                            .set_chorus_send(cc_to_u8(value)),
                         // CC102: Program Change 代替（VST3ではMidiProgramChangeが届かないため、
                         // `ym38x6-vst`と同じくGM2未定義ブロック先頭のCC102で代替する）。
                         102 => self.apply_program_change(midi_ch, cc_to_u7(value)),
@@ -881,10 +901,28 @@ impl Plugin for Op505Plugin {
         if interleaved_len > self.render_buffer.len() {
             self.render_buffer.resize(interleaved_len, 0.0);
         }
+        let slot_total_len = interleaved_len * EFFECT_SLOT_COUNT;
+        if slot_total_len > self.slot_render_buffer.len() {
+            self.slot_render_buffer.resize(slot_total_len, 0.0);
+        }
         let buf = &mut self.render_buffer[..interleaved_len];
         buf.fill(0.0);
-        self.engine.render(buf, num_channels);
-        self.effects.process(buf, num_channels);
+        let slot_buf = &mut self.slot_render_buffer[..slot_total_len];
+        slot_buf.fill(0.0);
+
+        // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）に従ってスロット別へ
+        // レンダリングし、スロットごとにMasterEffectsを適用してから合成する。誰もNRPN(0,1)を
+        // 送らなければ全チャンネルがslot0へ集まり、単一MasterEffects時代と同じ出力になる。
+        let channel_slot: [u8; MIDI_CHANNEL_COUNT] =
+            std::array::from_fn(|i| self.channels[i].effect_route_slot);
+        self.engine.render_routed(slot_buf, interleaved_len, &channel_slot, num_channels);
+        for (slot, fx) in self.effects.iter_mut().enumerate() {
+            let s = &mut slot_buf[slot * interleaved_len..(slot + 1) * interleaved_len];
+            fx.process(s, num_channels);
+            for (b, v) in buf.iter_mut().zip(s.iter()) {
+                *b += v;
+            }
+        }
 
         let output_slices = buffer.as_slice();
         for ch in 0..num_channels {

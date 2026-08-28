@@ -18,12 +18,17 @@ pub enum ControlTarget {
     PitchBendRange,
     /// RPN(0,5): Modulation Depth Range
     ModulationDepthRange,
-    /// NRPN(0,0)〜(0,1)・(0,22)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
+    /// NRPN(0,0)・(0,22)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
     /// Delay/FadeTime/Offset)のアドレス。質感LFO退役（`TimeEgParams::texture`へ統合、
     /// memory `project_texture_lfo_retirement.md`参照）に伴い**欠番として予約**し、再利用しない
     /// （`ReservedFgLoopCurve`と同じ理由：既存のSMF/DAWオートメーションが別の意味で
-    /// 解釈されるのを防ぐため）。
+    /// 解釈されるのを防ぐため）。NRPN(0,1)は`ChannelEffectRoute`へ再割り当て済みのため
+    /// このバリアントの対象外。
     ReservedTextureLfo,
+    /// NRPN(0,1): Channel Effect Route。送信チャンネル自身の音声・エフェクト設定NRPN(0,2)〜
+    /// (0,8)・CC91/93の適用先エフェクトスロット番号（0〜`EFFECT_SLOT_COUNT - 1`）を設定する。
+    /// 質感LFO退役で空いた欠番の再利用（詳細はspec-fm.md 8章）。
+    ChannelEffectRoute,
     /// NRPN(0,2): Reverb Type
     ReverbType,
     /// NRPN(0,3): Chorus Type
@@ -68,7 +73,8 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Rpn(0, 0) => ControlTarget::PitchBendRange,
         RpnSelection::Rpn(0, 5) => ControlTarget::ModulationDepthRange,
         RpnSelection::Rpn(_, _) => ControlTarget::Unassigned,
-        RpnSelection::Nrpn(0, 0..=1) => ControlTarget::ReservedTextureLfo,
+        RpnSelection::Nrpn(0, 0) => ControlTarget::ReservedTextureLfo,
+        RpnSelection::Nrpn(0, 1) => ControlTarget::ChannelEffectRoute,
         RpnSelection::Nrpn(0, 2) => ControlTarget::ReverbType,
         RpnSelection::Nrpn(0, 3) => ControlTarget::ChorusType,
         RpnSelection::Nrpn(0, 4) => ControlTarget::ReverbTime,
@@ -101,6 +107,7 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::PitchBendRange
         | ControlTarget::ModulationDepthRange
         | ControlTarget::ReservedTextureLfo
+        | ControlTarget::ChannelEffectRoute
         | ControlTarget::ReverbType
         | ControlTarget::ChorusType
         | ControlTarget::ReverbTime
@@ -141,12 +148,21 @@ mod tests {
     }
 
     /// 旧質感LFOのNRPNアドレス。質感LFO退役後は欠番として予約し、再利用しない。
+    /// NRPN(0,1)はChannelEffectRouteへ再割り当て済みのためこのリストから除外
+    /// （`channel_effect_route_address`参照）。
     #[test]
     fn reserved_texture_lfo_range_is_never_touched() {
-        for lsb in [0, 1, 22, 23, 24, 25, 26, 27] {
+        for lsb in [0, 22, 23, 24, 25, 26, 27] {
             assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedTextureLfo);
             assert!(!needs_voice_update(ControlTarget::ReservedTextureLfo));
         }
+    }
+
+    /// NRPN(0,1)は質感LFO退役で空いた欠番から`ChannelEffectRoute`へ再割り当てされている。
+    #[test]
+    fn channel_effect_route_address() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 1)), ControlTarget::ChannelEffectRoute);
+        assert!(!needs_voice_update(ControlTarget::ChannelEffectRoute));
     }
 
     #[test]

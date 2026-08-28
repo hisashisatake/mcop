@@ -1198,8 +1198,9 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 
 | 対象 | NRPN (MSB,LSB) | 値 |
 |---|---|---|
-| （欠番／`ReservedTextureLfo`） | 0, 0〜1 | 旧質感LFO Destination/Waveform。2026-08-20の退役に伴い欠番として予約（再利用しない、[質感LFO（廃止済み）](#質感lfo廃止済み)節参照） |
-| Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照） |
+| （欠番／`ReservedTextureLfo`） | 0, 0 | 旧質感LFO Destination。2026-08-20の退役に伴い欠番として予約（再利用しない、[質感LFO（廃止済み）](#質感lfo廃止済み)節参照） |
+| Channel Effect Route | 0, 1 | 0〜15。送信チャンネルの音声・エフェクト設定NRPN(0,2)〜(0,8)・CC91/93の適用先エフェクトスロットを選択する（既定0）。2026-08-28、質感LFOの欠番から新設（下記「エフェクトスロット」節参照） |
+| Reverb Type | 0, 2 | 0〜7（マスターエフェクトセクションのenum参照）。送信チャンネルのeffect_route_slotが指すスロットへ適用 |
 | Chorus Type | 0, 3 | 0〜7（マスターエフェクトセクションのenum参照） |
 | Reverb Time | 0, 4 | 0〜255 |
 | Chorus Mod Rate | 0, 5 | 0〜255 |
@@ -1225,6 +1226,17 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Gain FG Curve | 0, 33 | 0=線形 / 1=サイン風 |
 | CC2 Destination | 0, 34 | 0〜5（destination enum、下記参照。既定5=TLキャリア一括） |
 | CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
+
+**エフェクトスロット（2026-08-28新設）：**
+
+`MasterEffects`（Reverb/Chorus）はMIDIチャンネル数と同数（16個）のスロットを持つ。各MIDIチャンネルは
+NRPN(0,1) Channel Effect Routeで自分の音声・エフェクト設定NRPN(0,2)〜(0,8)・CC91/93の適用先スロット
+（既定0）を選択する。「エフェクト関連の設定はすべて送信したMIDIチャンネルのルーティング先スロットへ
+適用する」という1レジスタ統合方式で、NRPN(0,2)〜(0,8)・CC91/93はいずれも別途スロット選択レジスタを
+持たず、送信チャンネルの`effect_route_slot`が指すスロットへそのまま適用される。誰もNRPN(0,1)を送らな
+ければ全チャンネルがスロット0（＝従来の唯一の`MasterEffects`相当）へ集まるため、既存のSMF/プリセット/
+DAWオートメーションの出力はビット不変。op505-vstのDAWパラメーター9個（Reverb/Chorus関連）はスロット
+選択UIを持たないため常にスロット0固定。詳細はspec-fm.md 8章参照。
 
 **op505-vstのNRPNテーブル仕様（2026-08、フェーズ2実装時、`op505/vst/src/lib.rs`）：**
 

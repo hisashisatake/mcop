@@ -693,6 +693,11 @@ pub struct Op505Engine {
     /// pan_gain_l=pan_gain_r=1.0）はどちらもモノラル時代の`mix_buf`と各要素がビット単位で一致する）。
     mix_buf_l: Vec<f32>,
     mix_buf_r: Vec<f32>,
+    /// `render_routed`専用のスロット別L/R合成バッファ（`render`の`mix_buf_l/r`とは独立、
+    /// `render`のビット不変を保つため共用しない）。`Vec`の外側要素数=スロット数で、
+    /// 毎呼び出し`.clear()+.resize()`して使い回す（容量は保持されるので初回以降ヒープ確保なし）。
+    slot_mix_buf_l: Vec<Vec<f32>>,
+    slot_mix_buf_r: Vec<Vec<f32>>,
     /// TimeEgのテンポ同期（`sync_enabled`）に使うBPM。ホストDAWのTransport（VST）や
     /// タップテンポ（gesture-app）から`set_tempo()`経由で設定される。既定120。
     tempo_bpm: f32,
@@ -712,6 +717,8 @@ impl Op505Engine {
             max_voices: DEFAULT_MAX_VOICES,
             mix_buf_l: Vec::new(),
             mix_buf_r: Vec::new(),
+            slot_mix_buf_l: Vec::new(),
+            slot_mix_buf_r: Vec::new(),
             tempo_bpm: 120.0,
         }
     }
@@ -996,6 +1003,72 @@ impl Vco for Op505Engine {
                 }
             }
         }
+        self.channels.retain(|_, ch| !ch.is_idle());
+    }
+
+    /// `render`と同じミックスロジックを、ボイスの所属MIDIチャンネル（`id >> 7`）に応じて
+    /// `channel_slot`が指すスロットへ振り分けて行う。`render`本体は無改造（`mix_buf_l/r`ではなく
+    /// `slot_mix_buf_l/r`という独立のスクラッチを使う）。
+    fn render_routed(
+        &mut self,
+        slot_buffer: &mut [f32],
+        slot_stride: usize,
+        channel_slot: &[u8],
+        num_channels: usize,
+    ) {
+        let num_channels = num_channels.max(1);
+        let num_slots = if slot_stride == 0 { 0 } else { slot_buffer.len() / slot_stride };
+        if num_slots == 0 {
+            return;
+        }
+        let sample_rate = self.sample_rate;
+        let wave_tables = &self.wave_tables;
+        let tempo_bpm = self.tempo_bpm;
+        let frames = slot_stride.div_ceil(num_channels);
+
+        self.slot_mix_buf_l.resize_with(num_slots, Vec::new);
+        self.slot_mix_buf_r.resize_with(num_slots, Vec::new);
+        for buf in self.slot_mix_buf_l.iter_mut() {
+            buf.clear();
+            buf.resize(frames, 0.0);
+        }
+        for buf in self.slot_mix_buf_r.iter_mut() {
+            buf.clear();
+            buf.resize(frames, 0.0);
+        }
+
+        for (&id, ch) in self.channels.iter_mut() {
+            let midi_channel = id >> 7;
+            let slot = channel_slot.get(midi_channel).copied().unwrap_or(0) as usize;
+            let slot = if slot < num_slots { slot } else { 0 };
+            let (pan_l, pan_r) = (ch.pan_gain_l, ch.pan_gain_r);
+            let mix_l = &mut self.slot_mix_buf_l[slot];
+            let mix_r = &mut self.slot_mix_buf_r[slot];
+            for (l, r) in mix_l.iter_mut().zip(mix_r.iter_mut()) {
+                if ch.is_idle() {
+                    break;
+                }
+                let sample = ch.tick(sample_rate, wave_tables, tempo_bpm);
+                *l += sample * pan_l;
+                *r += sample * pan_r;
+            }
+        }
+
+        for slot in 0..num_slots {
+            let out = &mut slot_buffer[slot * slot_stride..(slot + 1) * slot_stride];
+            let mix_l = &self.slot_mix_buf_l[slot];
+            let mix_r = &self.slot_mix_buf_r[slot];
+            for (frame, (&l, &r)) in out.chunks_mut(num_channels).zip(mix_l.iter().zip(mix_r.iter())) {
+                if num_channels == 1 {
+                    frame[0] += (l + r) * 0.5;
+                } else {
+                    for (i, s) in frame.iter_mut().enumerate() {
+                        *s += if i % 2 == 0 { l } else { r };
+                    }
+                }
+            }
+        }
+
         self.channels.retain(|_, ch| !ch.is_idle());
     }
 }
@@ -1312,6 +1385,78 @@ mod tests {
         let mut buf = vec![0.0f32; 512];
         engine.render(&mut buf, 1);
         assert!(buf.iter().any(|&s| s != 0.0), "expected non-silent output");
+    }
+
+    // -----------------------------------------------------------------------
+    // render_routed — 複数エフェクトスロットへの経路分けレンダリング
+    // -----------------------------------------------------------------------
+
+    /// 全ボイスがスロット0に集まる既定状態（channel_slot全0）なら、`render_routed`のスロット0
+    /// 区間は`render`と完全にビット一致する（NRPN(0,1)を誰も送らなければ既存出力が
+    /// ビット不変であることの直接的な裏付け）。
+    #[test]
+    fn render_routed_single_slot_matches_render() {
+        let mut plain = Op505Engine::new(44100.0);
+        plain.set_patch(loud_patch(0));
+        plain.note_on(0, 440.0, 100);
+        plain.note_on(128, 550.0, 90); // 別MIDIチャンネル(id>>7==1)のボイス
+        let mut plain_out = vec![0.0f32; 1024];
+        plain.render(&mut plain_out, 2);
+
+        let mut routed = Op505Engine::new(44100.0);
+        routed.set_patch(loud_patch(0));
+        routed.note_on(0, 440.0, 100);
+        routed.note_on(128, 550.0, 90);
+        let mut slot_out = vec![0.0f32; 1024];
+        let channel_slot = [0u8; 16];
+        routed.render_routed(&mut slot_out, 1024, &channel_slot, 2);
+
+        assert_eq!(plain_out, slot_out);
+    }
+
+    /// ch0(id=0)をスロット0、ch1(id=128)をスロット1へ振り分けると、各スロットは
+    /// 「そのチャンネルだけを単独`render()`した波形」と一致する（MC-505型ルーティングの
+    /// 直接的な証明）。
+    #[test]
+    fn render_routed_splits_channels_into_separate_slots() {
+        let mut routed = Op505Engine::new(44100.0);
+        routed.set_patch(loud_patch(0));
+        routed.note_on(0, 440.0, 100); // ch0 -> slot0
+        routed.note_on(128, 550.0, 90); // ch1 -> slot1
+        let mut slot_buffer = vec![0.0f32; 512 * 2]; // 2スロット x 512サンプル(モノラル)
+        let mut channel_slot = [0u8; 16];
+        channel_slot[1] = 1;
+        routed.render_routed(&mut slot_buffer, 512, &channel_slot, 1);
+
+        let mut solo_ch0 = Op505Engine::new(44100.0);
+        solo_ch0.set_patch(loud_patch(0));
+        solo_ch0.note_on(0, 440.0, 100);
+        let mut solo_ch0_out = vec![0.0f32; 512];
+        solo_ch0.render(&mut solo_ch0_out, 1);
+
+        let mut solo_ch1 = Op505Engine::new(44100.0);
+        solo_ch1.set_patch(loud_patch(0));
+        solo_ch1.note_on(128, 550.0, 90);
+        let mut solo_ch1_out = vec![0.0f32; 512];
+        solo_ch1.render(&mut solo_ch1_out, 1);
+
+        assert_eq!(&slot_buffer[..512], &solo_ch0_out[..], "slot0はch0単独render()と一致するはず");
+        assert_eq!(&slot_buffer[512..], &solo_ch1_out[..], "slot1はch1単独render()と一致するはず");
+        assert!(solo_ch0_out.iter().any(|&s| s != 0.0), "ch0は非無音のはず");
+        assert!(solo_ch1_out.iter().any(|&s| s != 0.0), "ch1は非無音のはず");
+    }
+
+    /// `channel_slot`の値がスロット数を超えていてもパニックせず、スロット0へフォールバックする。
+    #[test]
+    fn render_routed_out_of_range_channel_slot_does_not_panic() {
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(loud_patch(0));
+        engine.note_on(0, 440.0, 100);
+        let mut slot_buffer = vec![0.0f32; 256]; // 1スロットのみ
+        let mut channel_slot = [0u8; 16];
+        channel_slot[0] = 200; // 存在しないスロット番号
+        engine.render_routed(&mut slot_buffer, 256, &channel_slot, 1);
+        assert!(slot_buffer.iter().any(|&s| s != 0.0), "スロット0へフォールバックして発音するはず");
     }
 
     // -----------------------------------------------------------------------

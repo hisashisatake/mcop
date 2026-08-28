@@ -14,7 +14,7 @@ pub mod rpn;
 pub mod sound_controller;
 pub mod value;
 
-pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget};
+pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget, EFFECT_SLOT_COUNT};
 pub use control::{control_target, needs_voice_update, ControlTarget};
 pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
 pub use mono::{MonoNoteOff, MonoNoteOn, MonoState};

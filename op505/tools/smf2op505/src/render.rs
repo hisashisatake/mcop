@@ -23,8 +23,11 @@
 //!   - CC72/73/75: Release/Attack/Decay Time（保持区間をピーク検出でAttack/Decay/Releaseへ
 //!     分割し、キャリアのみの各段timeへ時間スケールを掛ける）
 //!   - CC64 Sustain / CC66 Sostenuto / CC67 Soft Pedal（ホールドフラグ方式）
-//!   - CC91/93 + NRPN(0,2)〜(0,8): マスターエフェクト（Reverb/Chorus、`MasterEffects`）
-//!   - NRPN(0,0)〜(0,27)/(0,34)/(0,35): 質感LFO・Algorithm/Waveform/Filter/AT/OP F-Number/CC2,4 Destination
+//!   - CC91/93 + NRPN(0,2)〜(0,8): マスターエフェクト（Reverb/Chorus、`MasterEffects`）。
+//!     送信チャンネルの`effect_route_slot`（NRPN(0,1) Channel Effect Route）が指すスロットへ適用
+//!   - NRPN(0,1): Channel Effect Route（送信チャンネルの音声・エフェクト設定・CC91/93の
+//!     適用先スロットを選択、既定はスロット0）
+//!   - NRPN(0,0)・(0,22)〜(0,27)/(0,34)/(0,35): 質感LFO・Algorithm/Waveform/Filter/AT/OP F-Number/CC2,4 Destination
 //!   - Channel Pressure / Poly Key Pressure: AT Destination（NRPN(0,16)/(0,17)）
 //!   - CC103〜106: Operator Key On/Off
 //!   - CC120 All Sound Off（即時消音）/ CC121 Reset All Controllers（③層のみ）/
@@ -45,6 +48,10 @@ use crate::smf::{parse_smf, EvKind};
 /// MIDIノート番号の総数（0〜127）。ノート番号をそのままボイスIDの下位に使うため、
 /// 発音中ボイス走査ループの上限に使う（`op505-vst`の`MIDI_NOTE_COUNT`と同じ）。
 const MIDI_NOTE_COUNT: usize = 128;
+
+/// エフェクトスロット数。`op505_midi::EFFECT_SLOT_COUNT`（クランプ境界の一元管理元）と
+/// 常に揃える。
+const EFFECT_SLOT_COUNT: usize = op505_midi::EFFECT_SLOT_COUNT as usize;
 
 /// CC7(Channel Volume) と CC11(Expression) の値（0〜127）から GM2 準拠のゲインを計算する
 /// （`op505-vst`と同一式。`op505-midi`には置かない小関数のため、op505-vstと同様ここで複製する）。
@@ -202,21 +209,37 @@ fn note_on_voice(
     note_on_voice_core(engine, chi, note, vel, channels, bank, drums);
 }
 
-/// レンダリング済みサンプル位置を `target` まで進め、その区間をマスターエフェクトに通す。
-/// チャンクはイベント境界に揃うため、エフェクトのオートメーションがサンプル正確に反映される。
+/// レンダリング済みサンプル位置を `target` まで進める。各MIDIチャンネルの`effect_route_slot`
+/// （NRPN(0,1) Channel Effect Route、既定0）に応じてエンジン出力をスロット別に振り分け、
+/// スロットごとに対応する`MasterEffects`を適用してから全スロットを合成する。チャンクは
+/// イベント境界に揃うため、エフェクトのオートメーションがサンプル正確に反映される。
+///
+/// 誰もNRPN(0,1)を送らなければ全チャンネルの`effect_route_slot`は0のままなので、
+/// 全音声が`effects[0]`だけを通り、この機能追加前の単一`MasterEffects`と同じ出力になる
+/// （ビット不変、`no_effect_routing_is_bit_identical_across_runs`で検証）。
 fn render_chunk(
     engine: &mut Op505Engine,
-    effects: &mut MasterEffects,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    channels: &[ChannelState],
     out: &mut Vec<f32>,
     rendered: &mut usize,
     target: usize,
 ) {
     if target > *rendered {
         let n = target - *rendered;
-        let mut buf = vec![0.0f32; n];
-        engine.render(&mut buf, 1);
-        effects.process(&mut buf, 1);
-        out.extend_from_slice(&buf);
+        let channel_slot: [u8; 16] = std::array::from_fn(|i| channels[i].effect_route_slot);
+        let mut slot_buffer = vec![0.0f32; n * EFFECT_SLOT_COUNT];
+        engine.render_routed(&mut slot_buffer, n, &channel_slot, 1);
+
+        let mut mixed = vec![0.0f32; n];
+        for (slot, fx) in effects.iter_mut().enumerate() {
+            let buf = &mut slot_buffer[slot * n..(slot + 1) * n];
+            fx.process(buf, 1);
+            for (m, s) in mixed.iter_mut().zip(buf.iter()) {
+                *m += s;
+            }
+        }
+        out.extend_from_slice(&mixed);
         *rendered = target;
     }
 }
@@ -263,7 +286,10 @@ pub fn render_smf_with_drums(
     }
     // SMF内蔵のマスターエフェクト（CC91/93・NRPN(0,2)〜(0,8)で駆動）。既定 send=0 で透過。
     // main.rs の `--reverb-*`（op505-tools::fx）はこれとは独立した後段の診断用リバーブ。
-    let mut effects = MasterEffects::new(sample_rate);
+    // エフェクトスロット数分だけ持ち、各チャンネルの`effect_route_slot`（NRPN(0,1)）が
+    // 指すスロットへルーティングする（誰も送らなければ全チャンネルがslot 0へ集まる）。
+    let mut effects: [MasterEffects; EFFECT_SLOT_COUNT] =
+        std::array::from_fn(|_| MasterEffects::new(sample_rate));
     let mut out: Vec<f32> = Vec::new();
 
     let rhythm_kits_available = drums.map(|d| d.has_bank_in(RHYTHM_BANK_RANGE)).unwrap_or(false);
@@ -287,12 +313,12 @@ pub fn render_smf_with_drums(
         // 時短打ち切り: 上限に達したらそこまでレンダリングして以降のイベントは無視する。
         if let Some(maxs) = max_samples {
             if target >= maxs {
-                render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, maxs);
+                render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, maxs);
                 eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
                 return Ok(out);
             }
         }
-        render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, target);
+        render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, target);
         peak_voices = peak_voices.max(engine.active_voice_count());
 
         match e.kind {
@@ -371,7 +397,7 @@ pub fn render_smf_with_drums(
     if let Some(maxs) = max_samples {
         tail_target = tail_target.min(maxs);
     }
-    render_chunk(&mut engine, &mut effects, &mut out, &mut rendered, tail_target);
+    render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, tail_target);
     peak_voices = peak_voices.max(engine.active_voice_count());
     eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
     Ok(out)
@@ -382,7 +408,7 @@ pub fn render_smf_with_drums(
 #[allow(clippy::too_many_arguments)]
 fn handle_control_change(
     engine: &mut Op505Engine,
-    effects: &mut MasterEffects,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
     channels: &mut [ChannelState],
     chi: usize,
     cc: u8,
@@ -471,22 +497,25 @@ fn handle_control_change(
         101 => channels[chi].rpn.set_rpn_msb(cc_to_u7(val)),
         // CC6 Data Entry MSB: 選択中の RPN/NRPN へ値を適用。エフェクト系NRPN(Reverb/Chorus)は
         // op505-midiがsound-core型を扱えないため`DataEntryOutcome::Effect`で返り、ここで
-        // MasterEffectsへ適用する。
+        // 送信チャンネルの`effect_route_slot`が指すMasterEffectsへ適用する。
         6 => match channels[chi].apply_data_entry(val) {
             DataEntryOutcome::StateChanged { voice_update } => {
                 if voice_update {
                     apply_live(engine, chi, &channels[chi], bank, drums);
                 }
             }
-            DataEntryOutcome::Effect(target, value) => match target {
-                EffectControlTarget::ReverbType => effects.set_reverb_type(ReverbType::from_u8(value)),
-                EffectControlTarget::ChorusType => effects.set_chorus_type(ChorusType::from_u8(value)),
-                EffectControlTarget::ReverbTime => effects.set_reverb_time(value),
-                EffectControlTarget::ChorusModRate => effects.set_chorus_mod_rate(value),
-                EffectControlTarget::ChorusModDepth => effects.set_chorus_mod_depth(value),
-                EffectControlTarget::ChorusFeedback => effects.set_chorus_feedback(value),
-                EffectControlTarget::ChorusSendToReverb => effects.set_chorus_send_to_reverb(value),
-            },
+            DataEntryOutcome::Effect(slot, target, value) => {
+                let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+                match target {
+                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
+                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
+                    EffectControlTarget::ReverbTime => fx.set_reverb_time(value),
+                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(value),
+                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
+                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
+                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
+                }
+            }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
         38 => {
@@ -526,9 +555,9 @@ fn handle_control_change(
             engine.set_pitch_bend_group(chi, 0.0);
             apply_live(engine, chi, &channels[chi], bank, drums);
         }
-        // CC91/93: マスターエフェクト送りレベル（master）。
-        91 => effects.set_reverb_send(cc_to_u8(val)),
-        93 => effects.set_chorus_send(cc_to_u8(val)),
+        // CC91/93: エフェクト送りレベル。送信チャンネルの`effect_route_slot`が指すスロットへ適用。
+        91 => effects[channels[chi].effect_route_slot as usize].set_reverb_send(cc_to_u8(val)),
+        93 => effects[channels[chi].effect_route_slot as usize].set_chorus_send(cc_to_u8(val)),
         // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため）。
         102 => {
             channels[chi].program_change(cc_to_u7(val));
@@ -903,6 +932,90 @@ mod tests {
         let smf = build_smf(&events);
         let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "レガートのlast-note priorityでの発音が無音");
+    }
+
+    // --- エフェクトルーティング（NRPN(0,1) Channel Effect Route）E2Eテスト ---
+
+    /// NRPN(0,1)を一切送らないSMF（`mixed_cc_nrpn_smoke`と同じ混在CC/NRPN列、CC91・
+    /// NRPN(0,2)〜(0,9)を含む）は決定論的であるはず（全チャンネルの`effect_route_slot`が
+    /// 既定0のまま＝全音声が`effects[0]`だけを通るため、単一MasterEffects時代と同じ経路）。
+    /// `no_portamento_cc_is_bit_identical_across_runs`と同型の直接証明。
+    #[test]
+    fn no_effect_routing_is_bit_identical_across_runs() {
+        let bank = vibrato_bank();
+        let events = vec![
+            (0u32, vec![0x90, 60, 100]),
+            (0, vec![0xB0, 99, 0]),
+            (0, vec![0xB0, 98, 9]), // NRPN LSB=9（Algorithm）
+            (0, vec![0xB0, 6, 7]),
+            (10, vec![0xB0, 91, 60]), // CC91 Reverb Send
+            (0, vec![0xB0, 99, 0]),
+            (0, vec![0xB0, 98, 2]), // NRPN LSB=2（Reverb Type）
+            (0, vec![0xB0, 6, 3]),
+            (240, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf_a = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
+        let buf_b = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
+        assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "出力が無音");
+        assert_eq!(buf_a, buf_b);
+    }
+
+    /// ch1をNRPN(0,1)でスロット1へルーティングすると、ch0のCC91 Reverb Send（スロット0のみを
+    /// 設定）はch1の音に影響しなくなる。ルーティング後の合成波形は「ch0だけをスロット0で
+    /// リバーブ込みで単独render()した波形」と「ch1だけをエフェクト無しで単独render()した波形」の
+    /// 単純な加算と一致するはず（各スロットの処理は独立、最終合成は加算のみのため）。
+    /// 対照として、ルーティングしなければch1もch0と同じスロット0のリバーブを浴びてしまい、
+    /// この加算とは一致しないことも確認する（テスト自体が無意味でないことの確認）。
+    #[test]
+    fn channel_effect_route_sends_channel_to_a_separate_slot() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let tail = 0.3;
+        let max_secs = Some(1.5);
+
+        let events_ch0_alone = vec![
+            (0u32, vec![0xB0, 91, 100]), // CC91 Reverb Send（ch0→スロット0既定）
+            (0, vec![0x90, 60, 100]),
+            (480, vec![0x80, 60, 0]),
+        ];
+        let buf_ch0 = render_smf(&build_smf(&events_ch0_alone), &bank, sr, tail, max_secs, None).unwrap();
+
+        let events_ch1_alone = vec![
+            (0u32, vec![0x91, 64, 100]), // エフェクト設定なし＝ドライ
+            (480, vec![0x81, 64, 0]),
+        ];
+        let buf_ch1 = render_smf(&build_smf(&events_ch1_alone), &bank, sr, tail, max_secs, None).unwrap();
+
+        let events_routed = vec![
+            (0u32, vec![0xB1, 99, 0]), // ch1: NRPN MSB=0
+            (0, vec![0xB1, 98, 1]),    // ch1: NRPN LSB=1（Channel Effect Route）
+            (0, vec![0xB1, 6, 1]),     // ch1: Data Entry=1 → effect_route_slot=1
+            (0, vec![0xB0, 91, 100]),  // ch0: CC91 Reverb Send（スロット0）
+            (0, vec![0x90, 60, 100]),  // ch0 Note On
+            (0, vec![0x91, 64, 100]),  // ch1 Note On
+            (480, vec![0x80, 60, 0]),  // ch0 Note Off
+            (0, vec![0x81, 64, 0]),    // ch1 Note Off
+        ];
+        let buf_routed = render_smf(&build_smf(&events_routed), &bank, sr, tail, max_secs, None).unwrap();
+
+        let events_unrouted = vec![
+            (0u32, vec![0xB0, 91, 100]),
+            (0, vec![0x90, 60, 100]),
+            (0, vec![0x91, 64, 100]),
+            (480, vec![0x80, 60, 0]),
+            (0, vec![0x81, 64, 0]),
+        ];
+        let buf_unrouted = render_smf(&build_smf(&events_unrouted), &bank, sr, tail, max_secs, None).unwrap();
+
+        assert!(buf_ch0.iter().any(|s| s.abs() > 1e-4), "ch0単独出力が無音");
+        assert!(buf_ch1.iter().any(|s| s.abs() > 1e-4), "ch1単独出力が無音");
+        assert_eq!(buf_routed.len(), buf_ch0.len());
+        assert_eq!(buf_routed.len(), buf_ch1.len());
+
+        let summed: Vec<f32> = buf_ch0.iter().zip(buf_ch1.iter()).map(|(&a, &b)| a + b).collect();
+        assert_eq!(buf_routed, summed, "ルーティング後はch0(リバーブ込み)+ch1(ドライ)の単純加算と一致するはず");
+        assert_ne!(buf_unrouted, summed, "ルーティングしなければch1もch0のリバーブを浴び、単純加算とは一致しないはず");
     }
 
     // --- MIDIチャンネル独立性E2Eテスト ---

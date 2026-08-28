@@ -31,6 +31,22 @@ pub trait Vco: Send {
     /// `output`にnum_channels（ステレオ等）でインターリーブ出力する（既存信号へ加算）。
     fn render(&mut self, output: &mut [f32], num_channels: usize);
 
+    /// `render`の複数エフェクトスロット版。全ボイスを単一バッファへ合算する`render`と異なり、
+    /// 各ボイスの所属MIDIチャンネル（`channel >> 7`）ごとに`channel_slot`が指すスロットへ
+    /// 振り分けてレンダリングする（MC-505型のチャンネル別エフェクトルーティング向け）。
+    ///
+    /// スロット`s`の出力は`slot_buffer[s*slot_stride .. (s+1)*slot_stride]`
+    /// （`num_channels`でインターリーブ、`render`と同じく既存信号へ加算）。スロット数は
+    /// `slot_buffer.len() / slot_stride`から決まる。`channel_slot[midi_channel]`が
+    /// 各MIDIチャンネルの出力先スロット番号（範囲外・配列長不足はスロット0へフォールバックする）。
+    fn render_routed(
+        &mut self,
+        slot_buffer: &mut [f32],
+        slot_stride: usize,
+        channel_slot: &[u8],
+        num_channels: usize,
+    );
+
     /// 発音中チャンネルのピッチベンド量（セント）を設定する。
     fn set_pitch_bend(&mut self, channel: usize, cents: f32);
 

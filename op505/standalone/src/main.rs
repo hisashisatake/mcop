@@ -18,7 +18,9 @@
 //! ディレクトリに置くだけでよい。判定・アドレス解決は`op505_midi::ChannelProgramState`参照）。
 //! 対応イベント: Note On/Off・Program Change・Pitch Bend・Channel/Poly Pressure・
 //! CC0/1/2/4/7/10/11/32/64/66/67/71/72/73/74/75/76/77/78/91/93/98〜101/103〜106/120/121/123、
-//! RPN(0,0)/(0,5)、NRPN(0,2)〜(0,21)/(0,34)/(0,35)。
+//! RPN(0,0)/(0,5)、NRPN(0,1)〜(0,21)/(0,34)/(0,35)。NRPN(0,1) Channel Effect Routeは
+//! 送信チャンネルの音声・エフェクト設定NRPN(0,2)〜(0,8)・CC91/93の適用先エフェクトスロットを
+//! 選択する（既定はスロット0、詳細はspec-fm.md 8章）。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -37,6 +39,9 @@ type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 /// MIDIノート番号の総数（0〜127）。発音中ボイス走査ループの上限に使う
 /// （`op505-vst`/`op505/tools/smf2op505`の`MIDI_NOTE_COUNT`と同じ）。
 const MIDI_NOTE_COUNT: usize = 128;
+
+/// エフェクトスロット数。`op505_midi::EFFECT_SLOT_COUNT`（クランプ境界の一元管理元）と揃える。
+const EFFECT_SLOT_COUNT: usize = op505_midi::EFFECT_SLOT_COUNT as usize;
 
 /// MIDIチャンネル(0〜15)とノート番号からVco::note_on/note_offの`channel`引数(ボイスID)を作る。
 /// `op505/tools/smf2op505`のrender.rsと同じ規約（`channel_index * 128 + note`）に揃えている。
@@ -116,7 +121,11 @@ fn main() {
     let stream_config: cpal::StreamConfig = supported.into();
 
     let mut engine = Op505Engine::new(sample_rate);
-    let mut effects = MasterEffects::new(sample_rate);
+    // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングする。
+    let mut effects: [MasterEffects; EFFECT_SLOT_COUNT] = std::array::from_fn(|_| MasterEffects::new(sample_rate));
+    // `render_routed`のスロット別出力スクラッチ。cpalコールバックの`output`長に合わせて
+    // grow-onlyでリサイズし、以降は使い回す（オーディオスレッドでの反復ヒープ確保を避ける）。
+    let mut slot_buf: Vec<f32> = Vec::new();
     let (presets, default_patch) = load_presets();
     engine.set_patch(default_patch);
     let mut state = MidiState::new(presets, default_patch);
@@ -127,8 +136,24 @@ fn main() {
             move |output: &mut [f32], _| {
                 drain_midi_queue(&midi_queue, &mut engine, &mut effects, &mut state);
                 output.fill(0.0);
-                engine.render(output, num_channels);
-                effects.process(output, num_channels);
+
+                let interleaved_len = output.len();
+                let slot_total_len = interleaved_len * EFFECT_SLOT_COUNT;
+                if slot_total_len > slot_buf.len() {
+                    slot_buf.resize(slot_total_len, 0.0);
+                }
+                let slot_out = &mut slot_buf[..slot_total_len];
+                slot_out.fill(0.0);
+
+                let channel_slot: [u8; 16] = std::array::from_fn(|i| state.channels[i].effect_route_slot);
+                engine.render_routed(slot_out, interleaved_len, &channel_slot, num_channels);
+                for (slot, fx) in effects.iter_mut().enumerate() {
+                    let s = &mut slot_out[slot * interleaved_len..(slot + 1) * interleaved_len];
+                    fx.process(s, num_channels);
+                    for (o, v) in output.iter_mut().zip(s.iter()) {
+                        *o += v;
+                    }
+                }
             },
             |err| eprintln!("audio error: {err}"),
             None,
@@ -162,7 +187,12 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
 }
 
 /// キューに溜まったMIDIメッセージを全て取り出し、エンジンへ適用する。
-fn drain_midi_queue(queue: &MidiQueue, engine: &mut Op505Engine, effects: &mut MasterEffects, state: &mut MidiState) {
+fn drain_midi_queue(
+    queue: &MidiQueue,
+    engine: &mut Op505Engine,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    state: &mut MidiState,
+) {
     let mut pending = queue.lock().unwrap();
     while let Some(bytes) = pending.pop_front() {
         handle_midi_message(engine, effects, state, &bytes);
@@ -172,7 +202,12 @@ fn drain_midi_queue(queue: &MidiQueue, engine: &mut Op505Engine, effects: &mut M
 /// 1つのMIDIメッセージを解釈する。メッセージ長はステータスバイトごとに異なる
 /// （Note On/Off・Pitch Bend・CCは3バイト、Program Change・Channel Pressureは2バイト）ため、
 /// 固定長スライスパターンではなくステータス別に必要な長さを都度チェックする。
-fn handle_midi_message(engine: &mut Op505Engine, effects: &mut MasterEffects, state: &mut MidiState, bytes: &[u8]) {
+fn handle_midi_message(
+    engine: &mut Op505Engine,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    state: &mut MidiState,
+    bytes: &[u8],
+) {
     let &[status, ..] = bytes else { return };
     let chi = (status & 0x0F) as usize;
 
@@ -353,7 +388,7 @@ fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
 /// Program Change選択済みの単一プリセット集合を持つ）。
 fn handle_control_change(
     engine: &mut Op505Engine,
-    effects: &mut MasterEffects,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
     state: &mut MidiState,
     chi: usize,
     cc: u8,
@@ -440,22 +475,25 @@ fn handle_control_change(
         101 => state.channels[chi].rpn.set_rpn_msb(cc_to_u7(val)),
         // CC6 Data Entry MSB: 選択中の RPN/NRPN へ値を適用。エフェクト系NRPN(Reverb/Chorus)は
         // op505-midiがsound-core型を扱えないため`DataEntryOutcome::Effect`で返り、ここで
-        // MasterEffectsへ適用する。
+        // 送信チャンネルのeffect_route_slotが指すMasterEffectsへ適用する。
         6 => match state.channels[chi].apply_data_entry(val) {
             DataEntryOutcome::StateChanged { voice_update } => {
                 if voice_update {
                     apply_live(engine, state, chi);
                 }
             }
-            DataEntryOutcome::Effect(target, value) => match target {
-                EffectControlTarget::ReverbType => effects.set_reverb_type(ReverbType::from_u8(value)),
-                EffectControlTarget::ChorusType => effects.set_chorus_type(ChorusType::from_u8(value)),
-                EffectControlTarget::ReverbTime => effects.set_reverb_time(value),
-                EffectControlTarget::ChorusModRate => effects.set_chorus_mod_rate(value),
-                EffectControlTarget::ChorusModDepth => effects.set_chorus_mod_depth(value),
-                EffectControlTarget::ChorusFeedback => effects.set_chorus_feedback(value),
-                EffectControlTarget::ChorusSendToReverb => effects.set_chorus_send_to_reverb(value),
-            },
+            DataEntryOutcome::Effect(slot, target, value) => {
+                let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+                match target {
+                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
+                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
+                    EffectControlTarget::ReverbTime => fx.set_reverb_time(value),
+                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(value),
+                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
+                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
+                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
+                }
+            }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
         38 => {
@@ -493,9 +531,9 @@ fn handle_control_change(
             engine.set_pitch_bend_group(chi, 0.0);
             apply_live(engine, state, chi);
         }
-        // CC91/93: マスターエフェクト送りレベル（master）。
-        91 => effects.set_reverb_send(cc_to_u8(val)),
-        93 => effects.set_chorus_send(cc_to_u8(val)),
+        // CC91/93: エフェクト送りレベル。送信チャンネルのeffect_route_slotが指すスロットへ適用。
+        91 => effects[state.channels[chi].effect_route_slot as usize].set_reverb_send(cc_to_u8(val)),
+        93 => effects[state.channels[chi].effect_route_slot as usize].set_chorus_send(cc_to_u8(val)),
         // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
         103..=106 => {
             let op_index = (cc - 103) as usize;
