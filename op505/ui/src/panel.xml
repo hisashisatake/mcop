@@ -159,7 +159,7 @@
       <header>
         <title>OP {index+1}</title>
         <readout compute="mul-fine-ratio" args="mul,op_fine_tune" format="×{value:.2}"
-          tooltip="MUL×FINEの実効周波数比（DT1は含まない）"/>
+          tooltip="Effective frequency ratio of MUL×FINE (excludes DT1)"/>
       </header>
       <row justify="start" gap="spacing">
         <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>

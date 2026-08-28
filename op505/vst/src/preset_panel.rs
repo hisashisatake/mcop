@@ -36,7 +36,23 @@ pub(crate) struct PresetSession {
     pending_open: Option<PendingOpen>,
     /// Save Asファイル保存ダイアログの結果待ち（`request_save_as`/`poll_pending_save_as`参照）。
     pending_save_as: Option<PendingSaveAs>,
+    /// 直近の操作エラー（担当ファイルが無いbankでの「+ New Voice」等）と表示開始時刻。
+    /// モーダルダイアログは描画コールバック内で同期的に出すとREAPERごとクラッシュするため
+    /// （Delete/Open/Save Asと同じ理由）使えず、egui内で完結する一時テキスト表示で代替する
+    /// （`draw_presets_panel`が`ERROR_DISPLAY_DURATION`経過で自動的に消す）。
+    last_error: Option<(String, std::time::Instant)>,
+    /// PRESETSリストで実際にユーザーが（またはOpen/Save As/+ New Voiceが）エントリーを選択
+    /// したか。falseの間はリストのどの行もハイライトしない。`sync_display_to_registry`は
+    /// ファイル名・音色名の表示だけを合わせDAWパラメーターには触れないため、ここがfalseのままだと
+    /// 「先頭エントリーが選択されているように見えるのにDAWパラメーターが違う」という誤解を
+    /// 避けられる（2026-08-28、当初は新規Add直後デフォルト値なら実際に適用する案を試したが、
+    /// ユーザー指摘により「選択状態そのものを見せない」方針へ変更。詳細はmemory
+    /// `project_vst_preset_registry`「発見された挙動ギャップ」節参照）。
+    has_selection: bool,
 }
+
+/// `PresetSession::last_error`を表示し続ける時間。
+const ERROR_DISPLAY_DURATION: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Delete確認中に確認先を固定するための情報。ダイアログ表示中にBank欄が操作された場合でも
 /// 削除対象がずれないよう、リクエスト時点の(bank, program)を保持する。
@@ -74,6 +90,8 @@ impl PresetSession {
             pending_delete: None,
             pending_open: None,
             pending_save_as: None,
+            last_error: None,
+            has_selection: false,
         }
     }
 
@@ -107,6 +125,7 @@ impl PresetSession {
         self.program = first.program;
         self.patch_name = first.name.clone();
         self.unsaved = false;
+        self.has_selection = true;
         Some(first)
     }
 
@@ -116,6 +135,7 @@ impl PresetSession {
         self.program = program;
         self.patch_name = patch_name;
         self.unsaved = false;
+        self.has_selection = true;
     }
 
     /// 別ファイルを読み込んだ（Open）、または別ファイルへ書き出した（Save As）ときに呼ぶ。
@@ -124,6 +144,7 @@ impl PresetSession {
         self.patch_name = patch_name;
         self.file_name = file_name;
         self.unsaved = false;
+        self.has_selection = true;
     }
 
     /// 現在の担当ファイルへ上書き保存した（Save）ときに呼ぶ。program/patch_nameは変わらない。
@@ -134,9 +155,13 @@ impl PresetSession {
 
     /// エディタ生成直後、今のbankに担当ファイルが既にあればファイル名・音色名の**表示だけ**を
     /// 合わせる。`apply_entry`は呼ばない＝DAWパラメーター（プロジェクトに保存済みのノブ値）には
-    /// 一切触れない。gesture-appは起動時にパッチも実際に適用するが、VSTでは「エディタを開いた
-    /// だけでプロジェクトの現在の音がプリセット内容に上書きされる」事故を避けるため、この非対称は
-    /// 意図的（ユーザー確認済み、2026-08-28）。
+    /// 一切触れない。`has_selection`はfalseのまま維持する＝PRESETSリストはどの行もハイライト
+    /// しない（表示上「選択されている」ように見えるとDAWパラメーターと一致していることを
+    /// 期待させてしまうため）。gesture-appは起動時にパッチも実際に適用するが、VSTでは
+    /// 「エディタを開いただけでプロジェクトの現在の音がプリセット内容に上書きされる」事故を
+    /// 避けるため、この非対称は意図的（ユーザー確認済み、2026-08-28。当初は新規Add直後
+    /// デフォルト値なら実際に適用する案を試したが、それでも「選択済みなのにパラメーターが違う」
+    /// 違和感は残るとユーザーから指摘があり、「選択状態を見せない」方針へ変更）。
     fn sync_display_to_registry(&mut self) {
         let Some(bank_file) = self.registry.get(&self.bank) else { return };
         let Some(entry) = bank_file.entries().first() else { return };
@@ -290,11 +315,20 @@ fn handle_add_new_voice(
 ) {
     let source_patch =
         if copy_current { build_patch(params, &params.egs.read().expect("Poisoned RwLock on read")) } else { Op505Patch::default() };
-    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return };
+    let Some(bank_file) = session.registry.get_mut(&session.bank) else {
+        // gesture-app（`op505_presets.rs`の`op505_add_preset`）と同じ制約：担当ファイルが無い
+        // bankでは追加できない（1バンク=1ファイル前提、先にOpen/Save Asでファイルを紐付ける
+        // 必要がある）。gesture-app側はエラーダイアログを出すが、VST側は同期的なモーダルが
+        // 使えないため一時テキスト表示で代替する（2026-08-28、以前は無言でreturnしていた）。
+        session.last_error =
+            Some(("This bank has no file yet. Use Open or Save As first.".to_string(), std::time::Instant::now()));
+        return;
+    };
     let Ok(entry) = bank_file.add_new_voice(source_patch) else { return };
     if bank_file.save().is_err() {
         return;
     }
+    session.last_error = None;
     publish_bank(shared, dirty, bank_file);
     apply_entry(params, setter, &entry, false);
     session.select_entry(entry.program, entry.name);
@@ -318,8 +352,8 @@ fn request_delete(session: &mut PresetSession) {
         let confirmed = matches!(
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Warning)
-                .set_title("音色の削除")
-                .set_description(format!("音色「{:03} {}」を削除しますか？", program, name))
+                .set_title("Delete Voice")
+                .set_description(format!("Delete voice \"{:03} {}\"?", program, name))
                 .set_buttons(rfd::MessageButtons::YesNo)
                 .show(),
             rfd::MessageDialogResult::Yes
@@ -468,6 +502,21 @@ pub(crate) fn draw_presets_panel(
     }
     ui.separator();
 
+    // 「+ New Voice」等の操作エラー（担当ファイルが無いbank等）を一定時間だけ表示する。
+    // モーダルダイアログは描画コールバック内で同期的に出すとREAPERごとクラッシュするため使えない
+    // （Delete/Open/Save Asと同じ理由）。ScrollAreaより前に置く必要がある点に注意
+    // （`auto_shrink([false,false])`の罠、memory `project_preset_list_scrollbar_and_add_delete`）。
+    if let Some((msg, shown_at)) = &session.last_error {
+        let elapsed = shown_at.elapsed();
+        if elapsed < ERROR_DISPLAY_DURATION {
+            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), msg);
+            // 操作が無く再描画が起きない場合でも確実に消えるよう、残り時間ぶんの再描画を予約する。
+            ui.ctx().request_repaint_after(ERROR_DISPLAY_DURATION - elapsed);
+        } else {
+            session.last_error = None;
+        }
+    }
+
     // Deleteキーのみで削除する（gesture-appと同じ、専用ボタンは置かない）。テキスト入力中は
     // 文字削除と衝突するため無効化する。DAW環境によってはDeleteキーがDAW自身のショートカット
     // （選択アイテム削除等）に奪われる可能性があるが、gesture-app版とのUI統一を優先する
@@ -481,7 +530,7 @@ pub(crate) fn draw_presets_panel(
     egui::ScrollArea::vertical().id_salt("presets").auto_shrink([false, false]).show(ui, |ui| {
         for entry in session.entries().to_vec() {
             let label = format!("{:03} {}", entry.program, entry.name);
-            let selected = entry.program == session.program;
+            let selected = session.has_selection && entry.program == session.program;
             if ui.selectable_label(selected, &label).clicked() {
                 let keep_fg = ui.input(|i| i.modifiers.shift);
                 apply_entry(params, setter, &entry, keep_fg);
@@ -607,6 +656,10 @@ mod tests {
         assert_eq!(session.patch_name, "Organ");
         assert_eq!(session.program, 3, "先頭エントリーのprogramへ合わせるはず（apply_entryは呼ばない＝DAWパラメーターは不変）");
         assert!(!session.unsaved);
+        assert!(
+            !session.has_selection,
+            "has_selectionはfalseのままのはず（PRESETSリストのハイライトを表示しない、DAWパラメーターと一致しない選択済み表示による誤解を避けるため）"
+        );
     }
 
     #[test]
@@ -615,5 +668,13 @@ mod tests {
         session.sync_display_to_registry();
         assert_eq!(session.file_name, None, "担当ファイルが無ければ(unsaved)表示のままのはず");
         assert_eq!(session.program, 0);
+    }
+
+    #[test]
+    fn select_entry_sets_has_selection() {
+        let mut session = PresetSession::new(Op505BankRegistry::new());
+        assert!(!session.has_selection, "初期状態はfalseのはず");
+        session.select_entry(1, "B".to_string());
+        assert!(session.has_selection, "実際にエントリーを選ぶとtrueになるはず");
     }
 }

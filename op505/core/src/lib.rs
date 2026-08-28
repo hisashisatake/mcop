@@ -312,7 +312,7 @@ fn default_fixed_note_fine() -> u8 {
 /// 段データがそのまま復元されるため、末尾の段だけ0埋めのままだと「全開→無音」の落差が生じる。
 /// `stage_count=0`はOP1〜4 EGでは「1として扱う」特殊値だが、Gain FG適用箇所（`Voice::tick`）
 /// だけが「無効」の意味を持つ設計（詳細は`docs/timeeg-fg-disable-plan.md`）。
-fn default_gain_fg() -> Op505GainFg {
+pub fn default_gain_fg() -> Op505GainFg {
     TimeEgParams {
         stages: [TimeStage { time: 0, level: 255, curve: 0 }; sound_core::MAX_STAGES],
         stage_count: 0,

@@ -84,7 +84,11 @@ impl Default for Op505EgBank {
             operators: [eg; 4],
             pitch_fg: neutral_fg,
             cutoff_fg: neutral_fg,
-            gain_fg: eg,
+            // Gain FGはオペレーターEG用の`eg`（STAGES=2）ではなく専用の透過既定
+            // （STAGES=0＝無効化、`Op505ChannelParams::default()`が使うものと同じ）を使う。
+            // 以前は`eg`を誤って流用しており、新規Add直後のGain FGだけSTAGES=2/RELが立って
+            // 見える不整合があった（ユーザー指摘、2026-08-28）。
+            gain_fg: op505_core::default_gain_fg(),
         }
     }
 }

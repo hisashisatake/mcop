@@ -857,7 +857,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     }
     response.context_menu(|ui| {
         let Some(target) = ui.memory(|m| m.data.get_temp::<CtxTarget>(ctx_id)) else {
-            ui.label("(対象なし)");
+            ui.label("(no target)");
             return;
         };
         // 0を許すプロファイル（FG）は右クリック削除でも0（無効状態）まで減らせる
@@ -870,7 +870,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
         if let Some(stage) = curve_stage {
             let curve_handle = TimeEgBoolFieldHandle::new(handle, TimeEgBoolField::StageCurve(stage));
             let mut curve_on = curve_handle.value();
-            if ui.checkbox(&mut curve_on, "カーブ: レイズドコサイン").changed() {
+            if ui.checkbox(&mut curve_on, "Curve: Raised Cosine").changed() {
                 curve_handle.begin_edit();
                 curve_handle.set(curve_on);
                 curve_handle.end_edit();
@@ -879,7 +879,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
         }
         match target {
             CtxTarget::Vertex(stage) => {
-                if n > min_stages && ui.button("この段を削除").clicked() {
+                if n > min_stages && ui.button("Delete this stage").clicked() {
                     handle.begin_edit();
                     handle.set_params(remove_stage(&params, stage, profile));
                     handle.end_edit();
@@ -887,7 +887,7 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
                 }
             }
             CtxTarget::Segment(stage) => {
-                if n < MAX_STAGES && ui.button("この後ろに段を挿入").clicked() {
+                if n < MAX_STAGES && ui.button("Insert stage after").clicked() {
                     handle.begin_edit();
                     handle.set_params(insert_stage_after(&params, stage, profile));
                     handle.end_edit();
