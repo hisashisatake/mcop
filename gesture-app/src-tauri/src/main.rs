@@ -4,9 +4,8 @@ mod op505_presets;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use op505_core::{
-    op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505Patch, Op505PresetBank,
+    build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505Patch, Op505PresetBank,
 };
-use op505_presets::{build_op505_registry, Op505BankRegistry};
 use sound_core::{
     cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, seconds_to_time, volume_depth,
     AudioProcessor, ChorusType, MasterEffects, ReverbType, TimeEgParams, TimeStage,
@@ -277,7 +276,7 @@ fn op505_get_current_patch(engine: tauri::State<'_, Arc<Mutex<Op505Engine>>>) ->
 }
 
 /// (bank, program)に対応する`.op505`プリセットをカレントパッチに設定する（次のnote-onから適用）。
-/// 解決順位はレジストリ→`Op505PresetBank`（`op505_presets::resolve_patch`参照）。
+/// 解決順位はレジストリ→`Op505PresetBank`（`op505_core::resolve_patch`参照）。
 /// 見つからなければエンジンには触れず`None`を返す（`Op505Patch::default()`はtl=0で無音のため、
 /// 黙って無音へ切り替えるより「見つからない」を呼び出し側に伝えて現在の音を維持するほうが安全）。
 #[tauri::command]
@@ -289,7 +288,7 @@ fn op505_set_program(
     bank: u16,
     program: u8,
 ) -> Option<Op505Patch> {
-    let patch = op505_presets::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
+    let patch = op505_core::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
     *original_fgs.lock().unwrap() = OriginalFgs::capture(&patch.channel);
     engine.lock().unwrap().set_patch(patch);
     Some(patch)

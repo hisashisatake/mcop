@@ -590,3 +590,27 @@ ch1のCC6/CC38がch2の選択に横取りされる）。`op505-vst`を`channels:
 エフェクト系NRPN(0,2)〜(0,8)とCC91/93（Reverb/Chorus Send）は`MasterEffects`がプラグイン全体で
 1個のため、この移行後もグローバルのまま残る（`ChannelState::apply_data_entry`が
 `DataEntryOutcome::Effect`で呼び出し側へ委譲する設計、上記境界線の通り）。
+
+### ⑥ `.op505`ファイル操作の意味論はop505-coreへ昇格した（⑤と同じ理由での例外、2026-08-27）
+
+gesture-appのPRESETSパネル（Open/Save/Save As/+ New Voice/Delete）が最初に実装していた
+「bank番号ごとの担当ファイル管理」（`Op505BankFile`/`Op505BankRegistry`、1バンク=1ファイル・
+ファイル名昇順で後勝ち）を、op505-vstのPRESETSパネルへも同じ仕様で持たせるにあたり、
+複製（fork-on-write）ではなく`op505-core::preset_registry`への昇格で対応した。
+
+**fork-on-write方針への抵触が無いことの確認**: 8章冒頭が禁じているのは「op505が主力・ym38x6が
+将来非推奨という非対称な関係を中立クレートが覆い隠すこと」（op505/ym38x6間の話）。gesture-appと
+op505-vstはどちらも現役のop505製品であり、この非対称性は存在しない。加えて`gesture-app → op505-core`・
+`op505-vst → op505-core`の依存辺は昇格前から両方既に存在しており、新しい依存辺は1本も増えない。
+
+**⑤と同じ例外条件に合致する**: 共有状態が**ディスク上の`.op505`ファイルそのもの**であるため、
+複製すると「gesture-appのSaveとVSTのSaveが食い違えば、同じファイルが両者で違う意味を持つ」という
+正誤の基準が無い乖離を生む。これはCC/NRPN解釈を`op505-midi`へ切り出した理由（VSTと参照実装が
+食い違うと正誤の基準が消える）と同型のため、⑤の例外を適用する。
+
+**境界線**: `op505-core::preset_registry`が持つのは「1バンク=1ファイルという規則そのもの」
+（`Op505BankFile`のメソッド群・`build_op505_registry`・`resolve_patch`）に限る。Tauri結合部
+（`#[tauri::command]`・`tauri::State`・`DialogExt`ネイティブダイアログ）はgesture-appに、
+egui/rfd結合部（PRESETSパネルの描画・ボタンハンドラ）はop505-vstに残す——「解釈のロジック」と
+「ホスト固有のUI/IPC」を分離する境界線は、⑤・GM2リズムチャンネルの`ChannelProgramState`と
+同じ形を保っている。

@@ -12,8 +12,10 @@
 pub mod eg_convert;
 pub mod operator;
 pub mod preset;
+pub mod preset_registry;
 pub use operator::Op505OperatorParams;
 pub use preset::{op505_presets_dir, Op505Preset, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
+pub use preset_registry::{build_op505_registry, current_open_dir, resolve_patch, Op505BankFile, Op505BankRegistry};
 
 /// バイポーラFG（Pitch/Cutoff）の無変調レベル。`sound-core`の同名定数の再エクスポート。
 ///

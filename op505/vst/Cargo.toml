@@ -16,3 +16,4 @@ op505-ui = { path = "../ui" }
 sound-core = { path = "../../sound/core" }
 sound-fm = { path = "../../sound/fm" }
 serde = { version = "1", features = ["derive"] }
+rfd = "0.15"

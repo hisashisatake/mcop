@@ -1,4 +1,5 @@
 use nice_plug::prelude::*;
+use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch};
 use serde::{Deserialize, Serialize};
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
 use std::sync::{Arc, RwLock};
@@ -234,5 +235,163 @@ impl Default for Op505VstParams {
             chorus_send_to_reverb: IntParam::new("Chorus Send To Reverb", DEFAULT_CHORUS_SEND_TO_REVERB as i32, IntRange::Linear { min: 0, max: 255 }),
             egs: Arc::new(RwLock::new(Op505EgBank::default())),
         }
+    }
+}
+
+/// 現在のDAWパラメーター＋TimeEg束から`Op505Patch`を構築する（MIDIチャンネル非依存）。
+/// オーディオスレッドは`cached_egs`を、GUIスレッドは`params.egs.read()`の結果を渡す
+/// （どちらも同じ関数を通ることが、保存される音と鳴っている音が一致することの根拠）。
+/// NRPN(0,9)〜(0,15)由来の`overrides`やCC1/76/77/78のPitch FG演奏補正はここでは適用しない
+/// （`apply_pitch_fg_expression`と同じ「note_patchへの後処理」パターンで別途適用するため）。
+pub(crate) fn build_patch(p: &Op505VstParams, egs: &Op505EgBank) -> Op505Patch {
+    let operators = std::array::from_fn(|i| {
+        let op = &p.operators[i];
+        Op505OperatorParams {
+            tl: op.tl.value() as u8,
+            eg: egs.operators[i],
+            mul: op.mul.value() as u8,
+            dt1: op.dt1.value() as u8,
+            ksr: op.ksr.value() as u8,
+            am_enable: op.ame.value(),
+            velocity_sensitivity: op.vel_sens.value() as u8,
+            waveform: op.waveform.value() as u8,
+            op_fine_tune: op.op_fine_tune.value() as u8,
+            eg_shift: op.eg_shift.value() as u8,
+            level_scale: op.level_scale.value() as u8,
+            velocity_gain: op.velocity_gain.value() as u8,
+        }
+    });
+
+    let channel = Op505ChannelParams {
+        algorithm: p.algorithm.value() as u8,
+        feedback: p.feedback.value() as u8,
+        filter_cutoff: p.cutoff.value() as u8,
+        filter_resonance: p.resonance.value() as u8,
+        filter_type: p.filter_type.value() as u8,
+        filter_self_oscillation: p.filter_self_oscillation.value(),
+        pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
+        cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
+        gain_fg: egs.gain_fg,
+        gain_fg_to_master: p.gain_fg_to_master.value(),
+        gain_fg_to_operators: p.gain_fg_to_operators.value(),
+        fixed_note_enable: p.fixed_note_enable.value(),
+        fixed_note: p.fixed_note.value() as u8,
+        fixed_note_fine: p.fixed_note_fine.value() as u8,
+        ..Op505ChannelParams::default()
+    };
+
+    Op505Patch { operators, channel }
+}
+
+/// `build_patch`の逆写像：`patch`のDAWパラメーター部分（TimeEg以外）を`setter`経由で書き込む。
+/// PRESETSリストのクリックのように「音色を丸ごと選び直す」操作の共通処理（`apply_patch_egs`と
+/// セットで呼ぶ）。
+pub(crate) fn apply_patch(p: &Op505VstParams, setter: &ParamSetter<'_>, patch: &Op505Patch) {
+    macro_rules! set {
+        ($param:expr, $v:expr) => {
+            setter.begin_set_parameter(&$param);
+            setter.set_parameter(&$param, $v);
+            setter.end_set_parameter(&$param);
+        };
+    }
+    let ch = &patch.channel;
+    set!(p.algorithm, ch.algorithm as i32);
+    set!(p.feedback, ch.feedback as i32);
+    set!(p.cutoff, ch.filter_cutoff as i32);
+    set!(p.resonance, ch.filter_resonance as i32);
+    set!(p.filter_type, ch.filter_type as i32);
+    set!(p.filter_self_oscillation, ch.filter_self_oscillation);
+    set!(p.pitch_fg_depth, ch.pitch_fg.depth as i32);
+    set!(p.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
+    set!(p.gain_fg_to_master, ch.gain_fg_to_master);
+    set!(p.gain_fg_to_operators, ch.gain_fg_to_operators);
+    set!(p.fixed_note_enable, ch.fixed_note_enable);
+    set!(p.fixed_note, ch.fixed_note as i32);
+    set!(p.fixed_note_fine, ch.fixed_note_fine as i32);
+    for (i, op) in patch.operators.iter().enumerate() {
+        let op_p = &p.operators[i];
+        set!(op_p.tl, op.tl as i32);
+        set!(op_p.mul, op.mul as i32);
+        set!(op_p.dt1, op.dt1 as i32);
+        set!(op_p.ksr, op.ksr as i32);
+        set!(op_p.ame, op.am_enable);
+        set!(op_p.vel_sens, op.velocity_sensitivity as i32);
+        set!(op_p.op_fine_tune, op.op_fine_tune as i32);
+        set!(op_p.waveform, op.waveform as i32);
+        set!(op_p.eg_shift, op.eg_shift as i32);
+        set!(op_p.level_scale, op.level_scale as i32);
+        set!(op_p.velocity_gain, op.velocity_gain as i32);
+    }
+}
+
+/// `build_patch`の逆写像（TimeEg 7本側）：`patch`のTimeEgを`egs`へ直接書き込む。persist状態の
+/// ため`ParamSetter`を経由しない、純粋関数（`apply_patch`とセットで呼ぶ）。
+pub(crate) fn apply_patch_egs(egs: &mut Op505EgBank, patch: &Op505Patch) {
+    for (i, op) in patch.operators.iter().enumerate() {
+        egs.operators[i] = op.eg;
+    }
+    egs.pitch_fg = patch.channel.pitch_fg.eg;
+    egs.cutoff_fg = patch.channel.cutoff_fg.eg;
+    egs.gain_fg = patch.channel.gain_fg;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_patch_reflects_daw_params_and_egs() {
+        // IntParamの値は`ParamSetter`（実プラグイン文脈が要る）でしか書き換えられないため、
+        // 構築時のdefault値そのものを検証対象にする（`IntParam::new`の第2引数=初期値=`.value()`）。
+        let params = Op505VstParams {
+            algorithm: IntParam::new("Algorithm", 4, IntRange::Linear { min: 0, max: 7 }),
+            fixed_note: IntParam::new("Fixed Note", 72, IntRange::Linear { min: 0, max: 127 }),
+            ..Op505VstParams::default()
+        };
+        let mut egs = Op505EgBank::default();
+        egs.operators[0].stage_count = 3;
+
+        let patch = build_patch(&params, &egs);
+
+        assert_eq!(patch.channel.algorithm, 4);
+        assert_eq!(patch.channel.fixed_note, 72);
+        assert_eq!(patch.operators[0].eg, egs.operators[0], "EGはegs引数からそのままコピーされるはず");
+    }
+
+    #[test]
+    fn apply_patch_egs_copies_all_seven_egs() {
+        let mut patch = Op505Patch::default();
+        for (i, op) in patch.operators.iter_mut().enumerate() {
+            op.eg.stage_count = (i + 1) as u8;
+        }
+        patch.channel.pitch_fg.eg.stage_count = 5;
+        patch.channel.cutoff_fg.eg.stage_count = 6;
+        patch.channel.gain_fg.stage_count = 7;
+
+        let mut egs = Op505EgBank::default();
+        apply_patch_egs(&mut egs, &patch);
+
+        for (i, op) in patch.operators.iter().enumerate() {
+            assert_eq!(egs.operators[i], op.eg, "オペレーターEG[{i}]が写っていないはず");
+        }
+        assert_eq!(egs.pitch_fg, patch.channel.pitch_fg.eg);
+        assert_eq!(egs.cutoff_fg, patch.channel.cutoff_fg.eg);
+        assert_eq!(egs.gain_fg, patch.channel.gain_fg);
+    }
+
+    #[test]
+    fn build_patch_after_apply_patch_egs_round_trips() {
+        let mut patch = Op505Patch::default();
+        patch.operators[2].eg.stage_count = 4;
+        patch.channel.gain_fg.stage_count = 9;
+
+        let mut egs = Op505EgBank::default();
+        apply_patch_egs(&mut egs, &patch);
+
+        let params = Op505VstParams::default();
+        let rebuilt = build_patch(&params, &egs);
+
+        assert_eq!(rebuilt.operators[2].eg, patch.operators[2].eg);
+        assert_eq!(rebuilt.channel.gain_fg, patch.channel.gain_fg);
     }
 }

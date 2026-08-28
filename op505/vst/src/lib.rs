@@ -1,6 +1,7 @@
 mod editor;
 mod param_adapter;
 mod params;
+mod preset_panel;
 
 use op505_midi::{
     cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
@@ -13,12 +14,10 @@ use params::{
 
 use nice_plug::prelude::*;
 use nice_plug_egui::EguiState;
-use op505_core::{
-    op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch,
-    Op505PresetBank,
-};
+use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::params::Op505EgBank;
 
@@ -125,7 +124,18 @@ struct Op505Plugin {
     program_patch: [Option<Op505Patch>; 16],
 
     // `op505_presets_dir()`から読み込んだユーザープリセット集合（`initialize()`で読み込む）。
+    // オーディオスレッド側キャッシュ（`cached_egs`と同じ役割）。MIDI Program Change解決は
+    // 必ずこちらを読む。
     preset_bank: Op505PresetBank,
+
+    // GUIエディタのPRESETSパネル（Save/Save As/+ New Voice/Delete）が更新する共有バンク。
+    // GUIスレッドはblocking writeで更新し、オーディオスレッドは`preset_bank_dirty`が
+    // 立っているときだけ`try_read()`で`preset_bank`へ取り込む（`cached_egs`/`params.egs`と
+    // 同じ「GUIはブロックしてよい、オーディオは絶対にブロックしない」非対称パターン）。
+    shared_preset_bank: Arc<RwLock<Op505PresetBank>>,
+    // `shared_preset_bank`を`preset_bank`へ取り込む必要があるかの門番。オーディオスレッドが
+    // 毎ブロックRwLockに触れずに済むようにする（保存操作は稀にしか起きないため）。
+    preset_bank_dirty: Arc<AtomicBool>,
 
     // GUIエディターのウィンドウサイズ状態（`editor()`で使い回す）。
     egui_state: Arc<EguiState>,
@@ -163,6 +173,8 @@ impl Default for Op505Plugin {
             rhythm_kits_available: false,
             program_patch: [None; 16],
             preset_bank: Op505PresetBank::default(),
+            shared_preset_bank: Arc::new(RwLock::new(Op505PresetBank::default())),
+            preset_bank_dirty: Arc::new(AtomicBool::new(false)),
             // 既定サイズもeditor_min_size()以上にしておく（下回るとエディタが開いた瞬間から
             // 横スクロールを要求する状態になり体験が悪いため）。
             egui_state: {
@@ -178,51 +190,25 @@ impl Op505Plugin {
     /// NRPN(0,9)〜(0,15)由来の`overrides`はここでは適用しない。Program Change選択中の
     /// チャンネルでも必ず後段適用できるよう、`apply_pitch_fg_expression`と同じ「note_patchへの
     /// 後処理」パターンへ分離してある。CC1/76/77/78のPitch FG演奏補正も同様に別途適用する）。
+    /// 本体は`params::build_patch`（GUIスレッドの保存処理とロジックを共有する自由関数）へ委譲。
     fn build_patch(&self) -> Op505Patch {
-        let p = &self.params;
-        let egs = &self.cached_egs;
-        let operators = std::array::from_fn(|i| {
-            let op = &p.operators[i];
-            Op505OperatorParams {
-                tl: op.tl.value() as u8,
-                eg: egs.operators[i],
-                mul: op.mul.value() as u8,
-                dt1: op.dt1.value() as u8,
-                ksr: op.ksr.value() as u8,
-                am_enable: op.ame.value(),
-                velocity_sensitivity: op.vel_sens.value() as u8,
-                waveform: op.waveform.value() as u8,
-                op_fine_tune: op.op_fine_tune.value() as u8,
-                eg_shift: op.eg_shift.value() as u8,
-                level_scale: op.level_scale.value() as u8,
-                velocity_gain: op.velocity_gain.value() as u8,
+        params::build_patch(&self.params, &self.cached_egs)
+    }
+
+    /// `preset_bank`が保存操作で更新された直後に呼ぶ：Program Changeで既に解決済みの
+    /// `program_patch`キャッシュを、新しい`preset_bank`の内容で引き直す。**PC未受信のまま
+    /// （`program_patch[ch]`がNone＝DAWノブに追従中）のチャンネルは対象外**——巻き込むと
+    /// bank0/program0が存在するだけでノブ操作が効かなくなる回帰になる。リズムチャンネルは
+    /// `resolve_note_patch`が毎回`preset_bank`を直接引くため対応不要。
+    fn refresh_program_patch_cache(&mut self) {
+        for ch in 0..MIDI_CHANNEL_COUNT {
+            if self.program_patch[ch].is_none() {
+                continue;
             }
-        });
-
-        // Pitch FGの生値（①音色パッチそのまま）をここでは詰めるだけにする。CC1/76/77/78の
-        // ②③層補正は`apply_pitch_fg_expression`で後段適用する（`build_patch()`内に埋め込むと
-        // Program Change選択中（`program_patch`がSomeでbuild_patch()自体が呼ばれない）チャンネルで
-        // 補正が丸ごとスキップされてしまうバグがあったため、apply_expression_modulation/
-        // apply_soft_pedalと同じ「note_patchへの後処理」パターンへ分離した）。
-        let channel = Op505ChannelParams {
-            algorithm: p.algorithm.value() as u8,
-            feedback: p.feedback.value() as u8,
-            filter_cutoff: p.cutoff.value() as u8,
-            filter_resonance: p.resonance.value() as u8,
-            filter_type: p.filter_type.value() as u8,
-            filter_self_oscillation: p.filter_self_oscillation.value(),
-            pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
-            cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
-            gain_fg: egs.gain_fg,
-            gain_fg_to_master: p.gain_fg_to_master.value(),
-            gain_fg_to_operators: p.gain_fg_to_operators.value(),
-            fixed_note_enable: p.fixed_note_enable.value(),
-            fixed_note: p.fixed_note.value() as u8,
-            fixed_note_fine: p.fixed_note_fine.value() as u8,
-            ..Op505ChannelParams::default()
-        };
-
-        Op505Patch { operators, channel }
+            if let ProgramSelection::Melodic { bank, program } = self.channels[ch].program_state.selection() {
+                self.program_patch[ch] = self.preset_bank.get(bank, program).map(|preset| preset.patch);
+            }
+        }
     }
 
     /// このMIDIチャンネル・ノートで鳴らすべきベースパッチ（DAWパラメーター等の後処理を
@@ -386,6 +372,11 @@ impl Plugin for Op505Plugin {
         self.render_buffer
             .resize(buffer_config.max_buffer_size as usize * num_out, 0.0);
         self.preset_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
+        // GUI側が参照する共有バンクも同じ内容で揃える。エディタを開いたままサンプルレート変更等で
+        // 再initialize()されると、presets_dir**外**のファイルをOpenして音声側へ載せていたバンクは
+        // ディスク由来の内容へ戻る（presets_dir内のファイルは保存済みなので影響なし）。
+        *self.shared_preset_bank.write().expect("Poisoned RwLock on write") = self.preset_bank.clone();
+        self.preset_bank_dirty.store(false, Ordering::Release);
         self.rhythm_kits_available = self.preset_bank.has_bank_in(RHYTHM_BANK_RANGE);
         // ChannelState全体ではなくprogram_stateだけをリセットする（rhythm_kits_availableが
         // 確定した直後のため。CC/NRPN/ペダル状態まで消える挙動変更を避ける）。
@@ -418,7 +409,7 @@ impl Plugin for Op505Plugin {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create_editor(self.egui_state.clone(), self.params.clone())
+        editor::create_editor(self.egui_state.clone(), self.params.clone(), self.shared_preset_bank.clone(), self.preset_bank_dirty.clone())
     }
 
     fn process(
@@ -432,6 +423,28 @@ impl Plugin for Op505Plugin {
         if let Ok(egs) = self.params.egs.try_read() {
             if *egs != self.cached_egs {
                 self.cached_egs = *egs;
+            }
+        }
+
+        // プリセットバンク：GUIエディタのSave/Save As/+ New Voice/Deleteが`shared_preset_bank`へ
+        // 書き込むと`preset_bank_dirty`が立つ。swap(false)で「読む」と「消す」を不可分に行い、
+        // try_readが失敗したら（GUIが競合して稀に取れなかった）フラグを立て直して次ブロックで
+        // 再挑戦する（更新を取りこぼさない）。
+        if self.preset_bank_dirty.swap(false, Ordering::Acquire) {
+            // try_read()のガードを先に手放してから&mut selfを要するメソッドを呼ぶ
+            // （ガードがself.shared_preset_bankを借用したままだとrefresh_program_patch_cache()の
+            // &mut self呼び出しと競合しコンパイルエラーになる）。
+            let synced = if let Ok(bank) = self.shared_preset_bank.try_read() {
+                self.preset_bank.clone_from(&bank);
+                true
+            } else {
+                false
+            };
+            if synced {
+                self.rhythm_kits_available = self.preset_bank.has_bank_in(RHYTHM_BANK_RANGE);
+                self.refresh_program_patch_cache();
+            } else {
+                self.preset_bank_dirty.store(true, Ordering::Release);
             }
         }
 

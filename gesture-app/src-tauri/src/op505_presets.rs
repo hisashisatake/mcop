@@ -1,11 +1,11 @@
-//! OP505のプリセットレジストリ + Open/Save/Save As用Tauriコマンド。
+//! OP505のプリセット管理用Tauriコマンド。
 //!
-//! bank番号ごとに「担当ファイル」を覚え、Open/Save/Save Asがセッション中に更新する
-//! （1バンク=1ファイルという運用が前提）。
+//! バンクレジストリ本体（`Op505BankFile`/`Op505BankRegistry`とその操作）は
+//! `op505_core::preset_registry`へ昇格済み（op505-vstのPRESETSパネルと仕様を共有するため、
+//! 詳細はCLAUDE.md op505/vst節・spec-fm.md 8章⑥参照）。このファイルに残るのはTauri結合部
+//! （`#[tauri::command]`・`tauri::State`・ネイティブダイアログ）とDTO変換だけ。
 
-use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use op505_core::{current_open_dir, Op505BankFile, Op505BankRegistry, Op505Engine, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_dialog::DialogExt;
 
@@ -40,91 +40,13 @@ pub struct Op505LoadedPatchDto {
     pub program: u8,
 }
 
-/// bank番号ごとの「担当ファイル」（`op505_presets_dir()`全体の中で、そのbankを最後に定義したファイル）。
-/// Open/Save/Save Asが直接更新する（音色エディタのファイル状態はpresets_dirの外/中を区別しない、
-/// ym38x6側の`BankFile`と同じ意味論）。
-pub struct Op505BankFile {
-    path: PathBuf,
-    file: Op505PresetFile,
-}
-pub type Op505BankRegistry = HashMap<u16, Op505BankFile>;
-
-/// `dir`内の`.op505`ファイルをファイル名昇順で走査し、bank番号ごとに「最後に処理したファイル」を
-/// レジストリへ記録する（`build_registry`のOP505版、同じ優先順位）。起動時（または
-/// `op505_reload_presets`）に呼ぶ。
-pub fn build_op505_registry(dir: &Path) -> Op505BankRegistry {
-    let mut paths: Vec<_> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("op505"))
-        .collect();
-    paths.sort();
-
-    let mut registry = HashMap::new();
-    for path in paths {
-        let Ok(json) = std::fs::read_to_string(&path) else { continue };
-        let Ok(file) = Op505PresetFile::from_json(&json) else { continue };
-        registry.insert(bank_of(&file), Op505BankFile { path, file });
-    }
-    registry
-}
-
-/// `Op505PresetFile`のPresets/Programsどちらのvariantでもエントリ一覧への参照を取り出す。
-fn entries(file: &Op505PresetFile) -> &Vec<Op505PresetEntry> {
-    match file {
-        Op505PresetFile::Presets { presets, .. } => presets,
-        Op505PresetFile::Programs { programs, .. } => programs,
-    }
-}
-
-/// `entries`の可変参照版。
-fn entries_mut(file: &mut Op505PresetFile) -> &mut Vec<Op505PresetEntry> {
-    match file {
-        Op505PresetFile::Presets { presets, .. } => presets,
-        Op505PresetFile::Programs { programs, .. } => programs,
-    }
-}
-
-/// `Op505PresetFile`のPresets/Programsどちらのvariantでもbank番号を取り出す。
-fn bank_of(file: &Op505PresetFile) -> u16 {
-    match file {
-        Op505PresetFile::Presets { bank, .. } | Op505PresetFile::Programs { bank, .. } => *bank,
-    }
-}
-
-/// `file`のbankフィールドを`bank`へ書き換えたものを返す（variant・エントリー内容はそのまま）。
-fn with_bank(file: Op505PresetFile, bank: u16) -> Op505PresetFile {
-    match file {
-        Op505PresetFile::Presets { presets, .. } => Op505PresetFile::Presets { bank, presets },
-        Op505PresetFile::Programs { programs, .. } => Op505PresetFile::Programs { bank, programs },
-    }
-}
-
-/// Open/Save Asのネイティブダイアログの初期ディレクトリを決める。指定bankがレジストリに
-/// 登録済みならその親ディレクトリ、未登録なら`op505_presets_dir()`。
-fn current_open_dir(registry: &Op505BankRegistry, bank: u16) -> PathBuf {
-    registry.get(&bank).and_then(|bank_file| bank_file.path.parent().map(PathBuf::from)).unwrap_or_else(op505_presets_dir)
-}
-
-/// (bank, program)に対応するパッチを解決する（`op505_set_program`用。ym38x6の
-/// `resolve_patch`と異なり波形メモリ/GM2/プレースホルダーの代替は無いため、
-/// レジストリ→`Op505PresetBank`の順で見つからなければ`None`を返す）。
-pub fn resolve_patch(registry: &Op505BankRegistry, bank_state: &Op505PresetBank, bank: u16, program: u8) -> Option<Op505Patch> {
-    registry
-        .get(&bank)
-        .and_then(|bank_file| entries(&bank_file.file).iter().find(|e| e.program == program).map(|e| e.patch))
-        .or_else(|| bank_state.get(bank, program).map(|preset| preset.patch))
-}
-
 /// 今開いている（＝`registry`に登録済みの）bankのファイルが持つ音色一覧を返す
 /// （`list_bank_entries`のOP505版。未登録なら空）。
 #[tauri::command]
 pub fn op505_list_bank_entries(registry: tauri::State<'_, Mutex<Op505BankRegistry>>, bank: u16) -> Vec<PresetEntryDto> {
     let reg = registry.lock().unwrap();
     reg.get(&bank)
-        .map(|bank_file| entries(&bank_file.file).iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect())
+        .map(|bank_file| bank_file.entries().iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect())
         .unwrap_or_default()
 }
 
@@ -143,8 +65,8 @@ pub fn op505_get_bank_program(
     {
         let reg = registry.lock().unwrap();
         if let Some(bank_file) = reg.get(&bank) {
-            if let Some(entry) = entries(&bank_file.file).iter().find(|e| e.program == program) {
-                let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+            if let Some(entry) = bank_file.entries().iter().find(|e| e.program == program) {
+                let file_name = bank_file.file_name().map(|s| s.to_string());
                 return Op505LoadedPatchDto { patch: entry.patch, patch_name: entry.name.clone(), file_name, bank, program };
             }
         }
@@ -175,12 +97,13 @@ pub async fn op505_open_patch_file(
     let path = picked.into_path().map_err(|e| e.to_string())?;
 
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let file = with_bank(Op505PresetFile::from_json(&json).map_err(|e| e.to_string())?, bank);
-    let entry = entries(&file).first().ok_or("ファイルに音色が含まれていません")?.clone();
-    let file_name = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+    let file = Op505PresetFile::from_json(&json).map_err(|e| e.to_string())?;
+    let bank_file = Op505BankFile::from_loaded(path, file, bank);
+    let entry = bank_file.entries().first().ok_or("ファイルに音色が含まれていません")?.clone();
+    let file_name = bank_file.file_name().map(|s| s.to_string());
     let dto = Op505LoadedPatchDto { patch: entry.patch, patch_name: entry.name, file_name, bank, program: entry.program };
 
-    registry.lock().unwrap().insert(bank, Op505BankFile { path, file });
+    registry.lock().unwrap().insert(bank, bank_file);
     Ok(Some(dto))
 }
 
@@ -195,44 +118,23 @@ pub fn op505_save_patch_overwrite(
 ) -> Result<SavedFileDto, String> {
     let mut reg = registry.lock().unwrap();
     let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
-    let list = entries_mut(&mut bank_file.file);
-    let entry = list.iter_mut().find(|e| e.program == program).ok_or("保存先エントリが見つかりません")?;
-    entry.patch = patch;
-    entry.name = patch_name.clone();
-    let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
-    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
-    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
+    bank_file.upsert(program, patch_name.clone(), patch)?;
+    bank_file.save()?;
+    let file_name = bank_file.file_name().unwrap_or("?").to_string();
     Ok(SavedFileDto { patch_name, file_name, bank, program })
-}
-
-/// `add_preset_entry`が新規追加した`Op505PresetEntry`。program番号は既存エントリの最大値+1
-/// （空なら0）、名前は"VoiceNNN"（NNNは新program番号を3桁ゼロ埋め）。program番号はu8のため、
-/// 既に255まで埋まっている場合はエラーを返す。`patch`は呼び出し元が決める（デフォルト初期化か、
-/// 現在編集中のパッチのコピーか＝PRESETSリストの「+ New Voice」通常クリック/Shift+クリックの分岐）。
-fn add_preset_entry(file: &mut Op505PresetFile, patch: Op505Patch) -> Result<Op505PresetEntry, String> {
-    let list = entries_mut(file);
-    let next_program = match list.iter().map(|e| e.program).max() {
-        Some(max) => max.checked_add(1).ok_or("これ以上音色を追加できません（program番号が上限に達しました）")?,
-        None => 0,
-    };
-    let entry = Op505PresetEntry { program: next_program, name: format!("Voice{next_program:03}"), patch };
-    list.push(entry.clone());
-    list.sort_by_key(|e| e.program);
-    Ok(entry)
 }
 
 /// 現在のbankの担当ファイルへ新規エントリを追加して保存する（PRESETSリスト末尾の「+ New Voice」用）。
 /// `patch`はフロント側が決める（通常クリック＝デフォルト初期化、Shift+クリック＝現在編集中のパッチの
-/// コピー）。採番・命名は`add_preset_entry`参照。担当ファイルが無いbank（先にOpen/Save Asが必要）は
-/// エラー（`op505_save_patch_overwrite`と同じ制約）。
+/// コピー）。採番・命名は`Op505BankFile::add_new_voice`参照。担当ファイルが無いbank（先にOpen/Save Asが
+/// 必要）はエラー（`op505_save_patch_overwrite`と同じ制約）。
 #[tauri::command]
 pub fn op505_add_preset(registry: tauri::State<'_, Mutex<Op505BankRegistry>>, bank: u16, patch: Op505Patch) -> Result<Op505LoadedPatchDto, String> {
     let mut reg = registry.lock().unwrap();
     let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
-    let entry = add_preset_entry(&mut bank_file.file, patch)?;
-    let file_name = bank_file.path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
-    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
-    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
+    let entry = bank_file.add_new_voice(patch)?;
+    bank_file.save()?;
+    let file_name = bank_file.file_name().map(|s| s.to_string());
     Ok(Op505LoadedPatchDto { patch: entry.patch, patch_name: entry.name, file_name, bank, program: entry.program })
 }
 
@@ -251,11 +153,7 @@ pub async fn op505_delete_preset(
     let name = {
         let reg = registry.lock().unwrap();
         let bank_file = reg.get(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
-        entries(&bank_file.file)
-            .iter()
-            .find(|e| e.program == program)
-            .map(|e| e.name.clone())
-            .ok_or("削除対象のエントリが見つかりません")?
+        bank_file.entries().iter().find(|e| e.program == program).map(|e| e.name.clone()).ok_or("削除対象のエントリが見つかりません")?
     };
 
     let confirmed = tauri::async_runtime::spawn_blocking(move || {
@@ -274,12 +172,9 @@ pub async fn op505_delete_preset(
 
     let mut reg = registry.lock().unwrap();
     let bank_file = reg.get_mut(&bank).ok_or("このbankにはまだファイルがありません（先にOpenかSave Asしてください）")?;
-    let list = entries_mut(&mut bank_file.file);
-    let idx = list.iter().position(|e| e.program == program).ok_or("削除対象のエントリが見つかりません")?;
-    list.remove(idx);
-    let json = bank_file.file.to_json().map_err(|e| e.to_string())?;
-    std::fs::write(&bank_file.path, json).map_err(|e| e.to_string())?;
-    Ok(Some(entries(&bank_file.file).iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect()))
+    bank_file.remove(program)?;
+    bank_file.save()?;
+    Ok(Some(bank_file.entries().iter().map(|e| PresetEntryDto { bank, program: e.program, name: e.name.clone() }).collect()))
 }
 
 /// ネイティブSaveダイアログで保存先を選び、新規`.op505`ファイルとして書き出す
@@ -311,168 +206,13 @@ pub async fn op505_save_patch_as(
     let path = picked.into_path().map_err(|e| e.to_string())?;
 
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("patch.op505").to_string();
-    let mut presets: Vec<Op505PresetEntry> =
-        registry.lock().unwrap().get(&bank).map(|bank_file| entries(&bank_file.file).clone()).unwrap_or_default();
-    match presets.iter_mut().find(|e| e.program == program) {
-        Some(entry) => {
-            entry.patch = patch;
-            entry.name = patch_name.clone();
-        }
-        None => presets.push(Op505PresetEntry { program, name: patch_name.clone(), patch }),
-    }
-    presets.sort_by_key(|e| e.program);
-    let file = Op505PresetFile::Presets { bank, presets };
-    let json = file.to_json().map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    let base_entries: Vec<Op505PresetEntry> = registry.lock().unwrap().get(&bank).map(|bank_file| bank_file.entries().to_vec()).unwrap_or_default();
+    let bank_file = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path)?;
 
-    registry.lock().unwrap().insert(bank, Op505BankFile { path, file });
+    registry.lock().unwrap().insert(bank, bank_file);
     Ok(Some(SavedFileDto { patch_name, file_name, bank, program }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn unique_temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("op505_gesture_app_test_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn sample_json(bank: u16, program: u8, name: &str) -> String {
-        Op505PresetFile::Programs {
-            bank,
-            programs: vec![Op505PresetEntry { program, name: name.to_string(), patch: Op505Patch::default() }],
-        }
-        .to_json()
-        .unwrap()
-    }
-
-    #[test]
-    fn build_registry_maps_bank_to_its_file() {
-        let dir = unique_temp_dir("registry_basic");
-        std::fs::write(dir.join("a.op505"), sample_json(0, 5, "Foo")).unwrap();
-        std::fs::write(dir.join("b.op505"), sample_json(1, 2, "Bar")).unwrap();
-
-        let registry = build_op505_registry(&dir);
-        assert_eq!(registry.get(&0).unwrap().path, dir.join("a.op505"));
-        assert_eq!(registry.get(&1).unwrap().path, dir.join("b.op505"));
-        assert!(registry.get(&2).is_none(), "存在しないbankは登録されない");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn build_registry_prefers_last_file_in_sorted_order() {
-        let dir = unique_temp_dir("registry_precedence");
-        std::fs::write(dir.join("a_first.op505"), sample_json(0, 0, "First")).unwrap();
-        std::fs::write(dir.join("b_second.op505"), sample_json(0, 0, "Second")).unwrap();
-
-        let registry = build_op505_registry(&dir);
-        assert_eq!(registry.get(&0).unwrap().path, dir.join("b_second.op505"), "後読みのファイルが優先されるべき");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn with_bank_overrides_bank_and_keeps_entries() {
-        let presets = Op505PresetFile::Presets {
-            bank: 3,
-            presets: vec![Op505PresetEntry { program: 5, name: "Foo".to_string(), patch: Op505Patch::default() }],
-        };
-        let rebanked = with_bank(presets, 9);
-        assert_eq!(bank_of(&rebanked), 9);
-        assert_eq!(entries(&rebanked).len(), 1);
-        assert_eq!(entries(&rebanked)[0].program, 5);
-
-        let programs = Op505PresetFile::Programs { bank: 3, programs: vec![] };
-        assert_eq!(bank_of(&with_bank(programs, 9)), 9);
-    }
-
-    #[test]
-    fn add_preset_entry_starts_at_zero_when_empty() {
-        let mut file = Op505PresetFile::Presets { bank: 0, presets: vec![] };
-        let entry = add_preset_entry(&mut file, Op505Patch::default()).unwrap();
-        assert_eq!(entry.program, 0);
-        assert_eq!(entry.name, "Voice000");
-        assert_eq!(entry.patch, Op505Patch::default());
-        assert_eq!(entries(&file).len(), 1);
-    }
-
-    #[test]
-    fn add_preset_entry_uses_max_program_plus_one() {
-        let mut file = Op505PresetFile::Presets {
-            bank: 0,
-            presets: vec![
-                Op505PresetEntry { program: 3, name: "A".to_string(), patch: Op505Patch::default() },
-                Op505PresetEntry { program: 31, name: "B".to_string(), patch: Op505Patch::default() },
-            ],
-        };
-        let entry = add_preset_entry(&mut file, Op505Patch::default()).unwrap();
-        assert_eq!(entry.program, 32);
-        assert_eq!(entry.name, "Voice032");
-        assert_eq!(entries(&file).last().unwrap().program, 32, "sortされ末尾に来るはず");
-    }
-
-    #[test]
-    fn add_preset_entry_copies_given_patch() {
-        let mut file = Op505PresetFile::Presets { bank: 0, presets: vec![] };
-        let mut source = Op505Patch::default();
-        source.operators[0].tl = 123;
-        let entry = add_preset_entry(&mut file, source).unwrap();
-        assert_eq!(entry.patch.operators[0].tl, 123, "Shift+クリックのコピー元がそのまま複製されるはず");
-    }
-
-    #[test]
-    fn add_preset_entry_errors_when_program_exhausted() {
-        let mut file = Op505PresetFile::Presets {
-            bank: 0,
-            presets: vec![Op505PresetEntry { program: 255, name: "Last".to_string(), patch: Op505Patch::default() }],
-        };
-        assert!(add_preset_entry(&mut file, Op505Patch::default()).is_err());
-    }
-
-    #[test]
-    fn current_open_dir_falls_back_to_presets_dir_when_bank_unregistered() {
-        let registry = Op505BankRegistry::new();
-        assert_eq!(current_open_dir(&registry, 0), op505_presets_dir());
-    }
-
-    #[test]
-    fn resolve_patch_prefers_registry_then_bank_state() {
-        let mut registry = Op505BankRegistry::new();
-        let mut patch_in_registry = Op505Patch::default();
-        patch_in_registry.operators[0].tl = 111;
-        registry.insert(
-            0,
-            Op505BankFile {
-                path: PathBuf::from("dummy.op505"),
-                file: Op505PresetFile::Presets {
-                    bank: 0,
-                    presets: vec![Op505PresetEntry { program: 3, name: "R".to_string(), patch: patch_in_registry }],
-                },
-            },
-        );
-
-        let dir = unique_temp_dir("resolve_patch");
-        let mut patch_in_bank = Op505Patch::default();
-        patch_in_bank.operators[0].tl = 222;
-        std::fs::write(
-            dir.join("b.op505"),
-            Op505PresetFile::Presets {
-                bank: 1,
-                presets: vec![Op505PresetEntry { program: 4, name: "B".to_string(), patch: patch_in_bank }],
-            }
-            .to_json()
-            .unwrap(),
-        )
-        .unwrap();
-        let bank_state = Op505PresetBank::load_from_dir(&dir);
-        std::fs::remove_dir_all(&dir).ok();
-
-        assert_eq!(resolve_patch(&registry, &bank_state, 0, 3).unwrap().operators[0].tl, 111, "レジストリ優先");
-        assert_eq!(resolve_patch(&registry, &bank_state, 1, 4).unwrap().operators[0].tl, 222, "レジストリに無ければbank_state");
-        assert!(resolve_patch(&registry, &bank_state, 9, 9).is_none(), "どちらにも無ければNone");
-    }
-}
+// このファイルはTauriコマンド（結合部）のみを持つ。レジストリの優先順位ロジック等の実体は
+// `op505_core::preset_registry`側で単体テスト済み（移設元: このファイルが元々持っていた
+// `#[cfg(test)] mod tests`8本）。

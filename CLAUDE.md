@@ -137,7 +137,13 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           2026-08-26、NRPN/RPN選択状態を含むMIDI受信状態を`op505_midi::ChannelState`
                           （smf2op505/standaloneと共有）へ全面移行し、全16 MIDIチャンネル完全独立化
                           （エフェクト系NRPN(0,2)〜(0,8)とCC91/93はMasterEffectsが1個のためグローバル
-                          のまま。詳細はspec-fm.md 8章⑤）
+                          のまま。詳細はspec-fm.md 8章⑤）。
+                          2026-08-27、PRESETSパネルをgesture-app同仕様のバンクレジストリ方式へ刷新
+                          （Open/Save/Save As/+ New Voice/Deleteの5操作、`rfd`クレートのネイティブ
+                          ダイアログ）。保存内容はMIDI Program Change解決側（オーディオスレッド）へも
+                          `Arc<RwLock<Op505PresetBank>>`+dirtyフラグ経由で即時反映される（`cached_egs`/
+                          `try_read()`と同じ非ブロッキングパターン）。レジストリ本体は`op505-core`の
+                          `preset_registry`モジュールへ昇格し、gesture-appと共有（詳細はspec-fm.md 8章⑥）
     midi/              ← CC/NRPN解釈の共有クレート（クレート名op505-midi。フェーズ5.5新設）。
                           `op505-vst`と`op505/tools/smf2op505`の両方が参照する、fork-on-write方針の
                           限定的な例外（VSTと参照実装の解釈が食い違うと正誤の基準が消えるため。
