@@ -12,6 +12,7 @@ use nice_plug::prelude::*;
 use op505_core::{
     build_op505_registry, current_open_dir, op505_presets_dir, Op505BankFile, Op505BankRegistry, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile,
 };
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 
@@ -99,6 +100,20 @@ impl PresetSession {
     /// 現在の担当ファイルへ上書き保存した（Save）ときに呼ぶ。program/patch_nameは変わらない。
     fn on_saved(&mut self, file_name: String) {
         self.file_name = Some(file_name);
+        self.unsaved = false;
+    }
+
+    /// エディタ生成直後、今のbankに担当ファイルが既にあればファイル名・音色名の**表示だけ**を
+    /// 合わせる。`apply_entry`は呼ばない＝DAWパラメーター（プロジェクトに保存済みのノブ値）には
+    /// 一切触れない。gesture-appは起動時にパッチも実際に適用するが、VSTでは「エディタを開いた
+    /// だけでプロジェクトの現在の音がプリセット内容に上書きされる」事故を避けるため、この非対称は
+    /// 意図的（ユーザー確認済み、2026-08-28）。
+    fn sync_display_to_registry(&mut self) {
+        let Some(bank_file) = self.registry.get(&self.bank) else { return };
+        let Some(entry) = bank_file.entries().first() else { return };
+        self.program = entry.program;
+        self.patch_name = entry.name.clone();
+        self.file_name = bank_file.file_name().map(str::to_string);
         self.unsaved = false;
     }
 }
@@ -266,6 +281,36 @@ fn poll_pending_delete(session: &mut PresetSession, params: &Op505VstParams, set
     }
 }
 
+/// Bank欄のハンドル。ノブ下の数値欄と同じ見た目（`ui_core::spin_control`）にするための橋渡し。
+/// `IntParamHandle::set`は`&self`のためCellで内部可変性を持たせる（gesture-appの`Rc<Cell<u16>>`に
+/// 相当。VST側は毎フレーム同期呼び出しで完結するのでRcは不要）。
+struct BankFieldHandle {
+    bank: Cell<i32>,
+}
+
+impl op505_ui::IntParamHandle for BankFieldHandle {
+    fn value(&self) -> i32 {
+        self.bank.get()
+    }
+    fn min(&self) -> i32 {
+        0
+    }
+    fn max(&self) -> i32 {
+        16383
+    }
+    fn default(&self) -> i32 {
+        0
+    }
+    fn name(&self) -> String {
+        "Bank".to_string()
+    }
+    fn begin_edit(&self) {}
+    fn set(&self, value: i32) {
+        self.bank.set(value.clamp(0, 16383));
+    }
+    fn end_edit(&self) {}
+}
+
 /// Bank欄の数値が変わったときの再解決：担当ファイルの中に今のprogramがあればそれを、
 /// 無ければ先頭エントリーを選ぶ（gesture-appの`handle_navigate`相当。ディスク再検索はしない、
 /// レジストリを引くだけ）。担当ファイルが無いbankへ移動した場合は選択を持たない。
@@ -320,9 +365,12 @@ pub(crate) fn draw_presets_panel(
 
     ui.horizontal(|ui| {
         ui.label("Bank");
-        let mut bank_i32 = session.bank as i32;
-        if ui.add(egui::DragValue::new(&mut bank_i32).range(0..=16383).speed(1.0)).changed() {
-            session.bank = bank_i32 as u16;
+        // gesture-app（`editor-wasm/src/app.rs`のBankField）と同じ±ボタン付き数値欄で揃える。
+        let bank_handle = BankFieldHandle { bank: Cell::new(session.bank as i32) };
+        ui_core::spin_control(ui, &bank_handle, egui::TextStyle::Body, 44.0);
+        let new_bank = bank_handle.bank.get() as u16;
+        if new_bank != session.bank {
+            session.bank = new_bank;
             handle_bank_changed(session, params, setter);
         }
     });
@@ -338,15 +386,16 @@ pub(crate) fn draw_presets_panel(
     }
     ui.separator();
 
-    // Deleteキー（テキスト入力中は無効化）。DAWがキーを奪う場合の保険としてリスト末尾に
-    // Deleteボタンも置く（下記ScrollArea内）。
+    // Deleteキーのみで削除する（gesture-appと同じ、専用ボタンは置かない）。テキスト入力中は
+    // 文字削除と衝突するため無効化する。DAW環境によってはDeleteキーがDAW自身のショートカット
+    // （選択アイテム削除等）に奪われる可能性があるが、gesture-app版とのUI統一を優先する
+    // （ユーザー確認済み、2026-08-28）。
     let any_text_focused = ui.memory(|m| m.focused().is_some());
     let has_entries = !session.entries().is_empty();
     let delete_enabled = has_entries && session.pending_delete.is_none();
     let delete_by_key = !any_text_focused && delete_enabled && ui.input(|i| i.key_pressed(egui::Key::Delete));
 
     ui.label(egui::RichText::new("PRESETS").strong());
-    let mut delete_by_button = false;
     egui::ScrollArea::vertical().id_salt("presets").auto_shrink([false, false]).show(ui, |ui| {
         for entry in session.entries().to_vec() {
             let label = format!("{:03} {}", entry.program, entry.name);
@@ -361,12 +410,9 @@ pub(crate) fn draw_presets_panel(
             let copy_current = ui.input(|i| i.modifiers.shift);
             handle_add_new_voice(session, params, setter, shared_preset_bank, preset_bank_dirty, copy_current);
         }
-        if ui.add_enabled(delete_enabled, egui::Button::new("Delete")).clicked() {
-            delete_by_button = true;
-        }
     });
 
-    if delete_by_key || delete_by_button {
+    if delete_by_key {
         request_delete(session);
     }
     poll_pending_delete(session, params, setter, shared_preset_bank, preset_bank_dirty);
@@ -379,13 +425,16 @@ pub(crate) struct EditorPresetState {
 
 impl EditorPresetState {
     pub(crate) fn new() -> Self {
-        EditorPresetState { session: PresetSession::new(build_op505_registry(&op505_presets_dir())) }
+        let mut session = PresetSession::new(build_op505_registry(&op505_presets_dir()));
+        session.sync_display_to_registry();
+        EditorPresetState { session }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn entry(program: u8, name: &str) -> Op505PresetEntry {
         Op505PresetEntry { program, name: name.to_string(), patch: Op505Patch::default() }
@@ -458,5 +507,29 @@ mod tests {
         session.select_entry(1, "B".to_string());
         assert_eq!(session.file_name.as_deref(), Some("bank.op505"), "同じファイル内の選択切り替えではfile_nameは不変のはず");
         assert_eq!(session.program, 1);
+    }
+
+    #[test]
+    fn sync_display_to_registry_shows_file_name_without_touching_params() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(3, "Organ")] };
+        let bank_file = Op505BankFile::from_loaded(PathBuf::from("organ.op505"), file, 0);
+        registry.insert(0, bank_file);
+
+        let mut session = PresetSession::new(registry);
+        session.sync_display_to_registry();
+
+        assert_eq!(session.file_name.as_deref(), Some("organ.op505"), "先頭エントリーの担当ファイル名を表示するはず");
+        assert_eq!(session.patch_name, "Organ");
+        assert_eq!(session.program, 3, "先頭エントリーのprogramへ合わせるはず（apply_entryは呼ばない＝DAWパラメーターは不変）");
+        assert!(!session.unsaved);
+    }
+
+    #[test]
+    fn sync_display_to_registry_is_noop_when_bank_unregistered() {
+        let mut session = PresetSession::new(Op505BankRegistry::new());
+        session.sync_display_to_registry();
+        assert_eq!(session.file_name, None, "担当ファイルが無ければ(unsaved)表示のままのはず");
+        assert_eq!(session.program, 0);
     }
 }
