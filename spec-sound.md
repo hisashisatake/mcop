@@ -401,6 +401,11 @@ GM2の「ノート番号＝楽器選択キー、各楽器は固定ピッチ」�
   参照しない（`sound_fm::waveform::is_noise_waveform`）ため、fixed_noteの値自体は
   「GM2のノート番号＝楽器選択キー」という意味だけを持ち、ノイズ系ドラム音色の音自体には
   影響しない（Snare/HH/Crash等）。トーナルなドラム（Kick/Tom、sine等）では実際に音高を決める。
+- **NRPN経由の上書き（2026-08-29新設）：** NRPN(0,22)〜(0,24) Fixed Note Enable/Fixed Note/
+  Fixed Note Fineで、DAWパラメーター・エディタ操作を介さずMIDI側からこの3フィールドを
+  上書きできる（`op505-midi::PatchOverrides`、Algorithm/Filter Typeと同じ「NRPN離散上書き
+  レイヤー」の仕組み。上記「NRPN番号（MSB,LSB）」表参照）。Program Changeで上書きは
+  クリアされる。
 
 ### フィルター（Vcf: State Variable Filter、ボイス単位）
 
@@ -1217,7 +1222,10 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Operator F-Number Op1 | 0, 19 | 同上 |
 | Operator F-Number Op2 | 0, 20 | 同上 |
 | Operator F-Number Op3 | 0, 21 | 同上 |
-| （欠番／`ReservedTextureLfo`） | 0, 22〜27 | 旧質感LFO Fade Mode/Rate/Depth/Delay/Fade Time/Offset。同上、欠番として予約 |
+| Fixed Note Enable | 0, 22 | 0=OFF / 非0=ON（[固定音階](#固定音階fixed-notegm2リズムチャンネル用op505固有)節参照）。2026-08-29、質感LFOの欠番から新設 |
+| Fixed Note | 0, 23 | 0〜127（MIDIノート番号）。同上、2026-08-29新設 |
+| Fixed Note Fine | 0, 24 | 0〜255（128=中心のバイポーラ）。同上、2026-08-29新設 |
+| （欠番／`ReservedTextureLfo`） | 0, 25〜27 | 旧質感LFO Rate/Depth/Delay/Fade Time/Offset。同上、欠番として予約 |
 | Pitch FG Loop | 0, 28 | 0=ワンショット / 1=ループ |
 | Pitch FG Curve | 0, 29 | 0=線形 / 1=サイン風 |
 | Cutoff FG Loop | 0, 30 | 0=ワンショット / 1=ループ |

@@ -18,12 +18,12 @@ pub enum ControlTarget {
     PitchBendRange,
     /// RPN(0,5): Modulation Depth Range
     ModulationDepthRange,
-    /// NRPN(0,0)・(0,22)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
+    /// NRPN(0,0)・(0,25)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
     /// Delay/FadeTime/Offset)のアドレス。質感LFO退役（`TimeEgParams::texture`へ統合、
     /// memory `project_texture_lfo_retirement.md`参照）に伴い**欠番として予約**し、再利用しない
     /// （`ReservedFgLoopCurve`と同じ理由：既存のSMF/DAWオートメーションが別の意味で
-    /// 解釈されるのを防ぐため）。NRPN(0,1)は`ChannelEffectRoute`へ再割り当て済みのため
-    /// このバリアントの対象外。
+    /// 解釈されるのを防ぐため）。NRPN(0,1)は`ChannelEffectRoute`へ、(0,22)〜(0,24)は
+    /// `FixedNoteEnable`/`FixedNote`/`FixedNoteFine`へ再割り当て済みのためこのバリアントの対象外。
     ReservedTextureLfo,
     /// NRPN(0,1): Channel Effect Route。送信チャンネル自身の音声・エフェクト設定NRPN(0,2)〜
     /// (0,8)・CC91/93の適用先エフェクトスロット番号（0〜`EFFECT_SLOT_COUNT - 1`）を設定する。
@@ -57,6 +57,14 @@ pub enum ControlTarget {
     PolyAtDestination,
     /// NRPN(0,18)〜(0,21): Operator F-Number Op0〜3（引数はOpインデックス0〜3）
     OperatorFNumber(u8),
+    /// NRPN(0,22): Fixed Note Enable。`Op505ChannelParams::fixed_note_enable`
+    /// （質感LFO退役で空いた欠番の再利用、詳細はspec-fm.md 8章）。
+    FixedNoteEnable,
+    /// NRPN(0,23): Fixed Note（MIDIノート番号0〜127）。`Op505ChannelParams::fixed_note`。
+    FixedNote,
+    /// NRPN(0,24): Fixed Note Fine（0〜255、128=中心のバイポーラ）。
+    /// `Op505ChannelParams::fixed_note_fine`。
+    FixedNoteFine,
     /// NRPN(0,28)〜(0,33)。op505のTimeEg 7本はpersist状態のためNRPNから触ると
     /// GUI表示と実音がズレる。**欠番として予約**（ym38x6版FG Loop/Curve相当）。
     ReservedFgLoopCurve,
@@ -89,7 +97,10 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 16) => ControlTarget::AtDestination,
         RpnSelection::Nrpn(0, 17) => ControlTarget::PolyAtDestination,
         RpnSelection::Nrpn(0, lsb @ 18..=21) => ControlTarget::OperatorFNumber(lsb - 18),
-        RpnSelection::Nrpn(0, 22..=27) => ControlTarget::ReservedTextureLfo,
+        RpnSelection::Nrpn(0, 22) => ControlTarget::FixedNoteEnable,
+        RpnSelection::Nrpn(0, 23) => ControlTarget::FixedNote,
+        RpnSelection::Nrpn(0, 24) => ControlTarget::FixedNoteFine,
+        RpnSelection::Nrpn(0, 25..=27) => ControlTarget::ReservedTextureLfo,
         RpnSelection::Nrpn(0, 28..=33) => ControlTarget::ReservedFgLoopCurve,
         RpnSelection::Nrpn(0, 34) => ControlTarget::Cc2Destination,
         RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
@@ -121,6 +132,9 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::FilterSelfOscillation
         | ControlTarget::AtDestination
         | ControlTarget::PolyAtDestination
+        | ControlTarget::FixedNoteEnable
+        | ControlTarget::FixedNote
+        | ControlTarget::FixedNoteFine
         | ControlTarget::ReservedFgLoopCurve
         | ControlTarget::Cc2Destination
         | ControlTarget::Cc4Destination => false,
@@ -148,11 +162,11 @@ mod tests {
     }
 
     /// 旧質感LFOのNRPNアドレス。質感LFO退役後は欠番として予約し、再利用しない。
-    /// NRPN(0,1)はChannelEffectRouteへ再割り当て済みのためこのリストから除外
-    /// （`channel_effect_route_address`参照）。
+    /// NRPN(0,1)はChannelEffectRoute、(0,22)〜(0,24)はFixed Note 3項目へ再割り当て済みのため
+    /// このリストから除外（`channel_effect_route_address`・`fixed_note_addresses`参照）。
     #[test]
     fn reserved_texture_lfo_range_is_never_touched() {
-        for lsb in [0, 22, 23, 24, 25, 26, 27] {
+        for lsb in [0, 25, 26, 27] {
             assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedTextureLfo);
             assert!(!needs_voice_update(ControlTarget::ReservedTextureLfo));
         }
@@ -163,6 +177,19 @@ mod tests {
     fn channel_effect_route_address() {
         assert_eq!(control_target(RpnSelection::Nrpn(0, 1)), ControlTarget::ChannelEffectRoute);
         assert!(!needs_voice_update(ControlTarget::ChannelEffectRoute));
+    }
+
+    /// NRPN(0,22)〜(0,24)は質感LFO退役で空いた欠番からFixed Note 3項目へ再割り当てされている。
+    /// いずれも`PatchOverrides`経由（`build_effective_patch`）で反映されるため
+    /// `needs_voice_update`はfalse（`OperatorFNumber`のような専用即時反映経路は不要）。
+    #[test]
+    fn fixed_note_addresses() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 22)), ControlTarget::FixedNoteEnable);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 23)), ControlTarget::FixedNote);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 24)), ControlTarget::FixedNoteFine);
+        assert!(!needs_voice_update(ControlTarget::FixedNoteEnable));
+        assert!(!needs_voice_update(ControlTarget::FixedNote));
+        assert!(!needs_voice_update(ControlTarget::FixedNoteFine));
     }
 
     #[test]

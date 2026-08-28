@@ -379,6 +379,18 @@ impl ChannelState {
                 self.apply_operator_f_number_override(op_index as usize);
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
+            ControlTarget::FixedNoteEnable => {
+                self.overrides.fixed_note_enable = Some(cc_byte_to_u7(raw_value) != 0);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::FixedNote => {
+                self.overrides.fixed_note = Some(cc_byte_to_u7(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::FixedNoteFine => {
+                self.overrides.fixed_note_fine = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
             ControlTarget::ReservedFgLoopCurve => DataEntryOutcome::StateChanged { voice_update: false },
             ControlTarget::Cc2Destination => {
                 self.cc2_destination = ExpressionDestination::from_u8(cc_byte_to_u7(raw_value));
@@ -433,12 +445,13 @@ mod tests {
         assert_eq!(eff, base);
     }
 
-    /// NRPN(0,0)・(0,22)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない。
-    /// NRPN(0,1)はChannelEffectRouteへ再割り当て済みのためこのリストから除外（別テスト参照）。
+    /// NRPN(0,0)・(0,25)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない。
+    /// NRPN(0,1)はChannelEffectRoute、(0,22)〜(0,24)はFixed Note 3項目へ再割り当て済みのため
+    /// このリストから除外（別テスト参照）。
     #[test]
     fn nrpn_reserved_texture_lfo_is_noop() {
         let mut st = ChannelState::new(0, false);
-        for lsb in [0u8, 22, 23, 24, 25, 26, 27] {
+        for lsb in [0u8, 25, 26, 27] {
             select_nrpn(&mut st, 0, lsb);
             assert_eq!(
                 st.apply_data_entry(100),
@@ -489,6 +502,41 @@ mod tests {
         assert_eq!(st.overrides.algorithm, Some(5));
         let eff = st.build_effective_patch(&Op505Patch::default());
         assert_eq!(eff.channel.algorithm, 5);
+    }
+
+    /// NRPN(0,22)〜(0,24) Fixed Note 3項目は`overrides`へ書き込まれ、実効パッチの
+    /// `channel.fixed_note_enable`/`fixed_note`/`fixed_note_fine`を置き換える。
+    #[test]
+    fn nrpn_fixed_note_overrides() {
+        let mut st = ChannelState::new(0, false);
+
+        select_nrpn(&mut st, 0, 22); // Fixed Note Enable
+        assert_eq!(st.apply_data_entry(127), DataEntryOutcome::StateChanged { voice_update: true });
+        assert_eq!(st.overrides.fixed_note_enable, Some(true));
+
+        select_nrpn(&mut st, 0, 23); // Fixed Note
+        assert_eq!(st.apply_data_entry(60), DataEntryOutcome::StateChanged { voice_update: true });
+        assert_eq!(st.overrides.fixed_note, Some(60));
+
+        select_nrpn(&mut st, 0, 24); // Fixed Note Fine
+        // ReverbTimeと同じcc_byte_to_u8（7bit→8bit拡大）を使うため、生値64は129になる。
+        assert_eq!(st.apply_data_entry(64), DataEntryOutcome::StateChanged { voice_update: true });
+        assert_eq!(st.overrides.fixed_note_fine, Some(cc_byte_to_u8(64)));
+
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert!(eff.channel.fixed_note_enable);
+        assert_eq!(eff.channel.fixed_note, 60);
+        assert_eq!(eff.channel.fixed_note_fine, cc_byte_to_u8(64));
+    }
+
+    /// NRPN(0,22) Fixed Note Enableは生値0で無効(false)、非0(=127)で有効(true)になる
+    /// （`filter_self_oscillation`と同じ「非0=true」規約）。
+    #[test]
+    fn nrpn_fixed_note_enable_zero_is_false() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 22);
+        st.apply_data_entry(0);
+        assert_eq!(st.overrides.fixed_note_enable, Some(false));
     }
 
     /// 折衷案の挙動：Program Changeで上書きレイヤーがクリアされ、以降のNRPNは新たに効く。

@@ -22,6 +22,9 @@ pub struct PatchOverrides {
     pub operator_waveforms: [Option<u8>; 4],
     pub filter_type: Option<u8>,
     pub filter_self_oscillation: Option<bool>,
+    pub fixed_note_enable: Option<bool>,
+    pub fixed_note: Option<u8>,
+    pub fixed_note_fine: Option<u8>,
 }
 
 impl PatchOverrides {
@@ -40,6 +43,15 @@ impl PatchOverrides {
         }
         if let Some(v) = self.filter_self_oscillation {
             patch.channel.filter_self_oscillation = v;
+        }
+        if let Some(v) = self.fixed_note_enable {
+            patch.channel.fixed_note_enable = v;
+        }
+        if let Some(v) = self.fixed_note {
+            patch.channel.fixed_note = v;
+        }
+        if let Some(v) = self.fixed_note_fine {
+            patch.channel.fixed_note_fine = v;
         }
     }
 
@@ -70,6 +82,9 @@ mod tests {
             operator_waveforms: [Some(9), None, Some(3), None],
             filter_type: Some(2),
             filter_self_oscillation: Some(false),
+            fixed_note_enable: Some(true),
+            fixed_note: Some(60),
+            fixed_note_fine: Some(200),
         };
         overrides.apply(&mut patch);
         assert_eq!(patch.channel.algorithm, 5);
@@ -79,6 +94,9 @@ mod tests {
         assert_eq!(patch.operators[3].waveform, base.operators[3].waveform);
         assert_eq!(patch.channel.filter_type, 2);
         assert!(!patch.channel.filter_self_oscillation);
+        assert!(patch.channel.fixed_note_enable);
+        assert_eq!(patch.channel.fixed_note, 60);
+        assert_eq!(patch.channel.fixed_note_fine, 200);
     }
 
     #[test]
@@ -88,6 +106,9 @@ mod tests {
             operator_waveforms: [Some(9); 4],
             filter_type: Some(2),
             filter_self_oscillation: Some(false),
+            fixed_note_enable: Some(true),
+            fixed_note: Some(60),
+            fixed_note_fine: Some(200),
         };
         overrides.clear();
         assert_eq!(overrides, PatchOverrides::default());
