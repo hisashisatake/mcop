@@ -13,6 +13,7 @@ use op505_core::{
     build_op505_registry, current_open_dir, op505_presets_dir, Op505BankFile, Op505BankRegistry, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile,
 };
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 
@@ -31,6 +32,10 @@ pub(crate) struct PresetSession {
     unsaved: bool,
     /// Delete確認ダイアログの結果待ち（`request_delete`/`poll_pending_delete`参照）。
     pending_delete: Option<PendingDelete>,
+    /// Openファイル選択ダイアログの結果待ち（`request_open`/`poll_pending_open`参照）。
+    pending_open: Option<PendingOpen>,
+    /// Save Asファイル保存ダイアログの結果待ち（`request_save_as`/`poll_pending_save_as`参照）。
+    pending_save_as: Option<PendingSaveAs>,
 }
 
 /// Delete確認中に確認先を固定するための情報。ダイアログ表示中にBank欄が操作された場合でも
@@ -41,11 +46,35 @@ struct PendingDelete {
     receiver: mpsc::Receiver<bool>,
 }
 
+/// Open実行中に読込先bankを固定するための情報（ダイアログ表示中にBankが操作された場合の対策）。
+struct PendingOpen {
+    bank: u16,
+    receiver: mpsc::Receiver<Option<PathBuf>>,
+}
+
+/// Save As実行中に保存対象(bank, program, 音色名)を固定するための情報。
+struct PendingSaveAs {
+    bank: u16,
+    program: u8,
+    patch_name: String,
+    receiver: mpsc::Receiver<Option<PathBuf>>,
+}
+
 impl PresetSession {
     /// 起動直後は何も選択しない（プロジェクトを開いただけでDAWパラメーターが書き換わる事故を
     /// 避ける、既存の「何も選ばない」挙動を踏襲）。
     fn new(registry: Op505BankRegistry) -> Self {
-        PresetSession { registry, bank: 0, program: 0, file_name: None, patch_name: String::new(), unsaved: false, pending_delete: None }
+        PresetSession {
+            registry,
+            bank: 0,
+            program: 0,
+            file_name: None,
+            patch_name: String::new(),
+            unsaved: false,
+            pending_delete: None,
+            pending_open: None,
+            pending_save_as: None,
+        }
     }
 
     /// 今のbankの担当ファイルが持つ音色一覧（未登録なら空）。
@@ -142,20 +171,51 @@ fn publish_bank(shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>, 
     dirty.store(true, Ordering::Release);
 }
 
-fn handle_open(session: &mut PresetSession, params: &Op505VstParams, setter: &ParamSetter<'_>, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+/// Openファイル選択ダイアログの表示を要求する。`rfd::FileDialog::pick_file()`もDelete確認と同じく
+/// ブロッキング呼び出しであり、egui描画コールバック内で直接呼ぶとREAPERごとクラッシュする
+/// （実機確認で確認済み・2026-08-28、Delete確認ダイアログと同じ原因）。表示は別スレッドへ逃がし、
+/// 結果は`poll_pending_open`が毎フレームpollする。
+fn request_open(session: &mut PresetSession) {
+    if session.pending_open.is_some() {
+        return;
+    }
     let start_dir = current_open_dir(&session.registry, session.bank);
-    let Some(path) = rfd::FileDialog::new().add_filter("op505", &["op505"]).set_directory(start_dir).pick_file() else { return };
+    let bank = session.bank;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let path = rfd::FileDialog::new().add_filter("op505", &["op505"]).set_directory(start_dir).pick_file();
+        let _ = tx.send(path);
+    });
+    session.pending_open = Some(PendingOpen { bank, receiver: rx });
+}
+
+/// 毎フレーム呼ぶ。ファイル選択ダイアログの結果が届いていればロードを実行する。
+fn poll_pending_open(session: &mut PresetSession, params: &Op505VstParams, setter: &ParamSetter<'_>, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+    let path = match session.pending_open.as_ref() {
+        Some(pending) => match pending.receiver.try_recv() {
+            Ok(path) => path,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        },
+        None => return,
+    };
+    let PendingOpen { bank, .. } = session.pending_open.take().expect("Some確認済み");
+    let Some(path) = path else { return }; // ダイアログをキャンセルした
     let Ok(json) = std::fs::read_to_string(&path) else { return };
     let Ok(file) = Op505PresetFile::from_json(&json) else { return };
-    // ファイル自身が宣言しているbank番号は無視し、今選択中のbankへ丸ごとロードする
+    // ファイル自身が宣言しているbank番号は無視し、リクエスト時点のbankへ丸ごとロードする
     // （gesture-appと同じ、ユーザー確認済みの既定仕様）。
-    let bank_file = Op505BankFile::from_loaded(path, file, session.bank);
+    let bank_file = Op505BankFile::from_loaded(path, file, bank);
     let Some(entry) = bank_file.entries().first().cloned() else { return };
 
-    apply_entry(params, setter, &entry, false);
+    // ダイアログ表示中にBankが切り替えられていた場合、DAWパラメーター・表示の更新は
+    // 今見えているbankとは無関係になるためスキップする（レジストリへの登録自体は常に行う）。
+    if bank == session.bank {
+        apply_entry(params, setter, &entry, false);
+        session.open_file(entry.program, entry.name, bank_file.file_name().map(str::to_string));
+    }
     publish_bank(shared, dirty, &bank_file);
-    session.open_file(entry.program, entry.name, bank_file.file_name().map(str::to_string));
-    session.registry.insert(session.bank, bank_file);
+    session.registry.insert(bank, bank_file);
 }
 
 fn handle_save(session: &mut PresetSession, params: &Op505VstParams, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
@@ -174,28 +234,50 @@ fn handle_save(session: &mut PresetSession, params: &Op505VstParams, shared: &Ar
     session.on_saved(file_name);
 }
 
-fn handle_save_as(session: &mut PresetSession, params: &Op505VstParams, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+/// Save As保存ダイアログの表示を要求する。理由・方式はOpen（`request_open`）と同じ
+/// （`rfd::FileDialog::save_file()`も同じブロッキングダイアログのため）。
+fn request_save_as(session: &mut PresetSession) {
+    if session.pending_save_as.is_some() {
+        return;
+    }
     let start_dir = current_open_dir(&session.registry, session.bank);
     let default_name = session.default_save_as_file_name();
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("op505", &["op505"])
-        .set_directory(start_dir)
-        .set_file_name(format!("{default_name}.op505"))
-        .save_file()
-    else {
-        return;
+    let (bank, program, patch_name) = (session.bank, session.program, session.patch_name.clone());
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let path = rfd::FileDialog::new()
+            .add_filter("op505", &["op505"])
+            .set_directory(start_dir)
+            .set_file_name(format!("{default_name}.op505"))
+            .save_file();
+        let _ = tx.send(path);
+    });
+    session.pending_save_as = Some(PendingSaveAs { bank, program, patch_name, receiver: rx });
+}
+
+/// 毎フレーム呼ぶ。保存ダイアログの結果が届いていれば書き出しを実行する。
+fn poll_pending_save_as(session: &mut PresetSession, params: &Op505VstParams, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+    let path = match session.pending_save_as.as_ref() {
+        Some(pending) => match pending.receiver.try_recv() {
+            Ok(path) => path,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        },
+        None => return,
     };
+    let PendingSaveAs { bank, program, patch_name, .. } = session.pending_save_as.take().expect("Some確認済み");
+    let Some(path) = path else { return }; // ダイアログをキャンセルした
 
     let patch = build_patch(params, &params.egs.read().expect("Poisoned RwLock on read"));
-    let base_entries: Vec<Op505PresetEntry> = session.registry.get(&session.bank).map(|f| f.entries().to_vec()).unwrap_or_default();
-    let patch_name = session.patch_name.clone();
-    let (bank, program) = (session.bank, session.program);
+    let base_entries: Vec<Op505PresetEntry> = session.registry.get(&bank).map(|f| f.entries().to_vec()).unwrap_or_default();
     let Ok(bank_file) = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path) else { return };
 
     let file_name = bank_file.file_name().unwrap_or("patch.op505").to_string();
     publish_bank(shared, dirty, &bank_file);
     session.registry.insert(bank, bank_file);
-    session.open_file(program, patch_name, Some(file_name));
+    if bank == session.bank {
+        session.open_file(program, patch_name, Some(file_name));
+    }
 }
 
 fn handle_add_new_voice(
@@ -352,14 +434,14 @@ pub(crate) fn draw_presets_panel(
     let session = &mut state.session;
 
     ui.horizontal(|ui| {
-        if ui.button("Open").clicked() {
-            handle_open(session, params, setter, shared_preset_bank, preset_bank_dirty);
+        if ui.add_enabled(session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
+            request_open(session);
         }
         if ui.add_enabled(session.save_enabled(), egui::Button::new("Save")).clicked() {
             handle_save(session, params, shared_preset_bank, preset_bank_dirty);
         }
-        if ui.button("Save As").clicked() {
-            handle_save_as(session, params, shared_preset_bank, preset_bank_dirty);
+        if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
+            request_save_as(session);
         }
     });
 
@@ -416,6 +498,8 @@ pub(crate) fn draw_presets_panel(
         request_delete(session);
     }
     poll_pending_delete(session, params, setter, shared_preset_bank, preset_bank_dirty);
+    poll_pending_open(session, params, setter, shared_preset_bank, preset_bank_dirty);
+    poll_pending_save_as(session, params, shared_preset_bank, preset_bank_dirty);
 }
 
 /// `EditorState`が持つPRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。
