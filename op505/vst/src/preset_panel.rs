@@ -13,7 +13,7 @@ use op505_core::{
     build_op505_registry, current_open_dir, op505_presets_dir, Op505BankFile, Op505BankRegistry, Op505Patch, Op505PresetBank, Op505PresetEntry, Op505PresetFile,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 
 use crate::params::{apply_patch, apply_patch_egs, build_patch, Op505VstParams};
 
@@ -28,13 +28,23 @@ pub(crate) struct PresetSession {
     /// （毎フレーム`build_patch`とのdiffを取る必要がありコスト・複雑さに見合わないため、
     /// 「音色名を編集した」ことだけを検知する簡易版に留める）。
     unsaved: bool,
+    /// Delete確認ダイアログの結果待ち（`request_delete`/`poll_pending_delete`参照）。
+    pending_delete: Option<PendingDelete>,
+}
+
+/// Delete確認中に確認先を固定するための情報。ダイアログ表示中にBank欄が操作された場合でも
+/// 削除対象がずれないよう、リクエスト時点の(bank, program)を保持する。
+struct PendingDelete {
+    bank: u16,
+    program: u8,
+    receiver: mpsc::Receiver<bool>,
 }
 
 impl PresetSession {
     /// 起動直後は何も選択しない（プロジェクトを開いただけでDAWパラメーターが書き換わる事故を
     /// 避ける、既存の「何も選ばない」挙動を踏襲）。
     fn new(registry: Op505BankRegistry) -> Self {
-        PresetSession { registry, bank: 0, program: 0, file_name: None, patch_name: String::new(), unsaved: false }
+        PresetSession { registry, bank: 0, program: 0, file_name: None, patch_name: String::new(), unsaved: false, pending_delete: None }
     }
 
     /// 今のbankの担当ファイルが持つ音色一覧（未登録なら空）。
@@ -193,25 +203,51 @@ fn handle_add_new_voice(
     session.select_entry(entry.program, entry.name);
 }
 
-fn handle_delete(session: &mut PresetSession, params: &Op505VstParams, setter: &ParamSetter<'_>, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+/// Delete確認ダイアログの表示を要求する。`rfd::MessageDialog::show()`はブロッキング呼び出しで、
+/// egui描画コールバック（＝REAPERのウィンドウプロシージャから呼ばれている最中）の内側で直接
+/// 呼ぶとダイアログが回すネストしたメッセージループがプラグインウィンドウへ再入し、REAPERごと
+/// クラッシュする（実機確認で確認済み・2026-08-28、例外コード0xC0000409）。そのため表示自体は
+/// 別スレッドへ逃がし、結果は`poll_pending_delete`が毎フレームpollする。
+fn request_delete(session: &mut PresetSession) {
+    if session.pending_delete.is_some() {
+        return; // 確認中の二重リクエストを防ぐ（ボタン側もdisabledにしているが念のため）
+    }
     let Some(bank_file) = session.registry.get(&session.bank) else { return };
     let Some(name) = bank_file.entries().iter().find(|e| e.program == session.program).map(|e| e.name.clone()) else { return };
 
-    let confirmed = matches!(
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("音色の削除")
-            .set_description(format!("音色「{:03} {}」を削除しますか？", session.program, name))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show(),
-        rfd::MessageDialogResult::Yes
-    );
+    let (bank, program) = (session.bank, session.program);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let confirmed = matches!(
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("音色の削除")
+                .set_description(format!("音色「{:03} {}」を削除しますか？", program, name))
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show(),
+            rfd::MessageDialogResult::Yes
+        );
+        let _ = tx.send(confirmed);
+    });
+    session.pending_delete = Some(PendingDelete { bank, program, receiver: rx });
+}
+
+/// 毎フレーム呼ぶ。確認スレッドの結果が届いていれば削除を実行する（結果が未到着ならno-op）。
+fn poll_pending_delete(session: &mut PresetSession, params: &Op505VstParams, setter: &ParamSetter<'_>, shared: &Arc<RwLock<Op505PresetBank>>, dirty: &Arc<AtomicBool>) {
+    let confirmed = match session.pending_delete.as_ref() {
+        Some(pending) => match pending.receiver.try_recv() {
+            Ok(confirmed) => confirmed,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        },
+        None => return,
+    };
+    let PendingDelete { bank, program, .. } = session.pending_delete.take().expect("Some確認済み");
     if !confirmed {
         return;
     }
 
-    let program = session.program;
-    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return };
+    let Some(bank_file) = session.registry.get_mut(&bank) else { return };
     if bank_file.remove(program).is_err() {
         return;
     }
@@ -221,8 +257,12 @@ fn handle_delete(session: &mut PresetSession, params: &Op505VstParams, setter: &
     let remaining = bank_file.entries().to_vec();
     publish_bank(shared, dirty, bank_file);
 
-    if let Some(next) = session.select_after_delete(&remaining) {
-        apply_entry(params, setter, &next, false);
+    // ダイアログ表示中にBankが切り替えられていた場合、削除対象はもう画面に見えていないので
+    // DAWパラメーターへの反映（現在選択への追従）は行わない。
+    if bank == session.bank {
+        if let Some(next) = session.select_after_delete(&remaining) {
+            apply_entry(params, setter, &next, false);
+        }
     }
 }
 
@@ -302,7 +342,8 @@ pub(crate) fn draw_presets_panel(
     // Deleteボタンも置く（下記ScrollArea内）。
     let any_text_focused = ui.memory(|m| m.focused().is_some());
     let has_entries = !session.entries().is_empty();
-    let delete_by_key = !any_text_focused && has_entries && ui.input(|i| i.key_pressed(egui::Key::Delete));
+    let delete_enabled = has_entries && session.pending_delete.is_none();
+    let delete_by_key = !any_text_focused && delete_enabled && ui.input(|i| i.key_pressed(egui::Key::Delete));
 
     ui.label(egui::RichText::new("PRESETS").strong());
     let mut delete_by_button = false;
@@ -320,14 +361,15 @@ pub(crate) fn draw_presets_panel(
             let copy_current = ui.input(|i| i.modifiers.shift);
             handle_add_new_voice(session, params, setter, shared_preset_bank, preset_bank_dirty, copy_current);
         }
-        if ui.add_enabled(has_entries, egui::Button::new("Delete")).clicked() {
+        if ui.add_enabled(delete_enabled, egui::Button::new("Delete")).clicked() {
             delete_by_button = true;
         }
     });
 
     if delete_by_key || delete_by_button {
-        handle_delete(session, params, setter, shared_preset_bank, preset_bank_dirty);
+        request_delete(session);
     }
+    poll_pending_delete(session, params, setter, shared_preset_bank, preset_bank_dirty);
 }
 
 /// `EditorState`が持つPRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。
