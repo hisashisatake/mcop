@@ -336,8 +336,11 @@ impl ChannelState {
 
     /// CC6(Data Entry MSB)受信時、[`control_target`]で解決した制御対象に応じて値を適用する。
     ///
-    /// `ControlTarget::ReservedFgLoopCurve`（op505のTimeEg 7本はpersist状態でNRPNからは
-    /// 触らない欠番）・`ReservedTextureLfo`（旧質感LFO、退役済み欠番）は何もしない。
+    /// `ControlTarget::ReservedTextureLfo`（旧質感LFO、退役済み欠番）は何もしない。
+    /// FG Loop/Curve（NRPN(0,28)〜(0,33)）は`PatchOverrides`経由（Algorithm/FilterTypeと同じ
+    /// 「NRPN離散上書きレイヤー」）。`op505-vst`ではTimeEg本体がpersist状態のため、音には
+    /// 即座に反映されるがGUIエディタの表示・Save後のプリセットへは反映されない
+    /// （Algorithm等と同じ既知の制約）。
     ///
     /// `ControlTarget::ChannelEffectRoute`（NRPN(0,1)）はこのチャンネル自身の`effect_route_slot`
     /// を書き換えるだけで`DataEntryOutcome::StateChanged`を返す。NRPN(0,2)〜(0,8)（エフェクト
@@ -433,7 +436,30 @@ impl ChannelState {
                 self.overrides.fixed_note_fine = Some(cc_byte_to_u8(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
-            ControlTarget::ReservedFgLoopCurve => DataEntryOutcome::StateChanged { voice_update: false },
+            ControlTarget::PitchFgLoop => {
+                self.overrides.pitch_fg_loop = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::PitchFgCurve => {
+                self.overrides.pitch_fg_curve = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::CutoffFgLoop => {
+                self.overrides.cutoff_fg_loop = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::CutoffFgCurve => {
+                self.overrides.cutoff_fg_curve = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::GainFgLoop => {
+                self.overrides.gain_fg_loop = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::GainFgCurve => {
+                self.overrides.gain_fg_curve = Some((cc_byte_to_u7(raw_value) != 0) as u8);
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
             ControlTarget::Cc2Destination => {
                 self.cc2_destination = ExpressionDestination::from_u8(cc_byte_to_u7(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
@@ -608,18 +634,43 @@ mod tests {
         }
     }
 
-    /// NRPN(0,28)〜(0,33)（op505ではReservedFgLoopCurve）は何も変えず voice_update=false を返す。
+    /// NRPN(0,28)〜(0,33) FG Loop/Curveは`overrides`へ書き込まれ、実効パッチの
+    /// pitch/cutoff/gain各FGのloop_enabled・全段curveを置き換える。
     #[test]
-    fn nrpn_reserved_fg_loop_curve_is_noop() {
+    fn nrpn_fg_loop_curve_overrides() {
         let mut st = ChannelState::new(0, false);
         for lsb in 28u8..=33 {
             select_nrpn(&mut st, 0, lsb);
             assert_eq!(
                 st.apply_data_entry(127),
-                DataEntryOutcome::StateChanged { voice_update: false },
-                "NRPN(0,{lsb}) should be a no-op"
+                DataEntryOutcome::StateChanged { voice_update: true },
+                "NRPN(0,{lsb}) should update overrides"
             );
         }
+        assert_eq!(st.overrides.pitch_fg_loop, Some(1));
+        assert_eq!(st.overrides.pitch_fg_curve, Some(1));
+        assert_eq!(st.overrides.cutoff_fg_loop, Some(1));
+        assert_eq!(st.overrides.cutoff_fg_curve, Some(1));
+        assert_eq!(st.overrides.gain_fg_loop, Some(1));
+        assert_eq!(st.overrides.gain_fg_curve, Some(1));
+
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert_eq!(eff.channel.pitch_fg.eg.loop_enabled, 1);
+        assert!(eff.channel.pitch_fg.eg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(eff.channel.cutoff_fg.eg.loop_enabled, 1);
+        assert!(eff.channel.cutoff_fg.eg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(eff.channel.gain_fg.loop_enabled, 1);
+        assert!(eff.channel.gain_fg.stages.iter().all(|s| s.curve == 1));
+    }
+
+    /// NRPN(0,28) Pitch FG Loopは生値0で無効(0)、非0(=127)で有効(1)になる
+    /// （`filter_self_oscillation`と同じ「非0=true」規約）。
+    #[test]
+    fn nrpn_fg_loop_zero_is_off() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 28);
+        st.apply_data_entry(0);
+        assert_eq!(st.overrides.pitch_fg_loop, Some(0));
     }
 
     /// NRPN(0,18)＝OP0 F-Number は CC6(MSB)+CC38(LSB)の14bit→13bit clamp。

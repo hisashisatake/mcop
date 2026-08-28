@@ -1256,12 +1256,13 @@ DAWオートメーションの出力はビット不変。op505-vstのDAWパラ�
 
 **op505-vstのNRPNテーブル仕様（2026-08、フェーズ2実装時、`op505/vst/src/lib.rs`）：**
 
-- **NRPN(0,28)〜(0,33)（Pitch/Cutoff/Gain FG Loop/Curve）は欠番として予約**する（未実装、`_ => {}`で無視）。
-  op505のTimeEg 7本はDAWパラメーターではなくnice-plugの`#[persist]`状態
-  （`Arc<RwLock<Op505EgBank>>`、[[project_op505_vst_phase1]]参照）のため、NRPNから直接書き込むと
-  GUI表示と実際に鳴る音がズレる。Loop/Curve相当（`TimeEgParams`の`loop_enabled`等）はGUI/persist
-  経由でのみ編集する設計に統一した。番号を詰めずそのまま欠番にしたのは、将来persist状態への
-  安全な書き込み手段（`try_write()`等）を追加する余地を残すため。
+- **NRPN(0,28)〜(0,33)（Pitch/Cutoff/Gain FG Loop/Curve）は2026-08-29実装**（`PatchOverrides`
+  経由、Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」方式）。op505のTimeEg 7本は
+  DAWパラメーターではなくnice-plugの`#[persist]`状態（`Arc<RwLock<Op505EgBank>>`、
+  [[project_op505_vst_phase1]]参照）のため、この上書きは**音には即座に反映されるが、
+  GUIエディタの表示・Save後のプリセットへは反映されない**（persist状態への安全な書き込み
+  手段＝「保留キュー＋try_write再試行」方式は検討したが、Algorithm等の既存NRPNと同水準の
+  制約として受け入れる簡易実装を採用した。[[project_nrpn_effect_slot_renumbering_design]]参照）。
 - **NRPN(0,14) Filter Type・NRPN(0,15) Filter Self-Oscillationは二重公開**
   （DAWパラメーターとの1シャドウ差分検知）になる。op505-vstフェーズ1で先に
   DAWパラメーター化されていたため、algorithmや質感LFO群と同じシャドウ差分検知パターンで両立させる。

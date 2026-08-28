@@ -72,9 +72,22 @@ pub enum ControlTarget {
     /// NRPN(0,24): Fixed Note Fine（0〜255、128=中心のバイポーラ）。
     /// `Op505ChannelParams::fixed_note_fine`。
     FixedNoteFine,
-    /// NRPN(0,28)〜(0,33)。op505のTimeEg 7本はpersist状態のためNRPNから触ると
-    /// GUI表示と実音がズレる。**欠番として予約**（ym38x6版FG Loop/Curve相当）。
-    ReservedFgLoopCurve,
+    /// NRPN(0,28): Pitch FG Loop（0=ワンショット/1=ループ）。
+    /// `PatchOverrides`経由（Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」）。
+    /// `op505-vst`ではTimeEg本体がpersist状態のため、この上書きは音には即座に反映されるが
+    /// GUIエディタの表示・Save後のプリセットへは反映されない（Algorithm等と同じ既知の制約、
+    /// spec-sound.md「op505-vstのNRPNテーブル仕様」節参照）。
+    PitchFgLoop,
+    /// NRPN(0,29): Pitch FG Curve（0=線形/1=サイン風、全段一括）。
+    PitchFgCurve,
+    /// NRPN(0,30): Cutoff FG Loop（0=ワンショット/1=ループ）。
+    CutoffFgLoop,
+    /// NRPN(0,31): Cutoff FG Curve（0=線形/1=サイン風、全段一括）。
+    CutoffFgCurve,
+    /// NRPN(0,32): Gain FG Loop（0=ワンショット/1=ループ）。
+    GainFgLoop,
+    /// NRPN(0,33): Gain FG Curve（0=線形/1=サイン風、全段一括）。
+    GainFgCurve,
     /// NRPN(0,34): CC2(ブレス)Destination
     Cc2Destination,
     /// NRPN(0,35): CC4(フット)Destination
@@ -110,7 +123,12 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 23) => ControlTarget::FixedNote,
         RpnSelection::Nrpn(0, 24) => ControlTarget::FixedNoteFine,
         RpnSelection::Nrpn(0, 25..=27) => ControlTarget::ReservedTextureLfo,
-        RpnSelection::Nrpn(0, 28..=33) => ControlTarget::ReservedFgLoopCurve,
+        RpnSelection::Nrpn(0, 28) => ControlTarget::PitchFgLoop,
+        RpnSelection::Nrpn(0, 29) => ControlTarget::PitchFgCurve,
+        RpnSelection::Nrpn(0, 30) => ControlTarget::CutoffFgLoop,
+        RpnSelection::Nrpn(0, 31) => ControlTarget::CutoffFgCurve,
+        RpnSelection::Nrpn(0, 32) => ControlTarget::GainFgLoop,
+        RpnSelection::Nrpn(0, 33) => ControlTarget::GainFgCurve,
         RpnSelection::Nrpn(0, 34) => ControlTarget::Cc2Destination,
         RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
         RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
@@ -146,7 +164,12 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::FixedNoteEnable
         | ControlTarget::FixedNote
         | ControlTarget::FixedNoteFine
-        | ControlTarget::ReservedFgLoopCurve
+        | ControlTarget::PitchFgLoop
+        | ControlTarget::PitchFgCurve
+        | ControlTarget::CutoffFgLoop
+        | ControlTarget::CutoffFgCurve
+        | ControlTarget::GainFgLoop
+        | ControlTarget::GainFgCurve
         | ControlTarget::Cc2Destination
         | ControlTarget::Cc4Destination => false,
     }
@@ -164,11 +187,24 @@ mod tests {
         assert_eq!(control_target(RpnSelection::Nrpn(0, 21)), ControlTarget::OperatorFNumber(3));
     }
 
+    /// NRPN(0,28)〜(0,33)はFG Loop/Curve 6項目（2026-08-29実装、旧`ReservedFgLoopCurve`欠番から）。
     #[test]
-    fn reserved_fg_loop_curve_range_is_never_touched() {
-        for lsb in 28..=33 {
-            assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedFgLoopCurve);
-            assert!(!needs_voice_update(ControlTarget::ReservedFgLoopCurve));
+    fn fg_loop_curve_addresses() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 28)), ControlTarget::PitchFgLoop);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 29)), ControlTarget::PitchFgCurve);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 30)), ControlTarget::CutoffFgLoop);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 31)), ControlTarget::CutoffFgCurve);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 32)), ControlTarget::GainFgLoop);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 33)), ControlTarget::GainFgCurve);
+        for target in [
+            ControlTarget::PitchFgLoop,
+            ControlTarget::PitchFgCurve,
+            ControlTarget::CutoffFgLoop,
+            ControlTarget::CutoffFgCurve,
+            ControlTarget::GainFgLoop,
+            ControlTarget::GainFgCurve,
+        ] {
+            assert!(!needs_voice_update(target));
         }
     }
 

@@ -9,9 +9,10 @@
 //! VST はプラグイン単一音色前提でシャドウ状態をプラグイングローバルに持つが、smf2op505 は
 //! マルチティンバーのため [`ChannelState`] を **MIDIチャンネル別** に16個持つ。
 //!
-//! op505のTimeEg 7本（OP1〜4 EG・Pitch/Cutoff/Gain FG）はDAWパラメーターではなくpersist状態
-//! のため、`.op505`バンクの値をそのまま使う。NRPNからのFG Loop/Curve上書きはop505では欠番
-//! （`op505_midi::ControlTarget::ReservedFgLoopCurve`）であり、ここでも何もしない。
+//! NRPN(0,28)〜(0,33) FG Loop/Curveは`ChannelState::overrides`（`PatchOverrides`）経由で
+//! Pitch/Cutoff/Gain FGのloop_enabled・全段curveを上書きする（Algorithm等と同じNRPN離散
+//! 上書きレイヤー、smf2op505は`.op505`バンクの値をベースパッチとしてそのまま使うだけなので
+//! `op505-vst`特有のpersist書き込み制約を受けない）。
 //!
 //! 対応SMFイベント:
 //!   - Note On/Off、Program Change（CC102代替含む）、Tempo

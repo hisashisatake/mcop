@@ -25,6 +25,16 @@ pub struct PatchOverrides {
     pub fixed_note_enable: Option<bool>,
     pub fixed_note: Option<u8>,
     pub fixed_note_fine: Option<u8>,
+    /// NRPN(0,28)〜(0,33) FG Loop/Curve（0/1）。`op505-vst`ではTimeEg本体がpersist状態のため、
+    /// この上書きは音には即座に反映されるがGUIエディタの表示・Save後のプリセットへは
+    /// 反映されない（Algorithm等と同じ既知の制約、spec-sound.md参照）。
+    pub pitch_fg_loop: Option<u8>,
+    /// Curveは全段一括（`TimeStage::curve`は本来段ごとだが、NRPN 1本で全段へ同じ値を適用する）。
+    pub pitch_fg_curve: Option<u8>,
+    pub cutoff_fg_loop: Option<u8>,
+    pub cutoff_fg_curve: Option<u8>,
+    pub gain_fg_loop: Option<u8>,
+    pub gain_fg_curve: Option<u8>,
 }
 
 impl PatchOverrides {
@@ -52,6 +62,30 @@ impl PatchOverrides {
         }
         if let Some(v) = self.fixed_note_fine {
             patch.channel.fixed_note_fine = v;
+        }
+        if let Some(v) = self.pitch_fg_loop {
+            patch.channel.pitch_fg.eg.loop_enabled = v;
+        }
+        if let Some(v) = self.pitch_fg_curve {
+            for stage in patch.channel.pitch_fg.eg.stages.iter_mut() {
+                stage.curve = v;
+            }
+        }
+        if let Some(v) = self.cutoff_fg_loop {
+            patch.channel.cutoff_fg.eg.loop_enabled = v;
+        }
+        if let Some(v) = self.cutoff_fg_curve {
+            for stage in patch.channel.cutoff_fg.eg.stages.iter_mut() {
+                stage.curve = v;
+            }
+        }
+        if let Some(v) = self.gain_fg_loop {
+            patch.channel.gain_fg.loop_enabled = v;
+        }
+        if let Some(v) = self.gain_fg_curve {
+            for stage in patch.channel.gain_fg.stages.iter_mut() {
+                stage.curve = v;
+            }
         }
     }
 
@@ -85,6 +119,12 @@ mod tests {
             fixed_note_enable: Some(true),
             fixed_note: Some(60),
             fixed_note_fine: Some(200),
+            pitch_fg_loop: Some(1),
+            pitch_fg_curve: Some(1),
+            cutoff_fg_loop: Some(1),
+            cutoff_fg_curve: Some(1),
+            gain_fg_loop: Some(1),
+            gain_fg_curve: Some(1),
         };
         overrides.apply(&mut patch);
         assert_eq!(patch.channel.algorithm, 5);
@@ -97,6 +137,12 @@ mod tests {
         assert!(patch.channel.fixed_note_enable);
         assert_eq!(patch.channel.fixed_note, 60);
         assert_eq!(patch.channel.fixed_note_fine, 200);
+        assert_eq!(patch.channel.pitch_fg.eg.loop_enabled, 1);
+        assert!(patch.channel.pitch_fg.eg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(patch.channel.cutoff_fg.eg.loop_enabled, 1);
+        assert!(patch.channel.cutoff_fg.eg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(patch.channel.gain_fg.loop_enabled, 1);
+        assert!(patch.channel.gain_fg.stages.iter().all(|s| s.curve == 1));
     }
 
     #[test]
@@ -109,6 +155,12 @@ mod tests {
             fixed_note_enable: Some(true),
             fixed_note: Some(60),
             fixed_note_fine: Some(200),
+            pitch_fg_loop: Some(1),
+            pitch_fg_curve: Some(1),
+            cutoff_fg_loop: Some(1),
+            cutoff_fg_curve: Some(1),
+            gain_fg_loop: Some(1),
+            gain_fg_curve: Some(1),
         };
         overrides.clear();
         assert_eq!(overrides, PatchOverrides::default());
