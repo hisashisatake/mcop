@@ -16,6 +16,13 @@ pub enum ControlTarget {
     Unassigned,
     /// RPN(0,0): Pitch Bend Sensitivity（半音）
     PitchBendRange,
+    /// RPN(0,1): Channel Fine Tuning（GM2必須セット、14bit＝CC6(MSB)+CC38(LSB)）。
+    /// 8192＝無補正の中心、±100セント。ピッチベンドとは独立に常時加算する
+    /// （`ChannelState::tune_cents`参照）。
+    ChannelFineTuning,
+    /// RPN(0,2): Channel Coarse Tuning（GM2必須セット、GM1由来。MSBのみ有効）。
+    /// 64＝無補正の中心、±64半音。LSBは無視する（MIDI規格上0固定送信が前提）。
+    ChannelCoarseTuning,
     /// RPN(0,5): Modulation Depth Range
     ModulationDepthRange,
     /// NRPN(0,0)・(0,25)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
@@ -79,6 +86,8 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
     match selection {
         RpnSelection::None => ControlTarget::Unassigned,
         RpnSelection::Rpn(0, 0) => ControlTarget::PitchBendRange,
+        RpnSelection::Rpn(0, 1) => ControlTarget::ChannelFineTuning,
+        RpnSelection::Rpn(0, 2) => ControlTarget::ChannelCoarseTuning,
         RpnSelection::Rpn(0, 5) => ControlTarget::ModulationDepthRange,
         RpnSelection::Rpn(_, _) => ControlTarget::Unassigned,
         RpnSelection::Nrpn(0, 0) => ControlTarget::ReservedTextureLfo,
@@ -116,6 +125,8 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         ControlTarget::OperatorFNumber(_) => true,
         ControlTarget::Unassigned
         | ControlTarget::PitchBendRange
+        | ControlTarget::ChannelFineTuning
+        | ControlTarget::ChannelCoarseTuning
         | ControlTarget::ModulationDepthRange
         | ControlTarget::ReservedTextureLfo
         | ControlTarget::ChannelEffectRoute
@@ -202,5 +213,14 @@ mod tests {
     fn unknown_nrpn_group_is_unassigned() {
         assert_eq!(control_target(RpnSelection::Nrpn(1, 0)), ControlTarget::Unassigned);
         assert_eq!(control_target(RpnSelection::None), ControlTarget::Unassigned);
+    }
+
+    /// RPN(0,1)/(0,2)はGM2必須セットのChannel Fine/Coarse Tuning。
+    #[test]
+    fn channel_tuning_rpn_addresses() {
+        assert_eq!(control_target(RpnSelection::Rpn(0, 1)), ControlTarget::ChannelFineTuning);
+        assert_eq!(control_target(RpnSelection::Rpn(0, 2)), ControlTarget::ChannelCoarseTuning);
+        assert!(!needs_voice_update(ControlTarget::ChannelFineTuning));
+        assert!(!needs_voice_update(ControlTarget::ChannelCoarseTuning));
     }
 }

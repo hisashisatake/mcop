@@ -296,7 +296,7 @@ impl Op505Plugin {
         self.channels[midi_ch].apply_note_post_processing(&mut note_on_patch, note);
         self.engine.set_patch(note_on_patch);
         self.engine.note_on(ch_id, freq, velocity_u8);
-        self.engine.set_pitch_bend(ch_id, self.channels[midi_ch].bend_cents);
+        self.engine.set_pitch_bend(ch_id, self.channels[midi_ch].total_pitch_bend_cents());
         self.engine.set_channel_volume(
             ch_id,
             channel_gain(self.channels[midi_ch].cc7, self.channels[midi_ch].cc11),
@@ -325,8 +325,8 @@ impl Op505Plugin {
     ///
     /// `voice_update`は無視してよい：`voice_update:true`を返す全ターゲット
     /// （overrides/at_destination/poly_at_destination/cc2_destination/cc4_destination/
-    /// pitch_fg_rpn0_5/operator_f_number_override）は、毎ブロック先頭の伝播ループが
-    /// 無条件に全対象を再構築するため（将来「変化したchだけ伝播」のような最適化を
+    /// pitch_fg_rpn0_5/operator_f_number_override/tune_coarse/tune_fine）は、毎ブロック先頭の
+    /// 伝播ループが無条件に全対象を再構築するため（将来「変化したchだけ伝播」のような最適化を
     /// 入れると静かに壊れるので、この前提を崩す変更をする際は要注意）。
     fn handle_data_entry(&mut self, midi_ch: usize, value: f32) {
         match self.channels[midi_ch].apply_data_entry(cc_to_u7(value)) {
@@ -603,6 +603,11 @@ impl Plugin for Op505Plugin {
                 self.engine.set_operator_params(ch_id, op_index, *op);
             }
             self.engine.set_pitch_fg_rate_scale(ch_id, self.pitch_fg_rate_scale(midi_ch));
+            // RPN(0,1)/(0,2) Channel Fine/Coarse Tuning。ピッチベンドホイールの即時反映
+            // （`set_pitch_bend_group`）とは別に、他の全NRPN補正と同じく1ブロック遅れで
+            // ここへ伝播する（`total_pitch_bend_cents`＝bend_cents+tune_cents、常に無条件で
+            // 再送する設計なので取りこぼしは無い）。
+            self.engine.set_pitch_bend(ch_id, self.channels[midi_ch].total_pitch_bend_cents());
             // NRPN(0,18)〜(0,21) Operator F-Number上書き。他の全NRPN補正と同じく1ブロック遅れで
             // 伝播する（Someのみ適用。Noneはnote_on時のリセット値=F_NUMBER_CENTER相当のまま）。
             for (op_index, f_number) in self.channels[midi_ch].operator_f_number_override.iter().enumerate() {
@@ -819,10 +824,10 @@ impl Plugin for Op505Plugin {
                         100 => self.channels[midi_ch].rpn.set_rpn_lsb(cc_to_u7(value)),
                         101 => self.channels[midi_ch].rpn.set_rpn_msb(cc_to_u7(value)),
                         6 => self.handle_data_entry(midi_ch, value),
-                        // CC38(Data Entry LSB)：OP F-Number(NRPN(0,18)〜(0,21))選択中のときだけ
-                        // 14bit値を更新する（`ChannelState::apply_data_entry_lsb`。戻り値の
-                        // 即時反映フラグは無視してよい。伝播ループが毎ブロック無条件に
-                        // 全対象を再構築するため）。
+                        // CC38(Data Entry LSB)：OP F-Number(NRPN(0,18)〜(0,21))・Channel Fine
+                        // Tuning(RPN(0,1))選択中のときだけ14bit値を更新する
+                        // （`ChannelState::apply_data_entry_lsb`。戻り値の即時反映フラグは
+                        // 無視してよい。伝播ループが毎ブロック無条件に全対象を再構築するため）。
                         38 => {
                             let _ = self.channels[midi_ch].apply_data_entry_lsb(cc_to_u7(value));
                         }

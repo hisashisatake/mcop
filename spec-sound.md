@@ -972,10 +972,18 @@ CC66 OFF:        sostenuto中、pedal_down中でもkeys_down中でもないノ�
 | RPN (MSB,LSB) | 内容 | デフォルト | 備考 |
 |---|---|---|---|
 | 0, 0 | Pitch Bend Sensitivity | ±2半音 | Pitch BendのF-Number換算レンジ（半音 + セント） |
-| 0, 1 | Channel Fine Tuning | 0セント | F-Numberオフセット（±100セント） |
-| 0, 2 | Channel Coarse Tuning | 0半音 | F-Numberオフセット（±64半音） |
+| 0, 1 | Channel Fine Tuning | 8192（無補正） | CC6(MSB)+CC38(LSB)の14bit、±100セント。2026-08-29実装、下記参照 |
+| 0, 2 | Channel Coarse Tuning | 64（無補正） | MSBのみ、±64半音。2026-08-29実装、下記参照 |
 | 0, 5 | Modulation Depth Range | 64（約50セント相当） | Pitch FGのCC1セント換算係数（FGセクション参照） |
 | 127, 127 (7F,7F) | RPN/NRPN Null | - | 選択解除（誤操作防止のため必須） |
+
+**Channel Fine/Coarse Tuningの実装（2026-08-29、`op505-midi::ChannelState`）：** ピッチベンド
+（`bend_cents`）とは別に`tune_coarse`/`tune_fine`をチャンネル別に保持し、
+`tune_cents() = (tune_coarse-64)×100 + (tune_fine-8192)/8192×100`をピッチベンドへ常時加算する
+（`total_pitch_bend_cents() = bend_cents + tune_cents()`、3ホスト共通）。CC121(Reset All
+Controllers)ではピッチベンド（`bend_cents`）は0へ戻るが、チューニングは「チャンネル設定」
+として初期化しない（`portamento_time`と同じ扱い）。実装当初の設計（F-Number直接オフセット）
+ではなく、ピッチベンドと同じ「セント加算・毎ブロック無条件再送」経路に統一している。
 
 ### Bank Select / Program Change
 
@@ -1305,11 +1313,16 @@ destination enum（共通）。旧`LFO AMD`は2026-08-20のCHIP LFO完全退役�
 
 **op505でのMIDIチャンネル対応範囲：** `ym38x6-vst`はCC1/CC2/CC4/CC76/CC77/CC78・Channel
 Pressure・Poly Key Pressureをグローバル単一値（MIDIチャンネル非依存）として扱っていたが、
-`op505-vst`（フェーズ2）ではこれらを**全16 MIDIチャンネル独立**に拡張した（`[u8; 16]`等で
-チャンネルごとに保持）。CC66(Sostenuto)/CC67(Soft Pedal)は元からチャンネルごとだったため変更なし。
-Destination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/(0,5)はグローバル単一のまま
-（NRPN/RPN状態自体がMIDIチャンネル非依存の設計、パッチ全体の設定を切り替えるものであり
-マルチティンバー用途を想定していないため。詳細はop505-vstフェーズ2実装メモ参照）。
+`op505-vst`（フェーズ2、2026-08-12）ではこれらを**全16 MIDIチャンネル独立**に拡張した
+（`[u8; 16]`等でチャンネルごとに保持）。CC66(Sostenuto)/CC67(Soft Pedal)は元からチャンネルごと
+だったため変更なし。フェーズ2の時点ではDestination（NRPN(0,16)/(0,17)/(0,34)/(0,35)）とRPN(0,0)/
+(0,5)はNRPN/RPN選択状態自体がプラグイン全体で1組のグローバルシャドウのままだったため
+グローバル単一だったが、**2026-08-26の`ChannelState`全面移行**（`channels: [ChannelState; 16]`
+1本化、[[project_vst_channelstate_migration]]、詳細はspec-fm.md 8章⑤）で、`rpn`（RPN/NRPN
+選択状態そのもの）・`data_entry_msb/lsb`を含めNRPN/RPN由来の値は全て`ChannelState`が
+チャンネル別に持つようになり、**全16 MIDIチャンネル完全独立**になった（同一MIDIチャンネル
+メッセージという規格上正しい挙動。既存のDAWプロジェクトで「あるチャンネルのNRPNを別チャンネルの
+音にも効かせていた」ものは移行後に効かなくなる非互換）。
 
 **手動ワウ：** CC4（フット）のデフォルト行先をFilter Cutoffに設定しているため、
 フットコントローラーで直接カットオフを開閉する古典的な「手動ワウ」がデフォルトで有効になる。

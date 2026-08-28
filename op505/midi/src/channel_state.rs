@@ -83,6 +83,12 @@ pub struct ChannelState {
     /// 現在のベンド量（セント）。note_on 時に新ボイスへ再適用する。
     pub bend_cents: f32,
 
+    // --- チューニング（RPN(0,1)/(0,2)、GM2必須セット）---
+    /// RPN(0,2) Channel Coarse Tuning（MSBのみ、64＝無補正、値-64が半音オフセット）。
+    pub tune_coarse: u8,
+    /// RPN(0,1) Channel Fine Tuning（CC6(MSB)+CC38(LSB)の14bit、8192＝無補正、±100セント）。
+    pub tune_fine: u16,
+
     // --- 音量（CC7/CC11、GM2）---
     pub cc7: u8,
     pub cc11: u8,
@@ -157,6 +163,8 @@ impl ChannelState {
             data_entry_lsb: 0,
             pitch_bend_range: 2.0,
             bend_cents: 0.0,
+            tune_coarse: 64,
+            tune_fine: 8192,
             cc7: 127,
             cc11: 127,
             pitch_fg_cc1: 0,
@@ -242,6 +250,21 @@ impl ChannelState {
         op505_core::pan_gains(self.cc10_pan)
     }
 
+    /// RPN(0,1)/(0,2) Channel Fine/Coarse Tuningの合計セントオフセット。
+    /// ピッチベンド（`bend_cents`）とは独立の「チャンネル設定」のため、CC121(Reset All
+    /// Controllers)では初期化しない（`portamento_time`と同じ扱い、`reset_all_controllers`参照）。
+    pub fn tune_cents(&self) -> f32 {
+        let coarse = (self.tune_coarse as f32 - 64.0) * 100.0;
+        let fine = (self.tune_fine as f32 - 8192.0) / 8192.0 * 100.0;
+        coarse + fine
+    }
+
+    /// ピッチベンド（`bend_cents`）とチューニング（`tune_cents`）を合算した、
+    /// `Vco::set_pitch_bend`／`_group`へ渡すべき実際のセント値。
+    pub fn total_pitch_bend_cents(&self) -> f32 {
+        self.bend_cents + self.tune_cents()
+    }
+
     /// CC5(Portamento Time)からグライド秒数を導く。0=グライドなし、127で約5秒
     /// （5ms×1000^(cc5/127)の対数スケール。実機シンセのポルタメントタイムノブに倣い、
     /// 低い値側を細かく、高い値側を大きく動かせるようにする）。
@@ -288,15 +311,26 @@ impl ChannelState {
         self.operator_f_number_override[op_index] = Some(combined.min(8191));
     }
 
-    /// CC38(Data Entry LSB)受信時の処理。OP F-Number(NRPN(0,18)〜(0,21)選択中)のときだけ
-    /// 14bit値を更新する。戻り値は発音中ボイスへの即時反映が必要か。
+    /// RPN(0,1)：CC6(MSB)+CC38(LSB)の14bit値(0〜16383、8192＝無補正)をそのまま`tune_fine`へ。
+    fn apply_channel_fine_tuning(&mut self) {
+        self.tune_fine = (self.data_entry_msb as u16) * 128 + self.data_entry_lsb as u16;
+    }
+
+    /// CC38(Data Entry LSB)受信時の処理。OP F-Number(NRPN(0,18)〜(0,21))・Channel Fine
+    /// Tuning(RPN(0,1))選択中のときだけ14bit値を更新する。戻り値は発音中ボイスへの
+    /// 即時反映が必要か。
     pub fn apply_data_entry_lsb(&mut self, raw_value: u8) -> bool {
         self.data_entry_lsb = cc_byte_to_u7(raw_value);
-        if let ControlTarget::OperatorFNumber(op_index) = control_target(self.rpn.selection) {
-            self.apply_operator_f_number_override(op_index as usize);
-            true
-        } else {
-            false
+        match control_target(self.rpn.selection) {
+            ControlTarget::OperatorFNumber(op_index) => {
+                self.apply_operator_f_number_override(op_index as usize);
+                true
+            }
+            ControlTarget::ChannelFineTuning => {
+                self.apply_channel_fine_tuning();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -316,6 +350,14 @@ impl ChannelState {
             ControlTarget::PitchBendRange => {
                 self.pitch_bend_range = cc_byte_to_u7(raw_value) as f32;
                 DataEntryOutcome::StateChanged { voice_update: false }
+            }
+            ControlTarget::ChannelFineTuning => {
+                self.apply_channel_fine_tuning();
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::ChannelCoarseTuning => {
+                self.tune_coarse = cc_byte_to_u7(raw_value);
+                DataEntryOutcome::StateChanged { voice_update: true }
             }
             ControlTarget::ModulationDepthRange => {
                 self.pitch_fg_rpn0_5 = cc_byte_to_u7(raw_value);
@@ -592,6 +634,59 @@ mod tests {
         st.apply_data_entry_lsb(127);
         assert_eq!(st.apply_data_entry(127), DataEntryOutcome::StateChanged { voice_update: true }); // 127*128+127 = 16383 → 8191
         assert_eq!(st.operator_f_number_override[0], Some(8191));
+    }
+
+    /// RPN(0,2) Channel Coarse Tuningはmsbのみで半音単位、既定64(=無補正)から-64〜+63半音。
+    #[test]
+    fn rpn_channel_coarse_tuning() {
+        let mut st = ChannelState::new(0, false);
+        assert_eq!(st.tune_cents(), 0.0);
+
+        select_rpn(&mut st, 0, 2);
+        assert_eq!(st.apply_data_entry(70), DataEntryOutcome::StateChanged { voice_update: true }); // +6半音
+        assert_eq!(st.tune_coarse, 70);
+        assert_eq!(st.tune_cents(), 600.0);
+        assert_eq!(st.total_pitch_bend_cents(), 600.0);
+    }
+
+    /// RPN(0,1) Channel Fine TuningはCC6(MSB)+CC38(LSB)の14bit、既定8192(=無補正)から±100セント。
+    #[test]
+    fn rpn_channel_fine_tuning_14bit() {
+        let mut st = ChannelState::new(0, false);
+        select_rpn(&mut st, 0, 1);
+        st.apply_data_entry_lsb(0);
+        st.apply_data_entry(64); // msb=64 → 64*128+0 = 8192（中心、無補正）
+        assert_eq!(st.tune_fine, 8192);
+        assert_eq!(st.tune_cents(), 0.0);
+
+        select_rpn(&mut st, 0, 1);
+        st.apply_data_entry(127);
+        st.apply_data_entry_lsb(127); // 127*128+127 = 16383（最大）
+        assert_eq!(st.tune_fine, 16383);
+        // 中心8192・最小0・最大16383は非対称（MIDI 14bit値の一般的な非対称性、ピッチベンドと同じ）
+        // なので最大値では+100セントちょうどにはならない（8191/8192*100 ≈ 99.988）。
+        assert!((st.tune_cents() - 100.0).abs() < 0.02, "最大値で+100セント付近のはず: {}", st.tune_cents());
+    }
+
+    /// Fine/Coarse Tuningは加算され、`total_pitch_bend_cents`はピッチベンドとも独立に合算する。
+    #[test]
+    fn tune_cents_combines_with_pitch_bend() {
+        let mut st = ChannelState::new(0, false);
+        select_rpn(&mut st, 0, 2);
+        st.apply_data_entry(65); // +1半音=100セント
+        st.bend_cents = 50.0;
+        assert_eq!(st.total_pitch_bend_cents(), 150.0);
+    }
+
+    /// CC121(Reset All Controllers)はチューニング(RPN(0,1)/(0,2))を初期化しない
+    /// （`portamento_time`と同じ「チャンネル設定」扱い、演奏コントローラーではないため）。
+    #[test]
+    fn reset_all_controllers_does_not_clear_tuning() {
+        let mut st = ChannelState::new(0, false);
+        select_rpn(&mut st, 0, 2);
+        st.apply_data_entry(70);
+        st.reset_all_controllers();
+        assert_eq!(st.tune_coarse, 70, "チューニングはRAC対象外");
     }
 
     /// `reset()`はCC/NRPN/ペダルを含む全フィールドを`new()`直後と同じ状態に戻す。

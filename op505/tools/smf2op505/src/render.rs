@@ -112,6 +112,9 @@ fn apply_live(engine: &mut Op505Engine, chi: usize, st: &ChannelState, bank: &Pa
         }
         engine.set_pitch_fg_rate_scale(id, rate_scale);
         engine.set_channel_pan(id, st.pan_gains());
+        // RPN(0,1)/(0,2) Channel Fine/Coarse Tuning。他の全NRPN補正と同じく無条件に毎回
+        // 再送する（`total_pitch_bend_cents`＝bend_cents+tune_cents）。
+        engine.set_pitch_bend(id, st.total_pitch_bend_cents());
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
                 engine.set_operator_f_number(id, op_index, *f_number);
@@ -156,7 +159,7 @@ fn note_on_voice_core(
         engine.note_on(id, freq, vel);
         engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
         engine.set_channel_pan(id, st.pan_gains());
-        engine.set_pitch_bend(id, st.bend_cents);
+        engine.set_pitch_bend(id, st.total_pitch_bend_cents());
         engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
@@ -1170,6 +1173,63 @@ mod tests {
         ]);
         let buf_c = render_smf(&smf_c, &bank, sr, 0.1, Some(1.0), None).unwrap();
         assert_ne!(buf_a, buf_c, "ch0自身のPitch Bend Range変更は出力を変えるはず");
+    }
+
+    /// RPN(0,2) Channel Coarse Tuningは他chに影響せず、自ch自身では出力を変える。
+    #[test]
+    fn rpn_channel_coarse_tuning_is_per_channel_and_changes_output() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let note_on_ch0 = (0u32, vec![0x90, 60, 100]);
+        let note_off_ch0 = (480u32, vec![0x80, 60, 0]);
+        // ch1へRPN(0,2)=76（+12半音）を送るイベント列。
+        let coarse_tune_ch1 = [
+            (0u32, vec![0xB1, 101, 0]),
+            (0, vec![0xB1, 100, 2]),
+            (0, vec![0xB1, 6, 76]),
+        ];
+
+        // A: チューニング変更なし。
+        let buf_a = render_smf(&build_smf(&[note_on_ch0.clone(), note_off_ch0.clone()]), &bank, sr, 0.1, Some(1.0), None)
+            .unwrap();
+
+        // B: ch1のCoarse Tuning変更はch0へ漏れない。
+        let mut events_b = coarse_tune_ch1.to_vec();
+        events_b.push(note_on_ch0.clone());
+        events_b.push(note_off_ch0.clone());
+        let buf_b = render_smf(&build_smf(&events_b), &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_eq!(buf_a, buf_b, "ch1のCoarse Tuning変更がch0に漏れてはいけない");
+
+        // C(対照): ch0自身のCoarse Tuningを変更すると出力（ピッチ）が変わる。
+        let mut events_c = vec![(0u32, vec![0xB0, 101, 0]), (0, vec![0xB0, 100, 2]), (0, vec![0xB0, 6, 76])];
+        events_c.push(note_on_ch0);
+        events_c.push(note_off_ch0);
+        let buf_c = render_smf(&build_smf(&events_c), &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_ne!(buf_a, buf_c, "ch0自身のCoarse Tuning変更は出力を変えるはず");
+    }
+
+    /// RPN(0,1) Channel Fine Tuning（CC6(MSB)+CC38(LSB)の14bit）は出力（ピッチ）を変える。
+    #[test]
+    fn rpn_channel_fine_tuning_changes_output() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let note_on_ch0 = (0u32, vec![0x90, 60, 100]);
+        let note_off_ch0 = (480u32, vec![0x80, 60, 0]);
+
+        let buf_a = render_smf(&build_smf(&[note_on_ch0.clone(), note_off_ch0.clone()]), &bank, sr, 0.1, Some(1.0), None)
+            .unwrap();
+
+        // 最大値(msb=127,lsb=127→16383)へ変更、+100セント付近。
+        let events_b = vec![
+            (0u32, vec![0xB0, 101, 0]),
+            (0, vec![0xB0, 100, 1]),
+            (0, vec![0xB0, 6, 127]),
+            (0, vec![0xB0, 38, 127]),
+            note_on_ch0,
+            note_off_ch0,
+        ];
+        let buf_b = render_smf(&build_smf(&events_b), &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert_ne!(buf_a, buf_b, "Fine Tuning変更は出力を変えるはず");
     }
 
     /// 16ch全てに異なるNRPN+noteを送ってもpanicせず、無音にならないことを確認する

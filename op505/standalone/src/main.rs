@@ -277,7 +277,7 @@ fn note_on_voice_core(engine: &mut Op505Engine, state: &mut MidiState, chi: usiz
         engine.note_on(id, freq, vel);
         engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
         engine.set_channel_pan(id, st.pan_gains());
-        engine.set_pitch_bend(id, st.bend_cents);
+        engine.set_pitch_bend(id, st.total_pitch_bend_cents());
         engine.set_pitch_fg_rate_scale(id, cc76_to_rate_scale(st.pitch_fg_cc76));
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
@@ -375,6 +375,9 @@ fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
         }
         engine.set_pitch_fg_rate_scale(id, rate_scale);
         engine.set_channel_pan(id, st.pan_gains());
+        // RPN(0,1)/(0,2) Channel Fine/Coarse Tuning。他の全NRPN補正と同じく無条件に毎回
+        // 再送する（`total_pitch_bend_cents`＝bend_cents+tune_cents）。
+        engine.set_pitch_bend(id, st.total_pitch_bend_cents());
         for (op_index, f) in st.operator_f_number_override.iter().enumerate() {
             if let Some(f_number) = f {
                 engine.set_operator_f_number(id, op_index, *f_number);
