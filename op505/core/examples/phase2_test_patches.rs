@@ -9,6 +9,13 @@
 //! - program=2「Test Vibrato」: 単一サイン波・フィードバック無し・大きめのPitch FG Depth(220)。
 //!   Test LeadはFM+フィードバックで音色が複雑なためピッチの揺れが埋もれやすく、CC1/76/77/78の
 //!   効果を最大限聴き取りやすくするための検証専用パッチ（01〜04区間用に差し替え可能）。
+//! - program=3「Test Cutoff FG」: Test Leadと同じFM構成（倍音が豊富でフィルター掃引が
+//!   聴き取りやすい）に、ゆっくりしたオートワウ（Cutoff FGのbipolar ping-pong、周期0.7秒）を
+//!   デフォルトでループ有効にして持たせた。`nrpn_verify_smf`のNRPN(0,30)/(0,31) Cutoff FG
+//!   Loop/Curve確認用。
+//! - program=4「Test Gain FG」: Test Vibratoと同じ単一サイン波に、ゆっくりしたトレモロ
+//!   （Gain FGのunipolarレベル往復、周期0.7秒）をデフォルトでループ有効にして持たせた。
+//!   `nrpn_verify_smf`のNRPN(0,32)/(0,33) Gain FG Loop/Curve確認用。
 //!
 //! 実行: cargo run -p op505-core --example phase2_test_patches
 //! 出力先: `op505_presets_dir()`（`%APPDATA%\op505\presets`優先）へ`phase2_test_patches.op505`。
@@ -179,6 +186,101 @@ fn test_vibrato() -> Op505Patch {
     Op505Patch { operators, channel }
 }
 
+/// Gain FG用のディレイ付きトレモロEG（`vibrato_eg`のunipolar版、ping-pongせず
+/// full(255)⇄dip(dip_level)を往復する）。stage0=遅延(full)→stage1(dip)/stage2(full)をループ、
+/// stage3はノートオフ後にfull(255=透過)へ落ち着くリリース段（`vibrato_eg`のNEUTRAL段と同じ役割）。
+fn tremolo_eg(delay_secs: f32, half_period_secs: f32, dip_level: u8) -> TimeEgParams {
+    TimeEgParams {
+        stages: stages(&[
+            (delay_secs, 255, 0),
+            (half_period_secs, dip_level, 1),
+            (half_period_secs, 255, 1),
+            (half_period_secs, 255, 1),
+        ]),
+        stage_count: 4,
+        loop_enabled: 1,
+        loop_start: 1,
+        release_point: 2,
+     ..Default::default()}
+}
+
+/// NRPN(0,30)/(0,31) Cutoff FG Loop/Curve確認用。Test Leadと同じFM構成（倍音豊富）に
+/// ゆっくりしたオートワウを持たせ、フィルター掃引が明瞭に聴こえるようにする。
+fn test_cutoff_fg() -> Op505Patch {
+    let carrier_eg = ad_sustain_release_eg(200, 1.0);
+    let op = |tl: u8, mul: u8| Op505OperatorParams {
+        tl,
+        eg: carrier_eg,
+        mul,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 0,
+        op_fine_tune: 128,
+        eg_shift: 0,
+        level_scale: 0,
+        velocity_gain: 255,
+    };
+    let operators = [op(180, 1), op(160, 2), op(140, 1), op(200, 1)];
+
+    let channel = Op505ChannelParams {
+        algorithm: 4,
+        feedback: 50,
+        filter_cutoff: 128, // 掃引の上下にヘッドルームを取るため中央に
+        filter_resonance: 90, // オートワウの掃引をはっきりさせる
+        filter_type: 0,
+        filter_self_oscillation: false,
+        pitch_fg: neutral_bipolar_fg(),
+        cutoff_fg: Op505BipolarFg { eg: vibrato_eg(0.1, 0.35), depth: 200 }, // 0.1s遅延、~0.7秒周期
+        gain_fg: transparent_gain_fg(),
+        gain_fg_to_master: true,
+        gain_fg_to_operators: false,
+        ..Op505ChannelParams::default()
+    };
+
+    Op505Patch { operators, channel }
+}
+
+/// NRPN(0,32)/(0,33) Gain FG Loop/Curve確認用。Test Vibratoと同じ単一サイン波に
+/// ゆっくりしたトレモロを持たせ、音量の往復が明瞭に聴こえるようにする。
+fn test_gain_fg() -> Op505Patch {
+    let eg = ad_sustain_release_eg(255, 1.0);
+    let carrier = Op505OperatorParams {
+        tl: 220,
+        eg,
+        mul: 1,
+        dt1: 128,
+        ksr: 0,
+        am_enable: false,
+        velocity_sensitivity: 0,
+        waveform: 0,
+        op_fine_tune: 128,
+        eg_shift: 0,
+        level_scale: 0,
+        velocity_gain: 255,
+    };
+    let silent = Op505OperatorParams { tl: 0, ..carrier };
+    let operators = [carrier, silent, silent, silent];
+
+    let channel = Op505ChannelParams {
+        algorithm: 7,
+        feedback: 0,
+        filter_cutoff: 255,
+        filter_resonance: 0,
+        filter_type: 0,
+        filter_self_oscillation: false,
+        pitch_fg: neutral_bipolar_fg(),
+        cutoff_fg: neutral_bipolar_fg(),
+        gain_fg: tremolo_eg(0.1, 0.35, 80), // 0.1s遅延、~0.7秒周期、dip=80(かなり深いトレモロ)
+        gain_fg_to_master: true,
+        gain_fg_to_operators: false,
+        ..Op505ChannelParams::default()
+    };
+
+    Op505Patch { operators, channel }
+}
+
 fn test_pluck() -> Op505Patch {
     let op = |tl: u8, mul: u8, decay: f32| Op505OperatorParams {
         tl,
@@ -221,6 +323,8 @@ fn main() {
             Op505PresetEntry { program: 0, name: "Test Lead".to_string(), patch: test_lead() },
             Op505PresetEntry { program: 1, name: "Test Pluck".to_string(), patch: test_pluck() },
             Op505PresetEntry { program: 2, name: "Test Vibrato".to_string(), patch: test_vibrato() },
+            Op505PresetEntry { program: 3, name: "Test Cutoff FG".to_string(), patch: test_cutoff_fg() },
+            Op505PresetEntry { program: 4, name: "Test Gain FG".to_string(), patch: test_gain_fg() },
         ],
     };
 
@@ -237,8 +341,12 @@ fn main() {
     let lead = bank.get(TEST_BANK, 0).expect("Test Lead should load from disk");
     let pluck = bank.get(TEST_BANK, 1).expect("Test Pluck should load from disk");
     let vibrato = bank.get(TEST_BANK, 2).expect("Test Vibrato should load from disk");
+    let cutoff_fg = bank.get(TEST_BANK, 3).expect("Test Cutoff FG should load from disk");
+    let gain_fg = bank.get(TEST_BANK, 4).expect("Test Gain FG should load from disk");
     println!("Wrote {} (bank={TEST_BANK})", out_path.display());
     println!("  program 0: {} (loaded ok, tl[0]={})", lead.name, lead.patch.operators[0].tl);
     println!("  program 1: {} (loaded ok, tl[0]={})", pluck.name, pluck.patch.operators[0].tl);
     println!("  program 2: {} (loaded ok, tl[0]={})", vibrato.name, vibrato.patch.operators[0].tl);
+    println!("  program 3: {} (loaded ok, tl[0]={})", cutoff_fg.name, cutoff_fg.patch.operators[0].tl);
+    println!("  program 4: {} (loaded ok, tl[0]={})", gain_fg.name, gain_fg.patch.operators[0].tl);
 }
