@@ -397,7 +397,21 @@ struct Channel {
     glide_cents: f32,
     /// 毎サンプル`glide_cents`を0へ近づける量（セント/サンプル、常に正）。
     glide_step_cents: f32,
+    /// キャリアが全てidleになってから経過した秒数（`carriers_idle()`がfalseの間は0.0に
+    /// 戻り続ける）。`is_collectible()`が「回収してよいか」の判定に使う
+    /// （[[project_synstring_dropout_carrier_idle]]参照）。
+    carrier_silent_elapsed: f32,
 }
+
+/// キャリアが無音になってから実際にチャンネルを回収するまでの猶予秒数。
+///
+/// `is_idle()`（全オペレーターがidle）は`Vco::note_on`/`glide_to`の再発音判定（retriggerで
+/// モジュレーター残響レベルを継続するか）を兼ねているため変更できないが、キャリアだけが
+/// 先にidleになった後は出力が厳密に0.0のまま残りのモジュレーターだけが空回りする
+/// （SynString等、長いリリースのモジュレーターを持つ音色で顕著）。猶予を置いて回収することで、
+/// この期間内の速い再発音は従来どおりretrigger（fresh note-onではない）を維持しつつ、
+/// それより長く無音が続くチャンネルは早期に解放する。
+const CARRIER_SILENCE_GRACE_SECONDS: f32 = 0.2;
 
 /// 固定音階が有効なら`frequency`（note_onで渡された生の周波数）を無視し、
 /// `fixed_note`＋`fixed_note_fine`から実効周波数を導出する。KSR/level_scale用の`note`も
@@ -454,6 +468,7 @@ impl Channel {
             note_is_off: false,
             glide_cents: 0.0,
             glide_step_cents: 0.0,
+            carrier_silent_elapsed: 0.0,
         }
     }
 
@@ -481,6 +496,7 @@ impl Channel {
         // note_on/retrigger直後に`start_glide`を呼び直す（set_pitch_bend等と同じ並び）。
         self.glide_cents = 0.0;
         self.glide_step_cents = 0.0;
+        self.carrier_silent_elapsed = 0.0;
     }
 
     fn note_off(&mut self) {
@@ -520,9 +536,29 @@ impl Channel {
         self.operators.iter().all(|op| op.is_idle())
     }
 
+    /// このチャンネルのキャリア（アルゴリズム結線上の出力段）が全てidleか。
+    /// `is_idle()`（全4オペレーター）と違い、モジュレーターが鳴り続けていても
+    /// キャリアさえ止まっていれば`true`になる＝この時点で聴感上の出力は厳密に0.0。
+    fn carriers_idle(&self) -> bool {
+        let algo = &ALGORITHMS[(self.channel_params.algorithm as usize).min(7)];
+        algo.carriers.iter().all(|&i| self.operators[i].is_idle())
+    }
+
+    /// `render`が回収してよいか。`is_idle()`（全OP idle、再発音時のretrigger判定と共有）に加え、
+    /// キャリアが無音になってから`CARRIER_SILENCE_GRACE_SECONDS`猶予が経過していれば回収する
+    /// （長いリリースのモジュレーターが出力ゼロのまま空回りし続けるのを防ぐ）。
+    fn is_collectible(&self) -> bool {
+        self.is_idle() || self.carrier_silent_elapsed >= CARRIER_SILENCE_GRACE_SECONDS
+    }
+
     fn tick(&mut self, sample_rate: f32, wave_tables: &[Option<WaveTable>], tempo_bpm: f32) -> f32 {
         if self.is_idle() {
             return 0.0;
+        }
+        if self.carriers_idle() {
+            self.carrier_silent_elapsed += 1.0 / sample_rate;
+        } else {
+            self.carrier_silent_elapsed = 0.0;
         }
 
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。
@@ -1003,7 +1039,7 @@ impl Vco for Op505Engine {
                 }
             }
         }
-        self.channels.retain(|_, ch| !ch.is_idle());
+        self.channels.retain(|_, ch| !ch.is_collectible());
     }
 
     /// `render`と同じミックスロジックを、ボイスの所属MIDIチャンネル（`id >> 7`）に応じて
@@ -1069,7 +1105,7 @@ impl Vco for Op505Engine {
             }
         }
 
-        self.channels.retain(|_, ch| !ch.is_idle());
+        self.channels.retain(|_, ch| !ch.is_collectible());
     }
 }
 
