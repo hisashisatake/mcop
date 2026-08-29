@@ -185,6 +185,13 @@ pub async fn fetch_bank_entries(bank: u16) -> Vec<PresetEntry> {
     invoke_query("op505_list_bank_entries", &BankArgs { bank }).await.unwrap_or_default()
 }
 
+/// bankの担当ファイル名だけを取得する（パッチはロードしない）。エディタのBank欄を
+/// 切り替えたときの表示更新専用（`app.rs::handle_bank_changed`参照、`op505_get_bank_program`と
+/// 違い今のパッチには一切触れない）。
+pub async fn fetch_bank_file_name(bank: u16) -> Option<String> {
+    invoke_query::<Option<String>>("op505_get_bank_file_name", &BankArgs { bank }).await.flatten()
+}
+
 /// ファイル/音色の識別情報（ファイル名・音色名・bank/program）。ロード/保存系の関数が
 /// 呼び出し側へ返す共通の戻り値型。
 pub struct PatchIdentity {

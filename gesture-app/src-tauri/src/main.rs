@@ -370,6 +370,7 @@ fn main() {
             op505_set_program,
             op505_reload_presets,
             op505_presets::op505_list_bank_entries,
+            op505_presets::op505_get_bank_file_name,
             op505_presets::op505_get_bank_program,
             op505_presets::op505_open_patch_file,
             op505_presets::op505_save_patch_overwrite,

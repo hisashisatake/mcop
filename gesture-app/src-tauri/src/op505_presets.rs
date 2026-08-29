@@ -50,6 +50,16 @@ pub fn op505_list_bank_entries(registry: tauri::State<'_, Mutex<Op505BankRegistr
         .unwrap_or_default()
 }
 
+/// bankの担当ファイル名だけを返す（読み込みはしない）。エディタのBank欄を切り替えた直後、
+/// まだ音色を何も選んでいない状態でファイル名だけ表示するために使う
+/// （`op505_get_bank_program`のようにパッチを読み込んで画面へ適用してしまうと、バンクを
+/// 跨ぐたびに前のbankで選択していたprogram番号と同じ番号のエントリーが誤って選択済みに
+/// 見えてしまうため、専用に切り出した。editor-wasm側は`ipc::fetch_bank_file_name`参照）。
+#[tauri::command]
+pub fn op505_get_bank_file_name(registry: tauri::State<'_, Mutex<Op505BankRegistry>>, bank: u16) -> Option<String> {
+    registry.lock().unwrap().get(&bank).and_then(|bank_file| bank_file.file_name().map(str::to_string))
+}
+
 /// (bank, program)のプリセット内容を返す（エンジンへは反映しない読み取り専用、
 /// `get_bank_program`のOP505版）。解決順位はレジストリ→`Op505PresetBank`→エンジンのカレントパッチ
 /// （`.op505`には波形メモリ/GM2のようなフォールバックが無いため、`Op505Patch::default()`

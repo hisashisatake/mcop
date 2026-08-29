@@ -10,14 +10,17 @@ use crate::op505_state::Op505State;
 use crate::state::MasterEffectsState;
 
 /// Open/Save/Save As/PRESETS選択/Bank・Programスピンの全経路が共有する表示状態。
-/// `current_bank`/`current_program`は「見た目と動作を一致させる」ための唯一の正——
-/// PRESETSリストのハイライトもこの値との比較で決める（独立した選択状態を持たない）。
+/// `current_bank`/`current_program`は「見た目と動作を一致させる」ための唯一の正。
+/// PRESETSリストのハイライトはこの値との比較に加え`has_selection`も見る——バンクだけを
+/// 切り替えて何も選択していない状態（`handle_bank_changed`参照）ではハイライトを出さない
+/// （op505-vstの`PresetSession::has_selection`と同じ方針、2026-08-29）。
 #[derive(Clone)]
 struct Identity {
     current_file_name: Rc<RefCell<Option<String>>>,
     current_patch_name: Rc<RefCell<String>>,
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
+    has_selection: Rc<Cell<bool>>,
     unsaved_changes: Rc<Cell<bool>>,
     /// `op505_list_bank_entries`で取得した、今のbankの担当ファイルの音色一覧。`apply()`のたびに
     /// 再取得し、Save/Save As/Openによるレジストリの変化を常に反映する。
@@ -35,6 +38,7 @@ impl Identity {
         *self.current_patch_name.borrow_mut() = loaded.patch_name;
         self.current_bank.set(loaded.bank);
         self.current_program.set(loaded.program);
+        self.has_selection.set(true);
         crate::program_sync::set_current(loaded.bank, loaded.program);
         self.unsaved_changes.set(false);
         self.suppress_unsaved.set(true);
@@ -50,25 +54,50 @@ impl Identity {
 }
 
 /// 指定のbank/programをレジストリから読み込む（`ipc::load_preset`＝`op505_get_bank_program`、
-/// ディスクの再検索はしない）。Bank/Programスピンの変更・PRESETSリストのクリック・起動直後の
-/// 初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく更新されているため、
-/// 「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
+/// ディスクの再検索はしない）。PRESETSリストのクリック・main.js側Bank/Program欄との同期・
+/// 起動直後の初期ロードのいずれもこれを呼ぶ（レジストリ自体がOpen/Save/Save Asで正しく
+/// 更新されているため、「別ファイルへ飛ぶ経路」と「ファイル内に留まる経路」を分ける必要がない）。
 /// `keep_fg`は`ipc::load_preset`参照（PRESETSリストのShift+クリック専用、他の呼び出し元は常にfalse）。
+///
+/// エディタ自身のBank欄（`BankField::set`）はこれを呼ばない——`bank`だけが変わり`program`は
+/// 変わっていないのに、たまたま新bankに同じprogram番号のエントリーがあると誤って自動選択・
+/// 自動適用してしまうため（`handle_bank_changed`参照）。
 async fn handle_navigate(patch: Rc<RefCell<Op505Patch>>, dirty: Rc<Cell<bool>>, identity: Identity, bank: u16, program: u8, keep_fg: bool) {
     if let Some(loaded) = ipc::load_preset(&patch, &dirty, bank, program, keep_fg).await {
         identity.apply(loaded);
     }
 }
 
+/// エディタのBank欄（`BankField::set`）専用：今の`patch`（発音中の音）には一切触れず、
+/// 新バンクの担当ファイル名だけを取得して表示し、PRESETSリストを未選択状態にする
+/// （`has_selection=false`、どの行もハイライトしない）。以前は`handle_navigate`を呼んでいたため、
+/// 旧バンクで選択していたprogram番号と同じ番号のエントリーが新バンクにたまたま存在すると、
+/// 自動的に選択・適用されてしまっていた（op505-vstの`handle_bank_changed`と同じ問題・同じ方針、
+/// 2026-08-29）。
+///
+/// 音は前のバンクで選んでいたものがそのまま鳴り続ける。「今の音色をShift+『+ New Voice』で
+/// 別バンクへコピーする」という使い方は、この関数が`patch`に一切触れないことで初めて成立する。
+async fn handle_bank_changed(identity: Identity, bank: u16) {
+    let file_name = ipc::fetch_bank_file_name(bank).await;
+    *identity.current_file_name.borrow_mut() = file_name;
+    *identity.current_patch_name.borrow_mut() = String::new();
+    identity.current_program.set(0);
+    identity.has_selection.set(false);
+    crate::shift_keys::request_repaint();
+
+    let presets = identity.presets.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        *presets.borrow_mut() = ipc::fetch_bank_entries(bank).await;
+        crate::shift_keys::request_repaint();
+    });
+}
+
 /// Bank欄のハンドル。ノブ下の数値欄＋±ボタン（`ui_core::spin_control`）と同じ見た目・操作感にする
 /// （メイン画面はHTML nativeのnumber inputだが、eguiでは同じ見た目を作れないため、
 /// エディタ内の他のパラメーターと統一したルック＆フィールに合わせる）。
-/// 値が変わったら`handle_navigate`と同じ経路でオンメモリのPresetBankから読み込む。
+/// 値が変わったら`handle_bank_changed`を呼ぶ（`patch`には触れない、`handle_bank_changed`のdoc参照）。
 struct BankField {
     current_bank: Rc<Cell<u16>>,
-    current_program: Rc<Cell<u8>>,
-    patch: Rc<RefCell<Op505Patch>>,
-    dirty: Rc<Cell<bool>>,
     identity: Identity,
 }
 
@@ -92,14 +121,7 @@ impl op505_ui::IntParamHandle for BankField {
     fn set(&self, value: i32) {
         let bank = value.clamp(0, 16383) as u16;
         self.current_bank.set(bank);
-        wasm_bindgen_futures::spawn_local(handle_navigate(
-            self.patch.clone(),
-            self.dirty.clone(),
-            self.identity.clone(),
-            bank,
-            self.current_program.get(),
-            false,
-        ));
+        wasm_bindgen_futures::spawn_local(handle_bank_changed(self.identity.clone(), bank));
     }
     fn end_edit(&self) {}
 }
@@ -177,10 +199,12 @@ pub struct EditorApp {
     /// 音色名の入力欄（`PresetEntry.name`）。ファイル名とは独立して編集できる
     /// （1ファイルに複数音色が入りうるため、ファイル名と音色名は別概念）。
     current_patch_name: Rc<RefCell<String>>,
-    /// 今表示中のbank/program。PRESETSリストのハイライトもこの値との比較で決める
-    /// （独立した選択状態を持たない。Open等で読み込んだファイルの実際のbank/programにも追従する）。
+    /// 今表示中のbank/program。Open等で読み込んだファイルの実際のbank/programに追従する。
     current_bank: Rc<Cell<u16>>,
     current_program: Rc<Cell<u8>>,
+    /// PRESETSリストのハイライトを出してよいか（`Identity`のdoc参照）。falseの間はどの行も
+    /// ハイライトしない＝「バンクを切り替えたが、まだこのバンク内の音色は何も選んでいない」状態。
+    has_selection: Rc<Cell<bool>>,
     /// 直近の保存以降にパラメーターまたは音色名を変更したか（フレーム末尾のdirty処理に便乗して立てる）。
     unsaved_changes: Rc<Cell<bool>>,
     /// `Identity::apply()`が立てる、次のsend_op505_patch()完了1回ぶんの`unsaved_changes`抑制フラグ
@@ -201,6 +225,7 @@ impl EditorApp {
         let current_patch_name = Rc::new(RefCell::new(String::new()));
         let current_bank = Rc::new(Cell::new(0));
         let current_program = Rc::new(Cell::new(0));
+        let has_selection = Rc::new(Cell::new(false));
         let unsaved_changes = Rc::new(Cell::new(false));
         let suppress_unsaved = Rc::new(Cell::new(false));
 
@@ -211,6 +236,7 @@ impl EditorApp {
             current_patch_name: current_patch_name.clone(),
             current_bank: current_bank.clone(),
             current_program: current_program.clone(),
+            has_selection: has_selection.clone(),
             unsaved_changes: unsaved_changes.clone(),
             presets: presets.clone(),
             suppress_unsaved: suppress_unsaved.clone(),
@@ -228,6 +254,7 @@ impl EditorApp {
             current_patch_name,
             current_bank,
             current_program,
+            has_selection,
             unsaved_changes,
             suppress_unsaved,
         }
@@ -239,6 +266,7 @@ impl EditorApp {
             current_patch_name: self.current_patch_name.clone(),
             current_bank: self.current_bank.clone(),
             current_program: self.current_program.clone(),
+            has_selection: self.has_selection.clone(),
             unsaved_changes: self.unsaved_changes.clone(),
             presets: self.presets.clone(),
             suppress_unsaved: self.suppress_unsaved.clone(),
@@ -283,7 +311,11 @@ impl eframe::App for EditorApp {
                     if ui.button("Open").clicked() {
                         wasm_bindgen_futures::spawn_local(handle_open_patch_file(patch.clone(), dirty.clone(), self.current_bank.get(), self.identity()));
                     }
-                    let save_enabled = self.current_file_name.borrow().is_some();
+                    // has_selectionも見る：バンク切り替え直後の未選択状態（handle_bank_changedで
+                    // programが0へリセットされた状態）でSaveを許すと、今鳴っている音を新バンクの
+                    // program 0へ無警告で上書きしてしまう事故につながるため（op505-vstの
+                    // save_enabled()と同じ理由、2026-08-29）。
+                    let save_enabled = self.has_selection.get() && self.current_file_name.borrow().is_some();
                     if ui.add_enabled(save_enabled, egui::Button::new("Save")).clicked() {
                         wasm_bindgen_futures::spawn_local(handle_save_patch_overwrite(
                             patch.clone(),
@@ -320,17 +352,11 @@ impl eframe::App for EditorApp {
 
                 // Bank（presets_dir内/外を区別しない、常に見える唯一の「今何を編集しているか」）。
                 // 他のパラメーターと同じ数値欄＋±ボタン（ui_core::spin_control）を使う。
-                // 値が変わったらpresets_dir全体から(bank, 現在のprogram)を探して読み込む
-                // （＝handle_navigate、BankField::set参照。別ファイルへ飛びうる唯一の操作）。
+                // 値が変わっても今のパッチ（発音中の音）には触れず、新バンクの担当ファイル名の
+                // 表示とPRESETSリストの更新だけを行う（＝handle_bank_changed、BankField::set参照）。
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Bank").text_style(egui::TextStyle::Body));
-                    let bank_field = BankField {
-                        current_bank: self.current_bank.clone(),
-                        current_program: self.current_program.clone(),
-                        patch: patch.clone(),
-                        dirty: dirty.clone(),
-                        identity: self.identity(),
-                    };
+                    let bank_field = BankField { current_bank: self.current_bank.clone(), identity: self.identity() };
                     ui_core::spin_control(ui, &bank_field, egui::TextStyle::Body, 44.0);
                 });
                 let file_label = self.current_file_name.borrow().clone().unwrap_or_else(|| "(unsaved)".to_string());
@@ -364,7 +390,7 @@ impl eframe::App for EditorApp {
                 egui::ScrollArea::vertical().id_salt("presets").auto_shrink([false, false]).show(ui, |ui| {
                     for preset in self.presets.borrow().iter() {
                         let label = format!("{:03} {}", preset.program, preset.name);
-                        let selected = preset.program == self.current_program.get();
+                        let selected = self.has_selection.get() && preset.program == self.current_program.get();
                         if ui.selectable_label(selected, &label).clicked() {
                             // Shift+クリックなら、PITCH FG/CUTOFF FG/GAIN FGは今の設定を保ったまま
                             // それ以外だけ差し替える（`ipc::load_preset`の`keep_fg`参照）。

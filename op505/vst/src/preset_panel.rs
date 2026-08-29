@@ -101,8 +101,11 @@ impl PresetSession {
     }
 
     /// Saveボタンを有効化してよいか（担当ファイルが無いbankでは保存できない）。
+    /// `has_selection`も見る：バンク切り替え直後の未選択状態（`handle_bank_changed`でprogramが
+    /// 0へリセットされた状態）でSaveを許すと、今鳴っている音を新バンクのprogram 0へ
+    /// 無警告で上書きしてしまう事故につながるため（2026-08-29、handle_bank_changed実装と同時に対処）。
     fn save_enabled(&self) -> bool {
-        self.file_name.is_some()
+        self.has_selection && self.file_name.is_some()
     }
 
     /// Save Asダイアログの初期提案ファイル名。「今開いているファイル名」→無ければ音色名→
@@ -427,29 +430,18 @@ impl op505_ui::IntParamHandle for BankFieldHandle {
     fn end_edit(&self) {}
 }
 
-/// Bank欄の数値が変わったときの再解決：担当ファイルの中に今のprogramがあればそれを、
-/// 無ければ先頭エントリーを選ぶ（gesture-appの`handle_navigate`相当。ディスク再検索はしない、
-/// レジストリを引くだけ）。担当ファイルが無いbankへ移動した場合は選択を持たない。
-fn handle_bank_changed(session: &mut PresetSession, params: &Op505VstParams, setter: &ParamSetter<'_>) {
-    let Some(bank_file) = session.registry.get(&session.bank) else {
-        session.program = 0;
-        session.patch_name.clear();
-        session.file_name = None;
-        session.unsaved = false;
-        return;
-    };
-    let file_name = bank_file.file_name().map(str::to_string);
-    let entry = bank_file.entries().iter().find(|e| e.program == session.program).or_else(|| bank_file.entries().first()).cloned();
-    match entry {
-        Some(entry) => {
-            apply_entry(params, setter, &entry, false);
-            session.open_file(entry.program, entry.name, file_name);
-        }
-        None => {
-            session.file_name = file_name;
-            session.unsaved = false;
-        }
-    }
+/// Bank欄の数値が変わったときの表示更新：DAWパラメーターには一切触れず、担当ファイルの
+/// ファイル名だけを表示に反映する（`sync_display_to_registry`と同じ「選択状態を見せない」
+/// 方針）。エントリーは自動選択しない——以前は今のprogramと同じ番号のエントリーがあれば
+/// 自動選択・適用（`apply_entry`）していたが、「バンクを跨いでも前のバンクの選択が
+/// 持ち越されて選択済みに見える」という違和感の原因になっていたため撤去した
+/// （ユーザー指摘、2026-08-29）。
+fn handle_bank_changed(session: &mut PresetSession) {
+    session.file_name = session.registry.get(&session.bank).and_then(Op505BankFile::file_name).map(str::to_string);
+    session.program = 0;
+    session.patch_name.clear();
+    session.unsaved = false;
+    session.has_selection = false;
 }
 
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
@@ -487,7 +479,7 @@ pub(crate) fn draw_presets_panel(
         let new_bank = bank_handle.bank.get() as u16;
         if new_bank != session.bank {
             session.bank = new_bank;
-            handle_bank_changed(session, params, setter);
+            handle_bank_changed(session);
         }
     });
 
@@ -577,8 +569,29 @@ mod tests {
     fn save_enabled_reflects_file_name() {
         let mut session = PresetSession::new(Op505BankRegistry::new());
         assert!(!session.save_enabled(), "file_name未設定ならSave不可");
+        // 実際のUIではSaveボタンはsave_enabled()自身がゲートするため、on_saved()に到達する時点で
+        // 既に選択済み（has_selection=true）のはず。テストでも同じ前提を再現する。
+        session.select_entry(0, "Voice".to_string());
         session.on_saved("a.op505".to_string());
         assert!(session.save_enabled());
+    }
+
+    /// バンク切り替え直後（未選択状態）はfile_nameがあってもSave不可
+    /// （今鳴っている音を新バンクのprogram 0へ無警告で上書きする事故を防ぐ）。
+    #[test]
+    fn save_enabled_is_false_after_bank_changed_even_with_file_name() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 1, presets: vec![entry(0, "Existing")] };
+        registry.insert(1, Op505BankFile::from_loaded(PathBuf::from("bank1.op505"), file, 1));
+
+        let mut session = PresetSession::new(registry);
+        session.select_entry(0, "Voice".to_string());
+        session.on_saved("a.op505".to_string());
+        assert!(session.save_enabled(), "選択済みならSave可");
+
+        session.bank = 1;
+        handle_bank_changed(&mut session);
+        assert!(!session.save_enabled(), "バンク切り替え直後の未選択状態ではSave不可のはず");
     }
 
     #[test]
@@ -676,5 +689,44 @@ mod tests {
         assert!(!session.has_selection, "初期状態はfalseのはず");
         session.select_entry(1, "B".to_string());
         assert!(session.has_selection, "実際にエントリーを選ぶとtrueになるはず");
+    }
+
+    /// バンク切り替え後、旧バンクで選択していたprogram番号と同じ番号のエントリーが
+    /// 新バンクに存在しても自動選択・自動適用しない（選択が持ち越されて見える違和感を防ぐ）。
+    #[test]
+    fn handle_bank_changed_does_not_carry_over_selection_even_when_program_matches() {
+        let mut registry = Op505BankRegistry::new();
+        let file0 = Op505PresetFile::Presets { bank: 0, presets: vec![entry(5, "OldVoice")] };
+        registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file0, 0));
+        let file1 = Op505PresetFile::Presets { bank: 1, presets: vec![entry(5, "SameNumberDifferentVoice")] };
+        registry.insert(1, Op505BankFile::from_loaded(PathBuf::from("bank1.op505"), file1, 1));
+
+        let mut session = PresetSession::new(registry);
+        session.bank = 0;
+        session.select_entry(5, "OldVoice".to_string());
+        assert!(session.has_selection);
+
+        session.bank = 1;
+        handle_bank_changed(&mut session);
+
+        assert!(!session.has_selection, "バンクを跨いだら選択状態を持たないはず");
+        assert_eq!(session.program, 0, "選択を持たない状態へリセットされるはず");
+        assert_eq!(session.patch_name, "", "選択を持たない状態では音色名表示も空になるはず");
+        assert_eq!(session.file_name.as_deref(), Some("bank1.op505"), "新バンクの担当ファイル名は表示するはず");
+    }
+
+    /// 担当ファイルが無いbankへ切り替えたときも、選択なし・ファイル名なしの状態になる。
+    #[test]
+    fn handle_bank_changed_clears_state_when_new_bank_has_no_file() {
+        let mut session = PresetSession::new(Op505BankRegistry::new());
+        session.select_entry(5, "Voice".to_string());
+        session.bank = 99;
+
+        handle_bank_changed(&mut session);
+
+        assert!(!session.has_selection);
+        assert_eq!(session.program, 0);
+        assert_eq!(session.patch_name, "");
+        assert_eq!(session.file_name, None);
     }
 }
