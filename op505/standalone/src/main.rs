@@ -1,14 +1,19 @@
 //! op505をDomino等のMME専用MIDIシーケンサから直接鳴らすための常駐アプリ。
 //!
-//! このアプリ自身は新規の仮想MIDIポートを作らない。loopMIDI等が作った既存の仮想MIDI
-//! ポート（または実機のUSB-MIDIキーボード）をmidir経由で開き、受け取ったMIDIバイト列を
-//! op505-coreへ渡してcpalでWASAPI直出しする。
+//! MIDI入力は2系統ある。①loopMIDI等が作った既存の仮想MIDIポート（または実機の
+//! USB-MIDIキーボード）を[`midir`]経由で開く従来経路。②[`mme_pipe`]が受け付ける
+//! 名前付きパイプ（`\\.\pipe\op505.mme.v1`）経由の経路——`op505-mme-driver`
+//! （Drivers32方式のユーザーモードMMEドライバDLL、`op505/mme-driver/`）が
+//! Domino等のクライアントプロセスに読み込まれ、そこから転送されてくる。②により
+//! op505自身がWindowsのMIDI OUTデバイス一覧に「op505」として現れ、loopMIDIの
+//! 仮想ポート作成を経由せずに直接選択できる。両経路とも受け取ったMIDIバイト列を
+//! 同じキューへ積み、op505-coreへ渡してcpalでWASAPI直出しする。
 //!
-//! MIDI入力はmidirのコールバックスレッドから届き、オーディオ処理はcpalのコールバック
-//! スレッドで行われる。両者はキュー（Mutex<VecDeque<Vec<u8>>>）でのみやり取りし、
-//! Op505Engine/MasterEffectsはオーディオスレッドが単独で所有する
-//! （gesture-appのArc<Mutex<Op505Engine>>と違い、UIスレッドからの同時アクセスが
-//! 無いため排他制御そのものを避けられる）。
+//! MIDI入力はmidirのコールバックスレッドまたは[`mme_pipe`]の受信スレッドから届き、
+//! オーディオ処理はcpalのコールバックスレッドで行われる。いずれもキュー
+//! （Mutex<VecDeque<Vec<u8>>>）でのみやり取りし、Op505Engine/MasterEffectsは
+//! オーディオスレッドが単独で所有する（gesture-appのArc<Mutex<Op505Engine>>と違い、
+//! UIスレッドからの同時アクセスが無いため排他制御そのものを避けられる）。
 //!
 //! CC/NRPN・プログラムチェンジの解釈は`op505-midi`の[`ChannelState`]を使う
 //! （`op505-vst`・`op505/tools/smf2op505`に続く3本目の利用側、詳細はspec-fm.md 8章）。
@@ -33,6 +38,8 @@ use op505_midi::{
     EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+
+mod mme_pipe;
 
 type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 
@@ -111,6 +118,7 @@ impl MidiState {
 
 fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
+    mme_pipe::spawn_accept_loop(Arc::clone(&midi_queue));
     let _midi_connection = connect_midi_input(Arc::clone(&midi_queue));
 
     let host = cpal::default_host();
@@ -592,11 +600,14 @@ fn handle_control_change(
 /// MIDI入力ポートへ接続する（Step 2: 複数ポートからの選択に対応）。
 /// 選択順は「起動時コマンドライン引数（数値）」→「ポートが1つのみなら自動選択」→
 /// 「複数かつ引数無しなら標準入力で対話選択」。
-fn connect_midi_input(queue: MidiQueue) -> MidiInputConnection<()> {
+/// ポートが1つも無い場合は`None`を返す（[`mme_pipe`]経由の入力だけで使う構成が
+/// 正当にあり得るため。以前はここでpanicしていたが、MMEドライバ経路の追加に伴い廃止した）。
+fn connect_midi_input(queue: MidiQueue) -> Option<MidiInputConnection<()>> {
     let input = MidiInput::new("op505-standalone").expect("failed to init MIDI input");
     let ports = input.ports();
     if ports.is_empty() {
-        panic!("MIDI入力ポートが見つかりません。loopMIDI等で仮想ポートを作成してから起動してください。");
+        println!("MIDI入力ポートが見つかりません（loopMIDI等が未起動）。MMEドライバ経由の入力のみ有効です。");
+        return None;
     }
 
     println!("利用可能なMIDI入力ポート:");
@@ -612,7 +623,7 @@ fn connect_midi_input(queue: MidiQueue) -> MidiInputConnection<()> {
     let port = &ports[index];
     println!("接続: {}", port_names[index]);
 
-    input
+    let connection = input
         .connect(
             port,
             "op505-standalone-input",
@@ -621,7 +632,8 @@ fn connect_midi_input(queue: MidiQueue) -> MidiInputConnection<()> {
             },
             (),
         )
-        .expect("failed to connect to MIDI input port")
+        .expect("failed to connect to MIDI input port");
+    Some(connection)
 }
 
 /// 接続するポートのインデックスを決める。

@@ -1,15 +1,17 @@
-//! op505をWindowsのMIDI OUTデバイス一覧に「op505」として登録する、ユーザーモードMMEドライバの
-//! 実現可能性スパイク（フェーズ0）。DriverProc/modMessageをエクスポートし、winmm.dllから
-//! 正しく認識されるか、MODM_DATAで実際にMIDIバイト列が届くかを検証する。
+//! op505をWindowsのMIDI OUTデバイス一覧に「op505」として登録する、ユーザーモードMMEドライバ。
+//! DriverProc/modMessageをエクスポートし、winmm.dll経由でDomino等のレガシーWinMM
+//! シーケンサから直接発音できるようにする（フェーズ0でDriverProc/modMessageの疎通を
+//! x64/x86両方で実機確認済み。フェーズ1で[`client`]モジュールによる名前付きパイプ配線を追加）。
 //!
-//! この段階ではop505-standaloneへの配線は行わない。受信したMIDIバイト列は一時ログ
-//! （[`log`]モジュール、`%TEMP%\op505mme-spike.log`）へ書き出すだけで、
-//! 「データが実際に流れるか」の証明に専念する（名前付きパイプでの本配線は後続フェーズ）。
+//! 受信した短いMIDIメッセージ（MODM_DATA）とリセット（MODM_RESET）は[`client::send_frame`]で
+//! op505-standaloneへ転送する。SysEx（MODM_LONGDATA）は未対応（フェーズ4で対応予定）。
+//! デバッグ用の生ログは引き続き[`log`]モジュール（`%TEMP%\op505mme-spike.log`）へ残す。
 //!
 //! この.dllは相手アプリ（Domino等）のプロセス空間にロードされる。パニックでホストごと
 //! 落とさないよう、エクスポート関数の本体は必ず[`std::panic::catch_unwind`]で包む
 //! （ワークスペースの`panic="abort"`から本クレートを除外している理由と対になる防御）。
 
+mod client;
 mod log;
 mod mm;
 
@@ -75,9 +77,13 @@ fn mod_message_inner(u_device_id: UINT, u_msg: UINT, dw_user: DWORD_PTR, dw_para
             if dw_user == 0 {
                 return MMSYSERR_INVALPARAM;
             }
+            if !client::open() {
+                log::log("modMessage OPEN failed: op505-standaloneのパイプサーバーに接続できません");
+                return MMSYSERR_NOTENABLED;
+            }
             // このメッセージに限り dw_user は DWORD_PTR* （出力先）。以降のメッセージでは
-            // ここに書いた値がそのまま dw_user として渡ってくる。スパイクでは区別不要のため
-            // 固定値を書くだけ。
+            // ここに書いた値がそのまま dw_user として渡ってくる。デバイス1個のみのため
+            // 区別不要で固定値を書くだけ。
             let out = dw_user as *mut usize;
             unsafe { *out = 1 };
             MMSYSERR_NOERROR
@@ -90,24 +96,31 @@ fn mod_message_inner(u_device_id: UINT, u_msg: UINT, dw_user: DWORD_PTR, dw_para
 
         MODM_DATA => {
             // dw_param1はステータス/データ1/データ2をリトルエンディアンでパックした短いMIDI
-            // メッセージ（下位1バイトがステータス）。正確な長さ判定はop505-midi側の役割なので
-            // ここでは行わず、届いた3バイトをそのままログに残す（データ到達の証明が目的）。
+            // メッセージ（下位1バイトがステータス）。ステータスバイトから実際のメッセージ長
+            // （1〜3バイト）を求め、その分だけをフレームへ詰めて送る
+            // （op505-standalone側はop505-midiで正規の長さ判定をするため、ここでの判定は
+            // 「送るバイト数」を決めるためだけの簡易実装でよい）。
             let status = (dw_param1 & 0xFF) as u8;
             let data1 = ((dw_param1 >> 8) & 0xFF) as u8;
             let data2 = ((dw_param1 >> 16) & 0xFF) as u8;
-            log::log(&format!(
-                "modMessage DATA device={u_device_id} bytes=[{status:#04X} {data1:#04X} {data2:#04X}]"
-            ));
+            let bytes: &[u8] = match short_message_len(status) {
+                1 => &[status],
+                2 => &[status, data1][..],
+                _ => &[status, data1, data2][..],
+            };
+            log::log(&format!("modMessage DATA device={u_device_id} bytes={bytes:02X?}"));
+            client::send_frame(client::build_frame(client::FRAME_KIND_SHORT, u_device_id as u8, bytes));
             MMSYSERR_NOERROR
         }
 
         MODM_LONGDATA => {
-            log::log(&format!("modMessage LONGDATA device={u_device_id}（SysEx、フェーズ0では未実装）"));
+            log::log(&format!("modMessage LONGDATA device={u_device_id}（SysEx、フェーズ4で対応予定・現状未実装）"));
             MMSYSERR_NOTSUPPORTED
         }
 
         MODM_RESET => {
             log::log(&format!("modMessage RESET device={u_device_id}"));
+            client::send_frame(client::build_frame(client::FRAME_KIND_RESET, u_device_id as u8, &[]));
             MMSYSERR_NOERROR
         }
 

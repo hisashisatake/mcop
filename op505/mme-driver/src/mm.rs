@@ -71,6 +71,22 @@ pub struct MidiOutCapsW {
     pub dw_support: DWORD,
 }
 
+/// MIDIステータスバイトから、そのショートメッセージの全体バイト数（1〜3）を求める。
+/// 標準的なMIDIステータスバイトの規約（チャンネルボイス/モードメッセージは種別で2〜3バイト、
+/// システムメッセージは種別ごとに固定長）に基づく簡易判定。
+pub fn short_message_len(status: u8) -> usize {
+    match status & 0xF0 {
+        0x80 | 0x90 | 0xA0 | 0xB0 | 0xE0 => 3,
+        0xC0 | 0xD0 => 2,
+        0xF0 => match status {
+            0xF1 | 0xF3 => 2,
+            0xF2 => 3,
+            _ => 1,
+        },
+        _ => 1,
+    }
+}
+
 /// `caps`へ固定のop505デバイス情報を書き込む。
 ///
 /// # Safety
