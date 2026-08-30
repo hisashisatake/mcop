@@ -1,15 +1,18 @@
 //! op505をDomino等のMME専用MIDIシーケンサから直接鳴らすための常駐アプリ。
 //!
-//! MIDI入力は2系統ある。①loopMIDI等が作った既存の仮想MIDIポート（または実機の
-//! USB-MIDIキーボード）を[`midir`]経由で開く従来経路。②[`mme_pipe`]が受け付ける
-//! 名前付きパイプ（`\\.\pipe\op505.mme.v1`）経由の経路——`op505-mme-driver`
-//! （Drivers32方式のユーザーモードMMEドライバDLL、`op505/mme-driver/`）が
-//! Domino等のクライアントプロセスに読み込まれ、そこから転送されてくる。②により
-//! op505自身がWindowsのMIDI OUTデバイス一覧に「op505」として現れ、loopMIDIの
-//! 仮想ポート作成を経由せずに直接選択できる。両経路とも受け取ったMIDIバイト列を
-//! 同じキューへ積み、op505-coreへ渡してcpalでWASAPI直出しする。
+//! MIDI入力の供給元は[`midi_source::MidiSource`]で抽象化され、複数併存できる
+//! （[`sources`]配下が個々の実装）。現状2系統ある。①loopMIDI等が作った既存の仮想MIDI
+//! ポート（または実機のUSB-MIDIキーボード）を[`midir`]経由で開く[`sources::midir_src`]。
+//! ②[`sources::pipe_src`]が受け付ける名前付きパイプ（`\\.\pipe\op505.mme.v1`）経由の
+//! 経路——`op505-mme-driver`（Drivers32方式のユーザーモードMMEドライバDLL、
+//! `op505/mme-driver/`）がDomino等のクライアントプロセスに読み込まれ、そこから
+//! 転送されてくる。②によりop505自身がWindowsのMIDI OUTデバイス一覧に「op505」として
+//! 現れ、loopMIDIの仮想ポート作成を経由せずに直接選択できる。将来のWindows MIDI
+//! Services経由の供給元も同じトレイトを実装するだけで足りる設計（詳細はop505/mme-driver/
+//! 配下の設計メモ参照）。どの供給元も受け取ったMIDIバイト列を同じキューへ積み、
+//! op505-coreへ渡してcpalでWASAPI直出しする。
 //!
-//! MIDI入力はmidirのコールバックスレッドまたは[`mme_pipe`]の受信スレッドから届き、
+//! MIDI入力は各供給元のスレッドから[`midi_source::MidiSink::push`]経由で届き、
 //! オーディオ処理はcpalのコールバックスレッドで行われる。いずれもキュー
 //! （Mutex<VecDeque<Vec<u8>>>）でのみやり取りし、Op505Engine/MasterEffectsは
 //! オーディオスレッドが単独で所有する（gesture-appのArc<Mutex<Op505Engine>>と違い、
@@ -31,7 +34,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use midir::{MidiInput, MidiInputConnection};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
@@ -39,7 +41,9 @@ use op505_midi::{
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
-mod mme_pipe;
+mod config;
+mod midi_source;
+mod sources;
 
 type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 
@@ -118,8 +122,15 @@ impl MidiState {
 
 fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
-    mme_pipe::spawn_accept_loop(Arc::clone(&midi_queue));
-    let _midi_connection = connect_midi_input(Arc::clone(&midi_queue));
+    let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
+    let mut registry = midi_source::SourceRegistry::new();
+
+    registry.add(Box::new(sources::pipe_src::spawn(sink.clone())));
+
+    let config = config::load();
+    if let Some(midir_source) = sources::midir_src::connect(sink, config.midi_in_port.as_deref()) {
+        registry.add(Box::new(midir_source));
+    }
 
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
@@ -597,78 +608,6 @@ fn handle_control_change(
     }
 }
 
-/// MIDI入力ポートへ接続する（Step 2: 複数ポートからの選択に対応）。
-/// 選択順は「起動時コマンドライン引数（数値）」→「ポートが1つのみなら自動選択」→
-/// 「複数かつ引数無しなら標準入力で対話選択」。
-/// ポートが1つも無い場合は`None`を返す（[`mme_pipe`]経由の入力だけで使う構成が
-/// 正当にあり得るため。以前はここでpanicしていたが、MMEドライバ経路の追加に伴い廃止した）。
-fn connect_midi_input(queue: MidiQueue) -> Option<MidiInputConnection<()>> {
-    let input = MidiInput::new("op505-standalone").expect("failed to init MIDI input");
-    let ports = input.ports();
-    if ports.is_empty() {
-        println!("MIDI入力ポートが見つかりません（loopMIDI等が未起動）。MMEドライバ経由の入力のみ有効です。");
-        return None;
-    }
-
-    println!("利用可能なMIDI入力ポート:");
-    let port_names: Vec<String> = ports
-        .iter()
-        .map(|port| input.port_name(port).unwrap_or_else(|_| "(不明)".to_string()))
-        .collect();
-    for (i, name) in port_names.iter().enumerate() {
-        println!("  [{i}] {name}");
-    }
-
-    let index = select_port_index(&port_names);
-    let port = &ports[index];
-    println!("接続: {}", port_names[index]);
-
-    let connection = input
-        .connect(
-            port,
-            "op505-standalone-input",
-            move |_stamp, message, _| {
-                queue.lock().unwrap().push_back(message.to_vec());
-            },
-            (),
-        )
-        .expect("failed to connect to MIDI input port");
-    Some(connection)
-}
-
-/// 接続するポートのインデックスを決める。
-/// 1. 起動時コマンドライン引数（`op505-standalone.exe 1`のように数値で指定）があれば最優先。
-/// 2. ポートが1つしかなければ選ぶ余地が無いので自動選択。
-/// 3. それ以外は標準入力で対話選択（不正な入力は再入力を促す）。
-fn select_port_index(port_names: &[String]) -> usize {
-    if let Some(arg) = std::env::args().nth(1) {
-        match arg.parse::<usize>() {
-            Ok(index) if index < port_names.len() => return index,
-            _ => eprintln!(
-                "警告: 引数 '{arg}' は有効なポート番号(0〜{})ではありません。無視します。",
-                port_names.len() - 1
-            ),
-        }
-    }
-
-    if port_names.len() == 1 {
-        return 0;
-    }
-
-    use std::io::Write;
-    loop {
-        print!("接続するポート番号を入力してください (0〜{}): ", port_names.len() - 1);
-        std::io::stdout().flush().ok();
-
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).is_err() {
-            eprintln!("標準入力の読み取りに失敗しました。ポート0を使用します。");
-            return 0;
-        }
-
-        match line.trim().parse::<usize>() {
-            Ok(index) if index < port_names.len() => return index,
-            _ => println!("0〜{}の番号を入力してください。", port_names.len() - 1),
-        }
-    }
-}
+// MIDI入力ポートへの接続・選択は sources::midir_src（旧connect_midi_input/select_port_index、
+// コマンドライン引数+stdin対話）へ移動した。設定ファイル（config.rs）+
+// 「ポートが1個だけなら自動選択」方式に置き換え、タスクトレイ化後もstdin無しで動く。

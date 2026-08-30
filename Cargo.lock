@@ -3844,6 +3844,8 @@ dependencies = [
  "midir",
  "op505-core",
  "op505-midi",
+ "serde",
+ "serde_json",
  "sound-core",
 ]
 

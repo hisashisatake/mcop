@@ -1,4 +1,5 @@
 //! op505-mme-driver（Domino等のプロセスに住むMMEドライバDLL）からの名前付きパイプ受信サーバー。
+//! （旧`mme_pipe`モジュールを`sources`配下へ移動したもの。フレーム形式・FFI設計は不変）
 //!
 //! フレーム形式（op505/mme-driver/src/client.rsのbuild_frameと対になる。変更時は両方揃える）:
 //! `[u8 version=1][u8 kind][u8 device_id][u16 len（リトルエンディアン）][bytes; len]`
@@ -9,15 +10,15 @@
 //! ConnectNamedPipe）が必要なため、その2関数だけをkernel32.dllから直接FFI宣言する
 //! （windows-sys等の外部crateは導入しない）。接続確立後の読み取り・クローズは
 //! `std::fs::File`（`FromRawHandle`経由）に委ね、生のReadFile/CloseHandle呼び出しは書かない。
+//!
+//! acceptループの明示的な停止手段は現状無く、プロセス終了まで動き続ける
+//! （タスクトレイ化フェーズで「終了」メニューの実装時に追加する）。
 
 use std::fs::File;
 use std::io::Read;
 use std::os::windows::io::FromRawHandle;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::collections::VecDeque;
 
-type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
+use crate::midi_source::{MidiSink, MidiSource};
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
 
@@ -57,14 +58,24 @@ mod ffi {
     }
 }
 
+/// パイプサーバーが生きていることを示すだけのハンドル（実体はacceptループのスレッド）。
+pub struct PipeSource;
+
+impl MidiSource for PipeSource {
+    fn describe(&self) -> String {
+        format!("MMEドライバ (名前付きパイプ {PIPE_PATH})")
+    }
+}
+
 /// パイプ受信サーバーをバックグラウンドスレッドで起動する（呼び出しはブロックしない）。
 /// 失敗時は標準エラーへ警告を出して諦める（MMEドライバ経由の入力が無効になるだけで、
 /// midir経由の既存入力は影響を受けない）。
-pub fn spawn_accept_loop(queue: MidiQueue) {
-    std::thread::spawn(move || accept_loop(queue));
+pub fn spawn(sink: MidiSink) -> PipeSource {
+    std::thread::spawn(move || accept_loop(sink));
+    PipeSource
 }
 
-fn accept_loop(queue: MidiQueue) {
+fn accept_loop(sink: MidiSink) {
     loop {
         let Some(handle) = create_pipe_instance() else {
             eprintln!(
@@ -87,8 +98,8 @@ fn accept_loop(queue: MidiQueue) {
             continue;
         }
 
-        let queue_for_client = Arc::clone(&queue);
-        std::thread::spawn(move || serve_client(file, queue_for_client));
+        let sink_for_client = sink.clone();
+        std::thread::spawn(move || serve_client(file, sink_for_client));
         // ループ先頭へ戻り、次のクライアント用に新しいインスタンスを作る
         // （複数のWinMMホストアプリが同時に接続してくる可能性があるため）。
     }
@@ -121,14 +132,14 @@ fn pipe_name_wide() -> Vec<u16> {
     OsStr::new(PIPE_PATH).encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn serve_client(mut file: File, queue: MidiQueue) {
+fn serve_client(mut file: File, sink: MidiSink) {
     let mut buf = [0u8; 4096];
     loop {
         match file.read(&mut buf) {
             Ok(0) => break, // クライアントが切断
             Ok(n) => {
                 for message in decode_frame(&buf[..n]) {
-                    queue.lock().unwrap().push_back(message);
+                    sink.push(message);
                 }
             }
             Err(_) => break,

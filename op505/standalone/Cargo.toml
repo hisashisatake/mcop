@@ -19,3 +19,7 @@ op505-midi = { path = "../midi" }
 sound-core = { path = "../../sound/core" }
 midir = "0.11"
 cpal = "0.15"
+# 設定ファイル（%APPDATA%\op505\standalone.json）用。op505-coreの.op505プリセット形式と
+# 同じserde+serde_json（op505/core/Cargo.toml参照）に揃える。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
