@@ -1,0 +1,4 @@
+LIBRARY op505mme
+EXPORTS
+    DriverProc=_DriverProc@20
+    modMessage=_modMessage@20

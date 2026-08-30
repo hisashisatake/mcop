@@ -1,0 +1,28 @@
+[package]
+name = "op505-mme-driver"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# op505をWindowsのMIDI OUTデバイス一覧に「op505」として登録するユーザーモードMMEドライバ
+# （Drivers32方式、VirtualMIDISynthと同じ仕組み。カーネルドライバではない）。
+# Domino等のレガシーWinMMシーケンサから直接op505-standaloneへMIDIを送れるようにする。
+#
+# 相手アプリ（Domino等）のプロセス空間にロードされるDLLのため：
+# - op505-coreには依存しない（極小に保つ。将来のフェーズでMIDIバイト列を名前付きパイプで
+#   op505-standaloneへ転送するだけのシムに留める）。
+# - ワークスペースから除外（ルートCargo.tomlのexclude）。ワークスペースの
+#   [profile.release] panic="abort" は他プロセスに住むDLLには致命的
+#   （パニックでホストアプリごと落ちる）。op505/tools/patchlab（PyO3 cdylib）が
+#   同じ理由で既にexcludeされている先例に倣う。除外により、このクレートは
+#   下記の自前[profile.release]（panic="unwind"）を使う。
+# - 現段階（フェーズ0スパイク）は依存ゼロ。DriverProc/modMessageの最小実装のみで、
+#   winmm.dllから正しく認識されデータが届くかを検証する。エンジン配線・名前付きパイプは
+#   後続フェーズで追加する。
+
+[lib]
+name = "op505mme"
+crate-type = ["cdylib"]
+
+[profile.release]
+panic = "unwind"
