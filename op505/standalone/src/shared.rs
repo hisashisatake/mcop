@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::RwLock;
 
-use op505_core::{Op505Patch, Op505PresetBank};
+use op505_core::{Op505BankFile, Op505Patch, Op505PresetBank};
 
 /// `edit_channel`の「編集対象なし」を表す番兵値。MIDIチャンネルは0〜15のため衝突しない。
 pub const NO_EDIT_CHANNEL: u8 = 0xFF;
@@ -86,9 +86,12 @@ impl SharedEditState {
         self.patch_dirty.store(true, Ordering::Release);
     }
 
-    /// エディタからプリセットバンクを書き込む（Saveボタン相当）。
-    pub fn publish_presets(&self, presets: Op505PresetBank) {
-        *self.presets.write().unwrap() = presets;
+    /// エディタのPRESETSパネルがOpen/Save/Save As/+ New Voice/Deleteしたバンクを、音声側の
+    /// 検索用`Op505PresetBank`へマージする（`op505-vst`の`publish_bank`と同じ操作、
+    /// `Op505BankFile::as_presets_file()`が返す「このbankは今このファイルの内容が全て」を
+    /// `Op505PresetBank::merge_file`が受け取り、該当bankを丸ごと置き換える）。
+    pub fn publish_bank_file(&self, bank_file: &Op505BankFile) {
+        self.presets.write().unwrap().merge_file(bank_file.as_presets_file());
         self.presets_dirty.store(true, Ordering::Release);
     }
 
@@ -199,6 +202,23 @@ mod tests {
         assert_eq!(shared.edit_channel(), Some(3));
         shared.set_edit_channel(None);
         assert_eq!(shared.edit_channel(), None);
+    }
+
+    #[test]
+    fn publish_bank_file_merges_into_presets() {
+        use op505_core::{Op505PresetEntry, Op505PresetFile};
+        use std::path::PathBuf;
+
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let file = Op505PresetFile::Presets {
+            bank: 5,
+            presets: vec![Op505PresetEntry { program: 2, name: "Test".to_string(), patch: Op505Patch::default() }],
+        };
+        let bank_file = Op505BankFile::from_loaded(PathBuf::from("dummy.op505"), file, 5);
+        shared.publish_bank_file(&bank_file);
+        let presets = shared.take_presets_if_dirty().expect("dirty after publish");
+        assert!(presets.get(5, 2).is_some(), "マージされたエントリーが取り出せるはず");
+        assert!(shared.take_presets_if_dirty().is_none());
     }
 
     #[test]

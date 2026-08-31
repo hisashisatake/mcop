@@ -11,13 +11,19 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::panel_params::{MasterEffectsState, Op505State};
+use super::preset_panel::{self, EditorPresetState};
 use crate::shared::SharedEditState;
+
+/// PRESETSサイドバー（固定幅）の幅。op505-vstの`PRESETS_SIDEBAR_WIDTH`と揃える
+/// （Open/Save/Save Asの3ボタンが折り返さず並ぶ幅）。
+const PRESETS_SIDEBAR_WIDTH: f32 = 200.0;
 
 pub struct EditorApp {
     shared: Arc<SharedEditState>,
     op505: Op505State,
     master: Rc<std::cell::RefCell<MasterEffectsState>>,
     master_dirty: Rc<Cell<bool>>,
+    presets: EditorPresetState,
     /// UIローカルの編集対象ch選択。`None`＝「(なし)」（既定、`SharedEditState::NO_EDIT_CHANNEL`と
     /// 対応）。ウィンドウを開いた直後に演奏中のチャンネルを勝手に上書きしないよう、既定は
     /// 必ず`None`にする（ユーザー確認済み、gesture-appコントローラー化ロードマップのplan参照）。
@@ -34,6 +40,7 @@ impl EditorApp {
             op505: Op505State::new(initial_patch),
             master: Rc::new(std::cell::RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
+            presets: EditorPresetState::new(),
             edit_channel: None,
         }
     }
@@ -68,6 +75,10 @@ impl eframe::App for EditorApp {
                     );
                 }
             });
+        });
+
+        egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
+            preset_panel::draw_presets_panel(ui, &mut self.presets, &self.op505.patch, &self.op505.dirty, &self.shared);
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {

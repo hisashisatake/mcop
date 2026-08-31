@@ -28,6 +28,7 @@ use crate::shared::SharedEditState;
 
 mod app;
 mod panel_params;
+mod preset_panel;
 
 use app::EditorApp;
 
@@ -118,12 +119,12 @@ fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<eg
             builder.with_any_thread(true).with_dpi_aware(false);
         })),
         // 幅はop505-uiパネルの最小幅（panel.xmlから算出、ノブ等が折り返さず収まるサイズ）+
-        // 余白。PRESETSサイドバー分は未実装（サブステップ4）のため今は含めない。
+        // PRESETSサイドバー(`app::PRESETS_SIDEBAR_WIDTH`と同値)+余白。
         // 高さは4オペレーター分のTimeEgエディタが縦に並ぶため大きめに確保し、収まらない分は
         // ScrollArea（`app.rs`）に任せる。
         viewport: egui::ViewportBuilder::default()
             .with_title("op505 音色エディタ")
-            .with_inner_size([op505_ui::PANEL_MIN_WIDTH + 40.0, 720.0]),
+            .with_inner_size([op505_ui::PANEL_MIN_WIDTH + 200.0 + 40.0, 720.0]),
         ..Default::default()
     };
 
