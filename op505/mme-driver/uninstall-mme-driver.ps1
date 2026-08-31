@@ -4,6 +4,12 @@
 
 $ErrorActionPreference = "Stop"
 
+Add-Type -Namespace Op505 -Name NativeMethods -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, uint dwFlags);
+'@
+$MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+
 $principal = New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "This script must run elevated (Administrator)."
@@ -35,7 +41,11 @@ foreach ($path in @((Join-Path $env:WINDIR "System32\op505mme.dll"), (Join-Path 
             Remove-Item -Path $path -Force
             Write-Output "Removed $path"
         } catch {
-            Write-Warning "Could not delete $path (likely still loaded by a running app). It is unregistered and harmless, but the file itself is orphaned until the holder process exits."
+            if ([Op505.NativeMethods]::MoveFileEx($path, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) {
+                Write-Warning "$path is locked (likely still loaded by a running app). It is unregistered and harmless; deletion scheduled for the next reboot."
+            } else {
+                Write-Warning "Could not delete $path, and scheduling deletion on reboot also failed (Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())). It is unregistered and harmless, but the file itself is orphaned until manually removed."
+            }
         }
     }
 }

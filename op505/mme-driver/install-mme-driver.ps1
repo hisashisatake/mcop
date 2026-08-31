@@ -7,8 +7,47 @@
 #   - Only writes to a free "midi2".."midi9" slot, or reuses a slot that already points at
 #     op505mme.dll (idempotent re-run).
 #   - Backs up both Drivers32 keys via `reg export` before any write.
+#   - If the DLL is locked by a running client (e.g. op505-standalone itself, per the
+#     self-load discovery in project memory), falls back to scheduling the replacement via
+#     MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT) so it takes effect on the next reboot
+#     instead of failing outright.
 
 $ErrorActionPreference = "Stop"
+
+Add-Type -Namespace Op505 -Name NativeMethods -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, uint dwFlags);
+'@
+$MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+
+# Copies $source over $destination. If $destination is locked by a running process (typically
+# op505-standalone itself, which loads every Drivers32 "midi*" entry as soon as it touches
+# WinMM), schedules a two-step replacement for the next boot instead of failing:
+#   1. schedule deletion of the currently-loaded $destination
+#   2. copy $source to a "<destination>.op505-pending" sibling and schedule renaming it onto
+#      $destination
+# Both steps are processed in order from PendingFileRenameOperations at boot, before any app
+# (including op505-standalone) can lock the file again.
+function Install-DllWithFallback([string]$source, [string]$destination) {
+    try {
+        Copy-Item -Path $source -Destination $destination -Force -ErrorAction Stop
+        Write-Output "Copied: $source -> $destination"
+        return
+    } catch {
+        Write-Warning "$destination is locked (likely loaded by a running app, e.g. op505-standalone). Scheduling replacement on next reboot."
+    }
+
+    $pending = "$destination.op505-pending"
+    Copy-Item -Path $source -Destination $pending -Force
+
+    if (-not [Op505.NativeMethods]::MoveFileEx($destination, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) {
+        throw "MoveFileEx (schedule delete) failed for $destination (Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+    }
+    if (-not [Op505.NativeMethods]::MoveFileEx($pending, $destination, $MOVEFILE_DELAY_UNTIL_REBOOT)) {
+        throw "MoveFileEx (schedule rename) failed for $pending -> $destination (Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+    }
+    Write-Output "Scheduled: $pending -> $destination will replace the locked file on next reboot."
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dllX64 = Join-Path $scriptDir "dist\x64\op505mme.dll"
@@ -69,14 +108,11 @@ $slot32 = Find-Slot $key32
 if (-not $slot64) { throw "$key64 : no free midi2..midi9 slot." }
 if (-not $slot32) { throw "$key32 : no free midi2..midi9 slot." }
 
-# --- Copy DLLs ---
+# --- Copy DLLs (falls back to a reboot-scheduled replacement if locked) ---
 $sys32 = Join-Path $env:WINDIR "System32\op505mme.dll"
 $syswow64 = Join-Path $env:WINDIR "SysWOW64\op505mme.dll"
-Copy-Item -Path $dllX64 -Destination $sys32 -Force
-Copy-Item -Path $dllX86 -Destination $syswow64 -Force
-Write-Output "Copied:"
-Write-Output "  $dllX64 -> $sys32"
-Write-Output "  $dllX86 -> $syswow64"
+Install-DllWithFallback $dllX64 $sys32
+Install-DllWithFallback $dllX86 $syswow64
 
 # --- Register ---
 Set-ItemProperty -Path $key64 -Name $slot64.Name -Value "op505mme.dll" -Type String
