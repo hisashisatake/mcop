@@ -437,6 +437,21 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
     - パイプのACL: 既定のセキュリティ記述子はMedium整合性レベル相当で、Windowsの
       「No Write-Up」原則によりLow整合性レベルのクライアントからは書き込めないため、
       SDDL`S:(ML;;NW;;;LW)`を`CreateNamedPipeW`へ明示的に付与し実機確認済み
+    - **NSIS統合インストーラ完了**（`op505/mme-driver/installer/`、実機確認済み、
+      2026-08-31）: standalone.exe配置＋MMEドライバのDrivers32登録を1本の
+      `op505-setup.exe`に統合。`install-mme-driver.ps1`/`uninstall-mme-driver.ps1`の
+      安全ロジック（`midi`/`midi1`保護・バックアップ・空きスロット走査・冪等な
+      再利用・厳密一致でのみ削除）をNSISスクリプトへそのまま移植し、`x64.nsh`の
+      `${DisableX64FSRedirection}`/`SetRegView 64`で64bit側のSystem32・レジストリを
+      操作する。ロード中DLLの置換は`Delete /REBOOTOK`+`Rename /REBOOTOK`
+      （MoveFileExの`MOVEFILE_DELAY_UNTIL_REBOOT`のNSISネイティブ相当）でフォールバック。
+      **発見したバグ**: 直接上書きの成否判定に使う`System::Call`経由の`CopyFileW`は、
+      `File`命令と異なり実行時のカレントディレクトリを基準に相対パスを解決するため、
+      ビルド時の`!define`に相対パスを使うと常に失敗しフォールバック経路だけが動く
+      （結果的に正しく配置されるため気づきにくい）。`build-installer.ps1`側で絶対パスを
+      計算し`makensis /D...`で渡すことで解消し、「ロードされていない場合は直接上書き・
+      ロード中のみフォールバック」という設計通りの分岐を実機で確認した
+      （`PendingFileRenameOperations`への新規登録有無で判定）
     - 残: CLAUDE.md/本ロードマップへの反映（本節）、developへの`--no-ff`マージ
   → `feature/mme-driver-tray`ブランチで実施（develop未マージ）
 ```

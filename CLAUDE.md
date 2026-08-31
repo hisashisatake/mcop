@@ -393,6 +393,50 @@ MIDI Servicesの標準ドライバは不可侵）。解除は`uninstall-mme-driv
 反映が遅延する）。DLL更新後にDominoなどの既存クライアントを再起動すればMIDI OUTデバイス
 一覧が再列挙される（OS再起動は通常不要）。
 
+### NSIS統合インストーラ（op505-setup.exe）
+
+`op505/mme-driver/installer/`に、standalone.exe配置＋MMEドライバのDrivers32登録を1本の
+exeへ統合したNSISインストーラがある。上記2つの手順（PowerShellスクリプト2本）を
+エンドユーザー向けに1本化したもので、中身のロジック（安全チェック・バックアップ・
+空きスロット走査等）は`install-mme-driver.ps1`/`uninstall-mme-driver.ps1`と同一。
+
+```powershell
+# 事前ビルド（standalone.exeとmme-driver x64/x86 DLLをdistへ配置しておく）
+cargo build --release -p op505-standalone
+cd op505\mme-driver
+cargo build --release
+$rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+& $rustupCargo build --release --target i686-pc-windows-msvc
+Copy-Item target\release\op505mme.dll dist\x64\op505mme.dll
+Copy-Item target\i686-pc-windows-msvc\release\op505mme.dll dist\x86\op505mme.dll
+cd ..\..\..
+
+# インストーラのビルド（NSIS 3.11、winget install NSIS.NSISで導入可能）
+pwsh -File op505\mme-driver\installer\build-installer.ps1
+# -> op505\mme-driver\installer\dist\op505-setup.exe（管理者権限で実行、/Sでサイレントインストール）
+```
+
+**`.nsi`ファイルを編集したらUTF-8 BOMを再付与すること**: NSISの`Unicode true`はスクリプト
+ファイル自体がBOM付きエンコードであることを要求する。WriteツールはBOM無しUTF-8で保存するため、
+日本語コメントを含む本ファイルを編集した直後にBOM無しのままビルドすると
+`Bad text encoding`エラーになる（PowerShellスクリプトのBOM問題と同種の罠、CLAUDE.md冒頭
+「PowerShellスクリプト実行」参照）。
+
+```powershell
+$path = "op505\mme-driver\installer\op505-installer.nsi"
+$content = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($true)))
+```
+
+**罠（発見済み、修正済みだが再発に注意）**: `.nsi`内でロード中DLLの直接上書き成否を判定する
+`System::Call`経由の`CopyFileW`は、`File`命令と違って**実行時のカレントディレクトリを基準に
+相対パスを解決する**。`!define DLL_X64 "..\dist\x64\op505mme.dll"`のような相対パスのままだと
+直接上書きが常に失敗し、常に`Delete`/`Rename`の`/REBOOTOK`フォールバック経路だけが動く
+（最終的に正しく配置はされるため気づきにくいが、「ロードされていなければ直接上書き」という
+設計意図が失われる）。`build-installer.ps1`が絶対パスを計算し`makensis /DDLL_X64=...`で
+渡す方式で解消済み。`.nsi`側で新たに`System::Call`にファイルパスを渡す処理を追加する場合は
+必ず絶対パスであることを確認する。
+
 ---
 
 ## アーキテクチャ
