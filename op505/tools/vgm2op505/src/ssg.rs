@@ -19,7 +19,7 @@
 //! Pitch/Cutoff/Gain FG・texture_lfoの値は`Ym38x6Patch::default()`由来で
 //! `Op505ChannelParams::default()`とはビット表現が異なる（音は同一）。整理は別コミットで行う。
 
-use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch};
+use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch};
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
 
 // SSGクロックの分周値はチップ依存（`ssg_clock = chip_clock / ssg_clock_div`）。
@@ -321,7 +321,7 @@ fn ssg_channel(algorithm: u8) -> Op505ChannelParams {
         algorithm,
         pitch_fg: Op505BipolarFg { eg: pitch_cutoff_eg(54), depth: 0 },
         cutoff_fg: Op505BipolarFg { eg: pitch_cutoff_eg(255), depth: 0 },
-        gain_fg,
+        gain_fg: Op505GainFg { eg: gain_fg, depth: 255 },
         ..Op505ChannelParams::default()
     }
 }

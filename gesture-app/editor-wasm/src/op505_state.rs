@@ -128,6 +128,9 @@ fn bipolar_fg_panel_params(
     set_eg: fn(&mut Op505Patch, TimeEgParams),
     eg_name: &'static str,
     depth_name: &'static str,
+    // Pitch/Cutoff FGは0（無変調）、Gain FGは255（EGの形をそのまま使う＝旧仕様と一致）。
+    // `Op505GainFg`のdocコメント参照。
+    default_depth: i32,
 ) -> Op505BipolarFgPanelParams<'static> {
     Op505BipolarFgPanelParams {
         eg: time_eg_handle(state, dirty, get_eg, set_eg, eg_name),
@@ -138,8 +141,7 @@ fn bipolar_fg_panel_params(
             set: set_depth,
             min: 0,
             max: 255,
-            // 符号を持たない振れ幅の倍率。0＝変調なし（符号はFGのレベル波形側が持つ）。
-            default: 0,
+            default: default_depth,
             name: depth_name,
         }) as Box<dyn IntParamHandle>,
     }
@@ -275,6 +277,7 @@ impl Op505State {
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.pitch_fg.eg = v,
                 "PITCH FG",
                 "Pitch FG Depth",
+                0,
             ),
             cutoff_fg: bipolar_fg_panel_params(
                 state,
@@ -285,13 +288,18 @@ impl Op505State {
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.cutoff_fg.eg = v,
                 "CUTOFF FG",
                 "Cutoff FG Depth",
+                0,
             ),
-            gain_fg: time_eg_handle(
+            gain_fg: bipolar_fg_panel_params(
                 state,
                 dirty,
-                |p: &Op505Patch| p.channel.gain_fg,
-                |p: &mut Op505Patch, v: TimeEgParams| p.channel.gain_fg = v,
+                |p: &Op505Patch| p.channel.gain_fg.depth as i32,
+                |p: &mut Op505Patch, v: i32| p.channel.gain_fg.depth = v as u8,
+                |p: &Op505Patch| p.channel.gain_fg.eg,
+                |p: &mut Op505Patch, v: TimeEgParams| p.channel.gain_fg.eg = v,
                 "GAIN FG",
+                "Gain FG Depth",
+                255,
             ),
             gain_fg_to_master: Box::new(Op505BoolField {
                 state: state.clone(),

@@ -5,6 +5,7 @@
 pub mod channel_state;
 pub mod control;
 pub mod expression;
+pub mod gain_fg;
 pub mod mono;
 pub mod overrides;
 pub mod pedal;
@@ -17,6 +18,7 @@ pub mod value;
 pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget, EFFECT_SLOT_COUNT};
 pub use control::{control_target, needs_voice_update, ControlTarget};
 pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
+pub use gain_fg::apply_gain_fg_expression;
 pub use mono::{MonoNoteOff, MonoNoteOn, MonoState};
 pub use overrides::PatchOverrides;
 pub use pedal::{released_notes, PedalState};

@@ -25,12 +25,10 @@ pub enum ControlTarget {
     ChannelCoarseTuning,
     /// RPN(0,5): Modulation Depth Range
     ModulationDepthRange,
-    /// NRPN(0,0)・(0,25)〜(0,27)。旧質感LFO(Destination/Waveform/FadeMode/Rate/Depth/
-    /// Delay/FadeTime/Offset)のアドレス。質感LFO退役（`TimeEgParams::texture`へ統合、
-    /// memory `project_texture_lfo_retirement.md`参照）に伴い**欠番として予約**し、再利用しない
-    /// （`ReservedFgLoopCurve`と同じ理由：既存のSMF/DAWオートメーションが別の意味で
-    /// 解釈されるのを防ぐため）。NRPN(0,1)は`ChannelEffectRoute`へ、(0,22)〜(0,24)は
-    /// `FixedNoteEnable`/`FixedNote`/`FixedNoteFine`へ再割り当て済みのためこのバリアントの対象外。
+    /// NRPN(0,0)。旧質感LFO(Destination)のアドレス。質感LFO退役（`TimeEgParams::texture`へ統合、
+    /// memory `project_texture_lfo_retirement.md`参照）に伴う欠番。(0,1)・(0,22)〜(0,27)は
+    /// 別バリアントへ再割り当て済みのためこのバリアントの対象外（NRPN欠番は永久予約ではなく、
+    /// 用途が生まれ次第あける方針。詳細はspec-fm.md 8章）。
     ReservedTextureLfo,
     /// NRPN(0,1): Channel Effect Route。送信チャンネル自身の音声・エフェクト設定NRPN(0,2)〜
     /// (0,8)・CC91/93の適用先エフェクトスロット番号（0〜`EFFECT_SLOT_COUNT - 1`）を設定する。
@@ -72,6 +70,15 @@ pub enum ControlTarget {
     /// NRPN(0,24): Fixed Note Fine（0〜255、128=中心のバイポーラ）。
     /// `Op505ChannelParams::fixed_note_fine`。
     FixedNoteFine,
+    /// NRPN(0,25): Pitch FG Depth（0〜255）の絶対上書き。`PatchOverrides`経由
+    /// （Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」）。CC1/CC77の演奏補正は
+    /// この上書き後の値へさらに加算される（`ChannelState::apply_note_post_processing`参照）。
+    PitchFgDepth,
+    /// NRPN(0,26): Cutoff FG Depth（0〜255）の絶対上書き。
+    CutoffFgDepth,
+    /// NRPN(0,27): Gain FG Depth（0〜255）の絶対上書き。CC92の演奏補正はこの上書き後の値へ
+    /// さらに加算される。
+    GainFgDepth,
     /// NRPN(0,28): Pitch FG Loop（0=ワンショット/1=ループ）。
     /// `PatchOverrides`経由（Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」）。
     /// `op505-vst`ではTimeEg本体がpersist状態のため、この上書きは音には即座に反映されるが
@@ -122,7 +129,9 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 22) => ControlTarget::FixedNoteEnable,
         RpnSelection::Nrpn(0, 23) => ControlTarget::FixedNote,
         RpnSelection::Nrpn(0, 24) => ControlTarget::FixedNoteFine,
-        RpnSelection::Nrpn(0, 25..=27) => ControlTarget::ReservedTextureLfo,
+        RpnSelection::Nrpn(0, 25) => ControlTarget::PitchFgDepth,
+        RpnSelection::Nrpn(0, 26) => ControlTarget::CutoffFgDepth,
+        RpnSelection::Nrpn(0, 27) => ControlTarget::GainFgDepth,
         RpnSelection::Nrpn(0, 28) => ControlTarget::PitchFgLoop,
         RpnSelection::Nrpn(0, 29) => ControlTarget::PitchFgCurve,
         RpnSelection::Nrpn(0, 30) => ControlTarget::CutoffFgLoop,
@@ -164,6 +173,9 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::FixedNoteEnable
         | ControlTarget::FixedNote
         | ControlTarget::FixedNoteFine
+        | ControlTarget::PitchFgDepth
+        | ControlTarget::CutoffFgDepth
+        | ControlTarget::GainFgDepth
         | ControlTarget::PitchFgLoop
         | ControlTarget::PitchFgCurve
         | ControlTarget::CutoffFgLoop
@@ -208,15 +220,24 @@ mod tests {
         }
     }
 
-    /// 旧質感LFOのNRPNアドレス。質感LFO退役後は欠番として予約し、再利用しない。
-    /// NRPN(0,1)はChannelEffectRoute、(0,22)〜(0,24)はFixed Note 3項目へ再割り当て済みのため
-    /// このリストから除外（`channel_effect_route_address`・`fixed_note_addresses`参照）。
+    /// 旧質感LFOのNRPNアドレス。NRPN(0,0)のみが欠番のまま残る（(0,1)はChannelEffectRoute、
+    /// (0,22)〜(0,24)はFixed Note 3項目、(0,25)〜(0,27)はFG Depth 3項目へ再割り当て済み、
+    /// `channel_effect_route_address`・`fixed_note_addresses`・`fg_depth_addresses`参照）。
     #[test]
     fn reserved_texture_lfo_range_is_never_touched() {
-        for lsb in [0, 25, 26, 27] {
-            assert_eq!(control_target(RpnSelection::Nrpn(0, lsb)), ControlTarget::ReservedTextureLfo);
-            assert!(!needs_voice_update(ControlTarget::ReservedTextureLfo));
-        }
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 0)), ControlTarget::ReservedTextureLfo);
+        assert!(!needs_voice_update(ControlTarget::ReservedTextureLfo));
+    }
+
+    /// NRPN(0,25)〜(0,27)は質感LFO退役で空いた欠番からFG Depth 3項目へ再割り当てされている。
+    #[test]
+    fn fg_depth_addresses() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 25)), ControlTarget::PitchFgDepth);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 26)), ControlTarget::CutoffFgDepth);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 27)), ControlTarget::GainFgDepth);
+        assert!(!needs_voice_update(ControlTarget::PitchFgDepth));
+        assert!(!needs_voice_update(ControlTarget::CutoffFgDepth));
+        assert!(!needs_voice_update(ControlTarget::GainFgDepth));
     }
 
     /// NRPN(0,1)は質感LFO退役で空いた欠番から`ChannelEffectRoute`へ再割り当てされている。

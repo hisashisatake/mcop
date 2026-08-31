@@ -21,8 +21,8 @@
 //! 出力先: `op505_presets_dir()`（`%APPDATA%\op505\presets`優先）へ`phase2_test_patches.op505`。
 
 use op505_core::{
-    op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch, Op505PresetEntry,
-    Op505PresetFile,
+    op505_presets_dir, Op505BipolarFg, Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch,
+    Op505PresetEntry, Op505PresetFile,
 };
 use sound_core::{seconds_to_time, TimeEgParams, TimeStage, MAX_STAGES};
 
@@ -39,15 +39,18 @@ fn stages(entries: &[(f32, u8, u8)]) -> [TimeStage; MAX_STAGES] {
 /// 透過的なGain FG（常時フルレベル、ゲートは閉じない。発音終了は各OPのEGのみで決める。
 /// `op505-core::default_gain_fg`と同形（STAGES=0＝無効、エンジンが常に1.0透過を返す）、
 /// private関数のためここでも同じ形を複製する）。
-fn transparent_gain_fg() -> TimeEgParams {
-    TimeEgParams {
-        stages: [TimeStage { time: 0, level: 255, curve: 0 }; MAX_STAGES],
-        stage_count: 0,
-        loop_enabled: 0,
-        loop_start: 0,
-        // release_point=最終段＝リリース区間が空。note-offで何も起きずゲートは開いたまま。
-        release_point: 0,
-     ..Default::default()}
+fn transparent_gain_fg() -> Op505GainFg {
+    Op505GainFg {
+        eg: TimeEgParams {
+            stages: [TimeStage { time: 0, level: 255, curve: 0 }; MAX_STAGES],
+            stage_count: 0,
+            loop_enabled: 0,
+            loop_start: 0,
+            // release_point=最終段＝リリース区間が空。note-offで何も起きずゲートは開いたまま。
+            release_point: 0,
+         ..Default::default()},
+        depth: 255,
+    }
 }
 
 /// バイポーラFGの「無効化」状態（Depth=0＝振れ幅ゼロ、レベルは全段中央128）。
@@ -159,7 +162,7 @@ fn test_vibrato() -> Op505Patch {
         ksr: 0,
         am_enable: false,
         velocity_sensitivity: 0,
-        waveform: 0, // サイン波
+        waveform: 8, // ノコギリ波（サインは倍音が無く微小なピッチ揺れが聴き取りにくいため）
         op_fine_tune: 128,
         eg_shift: 0,
         level_scale: 0,
@@ -189,19 +192,22 @@ fn test_vibrato() -> Op505Patch {
 /// Gain FG用のディレイ付きトレモロEG（`vibrato_eg`のunipolar版、ping-pongせず
 /// full(255)⇄dip(dip_level)を往復する）。stage0=遅延(full)→stage1(dip)/stage2(full)をループ、
 /// stage3はノートオフ後にfull(255=透過)へ落ち着くリリース段（`vibrato_eg`のNEUTRAL段と同じ役割）。
-fn tremolo_eg(delay_secs: f32, half_period_secs: f32, dip_level: u8) -> TimeEgParams {
-    TimeEgParams {
-        stages: stages(&[
-            (delay_secs, 255, 0),
-            (half_period_secs, dip_level, 1),
-            (half_period_secs, 255, 1),
-            (half_period_secs, 255, 1),
-        ]),
-        stage_count: 4,
-        loop_enabled: 1,
-        loop_start: 1,
-        release_point: 2,
-     ..Default::default()}
+fn tremolo_eg(delay_secs: f32, half_period_secs: f32, dip_level: u8) -> Op505GainFg {
+    Op505GainFg {
+        eg: TimeEgParams {
+            stages: stages(&[
+                (delay_secs, 255, 0),
+                (half_period_secs, dip_level, 1),
+                (half_period_secs, 255, 1),
+                (half_period_secs, 255, 1),
+            ]),
+            stage_count: 4,
+            loop_enabled: 1,
+            loop_start: 1,
+            release_point: 2,
+         ..Default::default()},
+        depth: 255,
+    }
 }
 
 /// NRPN(0,30)/(0,31) Cutoff FG Loop/Curve確認用。Test Leadと同じFM構成（倍音豊富）に
@@ -216,7 +222,7 @@ fn test_cutoff_fg() -> Op505Patch {
         ksr: 0,
         am_enable: false,
         velocity_sensitivity: 0,
-        waveform: 0,
+        waveform: 8, // ノコギリ波（倍音を豊富にしフィルター掃引を聴き取りやすくする）
         op_fine_tune: 128,
         eg_shift: 0,
         level_scale: 0,
@@ -254,7 +260,7 @@ fn test_gain_fg() -> Op505Patch {
         ksr: 0,
         am_enable: false,
         velocity_sensitivity: 0,
-        waveform: 0,
+        waveform: 8, // ノコギリ波（単純なサイン持続音より判別しやすくする）
         op_fine_tune: 128,
         eg_shift: 0,
         level_scale: 0,

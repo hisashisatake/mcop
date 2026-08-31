@@ -23,6 +23,7 @@ use crate::expression::{apply_expression_modulation, apply_soft_pedal, Expressio
 use crate::mono::MonoState;
 use crate::overrides::PatchOverrides;
 use crate::pedal::PedalState;
+use crate::gain_fg::apply_gain_fg_expression;
 use crate::pitch_fg::apply_pitch_fg_expression;
 use crate::rhythm::{ChannelProgramState, ProgramSelection};
 use crate::sound_controller::apply_sound_controllers;
@@ -100,6 +101,9 @@ pub struct ChannelState {
     pub pitch_fg_cc78: u8,   // CC78 Vibrato Delay（0〜127、64=無補正）
     pub pitch_fg_rpn0_5: u8, // RPN(0,5) Modulation Depth Range（GM2、既定64）
 
+    // --- Gain FG 演奏補正（中立既定、常時適用）---
+    pub gain_fg_cc92: u8, // CC92 Tremolo Depth（0〜255、Depthへ0起点加算。RPN連動レンジは無い）
+
     // --- NRPN 離散/焼き込み上書き（Program Changeでclear()される）---
     pub overrides: PatchOverrides,
     /// OP単位F-Number上書き（NRPN(0,18)〜(0,21)、13bit、Some時のみ set_operator_f_number）。
@@ -172,6 +176,7 @@ impl ChannelState {
             pitch_fg_cc77: 0,
             pitch_fg_cc78: 64,
             pitch_fg_rpn0_5: 64,
+            gain_fg_cc92: 0,
             overrides: PatchOverrides::default(),
             operator_f_number_override: [None; 4],
             at_destination: ExpressionDestination::default(),
@@ -240,6 +245,7 @@ impl ChannelState {
             self.cc75_decay,
         );
         apply_pitch_fg_expression(patch, self.pitch_fg_cc1, self.pitch_fg_cc77, self.pitch_fg_cc78, self.pitch_fg_rpn0_5);
+        apply_gain_fg_expression(patch, self.gain_fg_cc92);
         if self.pedal.soft_notes & (1u128 << note) != 0 {
             apply_soft_pedal(patch, self.pedal.cc67);
         }
@@ -436,6 +442,18 @@ impl ChannelState {
                 self.overrides.fixed_note_fine = Some(cc_byte_to_u8(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
+            ControlTarget::PitchFgDepth => {
+                self.overrides.pitch_fg_depth = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::CutoffFgDepth => {
+                self.overrides.cutoff_fg_depth = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::GainFgDepth => {
+                self.overrides.gain_fg_depth = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
             ControlTarget::PitchFgLoop => {
                 self.overrides.pitch_fg_loop = Some((cc_byte_to_u7(raw_value) != 0) as u8);
                 DataEntryOutcome::StateChanged { voice_update: true }
@@ -513,22 +531,44 @@ mod tests {
         assert_eq!(eff, base);
     }
 
-    /// NRPN(0,0)・(0,25)〜(0,27)（旧質感LFO）は質感LFO退役後、欠番として何もしない。
-    /// NRPN(0,1)はChannelEffectRoute、(0,22)〜(0,24)はFixed Note 3項目へ再割り当て済みのため
-    /// このリストから除外（別テスト参照）。
+    /// NRPN(0,0)（旧質感LFO）は質感LFO退役後、欠番として何もしない。NRPN(0,1)は
+    /// ChannelEffectRoute、(0,22)〜(0,24)はFixed Note 3項目、(0,25)〜(0,27)はFG Depth
+    /// 3項目へ再割り当て済みのためこのリストから除外（別テスト参照）。
     #[test]
     fn nrpn_reserved_texture_lfo_is_noop() {
         let mut st = ChannelState::new(0, false);
-        for lsb in [0u8, 25, 26, 27] {
+        select_nrpn(&mut st, 0, 0);
+        assert_eq!(
+            st.apply_data_entry(100),
+            DataEntryOutcome::StateChanged { voice_update: false },
+            "NRPN(0,0) should be a no-op"
+        );
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert_eq!(eff, Op505Patch::default());
+    }
+
+    /// NRPN(0,25)〜(0,27) FG Depth：`PatchOverrides`経由で絶対上書きし、発音中ボイスへの
+    /// 即時反映が必要（voice_update=true）。
+    #[test]
+    fn nrpn_fg_depth_overrides_apply_absolute_value() {
+        // raw_valueはMIDIの生CCバイト(0〜127の7bit)。100 -> cc_byte_to_u8 -> round(100/127*255)=201。
+        let mut st = ChannelState::new(0, false);
+        for lsb in [25u8, 26, 27] {
             select_nrpn(&mut st, 0, lsb);
             assert_eq!(
                 st.apply_data_entry(100),
-                DataEntryOutcome::StateChanged { voice_update: false },
-                "NRPN(0,{lsb}) should be a no-op"
+                DataEntryOutcome::StateChanged { voice_update: true },
+                "NRPN(0,{lsb}) should require voice update"
             );
         }
+        assert_eq!(st.overrides.pitch_fg_depth, Some(201));
+        assert_eq!(st.overrides.cutoff_fg_depth, Some(201));
+        assert_eq!(st.overrides.gain_fg_depth, Some(201));
+
         let eff = st.build_effective_patch(&Op505Patch::default());
-        assert_eq!(eff, Op505Patch::default());
+        assert_eq!(eff.channel.pitch_fg.depth, 201);
+        assert_eq!(eff.channel.cutoff_fg.depth, 201);
+        assert_eq!(eff.channel.gain_fg.depth, 201);
     }
 
     /// NRPN(0,1) Channel Effect Route は`effect_route_slot`を書き換え、
@@ -659,8 +699,8 @@ mod tests {
         assert!(eff.channel.pitch_fg.eg.stages.iter().all(|s| s.curve == 1));
         assert_eq!(eff.channel.cutoff_fg.eg.loop_enabled, 1);
         assert!(eff.channel.cutoff_fg.eg.stages.iter().all(|s| s.curve == 1));
-        assert_eq!(eff.channel.gain_fg.loop_enabled, 1);
-        assert!(eff.channel.gain_fg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(eff.channel.gain_fg.eg.loop_enabled, 1);
+        assert!(eff.channel.gain_fg.eg.stages.iter().all(|s| s.curve == 1));
     }
 
     /// NRPN(0,28) Pitch FG Loopは生値0で無効(0)、非0(=127)で有効(1)になる

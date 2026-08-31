@@ -1,5 +1,5 @@
 use nice_plug::prelude::*;
-use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505OperatorParams, Op505Patch};
+use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch};
 use serde::{Deserialize, Serialize};
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
 use std::sync::{Arc, RwLock};
@@ -88,7 +88,7 @@ impl Default for Op505EgBank {
             // （STAGES=0＝無効化、`Op505ChannelParams::default()`が使うものと同じ）を使う。
             // 以前は`eg`を誤って流用しており、新規Add直後のGain FGだけSTAGES=2/RELが立って
             // 見える不整合があった（ユーザー指摘、2026-08-28）。
-            gain_fg: op505_core::default_gain_fg(),
+            gain_fg: op505_core::default_gain_fg().eg,
         }
     }
 }
@@ -165,6 +165,10 @@ pub(crate) struct Op505VstParams {
     pub pitch_fg_depth: IntParam,
     #[id = "cutoff_fg_depth"]
     pub cutoff_fg_depth: IntParam,
+    /// Gain FGだけ既定255（旧仕様と完全一致するための「EGの形をそのまま使う」既定値）。
+    /// Pitch/Cutoff FGの既定0（無変調）とは意味が異なる点に注意（`Op505GainFg`のdocコメント参照）。
+    #[id = "gain_fg_depth"]
+    pub gain_fg_depth: IntParam,
 
     // ---- Gain FGの行先スイッチ（Depthなし、bool 2個。旧CHIP LFO AM経路の厳密代替。
     //      memory `project_chip_lfo_retirement_investigation.md`参照） ----
@@ -222,6 +226,7 @@ impl Default for Op505VstParams {
             filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
             pitch_fg_depth: IntParam::new("Pitch FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
             cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
+            gain_fg_depth: IntParam::new("Gain FG Depth", 255, IntRange::Linear { min: 0, max: 255 }),
             gain_fg_to_master: BoolParam::new("Gain FG to Master", true),
             gain_fg_to_operators: BoolParam::new("Gain FG to Operators", false),
             fixed_note_enable: BoolParam::new("Fixed Note Enable", false),
@@ -275,7 +280,7 @@ pub(crate) fn build_patch(p: &Op505VstParams, egs: &Op505EgBank) -> Op505Patch {
         filter_self_oscillation: p.filter_self_oscillation.value(),
         pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
         cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
-        gain_fg: egs.gain_fg,
+        gain_fg: Op505GainFg { eg: egs.gain_fg, depth: p.gain_fg_depth.value() as u8 },
         gain_fg_to_master: p.gain_fg_to_master.value(),
         gain_fg_to_operators: p.gain_fg_to_operators.value(),
         fixed_note_enable: p.fixed_note_enable.value(),
@@ -307,6 +312,7 @@ pub(crate) fn apply_patch(p: &Op505VstParams, setter: &ParamSetter<'_>, patch: &
     set!(p.filter_self_oscillation, ch.filter_self_oscillation);
     set!(p.pitch_fg_depth, ch.pitch_fg.depth as i32);
     set!(p.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
+    set!(p.gain_fg_depth, ch.gain_fg.depth as i32);
     set!(p.gain_fg_to_master, ch.gain_fg_to_master);
     set!(p.gain_fg_to_operators, ch.gain_fg_to_operators);
     set!(p.fixed_note_enable, ch.fixed_note_enable);
@@ -336,7 +342,7 @@ pub(crate) fn apply_patch_egs(egs: &mut Op505EgBank, patch: &Op505Patch) {
     }
     egs.pitch_fg = patch.channel.pitch_fg.eg;
     egs.cutoff_fg = patch.channel.cutoff_fg.eg;
-    egs.gain_fg = patch.channel.gain_fg;
+    egs.gain_fg = patch.channel.gain_fg.eg;
 }
 
 #[cfg(test)]
@@ -370,7 +376,7 @@ mod tests {
         }
         patch.channel.pitch_fg.eg.stage_count = 5;
         patch.channel.cutoff_fg.eg.stage_count = 6;
-        patch.channel.gain_fg.stage_count = 7;
+        patch.channel.gain_fg.eg.stage_count = 7;
 
         let mut egs = Op505EgBank::default();
         apply_patch_egs(&mut egs, &patch);
@@ -380,14 +386,14 @@ mod tests {
         }
         assert_eq!(egs.pitch_fg, patch.channel.pitch_fg.eg);
         assert_eq!(egs.cutoff_fg, patch.channel.cutoff_fg.eg);
-        assert_eq!(egs.gain_fg, patch.channel.gain_fg);
+        assert_eq!(egs.gain_fg, patch.channel.gain_fg.eg);
     }
 
     #[test]
     fn build_patch_after_apply_patch_egs_round_trips() {
         let mut patch = Op505Patch::default();
         patch.operators[2].eg.stage_count = 4;
-        patch.channel.gain_fg.stage_count = 9;
+        patch.channel.gain_fg.eg.stage_count = 9;
 
         let mut egs = Op505EgBank::default();
         apply_patch_egs(&mut egs, &patch);

@@ -113,15 +113,18 @@
              （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。
              STAGE=0は無効化（Voice::tickがgain_fg_outを1.0固定でスキップする、0.0ではない
              ことに注意——0.0だと無音になる）。 -->
-        <time-eg-editor handle="gain_fg" mapping="AmplitudeLinear" tl-value="255" min-stages="0" terminal-level="free"/>
+        <time-eg-editor handle="params.gain_fg.eg" mapping="AmplitudeLinear" tl-value="255" min-stages="0" terminal-level="free"/>
         <stack gap="spacing" center="true">
-          <enum label="RETRIG" handle="params.gain_fg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
-          <enum label="TEXTURE" handle="params.gain_fg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
+          <enum label="RETRIG" handle="params.gain_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
+          <enum label="TEXTURE" handle="params.gain_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
           <!-- 行先スイッチ（旧CHIP LFO AM経路の厳密代替）。MASTER=合成後の一括乗算、
                OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
                両方ON/両方OFFも可（排他ではない）。 -->
-          <checkbox label="SYNC" handle="params.gain_fg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.gain_fg.sync_rate_handle()" salt="10"/>
+          <checkbox label="SYNC" handle="params.gain_fg.eg.sync_enabled_handle()"/>
+          <sync-rate label="RATE" handle="params.gain_fg.eg.sync_rate_handle()" salt="10"/>
+          <!-- Depthは符号を持たない振れ幅の倍率だが、既定255（EGの形をそのまま使う）である点が
+               P.DEPTH/F.DEPTH（既定0＝無変調）と違う。詳細はOp505GainFgのdocコメント参照。 -->
+          <knob label="G.DEPTH" handle="params.gain_fg.depth"/>
           <checkbox label="MASTER" handle="gain_fg_to_master"/>
           <checkbox label="OP" handle="gain_fg_to_operators"/>
         </stack>
