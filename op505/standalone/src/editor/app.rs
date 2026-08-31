@@ -1,10 +1,9 @@
-//! トレイ起動音色エディタの`eframe::App`実装（Step 1サブステップ3）。
+//! トレイ起動音色エディタの`eframe::App`実装（Step 1、全サブステップ完了）。
 //!
-//! PRESETSパネル（Open/Save/Save As/+New Voice/Delete）とMASTER EFFECTSの実配線は
-//! 後続のサブステップで追加する。本サブステップでは「パネル表示」「編集対象chセレクタ」
-//! 「パッチのpublish」の3点のみを扱う。MASTER EFFECTSのノブ自体は`draw_op505_panel`が
-//! 要求する`Op505PanelParams`の一部として表示はされるが、値を動かしてもまだ音には
-//! 反映されない（`SharedEditState`のFX APIへはまだ配線していない）。
+//! 「編集対象ch」セレクタ・op505-uiパネル（`draw_op505_panel`）・PRESETSサイドバー・
+//! MASTER EFFECTSの4つを1画面にまとめる。値の変更はローカルの`dirty`フラグを立てるだけに
+//! 留め、フレーム末尾でまとめて`SharedEditState`へpublishする（ドラッグ中に1サンプルごと
+//! 書き込むと過負荷になるための1フレーム1回バッチ処理、gesture-app/op505-vstと同じ方針）。
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -95,6 +94,29 @@ impl eframe::App for EditorApp {
         if self.op505.dirty.get() {
             self.op505.dirty.set(false);
             self.shared.publish_patch(*self.op505.patch.borrow());
+        }
+
+        if self.master_dirty.get() {
+            self.master_dirty.set(false);
+            let m = self.master.borrow();
+            // フィールド順は`shared::FX_*`定数の並びと一致させること（`MasterEffectsState`の
+            // フィールド宣言順そのまま）。編集対象は常にスロット0
+            // （`op505_midi::EffectControlTarget`のNRPN(0,1) Channel Effect Routeが
+            // 未設定のチャンネルが送る既定スロットと同じ。standaloneのエディタは
+            // 「編集対象ch」を選ばない限りマルチスロットを意識させない設計のため、
+            // スロット選択UIは設けない）。
+            let values = [
+                m.rev_send as u8,
+                m.reverb_type as u8,
+                m.reverb_time as u8,
+                m.cho_send as u8,
+                m.chorus_type as u8,
+                m.chorus_mod_rate as u8,
+                m.chorus_mod_depth as u8,
+                m.chorus_feedback as u8,
+                m.chorus_send_to_reverb as u8,
+            ];
+            self.shared.publish_fx(0, values);
         }
     }
 }
