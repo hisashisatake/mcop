@@ -19,3 +19,6 @@ gesture-app/src/editor-wasm/
 # op505-mme-driver（x64/x86 op505mme.dll）のビルド成果物置き場。install-mme-driver.ps1が
 # 参照するが、target/同様にビルドで再生成されるためコミット対象外。
 op505/mme-driver/dist/
+# NSISインストーラ（op505-setup.exe）のビルド成果物。build-installer.ps1で再生成されるため
+# コミット対象外。
+op505/mme-driver/installer/dist/
