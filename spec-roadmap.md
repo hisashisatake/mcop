@@ -50,6 +50,10 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
 全層へ実装し、CLI経由の実機検証（auto_release A/B比較・ボイス安全性・和音ドラムのコード確認等）
 まで完了した（feature/gm2-rhythm-channelブランチ、詳細はspec-sound.md「リズム（ドラム）
 チャンネル」節）。次の主な残作業はフェーズ6（GM2テンプレートのop505向け再設計、リズムキットバンクを含む）。
+これと並行して、**op505-standaloneのMIDI機器化・タスクトレイ常駐化**（フェーズ13、
+`feature/mme-driver-tray`ブランチ、develop未マージ）を進めており、フェーズ0〜4（実現可能性
+スパイク〜堅牢化）が完了、フェーズ5（インストールスクリプトの安全策・ドキュメント整備）が
+進行中（2026-08-31時点）。
 
 ---
 
@@ -387,4 +391,52 @@ gesture-app全層・opz2op505/opm2op505の変換ロジックまで一括対応�
   → **op505-vstフェーズ2完了**（2026-08-12、feature/op505-vst-phase2）: MIDI表現系。詳細はフェーズ8参照
   → **フェーズ5.5完了**（2026-08-14、smf2wav/wavetest4x6/opzref4x6/patchlabのop505移行、
     op505-midi共有クレート化含む）。残タスクはフェーズ6（GM2テンプレートのop505向け再設計）
+
+フェーズ13（新設・2026-08-30）: op505-standaloneのMIDI機器化・タスクトレイ常駐化（フェーズ0〜4完了、フェーズ5進行中）
+  → 発端は「Dominoから直接op505を鳴らしたい」「loopMIDIを使わず単独でMIDI機器になれるか」
+    「タスクトレイ常駐にできるか」という要望。teVirtualMIDI SDK（loopMIDIの中身）はクローズド
+    ソースでライセンスが自由でないため不採用とし、Drivers32方式のユーザーモードMMEドライバ
+    （カーネルドライバではない普通のDLL、VirtualMIDISynthと同じ仕組み。EV証明書不要・BSOD
+    リスク無し）を自前実装する方針で合意
+  → **Windows MIDI Services（WMS）はこの用途の代替にならない**：WMSの仮想エンドポイント
+    （app-to-app MIDI）は公式に「WinMM API互換性はループバックエンドポイントや仮想デバイス
+    作成のような新機能へのアクセスを提供しない」と明記されており、Dominoのようなレガシー
+    WinMMアプリからは見えない。したがってWMSはこの用途の置き換えではなく、将来併存しうる
+    別系統という位置づけ（`MidiSource`トレイトで抽象化しておく価値はここにある）
+  → アーキテクチャは「薄いシムDLL＋名前付きパイプ」。`op505/mme-driver`（クレート名
+    op505-mme-driver、`[lib] name="op505mme"`）は相手アプリ（Domino等）のプロセス空間に
+    ロードされるため、MIDIバイト列を名前付きパイプ`\\.\pipe\op505.mme.v1`
+    （`PIPE_TYPE_MESSAGE`）経由で転送するだけの薄いシムに留め、音源エンジン・音声出力は
+    `op505/standalone`（常駐プロセス、クレート名op505-standalone）側が単独所有し続ける設計。
+    ワークスペースの`[profile.release] panic="abort"`は他プロセスに住むDLLには致命的なため、
+    `op505-mme-driver`はルートCargo.tomlのworkspace excludeへ登録し自クレートのみ
+    `panic="unwind"`、全エクスポート関数（`DriverProc`/`modMessage`）を`catch_unwind`で保護
+  → **フェーズ0（実現可能性スパイク）〜フェーズ3（タスクトレイ常駐化）完了**:
+    - MIDI入力元を`MidiSource`トレイトへ抽象化（`op505/standalone/src/midi_source.rs`）。
+      既存のmidir経由入力（実機MIDIキーボード・loopMIDI）とmme-driver経由の名前付き
+      パイプ入力を同じ`MidiQueue`へ合流させる
+    - タスクトレイ常駐化（`op505/standalone/src/tray.rs`）: `tray-icon`クレートをwinit抜き
+      （生のWin32メッセージループ）で使用。`#![windows_subsystem = "windows"]`でコンソールを
+      廃止し、ログは`%LOCALAPPDATA%\op505\standalone.log`、設定は
+      `%APPDATA%\op505\standalone.toml`へ移行。CLI引数+stdin対話は完全廃止
+  → **フェーズ4（堅牢化）完了**（実機確認済み、2026-08-31）:
+    - `MODM_LONGDATA`（SysEx）を`DriverCallback`のMOM_DONE通知まで正しく完結させる実装。
+      既存の`MODM_PREPARE`/`MODM_UNPREPARE`が`MIDIHDR.dwFlags`の`MHDR_PREPARED`を立てて
+      いなかったバグを発見・修正（mmddk.hの規約ではwinmmではなくドライバ自身の責務。
+      実機でSysEx送信した瞬間に`MIDIERR_UNPREPARED`として発覚した）
+    - `MODM_RESET`・複数クライアント同時接続・パイプ再接続を実機確認。パイプ再接続では
+      「standalone停止中に送信された最初の1通は接続断検知のトリガーとして消費され届かないが、
+      直後の自動再接続（200ms間隔リトライ）以降は正常に届く」という挙動を発見
+      （設計上のR4対策＝「サーバー未接続なら黙って破棄」の範囲内の動作）
+  → **フェーズ5（インストール/登録スクリプトの仕上げ）進行中**:
+    - `install-mme-driver.ps1`/`uninstall-mme-driver.ps1`: 管理者権限・64bitプロセス検査、
+      Drivers32バックアップ、`midi`/`midi1`（Windows MIDI Services）への書き込み禁止、
+      `midi2`〜`midi9`の空きスロット走査・冪等な再利用は実装済み。DLLがクライアントに
+      ロード中で置換できない場合の`MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)`
+      フォールバック（次回再起動時の差し替え予約）を追加実装済み
+    - パイプのACL: 既定のセキュリティ記述子はMedium整合性レベル相当で、Windowsの
+      「No Write-Up」原則によりLow整合性レベルのクライアントからは書き込めないため、
+      SDDL`S:(ML;;NW;;;LW)`を`CreateNamedPipeW`へ明示的に付与し実機確認済み
+    - 残: CLAUDE.md/本ロードマップへの反映（本節）、developへの`--no-ff`マージ
+  → `feature/mme-driver-tray`ブランチで実施（develop未マージ）
 ```
