@@ -15,14 +15,25 @@
 //!
 //! acceptループの明示的な停止手段は現状無く、プロセス終了まで動き続ける
 //! （タスクトレイ化フェーズで「終了」メニューの実装時に追加する）。
+//!
+//! パイプにはSDDL`S:(ML;;NW;;;LW)`（Low整合性レベルのプロセスからの書き込みも許可する
+//! Mandatory Label）を明示的に付与する。既定のセキュリティ記述子はMedium整合性レベル
+//! 相当で、Windowsの「No Write-Up」原則によりLow整合性レベルで動くクライアント
+//! （サンドボックス化されたアプリ等）からは書き込めない。DACL自体はSDDLで指定せず
+//! （呼び出し元プロセスの既定DACルールに委ねる）、整合性レベルのみを緩和する。
+//! `ConvertStringSecurityDescriptorToSecurityDescriptorW`（advapi32.dll）が返す
+//! セキュリティ記述子はプロセス終了まで使い続けるため意図的にリークする
+//! （`Box::leak`。毎回のCreateNamedPipeW呼び出しで同じ記述子を再利用する）。
 
 use std::fs::File;
 use std::io::Read;
 use std::os::windows::io::FromRawHandle;
+use std::sync::OnceLock;
 
 use crate::midi_source::{MidiSink, MidiSource};
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
+const PIPE_SDDL: &str = "S:(ML;;NW;;;LW)";
 
 const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
@@ -36,6 +47,7 @@ mod ffi {
     pub type HANDLE = *mut c_void;
     pub type BOOL = i32;
     pub type DWORD = u32;
+    pub type LPVOID = *mut c_void;
 
     pub const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
 
@@ -44,6 +56,16 @@ mod ffi {
     pub const PIPE_READMODE_MESSAGE: DWORD = 0x0000_0002;
     pub const PIPE_WAIT: DWORD = 0x0000_0000;
     pub const PIPE_UNLIMITED_INSTANCES: DWORD = 255;
+
+    pub const SDDL_REVISION_1: DWORD = 1;
+
+    /// SECURITY_ATTRIBUTES（winbase.h）。CreateNamedPipeWのlpSecurityAttributesへ渡す。
+    #[repr(C)]
+    pub struct SecurityAttributes {
+        pub n_length: DWORD,
+        pub lp_security_descriptor: LPVOID,
+        pub b_inherit_handle: BOOL,
+    }
 
     extern "system" {
         pub fn CreateNamedPipeW(
@@ -59,6 +81,58 @@ mod ffi {
 
         pub fn ConnectNamedPipe(hNamedPipe: HANDLE, lpOverlapped: *mut c_void) -> BOOL;
     }
+
+    // SDDL文字列 -> セキュリティ記述子の変換はadvapi32.dllが提供する（sddl.h/aclapi.h）。
+    #[link(name = "advapi32")]
+    extern "system" {
+        pub fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            StringSecurityDescriptor: *const u16,
+            StringSDRevision: DWORD,
+            SecurityDescriptor: *mut LPVOID,
+            SecurityDescriptorSize: *mut DWORD,
+        ) -> BOOL;
+    }
+}
+
+/// `PIPE_SDDL`から生成したSECURITY_ATTRIBUTESをプロセス内で使い回す。生成に失敗したら
+/// `None`を返し、呼び出し側はNULL（既定のセキュリティ記述子）へフォールバックする。
+fn security_attributes() -> Option<&'static ffi::SecurityAttributes> {
+    static SA_ADDR: OnceLock<Option<usize>> = OnceLock::new();
+    SA_ADDR
+        .get_or_init(build_security_attributes)
+        .map(|addr| unsafe { &*(addr as *const ffi::SecurityAttributes) })
+}
+
+fn build_security_attributes() -> Option<usize> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    let sddl: Vec<u16> = OsStr::new(PIPE_SDDL).encode_wide().chain(std::iter::once(0)).collect();
+
+    let mut descriptor: ffi::LPVOID = std::ptr::null_mut();
+    let ok = unsafe {
+        ffi::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            ffi::SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || descriptor.is_null() {
+        crate::log::log(&format!(
+            "パイプのSDDLセキュリティ記述子生成に失敗しました（{}）。既定のACLで動作します。",
+            std::io::Error::last_os_error()
+        ));
+        return None;
+    }
+
+    // プロセス終了まで使い続けるため意図的にリークする（accept_loopが繰り返し
+    // 参照するプロセス全体で1個の記述子。都度生成/解放するとACLの一貫性を保つ理由がない）。
+    let sa = Box::leak(Box::new(ffi::SecurityAttributes {
+        n_length: std::mem::size_of::<ffi::SecurityAttributes>() as ffi::DWORD,
+        lp_security_descriptor: descriptor,
+        b_inherit_handle: 0,
+    }));
+    Some(sa as *const _ as usize)
 }
 
 /// パイプサーバーが生きていることを示すだけのハンドル（実体はacceptループのスレッド）。
@@ -110,6 +184,10 @@ fn accept_loop(sink: MidiSink) {
 
 fn create_pipe_instance() -> Option<ffi::HANDLE> {
     let name = pipe_name_wide();
+    // SDDL生成に失敗した場合はNULL（既定のセキュリティ記述子）へフォールバックする。
+    let sa_ptr: *mut std::ffi::c_void = security_attributes()
+        .map(|sa| sa as *const ffi::SecurityAttributes as *mut std::ffi::c_void)
+        .unwrap_or(std::ptr::null_mut());
     let handle = unsafe {
         ffi::CreateNamedPipeW(
             name.as_ptr(),
@@ -119,7 +197,7 @@ fn create_pipe_instance() -> Option<ffi::HANDLE> {
             0,    // out buffer size（受信専用なので0で可）
             4096, // in buffer size（フレームは高々8バイト程度なので十分すぎるほど余裕がある）
             0,    // default timeout（0はシステム既定値=50ms）
-            std::ptr::null_mut(),
+            sa_ptr,
         )
     };
     if handle == ffi::INVALID_HANDLE_VALUE {
