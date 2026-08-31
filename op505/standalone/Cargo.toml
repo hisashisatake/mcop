@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 op505-core = { path = "../core" }
 op505-midi = { path = "../midi" }
+op505-ui = { path = "../ui" }
+ui-core = { path = "../../ui/core" }
 sound-core = { path = "../../sound/core" }
 midir = "0.11"
 cpal = "0.15"
@@ -26,3 +28,12 @@ serde_json = "1"
 # タスクトレイ常駐化用。winitは引き込まず、生のWin32メッセージループ（tray.rs参照）と
 # 組み合わせて使う。
 tray-icon = "0.24"
+# トレイ起動の音色エディタ（Step 1）用。`op505/tools/xml-panel-dsl/preview-native`と同じ
+# 構成（glow+default_fonts、winit依存）。tray.rsのGetMessageWループとは別スレッドで
+# `EventLoopBuilderExtWindows::with_any_thread(true)`により起動する（`editor`モジュール参照）。
+# このクレートはワークスペースメンバーのため`cargo check --workspace`にwinit/glowが混ざる
+# トレードオフを受け入れている（要否は導入時にユーザー確認済み）。
+eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.34"
+winit = "0.30"
+rfd = "0.15"

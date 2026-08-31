@@ -47,6 +47,7 @@ use op505_midi::{
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
 mod config;
+mod editor;
 mod log;
 mod midi_source;
 mod shared;
@@ -176,6 +177,8 @@ fn main() {
     // トレイ起動音色エディタとの共有状態（Step 1以降）。エディタが一度も開かれなければ
     // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
     let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
+    // エディタスレッドはこのクローンを持つ（オーディオコールバックへは別クローンをmoveする）。
+    let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state));
 
     let stream = device
         .build_output_stream::<f32, _, _>(
@@ -211,7 +214,7 @@ fn main() {
     stream.play().expect("failed to start audio stream");
 
     log::log("op505-standalone: 再生中。");
-    tray::run(sink);
+    tray::run(sink, editor_handle);
 }
 
 /// `op505_presets_dir()`から全プリセットを読み込み、その先頭を起動時の既定パッチとして返す。
