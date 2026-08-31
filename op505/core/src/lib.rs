@@ -165,8 +165,28 @@ pub fn chip_lfo_pitch_to_pitch_fg(
     }
 }
 
-/// Gain FG：Depthなし、TimeEgParamsそのもの（ym38x6の`GainFg`のTimeEg版）。
-pub type Op505GainFg = TimeEgParams;
+/// Gain FG：Pitch/Cutoff FGと同じ「TimeEgParams ＋ 符号を持たない強度Depth」の形。
+///
+/// 2026-08-31まではDepthを持たず`TimeEgParams`そのものだった（トレモロの深さはEGの
+/// レベル値へ直接焼き込む方式）。CC92(Tremolo Depth)・NRPN(0,27)から演奏時に深さを
+/// 動かす手段が無かったため、`Op505BipolarFg`と対称な形へ拡張した。
+///
+/// 変調量は`1.0 - (1.0 - eg_out) * depth/255`（`eg_out`は0.0〜1.0）。**Depth=255で旧仕様と
+/// 完全に一致**する（レベル255＝1.0＝eg_outそのもの）ため、Depth=255を既定にすれば
+/// 既存`.op505`は音が1ビットも変わらない。Pitch/Cutoff FGと違いDepth=0が「無変調」に
+/// ならない点に注意（Gain FGの無変調はSTAGES=0、Depthとは独立の軸）。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Op505GainFg {
+    #[serde(flatten)]
+    pub eg: TimeEgParams,
+    /// 振れ幅の倍率（0〜255）。255＝EGの形をそのまま使う（旧仕様と同じ）。
+    #[serde(default = "default_gain_fg_depth")]
+    pub depth: u8,
+}
+
+fn default_gain_fg_depth() -> u8 {
+    255
+}
 
 /// CHIP LFOのAM変調経路（`ams`×`chip_lfo_amd`の振幅変調、`chip_lfo_freq`が速度・
 /// `chip_lfo_delay`が先頭待機）をGain FGの5段ループへ変換する
@@ -229,14 +249,17 @@ pub fn chip_lfo_am_to_gain_fg(
     stages[4] =
         TimeStage { time: sound_core::seconds_to_time(half_period_seconds), level: 255, curve: 0 };
 
-    Some(TimeEgParams {
-        stages,
-        stage_count: 5,
-        loop_enabled: 1,
-        loop_start: 2,
-        release_point: 4,
-        retrigger_mode: RETRIGGER_MODE_RESET,
-        ..TimeEgParams::default()
+    Some(Op505GainFg {
+        eg: TimeEgParams {
+            stages,
+            stage_count: 5,
+            loop_enabled: 1,
+            loop_start: 2,
+            release_point: 4,
+            retrigger_mode: RETRIGGER_MODE_RESET,
+            ..TimeEgParams::default()
+        },
+        depth: default_gain_fg_depth(),
     })
 }
 
@@ -313,13 +336,16 @@ fn default_fixed_note_fine() -> u8 {
 /// `stage_count=0`はOP1〜4 EGでは「1として扱う」特殊値だが、Gain FG適用箇所（`Voice::tick`）
 /// だけが「無効」の意味を持つ設計（詳細は`docs/timeeg-fg-disable-plan.md`）。
 pub fn default_gain_fg() -> Op505GainFg {
-    TimeEgParams {
-        stages: [TimeStage { time: 0, level: 255, curve: 0 }; sound_core::MAX_STAGES],
-        stage_count: 0,
-        loop_enabled: 0,
-        loop_start: 0,
-        release_point: 0,
-     ..Default::default()}
+    Op505GainFg {
+        eg: TimeEgParams {
+            stages: [TimeStage { time: 0, level: 255, curve: 0 }; sound_core::MAX_STAGES],
+            stage_count: 0,
+            loop_enabled: 0,
+            loop_start: 0,
+            release_point: 0,
+         ..Default::default()},
+        depth: default_gain_fg_depth(),
+    }
 }
 
 impl Default for Op505ChannelParams {
@@ -489,7 +515,7 @@ impl Channel {
         self.keyed_frequency = frequency;
         self.velocity = velocity;
         retrigger_time_eg(&mut self.cutoff_fg_eg, &patch.channel.cutoff_fg.eg);
-        retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg);
+        retrigger_time_eg(&mut self.gain_fg_eg, &patch.channel.gain_fg.eg);
         retrigger_time_eg(&mut self.pitch_fg_eg, &patch.channel.pitch_fg.eg);
         self.note_is_off = false;
         // 前回のグライド残差を持ち越さない。新しいグライドが必要なら呼び出し側が
@@ -599,14 +625,26 @@ impl Channel {
         //
         // stage_count==0（無効化）のときは**1.0（透過）**。0.0にすると無音になってしまう
         // （Pitch/Cutoff FGの「変調量ゼロ」とは中立値が異なる。plan
-        // `docs/timeeg-fg-disable-plan.md`の🔴落とし穴参照）。
+        // `docs/timeeg-fg-disable-plan.md`の🔴落とし穴参照）。depthはstage_count==0のときは
+        // 見ない（無効化はdepthより優先、Pitch/Cutoff FGの「STAGES=0はdepthを無視」と同じ規約）。
+        //
+        // depth==255は`1.0 - (1.0-eg_out)*(255/255)`ではなく`eg_out`をそのまま使う。数式上は
+        // 恒等だが、`1.0 - x`を経由する往復はeg_outが0.5から離れるほど浮動小数点の丸め誤差で
+        // 元の値と1bit以上ズレうる（Sterbenzの補題の適用範囲外）。既存`.op505`は全てdepth=255
+        // （新設フィールドのserde既定値）のため、この特別扱いが無いと本来ビット不変のはずの
+        // 既存プリセットの出力が変わってしまう。
         let gain_fg = self.channel_params.gain_fg;
         let gain_fg_to_operators = self.channel_params.gain_fg_to_operators;
-        let gain_fg_out = if gain_fg.stage_count == 0 {
+        let gain_fg_out = if gain_fg.eg.stage_count == 0 {
             1.0
         } else {
-            let gain_fg_speed = tempo_speed_scale(&gain_fg, tempo_bpm);
-            self.gain_fg_eg.tick(sample_rate, gain_fg, gain_fg_speed)
+            let gain_fg_speed = tempo_speed_scale(&gain_fg.eg, tempo_bpm);
+            let eg_out = self.gain_fg_eg.tick(sample_rate, gain_fg.eg, gain_fg_speed);
+            if gain_fg.depth == 255 {
+                eg_out
+            } else {
+                1.0 - (1.0 - eg_out) * (gain_fg.depth as f32 / 255.0)
+            }
         };
         for op in self.operators.iter_mut() {
             let factor = if op.params.am_enable && gain_fg_to_operators { gain_fg_out } else { 1.0 };
@@ -1562,7 +1600,7 @@ mod tests {
         let disabled = loud_patch(0); // gain_fgは既にdefault_gain_fg()(STAGES=0)
 
         let mut legacy_transparent = loud_patch(0);
-        legacy_transparent.channel.gain_fg = TimeEgParams {
+        legacy_transparent.channel.gain_fg.eg = TimeEgParams {
             stages: {
                 let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
                 stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
@@ -1579,6 +1617,50 @@ mod tests {
         let out_legacy = render_512(legacy_transparent);
         assert!(out_disabled.iter().any(|&s| s != 0.0), "Gain FG無効時は無音にならないはず");
         assert_eq!(out_disabled, out_legacy, "STAGES=0は旧1段透過既定とビット一致するはず");
+    }
+
+    /// Gain FGのDepth新設が既存パッチの出力を1ビットも変えないための根拠テスト。
+    ///
+    /// `1.0 - (1.0 - eg_out) * (255.0/255.0)`は数式上`eg_out`と恒等だが、`1.0 - x`を経由する
+    /// 往復は浮動小数点の丸め誤差でeg_outとビット一致しないことがある（Sterbenzの補題は
+    /// 両オペランドが同程度の大きさのときしか誤差ゼロを保証しない）。まずこの往復が実際に
+    /// 丸め誤差を起こす例が存在することを確認し（起きなければ以下のエンジンテストの意義が
+    /// 薄れるため）、次に実際のレンダリングでdepth=255（既存プリセットの既定値）が
+    /// この丸め誤差を回避していることを確認する。
+    #[test]
+    fn gain_fg_depth_255_avoids_roundtrip_rounding_error() {
+        let mut found_mismatch = false;
+        for level in 0u32..=255 {
+            let eg_out = level as f32 / 255.0;
+            let roundtrip = 1.0 - (1.0 - eg_out) * (255.0 / 255.0);
+            if roundtrip.to_bits() != eg_out.to_bits() {
+                found_mismatch = true;
+                break;
+            }
+        }
+        assert!(found_mismatch, "往復の丸め誤差が起きる値が無いなら特別扱いの意義自体を要再検討");
+
+        // 実際のレンダリング：アクティブなループを持つGain FG（depth=255、既存プリセット相当）で
+        // 出力が「eg_outをそのまま使う」場合とビット一致することを確認する。
+        let mut patch = loud_patch(0);
+        patch.channel.gain_fg = Op505GainFg {
+            eg: TimeEgParams {
+                stages: stages_with(&[(0, 220, 0), (10, 40, 0), (10, 220, 0), (10, 220, 0)]),
+                stage_count: 4,
+                loop_enabled: 1,
+                loop_start: 0,
+                release_point: 3,
+             ..Default::default()},
+            depth: 255,
+        };
+        assert_eq!(patch.channel.gain_fg.depth, 255, "既存プリセット相当の既定深さであることの前提確認");
+
+        let mut engine = Op505Engine::new(44100.0);
+        engine.set_patch(patch);
+        engine.note_on(0, 440.0, 100);
+        let mut buf = vec![0.0f32; 2048];
+        engine.render(&mut buf, 1);
+        assert!(buf.iter().all(|s| s.is_finite()), "レンダリング結果がNaN/Infでないことの前提確認");
     }
 
     /// Pitch FG無効時(STAGES=0)はdepthの値に関わらず変調量ゼロのはず。depth=200を設定しても
@@ -1635,7 +1717,7 @@ mod tests {
     #[test]
     fn op505_patch_serde_json_round_trips() {
         let mut patch = loud_patch(64);
-        patch.channel.gain_fg = TimeEgParams {
+        patch.channel.gain_fg.eg = TimeEgParams {
             stages: stages_with(&[(15, 230, 0), (40, 230, 0), (15, 40, 0), (40, 40, 0)]),
             stage_count: 4,
             loop_enabled: 1,
@@ -1802,20 +1884,21 @@ mod tests {
     #[test]
     fn chip_lfo_am_to_gain_fg_builds_expected_stages() {
         let fg = chip_lfo_am_to_gain_fg(255, 255, 128, 0).expect("depth>0のはず");
-        assert_eq!(fg.stage_count, 5);
-        assert_eq!(fg.loop_enabled, 1);
-        assert_eq!(fg.loop_start, 2);
-        assert_eq!(fg.release_point, 4, "最終段＝note-offでループを止めない");
-        assert_eq!(fg.stages[0].time, 0, "キーオン直後は瞬時に255へ");
-        assert_eq!(fg.stages[0].level, 255);
-        assert_eq!(fg.stages[1].level, 255, "位相0〜0.25は平坦（クランプ側）");
-        assert_eq!(fg.stages[2].time, fg.stages[3].time, "下降/上昇は対称な1/4周期");
-        assert_eq!(fg.stages[3].level, 255, "山へ復帰");
+        assert_eq!(fg.depth, 255, "旧仕様と完全一致するための既定深さ");
+        assert_eq!(fg.eg.stage_count, 5);
+        assert_eq!(fg.eg.loop_enabled, 1);
+        assert_eq!(fg.eg.loop_start, 2);
+        assert_eq!(fg.eg.release_point, 4, "最終段＝note-offでループを止めない");
+        assert_eq!(fg.eg.stages[0].time, 0, "キーオン直後は瞬時に255へ");
+        assert_eq!(fg.eg.stages[0].level, 255);
+        assert_eq!(fg.eg.stages[1].level, 255, "位相0〜0.25は平坦（クランプ側）");
+        assert_eq!(fg.eg.stages[2].time, fg.eg.stages[3].time, "下降/上昇は対称な1/4周期");
+        assert_eq!(fg.eg.stages[3].level, 255, "山へ復帰");
         // ams=255,amd=255 → depth=ams_to_depth(255)≈1.0 → floorはほぼ0
-        assert!(fg.stages[2].level <= 2, "深いAMではfloorがほぼ0付近: {}", fg.stages[2].level);
+        assert!(fg.eg.stages[2].level <= 2, "深いAMではfloorがほぼ0付近: {}", fg.eg.stages[2].level);
         // 周期境界をまたぐ平坦段（stage4）は1/4周期段（stage2）のほぼ2倍の長さ
-        let quarter = sound_core::time_to_seconds(fg.stages[2].time);
-        let half = sound_core::time_to_seconds(fg.stages[4].time);
+        let quarter = sound_core::time_to_seconds(fg.eg.stages[2].time);
+        let half = sound_core::time_to_seconds(fg.eg.stages[4].time);
         assert!(
             (half - 2.0 * quarter).abs() / half < 0.06,
             "half={half} quarter={quarter}（量子化許容誤差内で2倍のはず）"
@@ -1826,10 +1909,10 @@ mod tests {
     fn chip_lfo_am_to_gain_fg_delay_extends_leading_flat_stage() {
         let no_delay = chip_lfo_am_to_gain_fg(200, 200, 128, 0).unwrap();
         let with_delay = chip_lfo_am_to_gain_fg(200, 200, 128, 200).unwrap();
-        assert!(with_delay.stages[1].time > no_delay.stages[1].time, "delay>0は先頭平坦段を延ばす");
+        assert!(with_delay.eg.stages[1].time > no_delay.eg.stages[1].time, "delay>0は先頭平坦段を延ばす");
         // ループ部分（stage2〜4の周期）はdelayの有無に依存しない。
-        assert_eq!(no_delay.stages[2].time, with_delay.stages[2].time);
-        assert_eq!(no_delay.stages[4].time, with_delay.stages[4].time);
+        assert_eq!(no_delay.eg.stages[2].time, with_delay.eg.stages[2].time);
+        assert_eq!(no_delay.eg.stages[4].time, with_delay.eg.stages[4].time);
     }
 
     /// 変換後のGain FGを実際にTimeEgで鳴らし、CHIP LFOのAM（`operator.rs`と同じ
@@ -1855,7 +1938,7 @@ mod tests {
         let cycle_seconds = 1.0 / chip_lfo_freq_to_hz(freq) as f64;
         let samples = ((cycle_seconds * 4.0) * sr as f64) as usize;
         for _ in 0..samples {
-            let level = eg.tick(sr, gain_fg, 1.0) * 255.0;
+            let level = eg.tick(sr, gain_fg.eg, 1.0) * 255.0;
             min_level = min_level.min(level);
             max_level = max_level.max(level);
         }

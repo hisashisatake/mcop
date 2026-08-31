@@ -449,6 +449,11 @@ fn handle_control_change(
             channels[chi].pitch_fg_cc78 = cc_to_u7(val);
             apply_live(engine, chi, &channels[chi], bank, drums);
         }
+        // CC92(Tremolo Depth)：Gain FG Depthへの0起点加算（CC77と同型、RPN連動レンジは無い）。
+        92 => {
+            channels[chi].gain_fg_cc92 = cc_to_u8(val);
+            apply_live(engine, chi, &channels[chi], bank, drums);
+        }
         // CC2(ブレス)/CC4(フット): Expression Destination（NRPN(0,34)/(0,35)）へ加算 → 発音中ボイスへ伝播。
         2 => {
             channels[chi].cc2 = cc_to_u8(val);

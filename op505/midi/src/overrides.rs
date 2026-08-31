@@ -25,6 +25,11 @@ pub struct PatchOverrides {
     pub fixed_note_enable: Option<bool>,
     pub fixed_note: Option<u8>,
     pub fixed_note_fine: Option<u8>,
+    /// NRPN(0,25)〜(0,27) FG Depth（0〜255）の絶対上書き。CC1/CC77/CC92の演奏補正は
+    /// この上書き後の値へさらに加算される（`ChannelState::apply_note_post_processing`参照）。
+    pub pitch_fg_depth: Option<u8>,
+    pub cutoff_fg_depth: Option<u8>,
+    pub gain_fg_depth: Option<u8>,
     /// NRPN(0,28)〜(0,33) FG Loop/Curve（0/1）。`op505-vst`ではTimeEg本体がpersist状態のため、
     /// この上書きは音には即座に反映されるがGUIエディタの表示・Save後のプリセットへは
     /// 反映されない（Algorithm等と同じ既知の制約、spec-sound.md参照）。
@@ -63,6 +68,15 @@ impl PatchOverrides {
         if let Some(v) = self.fixed_note_fine {
             patch.channel.fixed_note_fine = v;
         }
+        if let Some(v) = self.pitch_fg_depth {
+            patch.channel.pitch_fg.depth = v;
+        }
+        if let Some(v) = self.cutoff_fg_depth {
+            patch.channel.cutoff_fg.depth = v;
+        }
+        if let Some(v) = self.gain_fg_depth {
+            patch.channel.gain_fg.depth = v;
+        }
         if let Some(v) = self.pitch_fg_loop {
             patch.channel.pitch_fg.eg.loop_enabled = v;
         }
@@ -80,10 +94,10 @@ impl PatchOverrides {
             }
         }
         if let Some(v) = self.gain_fg_loop {
-            patch.channel.gain_fg.loop_enabled = v;
+            patch.channel.gain_fg.eg.loop_enabled = v;
         }
         if let Some(v) = self.gain_fg_curve {
-            for stage in patch.channel.gain_fg.stages.iter_mut() {
+            for stage in patch.channel.gain_fg.eg.stages.iter_mut() {
                 stage.curve = v;
             }
         }
@@ -119,6 +133,9 @@ mod tests {
             fixed_note_enable: Some(true),
             fixed_note: Some(60),
             fixed_note_fine: Some(200),
+            pitch_fg_depth: Some(210),
+            cutoff_fg_depth: Some(220),
+            gain_fg_depth: Some(230),
             pitch_fg_loop: Some(1),
             pitch_fg_curve: Some(1),
             cutoff_fg_loop: Some(1),
@@ -137,12 +154,15 @@ mod tests {
         assert!(patch.channel.fixed_note_enable);
         assert_eq!(patch.channel.fixed_note, 60);
         assert_eq!(patch.channel.fixed_note_fine, 200);
+        assert_eq!(patch.channel.pitch_fg.depth, 210);
+        assert_eq!(patch.channel.cutoff_fg.depth, 220);
+        assert_eq!(patch.channel.gain_fg.depth, 230);
         assert_eq!(patch.channel.pitch_fg.eg.loop_enabled, 1);
         assert!(patch.channel.pitch_fg.eg.stages.iter().all(|s| s.curve == 1));
         assert_eq!(patch.channel.cutoff_fg.eg.loop_enabled, 1);
         assert!(patch.channel.cutoff_fg.eg.stages.iter().all(|s| s.curve == 1));
-        assert_eq!(patch.channel.gain_fg.loop_enabled, 1);
-        assert!(patch.channel.gain_fg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(patch.channel.gain_fg.eg.loop_enabled, 1);
+        assert!(patch.channel.gain_fg.eg.stages.iter().all(|s| s.curve == 1));
     }
 
     #[test]
@@ -155,6 +175,9 @@ mod tests {
             fixed_note_enable: Some(true),
             fixed_note: Some(60),
             fixed_note_fine: Some(200),
+            pitch_fg_depth: Some(210),
+            cutoff_fg_depth: Some(220),
+            gain_fg_depth: Some(230),
             pitch_fg_loop: Some(1),
             pitch_fg_curve: Some(1),
             cutoff_fg_loop: Some(1),

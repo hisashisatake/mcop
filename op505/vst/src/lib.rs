@@ -746,6 +746,10 @@ impl Plugin for Op505Plugin {
                         78 => {
                             self.channels[midi_ch].pitch_fg_cc78 = cc_to_u7(value);
                         }
+                        // CC92(Tremolo Depth)：Gain FG Depthへの0起点加算（CC77と同型、RPN連動レンジは無い）。
+                        92 => {
+                            self.channels[midi_ch].gain_fg_cc92 = cc_to_u8(value);
+                        }
                         // CC10(Pan)：ボイス単位の左右ゲイン（patchではなくVco::set_channel_pan_group
                         // 経由、コンスタントパワー則）。CC7/CC11と同じく受信時に即座に発音中へ反映する。
                         10 => {

@@ -17,6 +17,9 @@
 //! - 13〜16: NRPN(0,28)/(0,29) Pitch FG Loop/Curve
 //! - 17〜19: NRPN(0,30)/(0,31) Cutoff FG Loop/Curve
 //! - 20〜22: NRPN(0,32)/(0,33) Gain FG Loop/Curve
+//! - 24〜26: NRPN(0,25) Pitch FG Depth絶対上書き
+//! - 27〜29: NRPN(0,26) Cutoff FG Depth絶対上書き
+//! - 30〜33: NRPN(0,27) Gain FG Depth絶対上書き + CC92(Tremolo Depth)加算
 
 use std::path::PathBuf;
 
@@ -256,16 +259,28 @@ fn main() {
     ev.push(note_off(480, ch1, NOTE_C4));
 
     // --- リセット: 13以降はFG(ピッチ/カットオフ/ゲイン)の聴き取りに集中できるよう、
-    //     ch1(スロット0)のReverb Sendを0へ戻す。10で設定した深い残響のままだと
-    //     以降のテスト全てに残響が乗ってしまうため ---
+    //     ch1(スロット0)・ch2(スロット1)双方のReverb Sendを0へ戻す。
+    //     **Send=0は「これ以上新しい音を送り込まない」だけで、FDN内に既に溜まっている
+    //     エネルギーの減衰速度は変えない**。Reverb Time=220(Room2、RT60≈1.26秒)のまま
+    //     だと、Sendを止めてもテール自体は1秒以上鳴り続ける。`set_reverb_time`は
+    //     フィードバックゲインをその場で更新する（次回tick以降に効く）ため、Timeも
+    //     最短へ戻すと既にリング中のテールの減衰そのものが加速する。そのうえで
+    //     RT60=最短(base_rt60=0.35秒)が十分減衰する余裕を見て2秒空ける ---
     ev.push((GROUP_GAP, cc(ch1, 91, 0).1));
+    ev.extend(select_nrpn(ch1, 0, 4));
+    ev.push(data_entry(ch1, 0)); // ch1(スロット0) Reverb Time最短へ→テールの減衰を加速
+    ev.push(cc(ch2, 91, 0));
+    ev.extend(select_nrpn(ch2, 0, 4));
+    ev.push(data_entry(ch2, 0)); // ch2(スロット1) Reverb Timeも最短へ
 
     // =====================================================================
     // 13〜16: NRPN(0,28)/(0,29) Pitch FG Loop/Curve（Test Vibrato使用）
     // =====================================================================
 
-    // --- 13: Test Vibratoへ切替。長い1音でビブラートが持続することを確認（既定でloop=1） ---
-    ev.push((960, marker("13")));
+    // --- 13: Test Vibratoへ切替。長い1音でビブラートが持続することを確認（既定でloop=1）。
+    //     リセット直後からReverb Timeが最短になっているため、ここまでの間隔で
+    //     テールは実用上無音まで減衰しているはず ---
+    ev.push((1920, marker("13")));
     ev.extend(bank_select_and_program_change(ch1, PROGRAM_VIBRATO));
     ev.push(note_on(0, ch1, NOTE_C4, 100));
     ev.push(note_off(2880, ch1, NOTE_C4)); // 約3秒(120BPMで2880tick)
@@ -347,7 +362,94 @@ fn main() {
     ev.push(note_on(0, ch1, NOTE_C4, 100));
     ev.push(note_off(2880, ch1, NOTE_C4));
 
-    ev.push((480, marker("23 (end)")));
+    // =====================================================================
+    // 24〜26: NRPN(0,25) Pitch FG Depth絶対上書き（Test Vibrato使用、
+    // プリセット本来のdepth=183）
+    // =====================================================================
+
+    // --- 24: Test Vibratoへ切替（Program Changeで前段の上書きは全てクリアされる）。
+    //     長い1音でプリセット本来の深さ(183)のビブラートを確認 ---
+    ev.push((480, marker("24")));
+    ev.extend(bank_select_and_program_change(ch1, PROGRAM_VIBRATO));
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 25: NRPN(0,25) Pitch FG Depth=40(浅い、絶対上書き)。24より明確に浅いビブラートのはず ---
+    ev.push((480, marker("25")));
+    ev.extend(select_nrpn(ch1, 0, 25));
+    ev.push(data_entry(ch1, 20)); // cc_byte_to_u8(20)=40
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 26: NRPN(0,25) Pitch FG Depth=255(最大、絶対上書き)。24(183)よりさらに深いビブラートのはず ---
+    ev.push((480, marker("26")));
+    ev.extend(select_nrpn(ch1, 0, 25));
+    ev.push(data_entry(ch1, 127)); // cc_byte_to_u8(127)=255
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // =====================================================================
+    // 27〜29: NRPN(0,26) Cutoff FG Depth絶対上書き（Test Cutoff FG使用、
+    // プリセット本来のdepth=200）
+    // =====================================================================
+
+    // --- 27: Test Cutoff FGへ切替（Program Changeで25/26の上書きはクリアされる）。
+    //     長い1音でプリセット本来の深さ(200)のオートワウを確認 ---
+    ev.push((480, marker("27")));
+    ev.extend(bank_select_and_program_change(ch1, PROGRAM_CUTOFF_FG));
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 28: NRPN(0,26) Cutoff FG Depth=40(浅い)。27よりフィルター掃引が明確に狭いはず ---
+    ev.push((480, marker("28")));
+    ev.extend(select_nrpn(ch1, 0, 26));
+    ev.push(data_entry(ch1, 20)); // cc_byte_to_u8(20)=40
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 29: NRPN(0,26) Cutoff FG Depth=255(最大)。27(200)よりさらに広い掃引のはず ---
+    ev.push((480, marker("29")));
+    ev.extend(select_nrpn(ch1, 0, 26));
+    ev.push(data_entry(ch1, 127)); // cc_byte_to_u8(127)=255
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // =====================================================================
+    // 30〜33: NRPN(0,27) Gain FG Depth絶対上書き + CC92(Tremolo Depth)加算
+    // （Test Gain FG使用、プリセット本来のdepth=255＝旧仕様と同じ「EGの形をそのまま使う」）
+    // =====================================================================
+
+    // --- 30: Test Gain FGへ切替（Program Changeで28/29の上書きはクリアされる）。
+    //     長い1音でプリセット本来の深さ(255=フル)のトレモロを確認 ---
+    ev.push((480, marker("30")));
+    ev.extend(bank_select_and_program_change(ch1, PROGRAM_GAIN_FG));
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 31: NRPN(0,27) Gain FG Depth=40(浅い、絶対上書き)。30よりトレモロがほぼ聴こえない
+    //     程度に浅くなるはず ---
+    ev.push((480, marker("31")));
+    ev.extend(select_nrpn(ch1, 0, 27));
+    ev.push(data_entry(ch1, 20)); // cc_byte_to_u8(20)=40
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 32: 31のNRPN上書き(depth=40)を保持したままCC92=120を加算(depth=40+120=160)。
+    //     31より深く、30(255)より浅いトレモロになるはず——CC92がNRPN上書き後の値へ
+    //     さらに加算されることの確認 ---
+    ev.push((480, marker("32")));
+    ev.push(cc(ch1, 92, 60)); // cc_byte_to_u8(60)=120
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    // --- 33: CC92=0へ戻す（depth=40のまま、31と同じ浅さに戻るはず）。
+    //     CC92の加算が可逆であることの確認 ---
+    ev.push((480, marker("33")));
+    ev.push(cc(ch1, 92, 0));
+    ev.push(note_on(0, ch1, NOTE_C4, 100));
+    ev.push(note_off(2880, ch1, NOTE_C4));
+
+    ev.push((480, marker("34 (end)")));
 
     // デバッグ用：各マーカーの絶対tick/秒数を出力する（波形解析での区間切り出しに使う。
     // GROUP_GAP等の変更で全体のタイミングがずれても手計算し直さずに済むようにするため）。

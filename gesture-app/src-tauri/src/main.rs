@@ -4,7 +4,8 @@ mod op505_presets;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use op505_core::{
-    build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505BipolarFg, Op505ChannelParams, Op505Engine, Op505Patch, Op505PresetBank,
+    build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505BipolarFg, Op505ChannelParams, Op505Engine,
+    Op505GainFg, Op505Patch, Op505PresetBank,
 };
 use sound_core::{
     cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, seconds_to_time, volume_depth,
@@ -47,7 +48,7 @@ impl PerformanceLfoDestination {
 #[derive(Clone, Copy)]
 struct OriginalFgs {
     pitch_fg: Op505BipolarFg,
-    gain_fg: TimeEgParams,
+    gain_fg: Op505GainFg,
     gain_fg_to_master: bool,
     gain_fg_to_operators: bool,
     cutoff_fg: Op505BipolarFg,
@@ -194,7 +195,7 @@ fn op505_set_performance_lfo(
     if dest == PerformanceLfoDestination::Volume || dest == PerformanceLfoDestination::TlCarrier {
         let depth = volume_depth(cc77, cc1);
         let hz = chip_lfo_freq_to_hz(rate);
-        patch.channel.gain_fg = build_tremolo_gain_fg(delay_seconds, hz, depth);
+        patch.channel.gain_fg.eg = build_tremolo_gain_fg(delay_seconds, hz, depth);
         patch.channel.gain_fg_to_master = true;
         patch.channel.gain_fg_to_operators = false;
     } else {

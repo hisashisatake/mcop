@@ -56,7 +56,7 @@ pub struct Op505PanelParams<'a> {
     // PITCH FG / CUTOFF FG / GAIN FG
     pub pitch_fg: Op505BipolarFgPanelParams<'a>,
     pub cutoff_fg: Op505BipolarFgPanelParams<'a>,
-    pub gain_fg: Box<dyn TimeEgHandle + 'a>,
+    pub gain_fg: Op505BipolarFgPanelParams<'a>,
     /// Gain FGの行先スイッチ（旧CHIP LFO AM経路の厳密代替）。
     pub gain_fg_to_master: Box<dyn BoolParamHandle + 'a>,
     pub gain_fg_to_operators: Box<dyn BoolParamHandle + 'a>,

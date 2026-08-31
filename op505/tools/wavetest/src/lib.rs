@@ -4,7 +4,7 @@
 //! 由来: ym38x6/tools/wavetest4x6/src/main.rs（コミット ef3d309 時点の複製、2026-08-13）。
 //! デフォーク後のop505ツール群向け複製（fork-on-write）。
 
-use op505_core::{Op505ChannelParams, Op505OperatorParams, Op505Patch};
+use op505_core::{Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch};
 use op505_core::eg_convert::convert_eg_shape;
 use sound_core::{seconds_to_time, TimeEgParams, TimeStage, MAX_STAGES};
 
@@ -241,7 +241,7 @@ pub fn base_timbres() -> Vec<BaseTimbre> {
                     op(150, 255, 0, 0, 255, 60, 6, 128),
                 ],
                 channel: Op505ChannelParams {
-                    gain_fg: gate_gain_fg(),
+                    gain_fg: Op505GainFg { eg: gate_gain_fg(), depth: 255 },
                     filter_self_oscillation: false,
                     ..channel(7, 0)
                 },

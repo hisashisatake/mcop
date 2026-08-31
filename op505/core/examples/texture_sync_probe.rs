@@ -54,7 +54,7 @@ fn build_patch(gain_fg: TimeEgParams) -> Op505Patch {
         Op505OperatorParams { tl: 255, mul: 1, waveform: 0, eg: op_eg, ..Op505OperatorParams::default() };
     patch.channel = Op505ChannelParams::default();
     patch.channel.algorithm = 7;
-    patch.channel.gain_fg = gain_fg;
+    patch.channel.gain_fg.eg = gain_fg;
     patch
 }
 

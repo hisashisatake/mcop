@@ -254,7 +254,7 @@ mod tests {
         }
         assert!(patch.channel.gain_fg_to_operators, "AM経路はGain FGのOP配線を有効にするはず");
         assert!(!patch.channel.gain_fg_to_master, "AM専用にした場合マスターVCAは無効になるはず");
-        assert_eq!(patch.channel.gain_fg.loop_enabled, 1, "Gain FGはAMループを持つはず");
+        assert_eq!(patch.channel.gain_fg.eg.loop_enabled, 1, "Gain FGはAMループを持つはず");
     }
 
     /// どのオペレーターも`ame=false`（AM未使用）なら、Gain FGは既定の透過値のまま

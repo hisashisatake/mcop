@@ -69,7 +69,10 @@ fn build_panel_params<'a>(
             eg: vt(egs, |b: &Op505EgBank| b.cutoff_fg, |b: &mut Op505EgBank, v| b.cutoff_fg = v, "CUTOFF FG"),
             depth: vi(&params.cutoff_fg_depth, setter),
         },
-        gain_fg: vt(egs, |b: &Op505EgBank| b.gain_fg, |b: &mut Op505EgBank, v| b.gain_fg = v, "GAIN FG"),
+        gain_fg: Op505BipolarFgPanelParams {
+            eg: vt(egs, |b: &Op505EgBank| b.gain_fg, |b: &mut Op505EgBank, v| b.gain_fg = v, "GAIN FG"),
+            depth: vi(&params.gain_fg_depth, setter),
+        },
         gain_fg_to_master: vb(&params.gain_fg_to_master, setter),
         gain_fg_to_operators: vb(&params.gain_fg_to_operators, setter),
         rev_send: vi(&params.rev_send, setter),
