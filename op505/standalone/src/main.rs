@@ -49,8 +49,11 @@ use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, 
 mod config;
 mod log;
 mod midi_source;
+mod shared;
 mod sources;
 mod tray;
+
+use shared::SharedEditState;
 
 type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 
@@ -89,6 +92,12 @@ struct MidiState {
     presets: Op505PresetBank,
     /// `presets`に該当(bank,program)が無いときのフォールバック（起動時の既定パッチ）。
     default_patch: Op505Patch,
+    /// トレイ起動音色エディタが編集中のパッチ（`shared::SharedEditState`から`try_read()`で
+    /// 取り込んだキャッシュ）。`edit_channel`が`Some`のときだけ`base_patch_for`から参照される。
+    edit_patch: Op505Patch,
+    /// エディタが編集対象としているMIDIチャンネル。`None`（エディタ未使用時は常にこれ）なら
+    /// 全チャンネルが従来どおりProgram Change解決のみで音色を決める。
+    edit_channel: Option<usize>,
 }
 
 impl MidiState {
@@ -102,15 +111,22 @@ impl MidiState {
             log::log("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
         }
         let channels = (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
-        Self { channels, presets, default_patch }
+        Self { channels, presets, default_patch, edit_patch: default_patch, edit_channel: None }
     }
 
     /// このチャンネル・ノートの現在のProgram Change選択が指すベースパッチ。
+    /// - エディタ編集中: `edit_channel`が`chi`を指していれば、Program Change選択を無視して
+    ///   `edit_patch`を返す（トレイ起動音色エディタでノブを操作した音をそのチャンネルで
+    ///   試聴するための経路。エディタ未使用時は`edit_channel`が常に`None`のためこの分岐に
+    ///   入らず、以降の判定は無改造）。
     /// - 旋律: `presets`に該当(bank,program)が無ければ`default_patch`にフォールバック。
     /// - リズム: `presets`のkit内に該当ノートが無ければkit0へフォールバックし、それも無ければ
     ///   `None`（このノートは発音しない。GM2実機でキット内に未定義のノートが無音になるのと同じ、
     ///   `op505/tools/smf2op505`の`base_patch_for`と同じ意味論）。
     fn base_patch_for(&self, chi: usize, note: u8) -> Option<Op505Patch> {
+        if self.edit_channel == Some(chi) {
+            return Some(self.edit_patch);
+        }
         match self.channels[chi].program_state.selection() {
             ProgramSelection::Melodic { bank, program } => {
                 Some(self.presets.get(bank, program).map(|p| p.patch).unwrap_or(self.default_patch))
@@ -150,14 +166,22 @@ fn main() {
     // `render_routed`のスロット別出力スクラッチ。cpalコールバックの`output`長に合わせて
     // grow-onlyでリサイズし、以降は使い回す（オーディオスレッドでの反復ヒープ確保を避ける）。
     let mut slot_buf: Vec<f32> = Vec::new();
+    // トレイ起動音色エディタ（Step 1以降）が発音中ボイスへ即時反映する際の、発音中ボイスID
+    // 一覧のスクラッチバッファ（`slot_buf`と同じ理由でオーディオスレッドの反復ヒープ確保を
+    // 避ける）。エディタが無い/未操作の間は`apply_live_active`自体が呼ばれないため使われない。
+    let mut active_ids: Vec<usize> = Vec::new();
     let (presets, default_patch) = load_presets();
     engine.set_patch(default_patch);
-    let mut state = MidiState::new(presets, default_patch);
+    let mut state = MidiState::new(presets.clone(), default_patch);
+    // トレイ起動音色エディタとの共有状態（Step 1以降）。エディタが一度も開かれなければ
+    // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
+    let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
 
     let stream = device
         .build_output_stream::<f32, _, _>(
             &stream_config,
             move |output: &mut [f32], _| {
+                sync_editor_state(&shared_edit_state, &mut engine, &mut effects, &mut state, &mut active_ids);
                 drain_midi_queue(&midi_queue, &mut engine, &mut effects, &mut state);
                 output.fill(0.0);
 
@@ -208,6 +232,46 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
             ));
             (presets, Op505Patch::default())
         }
+    }
+}
+
+/// トレイ起動音色エディタ（Step 1以降）からの入力をオーディオスレッドへ取り込む。
+/// `drain_midi_queue`より先に呼ぶこと（`op505-vst`の`process()`が`try_read()`を最初に
+/// 処理するのと同じ順序、`shared.rs`のモジュールdoc参照）。
+///
+/// エディタが一度も操作しない限り（`shared`の3つのdirtyフラグが全てfalseのまま）、この関数は
+/// `edit_channel()`と3回の`swap`だけで即座に返る——命令列も演算も既存挙動から変わらない。
+fn sync_editor_state(
+    shared: &SharedEditState,
+    engine: &mut Op505Engine,
+    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    state: &mut MidiState,
+    active_ids: &mut Vec<usize>,
+) {
+    state.edit_channel = shared.edit_channel();
+
+    if let Some(patch) = shared.take_patch_if_dirty() {
+        state.edit_patch = patch;
+        if let Some(chi) = state.edit_channel {
+            apply_live_active(engine, state, chi, active_ids);
+        }
+    }
+
+    if let Some(presets) = shared.take_presets_if_dirty() {
+        state.presets = presets;
+    }
+
+    if let Some((slot, values)) = shared.take_fx_if_dirty() {
+        let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+        fx.set_reverb_send(values[shared::FX_REVERB_SEND]);
+        fx.set_reverb_type(ReverbType::from_u8(values[shared::FX_REVERB_TYPE]));
+        fx.set_reverb_time(values[shared::FX_REVERB_TIME]);
+        fx.set_chorus_send(values[shared::FX_CHORUS_SEND]);
+        fx.set_chorus_type(ChorusType::from_u8(values[shared::FX_CHORUS_TYPE]));
+        fx.set_chorus_mod_rate(values[shared::FX_CHORUS_MOD_RATE]);
+        fx.set_chorus_mod_depth(values[shared::FX_CHORUS_MOD_DEPTH]);
+        fx.set_chorus_feedback(values[shared::FX_CHORUS_FEEDBACK]);
+        fx.set_chorus_send_to_reverb(values[shared::FX_CHORUS_SEND_TO_REVERB]);
     }
 }
 
@@ -374,16 +438,17 @@ fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, n
     }
 }
 
-/// CC/NRPNで変わった実効パッチ・CC76 rate_scale・AT・OP F-Numberを、そのチャンネルの
-/// 発音中ボイス全てへ伝播する（`op505/tools/smf2op505`のapply_liveと同じ役割）。
+/// CC/NRPNで変わった実効パッチ・CC76 rate_scale・AT・OP F-Numberを、`notes`が列挙する
+/// ノート番号（そのチャンネルの）へ伝播する共通本体。`apply_live`（CC経路、`0..128`昇順を
+/// 維持——エンジンがボイスID昇順の決定論的処理順序に依存するため）と`apply_live_active`
+/// （エディタ経路、発音中ボイスのみ）が呼び分ける。
 ///
 /// リズムチャンネルはノートごとに音色が違うため、`base_patch_for`をノートごとに呼ぶ
 /// （旋律のようにチャンネル全体で1回だけ計算する最適化はできない）。キット内に未定義の
 /// ノート（`base_patch_for`がNone）はスキップし、既存の発音中パラメーターをそのまま維持する。
-fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
+fn apply_live_notes(engine: &mut Op505Engine, state: &MidiState, chi: usize, notes: impl Iterator<Item = u8>) {
     let rate_scale = cc76_to_rate_scale(state.channels[chi].pitch_fg_cc76);
-    for note in 0..MIDI_NOTE_COUNT {
-        let note_u8 = note as u8;
+    for note_u8 in notes {
         let Some(base) = state.base_patch_for(chi, note_u8) else { continue };
         let st = &state.channels[chi];
         let eff = st.build_effective_patch(&base);
@@ -405,6 +470,23 @@ fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
             }
         }
     }
+}
+
+/// CC/NRPN経路（`handle_control_change`等）から呼ぶ。全128ノートを昇順で走査する
+/// （既存挙動を一切変えない、`op505/tools/smf2op505`のapply_liveと同じ役割）。
+fn apply_live(engine: &mut Op505Engine, state: &mut MidiState, chi: usize) {
+    apply_live_notes(engine, state, chi, 0..MIDI_NOTE_COUNT as u8);
+}
+
+/// トレイ起動音色エディタ経路（Step 1以降）から呼ぶ。エディタのノブ操作は毎フレーム
+/// 起こり得るため、`chi`で発音中の実ボイスのみへ絞って`apply_live_notes`を呼ぶ
+/// （16ch×128ノート全走査は重すぎる）。`ids`は呼び出し側（cpalコールバック）が
+/// 使い回すスクラッチバッファ（`slot_buf`と同じ理由でオーディオスレッドの反復
+/// ヒープ確保を避ける）。
+fn apply_live_active(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, ids: &mut Vec<usize>) {
+    engine.collect_active_channels(ids);
+    let notes = ids.iter().filter(|id| **id >> 7 == chi).map(|id| (id & 0x7f) as u8);
+    apply_live_notes(engine, state, chi, notes);
 }
 
 /// 1つのコントロールチェンジを処理する。`op505/tools/smf2op505`のhandle_control_changeを
@@ -618,3 +700,53 @@ fn handle_control_change(
 // MIDI入力ポートへの接続・選択は sources::midir_src（旧connect_midi_input/select_port_index、
 // コマンドライン引数+stdin対話）へ移動した。設定ファイル（config.rs）+
 // 「ポートが1個だけなら自動選択」方式に置き換え、タスクトレイ化後もstdin無しで動く。
+
+#[cfg(test)]
+mod base_patch_for_tests {
+    use super::*;
+
+    /// プリセット無し（`Op505PresetBank::default()`）の`MidiState`。Program Change未送信の
+    /// 全チャンネルは`ProgramSelection::Melodic { bank: 0, program: 0 }`のまま
+    /// （`ChannelProgramState::new`参照）、該当プリセットも無いため`default_patch`へ
+    /// フォールバックする。
+    fn state_with_default_patch(default_patch: Op505Patch) -> MidiState {
+        MidiState::new(Op505PresetBank::default(), default_patch)
+    }
+
+    fn patch_with_pitch_fg_depth(depth: u8) -> Op505Patch {
+        let mut patch = Op505Patch::default();
+        patch.channel.pitch_fg.depth = depth;
+        patch
+    }
+
+    #[test]
+    fn edit_channel_none_uses_program_change_resolution() {
+        let default_patch = patch_with_pitch_fg_depth(10);
+        let state = state_with_default_patch(default_patch);
+        assert_eq!(state.edit_channel, None);
+        let resolved = state.base_patch_for(0, 60).expect("no rhythm kit, must resolve to default_patch");
+        assert_eq!(resolved.channel.pitch_fg.depth, 10, "edit_channel=Noneでは従来のPC解決のまま");
+    }
+
+    #[test]
+    fn edit_channel_some_bypasses_program_change_for_that_channel() {
+        let default_patch = patch_with_pitch_fg_depth(10);
+        let mut state = state_with_default_patch(default_patch);
+        state.edit_patch = patch_with_pitch_fg_depth(99);
+        state.edit_channel = Some(3);
+
+        let resolved = state.base_patch_for(3, 60).expect("edit_channel=Some(3)はedit_patchを返す");
+        assert_eq!(resolved.channel.pitch_fg.depth, 99, "編集対象chはedit_patchで上書きされるはず");
+    }
+
+    #[test]
+    fn edit_channel_some_does_not_affect_other_channels() {
+        let default_patch = patch_with_pitch_fg_depth(10);
+        let mut state = state_with_default_patch(default_patch);
+        state.edit_patch = patch_with_pitch_fg_depth(99);
+        state.edit_channel = Some(3);
+
+        let resolved = state.base_patch_for(4, 60).expect("編集対象外chは従来のPC解決のまま");
+        assert_eq!(resolved.channel.pitch_fg.depth, 10, "編集対象外chはedit_patchの影響を受けないはず");
+    }
+}
