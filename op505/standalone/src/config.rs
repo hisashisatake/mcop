@@ -33,7 +33,32 @@ pub fn load() -> StandaloneConfig {
         return StandaloneConfig::default();
     };
     serde_json::from_str(&text).unwrap_or_else(|err| {
-        eprintln!("設定ファイル {} の読み込みに失敗しました（既定値を使用）: {err}", path.display());
+        crate::log::log(&format!("設定ファイル {} の読み込みに失敗しました（既定値を使用）: {err}", path.display()));
         StandaloneConfig::default()
     })
+}
+
+/// 設定ファイルを保存する。ディレクトリが無ければ作成する（タスクトレイのメニュー操作
+/// で選択したMIDI入力ポート名を永続化するために使う）。
+pub fn save(config: &StandaloneConfig) {
+    let path = config_path();
+    if let Some(dir) = path.parent() {
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            crate::log::log(&format!("設定ディレクトリ {} の作成に失敗しました: {err}", dir.display()));
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(config) {
+        Ok(text) => {
+            if let Err(err) = std::fs::write(&path, text) {
+                crate::log::log(&format!("設定ファイル {} の保存に失敗しました: {err}", path.display()));
+            }
+        }
+        Err(err) => crate::log::log(&format!("設定のシリアライズに失敗しました: {err}")),
+    }
+}
+
+/// 設定ファイルの絶対パスを返す（トレイメニューの「設定フォルダを開く」で使う）。
+pub fn file_path() -> PathBuf {
+    config_path()
 }

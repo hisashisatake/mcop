@@ -19,8 +19,14 @@ impl MidiSource for MidirSource {
     }
 }
 
+impl MidirSource {
+    /// 接続中のポート名（トレイメニューの初期チェック状態を合わせるために使う）。
+    pub fn connected_port_name(&self) -> &str {
+        &self.port_name
+    }
+}
+
 /// 利用可能な入力ポート名の一覧を返す（列挙のみ、接続はしない）。
-#[allow(dead_code)] // フェーズ3のトレイメニュー（ポート一覧表示）で使用予定
 pub fn list_input_ports() -> Vec<String> {
     let Ok(input) = MidiInput::new("op505-standalone-list") else {
         return Vec::new();
@@ -42,7 +48,7 @@ pub fn connect(sink: MidiSink, preferred_name: Option<&str>) -> Option<MidirSour
     let input = MidiInput::new("op505-standalone").ok()?;
     let ports = input.ports();
     if ports.is_empty() {
-        println!("MIDI入力ポートが見つかりません（loopMIDI等が未起動）。");
+        crate::log::log("MIDI入力ポートが見つかりません（loopMIDI等が未起動）。");
         return None;
     }
 
@@ -60,10 +66,10 @@ pub fn connect(sink: MidiSink, preferred_name: Option<&str>) -> Option<MidirSour
 
     let Some((port, port_name)) = chosen else {
         let available: Vec<&String> = named.iter().map(|(_, name)| name).collect();
-        println!(
+        crate::log::log(&format!(
             "MIDI入力ポートが複数見つかりましたが、設定（standalone.jsonのmidi_in_port）が\
              未指定のため自動接続しません。利用可能なポート: {available:?}"
-        );
+        ));
         return None;
     };
 

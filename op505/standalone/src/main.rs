@@ -1,3 +1,8 @@
+// コンソールウィンドウを持たないGUIサブシステムのアプリとしてビルドする（タスクトレイ常駐）。
+// これに伴い標準出力ハンドルが無効な環境があり得るため（Explorer起動等）、println!/eprintln!は
+// 使わず[`log`]モジュール（ファイル出力）へ統一している（println!は書き込み失敗時にpanicする）。
+#![windows_subsystem = "windows"]
+
 //! op505をDomino等のMME専用MIDIシーケンサから直接鳴らすための常駐アプリ。
 //!
 //! MIDI入力の供給元は[`midi_source::MidiSource`]で抽象化され、複数併存できる
@@ -42,8 +47,10 @@ use op505_midi::{
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
 
 mod config;
+mod log;
 mod midi_source;
 mod sources;
+mod tray;
 
 type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 
@@ -92,7 +99,7 @@ impl MidiState {
         // 置くだけで有効になる）。
         let rhythm_kits_available = presets.has_bank_in(RHYTHM_BANK_RANGE);
         if rhythm_kits_available {
-            println!("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
+            log::log("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
         }
         let channels = (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
         Self { channels, presets, default_patch }
@@ -125,12 +132,10 @@ fn main() {
     let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
     let mut registry = midi_source::SourceRegistry::new();
 
+    // midirソース（実機キーボード/loopMIDI）はタスクトレイのメニューから動的に
+    // 切り替えられる必要があるため、SourceRegistryへは入れず`tray::run`が
+    // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
     registry.add(Box::new(sources::pipe_src::spawn(sink.clone())));
-
-    let config = config::load();
-    if let Some(midir_source) = sources::midir_src::connect(sink, config.midi_in_port.as_deref()) {
-        registry.add(Box::new(midir_source));
-    }
 
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
@@ -174,17 +179,15 @@ fn main() {
                     }
                 }
             },
-            |err| eprintln!("audio error: {err}"),
+            |err| log::log(&format!("audio error: {err}")),
             None,
         )
         .expect("failed to build output stream");
 
     stream.play().expect("failed to start audio stream");
 
-    println!("op505-standalone: 再生中。Ctrl+Cで終了します。");
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
-    }
+    log::log("op505-standalone: 再生中。");
+    tray::run(sink);
 }
 
 /// `op505_presets_dir()`から全プリセットを読み込み、その先頭を起動時の既定パッチとして返す。
@@ -195,11 +198,14 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
     let presets = Op505PresetBank::load_from_dir(&dir);
     match presets.sorted_entries().into_iter().next() {
         Some(((bank, program), preset)) => {
-            println!("既定パッチ: {} (bank={bank}, program={program})", preset.name);
+            log::log(&format!("既定パッチ: {} (bank={bank}, program={program})", preset.name));
             (presets.clone(), preset.patch)
         }
         None => {
-            eprintln!("警告: {} にプリセットが見つかりません。無音のデフォルトパッチのまま起動します。", dir.display());
+            log::log(&format!(
+                "警告: {} にプリセットが見つかりません。無音のデフォルトパッチのまま起動します。",
+                dir.display()
+            ));
             (presets, Op505Patch::default())
         }
     }
@@ -250,12 +256,10 @@ fn handle_midi_message(
         }
         0xB0 => {
             let &[_, cc, val] = bytes else { return };
-            println!("cc: ch{chi} cc={cc} val={val}");
             handle_control_change(engine, effects, state, chi, cc, val);
         }
         0xC0 => {
             let &[_, program] = bytes else { return };
-            println!("program change: ch{chi} program={program}");
             state.channels[chi].program_change(program & 0x7f);
         }
         0xD0 => {
@@ -291,7 +295,6 @@ fn note_on_voice_core(engine: &mut Op505Engine, state: &mut MidiState, chi: usiz
         let st = &state.channels[chi];
         let mut eff = st.build_effective_patch(&base);
         st.apply_note_post_processing(&mut eff, note);
-        println!("note on:  ch{chi} note={note} vel={vel}");
         engine.set_patch(eff);
         engine.note_on(id, freq, vel);
         engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
@@ -342,7 +345,6 @@ fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, no
 /// Mono Mode中はサステインペダルより優先する（押鍵状態＝`MonoState`だけで解放/
 /// フォールバックを決める。理由は`handle_control_change`のCC126/127コメント参照）。
 fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8) {
-    println!("note off: ch{chi} note={note}");
     state.channels[chi].poly_pressure[note as usize] = 0;
     let pedal_released = state.channels[chi].pedal.note_off(note);
     if state.channels[chi].mono.enabled {

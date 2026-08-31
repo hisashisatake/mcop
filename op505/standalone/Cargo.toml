@@ -23,3 +23,6 @@ cpal = "0.15"
 # 同じserde+serde_json（op505/core/Cargo.toml参照）に揃える。
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# タスクトレイ常駐化用。winitは引き込まず、生のWin32メッセージループ（tray.rs参照）と
+# 組み合わせて使う。
+tray-icon = "0.24"

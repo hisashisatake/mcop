@@ -45,7 +45,7 @@ impl SourceRegistry {
     }
 
     pub fn add(&mut self, source: Box<dyn MidiSource>) {
-        println!("MIDI入力: {}", source.describe());
+        crate::log::log(&format!("MIDI入力: {}", source.describe()));
         self.sources.push(source);
     }
 }

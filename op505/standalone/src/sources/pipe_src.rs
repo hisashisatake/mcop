@@ -78,10 +78,10 @@ pub fn spawn(sink: MidiSink) -> PipeSource {
 fn accept_loop(sink: MidiSink) {
     loop {
         let Some(handle) = create_pipe_instance() else {
-            eprintln!(
-                "op505-standalone: MMEパイプサーバーの作成に失敗しました（{}）。MMEドライバ経由の入力は無効です。",
+            crate::log::log(&format!(
+                "MMEパイプサーバーの作成に失敗しました（{}）。MMEドライバ経由の入力は無効です。",
                 std::io::Error::last_os_error()
-            );
+            ));
             return;
         };
 
