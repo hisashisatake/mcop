@@ -108,6 +108,13 @@ impl SharedEditState {
         self.fx_dirty.store(true, Ordering::Release);
     }
 
+    /// エディタを開く際の初期値取得用。`take_patch_if_dirty`と違いdirtyフラグには触れない
+    /// （「今の値を閲覧するだけ」であり「オーディオスレッドへ反映する」操作ではないため）。
+    /// GUIスレッドからのブロッキング`read()`は許容する（オーディオスレッドは呼ばない）。
+    pub fn current_patch(&self) -> Op505Patch {
+        *self.patch.read().unwrap()
+    }
+
     // ---- オーディオスレッド側API（try_readのみ、ブロックしない） ----
 
     /// 現在の編集対象チャンネル（`NO_EDIT_CHANNEL`なら`None`）。

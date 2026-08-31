@@ -26,6 +26,11 @@ use winit::platform::windows::EventLoopBuilderExtWindows;
 use crate::log;
 use crate::shared::SharedEditState;
 
+mod app;
+mod panel_params;
+
+use app::EditorApp;
+
 /// エディタが開いた状態から自然に閉じる/ホストが閉じるよう要求してから、
 /// スレッドが後始末を終えるまで`shutdown()`が待つ上限。
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -112,11 +117,18 @@ fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<eg
         event_loop_builder: Some(Box::new(|builder| {
             builder.with_any_thread(true).with_dpi_aware(false);
         })),
-        viewport: egui::ViewportBuilder::default().with_title("op505 音色エディタ").with_inner_size([480.0, 360.0]),
+        // 幅はop505-uiパネルの最小幅（panel.xmlから算出、ノブ等が折り返さず収まるサイズ）+
+        // 余白。PRESETSサイドバー分は未実装（サブステップ4）のため今は含めない。
+        // 高さは4オペレーター分のTimeEgエディタが縦に並ぶため大きめに確保し、収まらない分は
+        // ScrollArea（`app.rs`）に任せる。
+        viewport: egui::ViewportBuilder::default()
+            .with_title("op505 音色エディタ")
+            .with_inner_size([op505_ui::PANEL_MIN_WIDTH + 40.0, 720.0]),
         ..Default::default()
     };
 
-    let shared = Arc::clone(shared);
+    let initial_patch = shared.current_patch();
+    let shared_for_app = Arc::clone(shared);
     let ctx_slot = Arc::clone(ctx_slot);
     let result = eframe::run_native(
         "op505_standalone_editor",
@@ -124,12 +136,16 @@ fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<eg
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
             *ctx_slot.lock().unwrap() = Some(cc.egui_ctx.clone());
-            Ok(Box::new(PlaceholderApp::new(shared)))
+            Ok(Box::new(EditorApp::new(shared_for_app, initial_patch)))
         }),
     );
     if let Err(err) = result {
         log::log(&format!("音色エディタの起動に失敗しました: {err}"));
     }
+    // ウィンドウがどう閉じられたか（Xボタン/EditorHandle::shutdown/run_native自体の失敗）に
+    // 関わらず、必ず編集対象chを「なし」へ戻す。EditorApp::ui()内の差分検知だけに頼ると、
+    // Xボタンで閉じられた場合は次のui()呼び出しが来ないため反映されない。
+    shared.set_edit_channel(None);
 }
 
 /// eguiの既定フォントにはCJKグリフが含まれず日本語ラベルが豆腐(□)化するため、
@@ -147,25 +163,4 @@ fn setup_fonts(ctx: &egui::Context) {
         }
     }
     ctx.set_fonts(fonts);
-}
-
-/// Step 1サブステップ2（常駐スレッド＋空ウィンドウ＋トレイメニュー）時点のプレースホルダー
-/// 実装。パネル表示・編集対象chセレクタ・PRESETSパネルは後続のサブステップで追加する
-/// （実装順序はgesture-appコントローラー化ロードマップのplanファイル参照）。
-struct PlaceholderApp {
-    _shared: Arc<SharedEditState>,
-}
-
-impl PlaceholderApp {
-    fn new(shared: Arc<SharedEditState>) -> Self {
-        Self { _shared: shared }
-    }
-}
-
-impl eframe::App for PlaceholderApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.label("音色エディタ（実装中）");
-        });
-    }
 }
