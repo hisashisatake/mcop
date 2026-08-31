@@ -1,14 +1,27 @@
+// コンソールウィンドウを持たないGUIサブシステムのアプリとしてビルドする（タスクトレイ常駐）。
+// これに伴い標準出力ハンドルが無効な環境があり得るため（Explorer起動等）、println!/eprintln!は
+// 使わず[`log`]モジュール（ファイル出力）へ統一している（println!は書き込み失敗時にpanicする）。
+#![windows_subsystem = "windows"]
+
 //! op505をDomino等のMME専用MIDIシーケンサから直接鳴らすための常駐アプリ。
 //!
-//! このアプリ自身は新規の仮想MIDIポートを作らない。loopMIDI等が作った既存の仮想MIDI
-//! ポート（または実機のUSB-MIDIキーボード）をmidir経由で開き、受け取ったMIDIバイト列を
+//! MIDI入力の供給元は[`midi_source::MidiSource`]で抽象化され、複数併存できる
+//! （[`sources`]配下が個々の実装）。現状2系統ある。①loopMIDI等が作った既存の仮想MIDI
+//! ポート（または実機のUSB-MIDIキーボード）を[`midir`]経由で開く[`sources::midir_src`]。
+//! ②[`sources::pipe_src`]が受け付ける名前付きパイプ（`\\.\pipe\op505.mme.v1`）経由の
+//! 経路——`op505-mme-driver`（Drivers32方式のユーザーモードMMEドライバDLL、
+//! `op505/mme-driver/`）がDomino等のクライアントプロセスに読み込まれ、そこから
+//! 転送されてくる。②によりop505自身がWindowsのMIDI OUTデバイス一覧に「op505」として
+//! 現れ、loopMIDIの仮想ポート作成を経由せずに直接選択できる。将来のWindows MIDI
+//! Services経由の供給元も同じトレイトを実装するだけで足りる設計（詳細はop505/mme-driver/
+//! 配下の設計メモ参照）。どの供給元も受け取ったMIDIバイト列を同じキューへ積み、
 //! op505-coreへ渡してcpalでWASAPI直出しする。
 //!
-//! MIDI入力はmidirのコールバックスレッドから届き、オーディオ処理はcpalのコールバック
-//! スレッドで行われる。両者はキュー（Mutex<VecDeque<Vec<u8>>>）でのみやり取りし、
-//! Op505Engine/MasterEffectsはオーディオスレッドが単独で所有する
-//! （gesture-appのArc<Mutex<Op505Engine>>と違い、UIスレッドからの同時アクセスが
-//! 無いため排他制御そのものを避けられる）。
+//! MIDI入力は各供給元のスレッドから[`midi_source::MidiSink::push`]経由で届き、
+//! オーディオ処理はcpalのコールバックスレッドで行われる。いずれもキュー
+//! （Mutex<VecDeque<Vec<u8>>>）でのみやり取りし、Op505Engine/MasterEffectsは
+//! オーディオスレッドが単独で所有する（gesture-appのArc<Mutex<Op505Engine>>と違い、
+//! UIスレッドからの同時アクセスが無いため排他制御そのものを避けられる）。
 //!
 //! CC/NRPN・プログラムチェンジの解釈は`op505-midi`の[`ChannelState`]を使う
 //! （`op505-vst`・`op505/tools/smf2op505`に続く3本目の利用側、詳細はspec-fm.md 8章）。
@@ -26,13 +39,18 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use midir::{MidiInput, MidiInputConnection};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
     EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+
+mod config;
+mod log;
+mod midi_source;
+mod sources;
+mod tray;
 
 type MidiQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
 
@@ -81,7 +99,7 @@ impl MidiState {
         // 置くだけで有効になる）。
         let rhythm_kits_available = presets.has_bank_in(RHYTHM_BANK_RANGE);
         if rhythm_kits_available {
-            println!("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
+            log::log("GM2リズムキットを検出。ch10は起動時からドラムモードで開始します。");
         }
         let channels = (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
         Self { channels, presets, default_patch }
@@ -111,7 +129,13 @@ impl MidiState {
 
 fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
-    let _midi_connection = connect_midi_input(Arc::clone(&midi_queue));
+    let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
+    let mut registry = midi_source::SourceRegistry::new();
+
+    // midirソース（実機キーボード/loopMIDI）はタスクトレイのメニューから動的に
+    // 切り替えられる必要があるため、SourceRegistryへは入れず`tray::run`が
+    // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
+    registry.add(Box::new(sources::pipe_src::spawn(sink.clone())));
 
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
@@ -155,17 +179,15 @@ fn main() {
                     }
                 }
             },
-            |err| eprintln!("audio error: {err}"),
+            |err| log::log(&format!("audio error: {err}")),
             None,
         )
         .expect("failed to build output stream");
 
     stream.play().expect("failed to start audio stream");
 
-    println!("op505-standalone: 再生中。Ctrl+Cで終了します。");
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
-    }
+    log::log("op505-standalone: 再生中。");
+    tray::run(sink);
 }
 
 /// `op505_presets_dir()`から全プリセットを読み込み、その先頭を起動時の既定パッチとして返す。
@@ -176,11 +198,14 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
     let presets = Op505PresetBank::load_from_dir(&dir);
     match presets.sorted_entries().into_iter().next() {
         Some(((bank, program), preset)) => {
-            println!("既定パッチ: {} (bank={bank}, program={program})", preset.name);
+            log::log(&format!("既定パッチ: {} (bank={bank}, program={program})", preset.name));
             (presets.clone(), preset.patch)
         }
         None => {
-            eprintln!("警告: {} にプリセットが見つかりません。無音のデフォルトパッチのまま起動します。", dir.display());
+            log::log(&format!(
+                "警告: {} にプリセットが見つかりません。無音のデフォルトパッチのまま起動します。",
+                dir.display()
+            ));
             (presets, Op505Patch::default())
         }
     }
@@ -231,12 +256,10 @@ fn handle_midi_message(
         }
         0xB0 => {
             let &[_, cc, val] = bytes else { return };
-            println!("cc: ch{chi} cc={cc} val={val}");
             handle_control_change(engine, effects, state, chi, cc, val);
         }
         0xC0 => {
             let &[_, program] = bytes else { return };
-            println!("program change: ch{chi} program={program}");
             state.channels[chi].program_change(program & 0x7f);
         }
         0xD0 => {
@@ -272,7 +295,6 @@ fn note_on_voice_core(engine: &mut Op505Engine, state: &mut MidiState, chi: usiz
         let st = &state.channels[chi];
         let mut eff = st.build_effective_patch(&base);
         st.apply_note_post_processing(&mut eff, note);
-        println!("note on:  ch{chi} note={note} vel={vel}");
         engine.set_patch(eff);
         engine.note_on(id, freq, vel);
         engine.set_channel_volume(id, channel_gain(st.cc7, st.cc11));
@@ -323,7 +345,6 @@ fn note_on_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, no
 /// Mono Mode中はサステインペダルより優先する（押鍵状態＝`MonoState`だけで解放/
 /// フォールバックを決める。理由は`handle_control_change`のCC126/127コメント参照）。
 fn note_off_voice(engine: &mut Op505Engine, state: &mut MidiState, chi: usize, note: u8) {
-    println!("note off: ch{chi} note={note}");
     state.channels[chi].poly_pressure[note as usize] = 0;
     let pedal_released = state.channels[chi].pedal.note_off(note);
     if state.channels[chi].mono.enabled {
@@ -589,74 +610,6 @@ fn handle_control_change(
     }
 }
 
-/// MIDI入力ポートへ接続する（Step 2: 複数ポートからの選択に対応）。
-/// 選択順は「起動時コマンドライン引数（数値）」→「ポートが1つのみなら自動選択」→
-/// 「複数かつ引数無しなら標準入力で対話選択」。
-fn connect_midi_input(queue: MidiQueue) -> MidiInputConnection<()> {
-    let input = MidiInput::new("op505-standalone").expect("failed to init MIDI input");
-    let ports = input.ports();
-    if ports.is_empty() {
-        panic!("MIDI入力ポートが見つかりません。loopMIDI等で仮想ポートを作成してから起動してください。");
-    }
-
-    println!("利用可能なMIDI入力ポート:");
-    let port_names: Vec<String> = ports
-        .iter()
-        .map(|port| input.port_name(port).unwrap_or_else(|_| "(不明)".to_string()))
-        .collect();
-    for (i, name) in port_names.iter().enumerate() {
-        println!("  [{i}] {name}");
-    }
-
-    let index = select_port_index(&port_names);
-    let port = &ports[index];
-    println!("接続: {}", port_names[index]);
-
-    input
-        .connect(
-            port,
-            "op505-standalone-input",
-            move |_stamp, message, _| {
-                queue.lock().unwrap().push_back(message.to_vec());
-            },
-            (),
-        )
-        .expect("failed to connect to MIDI input port")
-}
-
-/// 接続するポートのインデックスを決める。
-/// 1. 起動時コマンドライン引数（`op505-standalone.exe 1`のように数値で指定）があれば最優先。
-/// 2. ポートが1つしかなければ選ぶ余地が無いので自動選択。
-/// 3. それ以外は標準入力で対話選択（不正な入力は再入力を促す）。
-fn select_port_index(port_names: &[String]) -> usize {
-    if let Some(arg) = std::env::args().nth(1) {
-        match arg.parse::<usize>() {
-            Ok(index) if index < port_names.len() => return index,
-            _ => eprintln!(
-                "警告: 引数 '{arg}' は有効なポート番号(0〜{})ではありません。無視します。",
-                port_names.len() - 1
-            ),
-        }
-    }
-
-    if port_names.len() == 1 {
-        return 0;
-    }
-
-    use std::io::Write;
-    loop {
-        print!("接続するポート番号を入力してください (0〜{}): ", port_names.len() - 1);
-        std::io::stdout().flush().ok();
-
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).is_err() {
-            eprintln!("標準入力の読み取りに失敗しました。ポート0を使用します。");
-            return 0;
-        }
-
-        match line.trim().parse::<usize>() {
-            Ok(index) if index < port_names.len() => return index,
-            _ => println!("0〜{}の番号を入力してください。", port_names.len() - 1),
-        }
-    }
-}
+// MIDI入力ポートへの接続・選択は sources::midir_src（旧connect_midi_input/select_port_index、
+// コマンドライン引数+stdin対話）へ移動した。設定ファイル（config.rs）+
+// 「ポートが1個だけなら自動選択」方式に置き換え、タスクトレイ化後もstdin無しで動く。

@@ -24,6 +24,10 @@ members = [
 # op505/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
 # やpython/pyo3リンク要求を `cargo check --workspace` 等に持ち込まないため、ワークスペースから
 # 除外して独立クレートとして扱う（ビルドはmaturin専任、op505-coreはpath依存で参照）。
+# op505/mme-driver も同じ理由（cdylib、panic=abort禁止）でexclude。ただしこちらは
+# Domino等の相手アプリのプロセスにロードされるユーザーモードMMEドライバDLLで、
+# パニックを外へ伝播させるとホストアプリごと落ちるため独立clate自身がpanic="unwind"を持つ
+# （ビルドはx86_64-pc-windows-msvc/i686-pc-windows-msvc向けに個別。詳細はop505/mme-driver/Cargo.toml）。
 # gesture-app/editor-wasm・op505/ui/preview-wasm はwasm32-unknown-unknown専用クレート
 # （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
 # cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
@@ -41,6 +45,7 @@ exclude = [
     "gesture-app/editor-wasm",
     "op505/ui/preview-wasm",
     "op505/tools/xml-panel-dsl/preview-native",
+    "op505/mme-driver",
 ]
 resolver = "2"
 

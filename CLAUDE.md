@@ -58,6 +58,30 @@ Remove-Item Env:\RUSTFLAGS
 `cargo`コマンドは引き続きscoop版が解決される（`--no-modify-path`でPATH変更を避けたため）。
 wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.cargo\bin\cargo.exe`/`wasm-bindgen.exe`をフルパスで呼ぶ。
 
+### i686（op505-mme-driver用、32bit WinMMホスト対応）
+
+`op505/mme-driver`（Domino等がロードするMMEドライバDLL）はx64/x86両方のビルドが必要
+（64bitプロセスはSystem32、32bitプロセスはWOW64経由でSysWOW64のDLLを読むため）。
+x86ビルドには`i686-pc-windows-msvc`ターゲットが要るが、**scoop版cargo/rustcにはこの
+ターゲットのstdライブラリが無い**（`rustup target list --installed`が使えるのは
+上記wasm32セクションで導入したrustup管理版のみ）。i686も同じrustup管理版へ
+`target add`し、ビルドはrustup版cargoをフルパスで呼ぶ。
+
+```powershell
+$rustup = "$env:USERPROFILE\.cargo\bin\rustup.exe"
+& $rustup target add i686-pc-windows-msvc   # 初回のみ
+
+cd op505/mme-driver
+$rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+& $rustupCargo build --release                                        # x64 -> target\release\op505mme.dll
+& $rustupCargo build --release --target i686-pc-windows-msvc            # x86 -> target\i686-pc-windows-msvc\release\op505mme.dll
+```
+
+`op505/mme-driver`はワークスペースのexcludeメンバーのためscoop版cargoでも一見ビルドが通ってしまうが、
+x64ビルドもrustup版cargoで揃えること（rustcのバージョン差でx64/x86 DLLの生成コンパイラが
+食い違うのを避けるため）。生成物は`dist\x64\op505mme.dll`/`dist\x86\op505mme.dll`へ手動コピーし、
+`install-mme-driver.ps1`（要管理者権限・64bit PowerShell）がSystem32/SysWOW64へ配置しDrivers32へ登録する。
+
 ---
 
 ## プロジェクト概要
@@ -153,6 +177,34 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           Program Change判定（`rhythm`モジュール、`ChannelProgramState`状態機械）も
                           同じ理由でここに実装する（詳細はspec-sound.md「リズム（ドラム）
                           チャンネル」節）
+    standalone/        ← op505をDominoから直接鳴らす常駐MIDIアプリ（クレート名op505-standalone。
+                          フェーズ13新設）。MIDI入力元は`midi_source.rs`の`MidiSource`トレイトで
+                          抽象化し、既存のmidir経由入力（実機MIDIキーボード/loopMIDI、
+                          `sources/midir_src.rs`）とmme-driver経由の名前付きパイプ入力
+                          （`sources/pipe_src.rs`）を同じ`MidiQueue`へ合流させる。
+                          `tray-icon`をwinit抜き（生のWin32メッセージループ）で使い
+                          タスクトレイ常駐化（`#![windows_subsystem = "windows"]`でコンソール
+                          非表示）。設定は`%APPDATA%\op505\standalone.toml`、ログは
+                          `%LOCALAPPDATA%\op505\standalone.log`（コンソールが無いため）。
+                          CC/NRPN解釈はop505-vst/smf2op505と同じ`op505-midi::ChannelState`を使用
+    mme-driver/        ← op505をWindowsのMIDI OUTデバイス一覧へ「op505」として登録する
+                          ユーザーモードMMEドライバ（クレート名op505-mme-driver、
+                          `[lib] name="op505mme"`。Drivers32方式、VirtualMIDISynthと同じ
+                          カーネルドライバではない普通のDLL。フェーズ13新設）。相手アプリ
+                          （Domino等）のプロセス空間にロードされる薄いシムで、MIDIバイト列を
+                          名前付きパイプ`\\.\pipe\op505.mme.v1`経由でstandaloneへ転送するだけ。
+                          エンジン・音声出力はstandalone側が単独所有する。ワークスペースの
+                          `panic="abort"`は他プロセスに住むDLLには致命的なためルートCargo.toml
+                          のworkspace excludeへ登録し、自クレートのみ`panic="unwind"`＋全
+                          エクスポート関数を`catch_unwind`で保護。x64/x86両方のビルドが必要
+                          （`i686-pc-windows-msvc`ターゲット、後述「i686」節）。
+                          `install-mme-driver.ps1`/`uninstall-mme-driver.ps1`がDrivers32の
+                          `midi2`〜`midi9`空きスロットへ登録/解除する（`midi`/`midi1`＝Windows
+                          MIDI Servicesの標準ドライバは絶対に触らない）。DLLがロード中で
+                          置換できない場合は`MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)`で
+                          次回再起動時の差し替えへフォールバックする。standalone自身もWinMM
+                          MIDI入力を扱うため起動しているとop505mme.dll自身をロードしてしまい、
+                          DLL更新時はstandaloneを一旦終了させる必要がある
     tools/             ← レガシーFM音源→OP505直接変換ツール群 + 検証・音作りツール群
                           （実機レート→TimeEg直接変換、.38x6を経由しない）
       common/          ← クレート名op505-tools。op505ツール群専用の共有ユーティリティ
@@ -320,6 +372,70 @@ cargo nice-plug bundle op505-vst --release
 ```
 
 REAPER等のDAWで動作確認する場合は `target\bundled` をVST plug-in pathsに追加してRe-scanする。
+
+### op505-standalone（常駐MIDIアプリ）とMMEドライバのインストール
+
+```powershell
+# standaloneのビルド・起動（タスクトレイに常駐。終了はトレイメニューから）
+cargo build --release -p op505-standalone
+Start-Process target\release\op505-standalone.exe
+```
+
+Dominoからop505をMIDI OUTデバイスとして選べるようにするには、`op505/mme-driver`をx64/x86両方
+ビルドし（前述「i686」節）、`dist\x64`/`dist\x86`へ配置してから管理者権限の**64bit** PowerShellで
+`install-mme-driver.ps1`を実行する（Drivers32の空きスロットへ登録、`midi`/`midi1`＝Windows
+MIDI Servicesの標準ドライバは不可侵）。解除は`uninstall-mme-driver.ps1`。
+
+**DLL更新時の注意**: `op505-standalone`自身もWinMM MIDI入力を扱うため、起動しているとWinMMの
+一般挙動でDrivers32登録済みの`op505mme.dll`を自分自身にもロードしてしまう。DLLを再ビルドして
+再インストールする前に、必ず`op505-standalone`を一旦終了させること（ロード中のままだと
+`install-mme-driver.ps1`のコピーが失敗するか、`MoveFileEx`フォールバックで次回OS再起動まで
+反映が遅延する）。DLL更新後にDominoなどの既存クライアントを再起動すればMIDI OUTデバイス
+一覧が再列挙される（OS再起動は通常不要）。
+
+### NSIS統合インストーラ（op505-setup.exe）
+
+`op505/mme-driver/installer/`に、standalone.exe配置＋MMEドライバのDrivers32登録を1本の
+exeへ統合したNSISインストーラがある。上記2つの手順（PowerShellスクリプト2本）を
+エンドユーザー向けに1本化したもので、中身のロジック（安全チェック・バックアップ・
+空きスロット走査等）は`install-mme-driver.ps1`/`uninstall-mme-driver.ps1`と同一。
+
+```powershell
+# 事前ビルド（standalone.exeとmme-driver x64/x86 DLLをdistへ配置しておく）
+cargo build --release -p op505-standalone
+cd op505\mme-driver
+cargo build --release
+$rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+& $rustupCargo build --release --target i686-pc-windows-msvc
+Copy-Item target\release\op505mme.dll dist\x64\op505mme.dll
+Copy-Item target\i686-pc-windows-msvc\release\op505mme.dll dist\x86\op505mme.dll
+cd ..\..\..
+
+# インストーラのビルド（NSIS 3.11、winget install NSIS.NSISで導入可能）
+pwsh -File op505\mme-driver\installer\build-installer.ps1
+# -> op505\mme-driver\installer\dist\op505-setup.exe（管理者権限で実行、/Sでサイレントインストール）
+```
+
+**`.nsi`ファイルを編集したらUTF-8 BOMを再付与すること**: NSISの`Unicode true`はスクリプト
+ファイル自体がBOM付きエンコードであることを要求する。WriteツールはBOM無しUTF-8で保存するため、
+日本語コメントを含む本ファイルを編集した直後にBOM無しのままビルドすると
+`Bad text encoding`エラーになる（PowerShellスクリプトのBOM問題と同種の罠、CLAUDE.md冒頭
+「PowerShellスクリプト実行」参照）。
+
+```powershell
+$path = "op505\mme-driver\installer\op505-installer.nsi"
+$content = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($true)))
+```
+
+**罠（発見済み、修正済みだが再発に注意）**: `.nsi`内でロード中DLLの直接上書き成否を判定する
+`System::Call`経由の`CopyFileW`は、`File`命令と違って**実行時のカレントディレクトリを基準に
+相対パスを解決する**。`!define DLL_X64 "..\dist\x64\op505mme.dll"`のような相対パスのままだと
+直接上書きが常に失敗し、常に`Delete`/`Rename`の`/REBOOTOK`フォールバック経路だけが動く
+（最終的に正しく配置はされるため気づきにくいが、「ロードされていなければ直接上書き」という
+設計意図が失われる）。`build-installer.ps1`が絶対パスを計算し`makensis /DDLL_X64=...`で
+渡す方式で解消済み。`.nsi`側で新たに`System::Call`にファイルパスを渡す処理を追加する場合は
+必ず絶対パスであることを確認する。
 
 ---
 
