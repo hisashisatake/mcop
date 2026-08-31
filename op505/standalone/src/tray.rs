@@ -13,6 +13,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, Predefin
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::config;
+use crate::editor::EditorHandle;
 use crate::log;
 use crate::midi_source::MidiSink;
 use crate::sources::midir_src;
@@ -120,7 +121,12 @@ fn open_path_in_explorer(path: &std::path::Path) {
 /// トレイアイコン・メニューを構築し、Exitが選ばれるまでWin32メッセージループを
 /// ブロッキングで回す。呼び出し元（`main`）はこの関数から戻った後、`stream`等の
 /// ローカル変数のDropに任せて後片付けする。
-pub fn run(sink: MidiSink) {
+///
+/// `editor`（トレイ起動音色エディタ、Step 1）は「音色エディタ」メニュー項目から
+/// [`EditorHandle::show`]される。ループを抜けた直後（＝終了処理に入った後）に
+/// [`EditorHandle::shutdown`]を呼び、エディタが開いていれば閉じ終わるまで待ってから戻る
+/// （`main`側の`stream`Dropより先にウィンドウを畳んでおくため）。
+pub fn run(sink: MidiSink, editor: EditorHandle) {
     if !acquire_single_instance_lock() {
         log::log("既にop505-standaloneが起動中のため終了します。");
         return;
@@ -138,6 +144,9 @@ pub fn run(sink: MidiSink) {
     }
 
     let menu = Menu::new();
+    let editor_item = MenuItem::new("音色エディタ", true, None);
+    let _ = menu.append(&editor_item);
+    let _ = menu.append(&PredefinedMenuItem::separator());
     let (port_submenu, mut port_items) = build_port_items(current_port_name.as_deref());
     let _ = menu.append(&port_submenu);
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -177,28 +186,38 @@ pub fn run(sink: MidiSink) {
             handle_menu_event(
                 event.id,
                 &exit_item.id(),
+                &editor_item.id(),
                 &open_log_item.id(),
                 &open_config_item.id(),
                 &mut port_items,
                 &sink,
                 &mut current_midir,
+                &editor,
             );
         }
     }
+
+    editor.shutdown();
 }
 
 #[allow(clippy::too_many_arguments)]
 fn handle_menu_event(
     id: MenuId,
     exit_id: &MenuId,
+    editor_id: &MenuId,
     open_log_id: &MenuId,
     open_config_id: &MenuId,
     port_items: &mut [(CheckMenuItem, Option<String>)],
     sink: &MidiSink,
     current_midir: &mut Option<midir_src::MidirSource>,
+    editor: &EditorHandle,
 ) {
     if &id == exit_id {
         unsafe { winapi::PostQuitMessage(0) };
+        return;
+    }
+    if &id == editor_id {
+        editor.show();
         return;
     }
     if &id == open_log_id {
