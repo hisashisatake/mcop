@@ -5,8 +5,9 @@
 //!
 //! フレーム形式（op505/standalone/src/mme_pipe.rsのdecode_frameと対になる。変更時は両方揃える）:
 //! `[u8 version=1][u8 kind][u8 device_id][u16 len（リトルエンディアン）][bytes; len]`
-//! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx、フェーズ1では未使用）,
-//! 2=Reset（payload無し）。
+//! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx。フェーズ4で配線、
+//! op505側では内容を解釈せず破棄する。ペイロード長がu16の範囲を超える場合はこの層まで
+//! 到達しない——lib.rsのMODM_LONGDATA側で同期エラーとして弾く）, 2=Reset（payload無し）。
 //!
 //! MODM_DATA呼び出しスレッド（winmm経由でDominoのMIDIスレッド）をブロックしないよう、
 //! 実際の書き込みは専用ライタースレッドが担う。フレームは有界チャネル（256件）経由で
@@ -26,7 +27,6 @@ const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
 pub const FRAME_VERSION: u8 = 1;
 pub const FRAME_KIND_SHORT: u8 = 0;
-#[allow(dead_code)] // フェーズ4（SysEx対応）で使用予定
 pub const FRAME_KIND_LONG: u8 = 1;
 pub const FRAME_KIND_RESET: u8 = 2;
 

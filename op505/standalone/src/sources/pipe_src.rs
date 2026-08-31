@@ -3,7 +3,9 @@
 //!
 //! フレーム形式（op505/mme-driver/src/client.rsのbuild_frameと対になる。変更時は両方揃える）:
 //! `[u8 version=1][u8 kind][u8 device_id][u16 len（リトルエンディアン）][bytes; len]`
-//! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx、未対応）,
+//! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx。DLL側は
+//! `DriverCallback`のMOM_DONE通知までバッファライフサイクルを正しく完結させるが、
+//! op505側にSysEx解釈は無いためここでログのみ残して破棄する。MidiQueueへは積まない）,
 //! 2=Reset（payload無し。全16chへAll Sound Off(CC120)を合成して送る）。
 //!
 //! 名前付きパイプの「サーバー」役はRust標準ライブラリに無いAPI（CreateNamedPipeW /
@@ -24,6 +26,7 @@ const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
 
 const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
+const FRAME_KIND_LONG: u8 = 1;
 const FRAME_KIND_RESET: u8 = 2;
 
 #[allow(non_snake_case, non_camel_case_types, dead_code)]
@@ -169,6 +172,10 @@ fn decode_frame(raw: &[u8]) -> Vec<Vec<u8>> {
         // All Sound Off(CC120)を全16chへ合成する。既存のhandle_control_changeが
         // 対応済みのCCなので、専用の処理を新設せずに済む。
         FRAME_KIND_RESET => (0u8..16).map(|ch| vec![0xB0 | ch, 120, 0]).collect(),
-        _ => Vec::new(), // Long(SysEx)等、現状未対応
+        FRAME_KIND_LONG => {
+            crate::log::log(&format!("MMEドライバからSysEx(len={})を受信しましたが未解釈のため破棄します", payload.len()));
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }

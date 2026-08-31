@@ -56,6 +56,65 @@ pub const MOD_SWSYNTH: WORD = 7;
 
 pub const MAXPNAMELEN: usize = 32;
 
+// --- mmsyscom.h（MODM_OPENのdwParam2で渡ってくるコールバック種別。mingw-w64ヘッダミラーで確認） ---
+pub const CALLBACK_TYPEMASK: DWORD = 0x0007_0000;
+pub const CALLBACK_FUNCTION: DWORD = 0x0003_0000;
+pub const CALLBACK_EVENT: DWORD = 0x0005_0000;
+
+// --- mmeapi.h（MOM_*、MIDI OUTドライバがDriverCallbackへ通知するメッセージ種別） ---
+pub const MOM_DONE: DWORD = 0x3C9;
+
+// --- mmsystem.h（MIDIHDR.dwFlags） ---
+pub const MHDR_DONE: DWORD = 0x0000_0001;
+pub const MHDR_PREPARED: DWORD = 0x0000_0002;
+
+/// MIDIOPENDESC（mmddk.h）。クライアント（Domino等）がmidiOutOpenへ渡した情報をwinmmが
+/// 詰め替えてMODM_OPENのdwParam1として渡してくる。`hMidi`は「DriverCallbackで通知する際に
+/// 使うべきクライアント側ハンドル」とMSDN（learn.microsoft.com/.../ns-mmddk-midiopendesc）に
+/// 明記されており、自前で値をでっち上げる必要はない。ストリームオープン専用の`rgIds`は
+/// 単一デバイス・非ストリームの本ドライバでは常に`cIds=0`のため読み取らない。
+#[repr(C)]
+pub struct MidiOpenDesc {
+    pub h_midi: DWORD_PTR,
+    pub dw_callback: DWORD_PTR,
+    pub dw_instance: DWORD_PTR,
+    pub dn_dev_node: DWORD_PTR,
+    pub c_ids: DWORD,
+}
+
+/// MIDIHDR（mmsystem.h）。MODM_LONGDATAのdwParam1が指す、クライアントが
+/// `midiOutPrepareHeader`で準備済みのSysExバッファ記述子。
+#[repr(C)]
+pub struct MidiHdr {
+    pub lp_data: *mut u8,
+    pub dw_buffer_length: DWORD,
+    pub dw_bytes_recorded: DWORD,
+    pub dw_user: DWORD_PTR,
+    pub dw_flags: DWORD,
+    pub lp_next: *mut MidiHdr,
+    pub reserved: DWORD_PTR,
+    pub dw_offset: DWORD,
+    pub dw_reserved: [DWORD_PTR; 8],
+}
+
+// winmm.dllが実際にエクスポートしている、インストーラブルドライバ専用のコールバック中継関数
+// （winmm.libの一部。宣言はwine-mirror/wineのinclude/mmddk.hで確認済み。x64ではポインタ幅の
+// 引数がDWORD_PTRへ拡張されている点が32bit専用の古いMSDN文書の記載と異なるため要注意）。
+// このDLLはwinmm.dll自身に読み込まれて動く（modMessage経由で呼ばれる時点でプロセス内に
+// winmm.dllが既にロード済み）ため、暗黙リンクで問題ない。
+#[link(name = "winmm")]
+extern "system" {
+    pub fn DriverCallback(
+        dw_callback: DWORD_PTR,
+        u_flags: DWORD,
+        h_dev: HDRVR,
+        w_msg: DWORD,
+        dw_user: DWORD_PTR,
+        dw_param1: DWORD_PTR,
+        dw_param2: DWORD_PTR,
+    ) -> i32;
+}
+
 /// MIDIOUTCAPSW（mmeapi.h）。NT系のMMSYSTEMはドライバとの通信に常にワイド版構造体を使う
 /// （ANSI/Wide変換はwinmm.dllのAPI層が担う）。フィールド順・型はヘッダと一致させること。
 #[repr(C)]
