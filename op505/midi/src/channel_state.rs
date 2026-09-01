@@ -19,6 +19,7 @@
 //! 固定長配列になっているのはこのため）。
 
 use crate::control::{control_target, ControlTarget};
+use crate::cutoff_fg::apply_cutoff_fg_expression;
 use crate::expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
 use crate::mono::MonoState;
 use crate::overrides::PatchOverrides;
@@ -245,7 +246,8 @@ impl ChannelState {
             self.cc75_decay,
         );
         apply_pitch_fg_expression(patch, self.pitch_fg_cc1, self.pitch_fg_cc77, self.pitch_fg_cc78, self.pitch_fg_rpn0_5);
-        apply_gain_fg_expression(patch, self.gain_fg_cc92);
+        apply_gain_fg_expression(patch, self.gain_fg_cc92, self.pitch_fg_cc76);
+        apply_cutoff_fg_expression(patch, self.pitch_fg_cc76);
         if self.pedal.soft_notes & (1u128 << note) != 0 {
             apply_soft_pedal(patch, self.pedal.cc67);
         }
