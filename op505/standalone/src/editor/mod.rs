@@ -24,9 +24,11 @@ use std::time::{Duration, Instant};
 use winit::platform::windows::EventLoopBuilderExtWindows;
 
 use crate::log;
+use crate::midi_source::MidiSink;
 use crate::shared::SharedEditState;
 
 mod app;
+mod keyboard;
 mod panel_params;
 mod preset_panel;
 
@@ -48,7 +50,10 @@ impl EditorHandle {
     /// [`show`](Self::show)が呼ばれるたびに[`eframe::run_native`]を1回実行して戻ってくる
     /// （ウィンドウが閉じられたら`run_native`が戻り、次の`recv()`へ戻る。プロセス終了まで
     /// スレッド自体は生き続ける——モジュールdoc参照）。
-    pub fn spawn(shared: Arc<SharedEditState>) -> Self {
+    ///
+    /// `midi_sink`はエディタ下部の鍵盤（`keyboard.rs`）が試聴用のNote On/Offを積むための
+    /// ハンドル。実際のMIDI入力（`sources::pipe_src`等）と同じ`MidiQueue`を共有する。
+    pub fn spawn(shared: Arc<SharedEditState>, midi_sink: MidiSink) -> Self {
         let (req_tx, req_rx): (Sender<()>, Receiver<()>) = std::sync::mpsc::channel();
         let open = Arc::new(AtomicBool::new(false));
         let ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
@@ -57,7 +62,7 @@ impl EditorHandle {
         let thread_ctx = Arc::clone(&ctx);
         std::thread::spawn(move || {
             while req_rx.recv().is_ok() {
-                run_editor_once(&shared, &thread_ctx);
+                run_editor_once(&shared, &midi_sink, &thread_ctx);
                 // ウィンドウが閉じた（またはrun_native自体が失敗した）。次回のshow()を
                 // 受け付けられるよう、必ずこの順で後始末する（ctx→openの順。逆順だと
                 // 「open=falseなのにctxがまだ残っている」窓ができ、その間のfocus()が
@@ -113,7 +118,7 @@ impl EditorHandle {
     }
 }
 
-fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<egui::Context>>>) {
+fn run_editor_once(shared: &Arc<SharedEditState>, midi_sink: &MidiSink, ctx_slot: &Arc<Mutex<Option<egui::Context>>>) {
     let native_options = eframe::NativeOptions {
         event_loop_builder: Some(Box::new(|builder| {
             builder.with_any_thread(true).with_dpi_aware(false);
@@ -130,6 +135,7 @@ fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<eg
 
     let initial_patch = shared.current_patch();
     let shared_for_app = Arc::clone(shared);
+    let midi_sink_for_app = midi_sink.clone();
     let ctx_slot = Arc::clone(ctx_slot);
     let result = eframe::run_native(
         "op505_standalone_editor",
@@ -137,7 +143,7 @@ fn run_editor_once(shared: &Arc<SharedEditState>, ctx_slot: &Arc<Mutex<Option<eg
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
             *ctx_slot.lock().unwrap() = Some(cc.egui_ctx.clone());
-            Ok(Box::new(EditorApp::new(shared_for_app, initial_patch)))
+            Ok(Box::new(EditorApp::new(shared_for_app, midi_sink_for_app, initial_patch)))
         }),
     );
     if let Err(err) = result {

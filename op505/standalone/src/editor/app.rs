@@ -9,8 +9,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use super::keyboard::{self, KeyboardState};
 use super::panel_params::{MasterEffectsState, Op505State};
 use super::preset_panel::{self, EditorPresetState};
+use crate::midi_source::MidiSink;
 use crate::shared::SharedEditState;
 
 /// PRESETSサイドバー（固定幅）の幅。op505-vstの`PRESETS_SIDEBAR_WIDTH`と揃える
@@ -19,10 +21,13 @@ const PRESETS_SIDEBAR_WIDTH: f32 = 200.0;
 
 pub struct EditorApp {
     shared: Arc<SharedEditState>,
+    /// 鍵盤（`keyboard.rs`）が試聴用のNote On/Offを積む先。実際のMIDI入力と同じキューを共有する。
+    midi_sink: MidiSink,
     op505: Op505State,
     master: Rc<std::cell::RefCell<MasterEffectsState>>,
     master_dirty: Rc<Cell<bool>>,
     presets: EditorPresetState,
+    keyboard: KeyboardState,
     /// UIローカルの編集対象ch選択。`None`＝「(なし)」（既定、`SharedEditState::NO_EDIT_CHANNEL`と
     /// 対応）。ウィンドウを開いた直後に演奏中のチャンネルを勝手に上書きしないよう、既定は
     /// 必ず`None`にする（ユーザー確認済み、gesture-appコントローラー化ロードマップのplan参照）。
@@ -33,13 +38,15 @@ impl EditorApp {
     /// `initial_patch`は`SharedEditState`が現在保持している値（起動直後は`default_patch`、
     /// 前回このエディタで編集した値が残っていればそれ）。エディタを開くたびにゼロから
     /// 組み立て直すのではなく、直前の状態を引き継ぐ。
-    pub fn new(shared: Arc<SharedEditState>, initial_patch: op505_core::Op505Patch) -> Self {
+    pub fn new(shared: Arc<SharedEditState>, midi_sink: MidiSink, initial_patch: op505_core::Op505Patch) -> Self {
         Self {
             shared,
+            midi_sink,
             op505: Op505State::new(initial_patch),
             master: Rc::new(std::cell::RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
             presets: EditorPresetState::new(),
+            keyboard: KeyboardState::new(),
             edit_channel: None,
         }
     }
@@ -78,6 +85,10 @@ impl eframe::App for EditorApp {
 
         egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
             preset_panel::draw_presets_panel(ui, &mut self.presets, &self.op505.patch, &self.op505.dirty, &self.shared);
+        });
+
+        egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
+            keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {

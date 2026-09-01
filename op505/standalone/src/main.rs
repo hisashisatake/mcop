@@ -178,7 +178,8 @@ fn main() {
     // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
     let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
     // エディタスレッドはこのクローンを持つ（オーディオコールバックへは別クローンをmoveする）。
-    let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state));
+    // `sink.clone()`はエディタ下部の鍵盤が試聴用MIDIを積むために使う（実MIDI入力と同じキュー）。
+    let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state), sink.clone());
 
     let stream = device
         .build_output_stream::<f32, _, _>(
