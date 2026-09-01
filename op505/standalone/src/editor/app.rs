@@ -58,13 +58,13 @@ impl eframe::App for EditorApp {
 
         egui::Panel::top("editor_top_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label("編集対象ch:");
+                ui.label("Edit Channel:");
                 let selected_text = match self.edit_channel {
-                    None => "(なし)".to_string(),
+                    None => "(None)".to_string(),
                     Some(ch) => format!("{}", ch + 1),
                 };
                 egui::ComboBox::from_id_salt("edit_channel_combo").selected_text(selected_text).show_ui(ui, |ui| {
-                    if ui.selectable_label(self.edit_channel.is_none(), "(なし)").clicked() {
+                    if ui.selectable_label(self.edit_channel.is_none(), "(None)").clicked() {
                         self.edit_channel = None;
                     }
                     for ch in 0..16usize {
@@ -77,7 +77,7 @@ impl eframe::App for EditorApp {
                 if self.edit_channel.is_some() {
                     ui.colored_label(
                         egui::Color32::from_rgb(230, 160, 40),
-                        "編集中はこのチャンネルのProgram Changeが無視されます",
+                        "Program Change is ignored on this channel while editing",
                     );
                 }
             });

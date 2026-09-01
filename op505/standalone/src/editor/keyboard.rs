@@ -130,7 +130,7 @@ pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSi
     if edit_channel.is_none() {
         ui.colored_label(
             Color32::from_rgb(230, 160, 40),
-            "鍵盤で試聴するには上部で「編集対象ch」を選択してください",
+            "Select an \"Edit Channel\" above to play the keyboard",
         );
     }
 
@@ -144,7 +144,7 @@ pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSi
     ui.horizontal(|ui| {
         if ui
             .add_sized([button_w, total_h], egui::Button::new("◀"))
-            .on_hover_text("オクターブダウン")
+            .on_hover_text("Octave down")
             .clicked()
         {
             state.shift_octave(-1);
@@ -162,7 +162,7 @@ pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSi
 
         if ui
             .add_sized([button_w, total_h], egui::Button::new("▶"))
-            .on_hover_text("オクターブアップ")
+            .on_hover_text("Octave up")
             .clicked()
         {
             state.shift_octave(1);

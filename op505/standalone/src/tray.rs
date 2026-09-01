@@ -93,10 +93,10 @@ fn build_icon() -> Icon {
 /// 現在のMIDI入力ポート一覧から、ポート選択サブメニューを構築する。
 /// 各項目のMenuIdと対応するポート名（「自動」はNone）のペアを返す。
 fn build_port_items(current: Option<&str>) -> (Submenu, Vec<(CheckMenuItem, Option<String>)>) {
-    let submenu = Submenu::new("MIDI入力ポート", true);
+    let submenu = Submenu::new("MIDI Input Port", true);
     let mut items = Vec::new();
 
-    let auto_item = CheckMenuItem::new("(自動)", true, current.is_none(), None);
+    let auto_item = CheckMenuItem::new("(Auto)", true, current.is_none(), None);
     let _ = submenu.append(&auto_item);
     items.push((auto_item, None));
 
@@ -144,18 +144,18 @@ pub fn run(sink: MidiSink, editor: EditorHandle) {
     }
 
     let menu = Menu::new();
-    let editor_item = MenuItem::new("音色エディタ", true, None);
+    let editor_item = MenuItem::new("Tone Editor", true, None);
     let _ = menu.append(&editor_item);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let (port_submenu, mut port_items) = build_port_items(current_port_name.as_deref());
     let _ = menu.append(&port_submenu);
     let _ = menu.append(&PredefinedMenuItem::separator());
-    let open_log_item = MenuItem::new("ログを開く", true, None);
-    let open_config_item = MenuItem::new("設定フォルダを開く", true, None);
+    let open_log_item = MenuItem::new("Open Log", true, None);
+    let open_config_item = MenuItem::new("Open Config Folder", true, None);
     let _ = menu.append(&open_log_item);
     let _ = menu.append(&open_config_item);
     let _ = menu.append(&PredefinedMenuItem::separator());
-    let exit_item = MenuItem::new("終了", true, None);
+    let exit_item = MenuItem::new("Exit", true, None);
     let _ = menu.append(&exit_item);
 
     let _tray = TrayIconBuilder::new()

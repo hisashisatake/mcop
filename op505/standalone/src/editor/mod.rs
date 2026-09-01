@@ -128,7 +128,7 @@ fn run_editor_once(shared: &Arc<SharedEditState>, midi_sink: &MidiSink, ctx_slot
         // 高さは4オペレーター分のTimeEgエディタが縦に並ぶため大きめに確保し、収まらない分は
         // ScrollArea（`app.rs`）に任せる。
         viewport: egui::ViewportBuilder::default()
-            .with_title("op505 音色エディタ")
+            .with_title("op505 Tone Editor")
             .with_inner_size([op505_ui::PANEL_MIN_WIDTH + 200.0 + 40.0, 720.0]),
         ..Default::default()
     };
