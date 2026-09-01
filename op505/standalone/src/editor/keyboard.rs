@@ -8,14 +8,36 @@
 //! 置き換えた。宛先チャンネルはエディタの「編集対象ch」に相乗りする（どのチャンネルの
 //! MIDIとして送ればよいか他に定まらないため）。「編集対象ch」未選択中は発音操作を無効化する。
 //!
-//! 左右Ctrlキーでのオクターブ移動（移植元`shift_keys.rs`）は「eframeのwebバックエンドが
-//! 物理キー(ControlLeft/ControlRight)を区別できない」という制約への回避策で、ネイティブには
-//! 不要かつ未検証のため移植しない。オクターブ移動は左右のボタンのみで行う
-//! （移植元も元々ボタンと併用可能な設計だったため機能上の後退はない）。
+//! 左右Ctrlキーでのオクターブ移動（移植元`shift_keys.rs`、命名は"shift"だが実際のトリガーは
+//! Ctrl）は、eguiの標準入力経路では実現できない。eguiは修飾キー(Ctrl/Shift/Alt)を`Modifiers`
+//! フラグとしてのみ扱い左右を区別せず、`egui-winit`のキー変換テーブル（`key_from_key_code`）も
+//! 修飾キー自体を`egui::Key`へ一切変換しない（egui-winit 0.34.3のソースで確認済み）。
+//! そのためeguiを経由せず、Win32の`GetAsyncKeyState`で`VK_LCONTROL`/`VK_RCONTROL`を毎フレーム
+//! 直接ポーリングする（`tray.rs`の`mod winapi`と同じ、必要な関数だけを直接FFI宣言する方針）。
+//! ウィンドウがフォーカスを持つフレームでのみ押下エッジ（前フレームは離れていた→今は押されている）
+//! を判定し、他ウィンドウ操作中の押下やホールド中の連続発火を避ける。
 
 use egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::midi_source::MidiSink;
+
+/// `GetAsyncKeyState`用の最小限のWin32 FFI宣言（`tray.rs`の`mod winapi`と同じ方針）。
+#[allow(non_snake_case)]
+mod win32 {
+    /// 左Ctrlの仮想キーコード（winuser.h `VK_LCONTROL`）。
+    pub const VK_LCONTROL: i32 = 0xA2;
+    /// 右Ctrlの仮想キーコード（winuser.h `VK_RCONTROL`）。
+    pub const VK_RCONTROL: i32 = 0xA3;
+
+    extern "system" {
+        fn GetAsyncKeyState(vKey: i32) -> i16;
+    }
+
+    /// 現在このキーが物理的に押されているか（戻り値の最上位ビットが立っていれば押下中）。
+    pub fn is_key_down(vkey: i32) -> bool {
+        unsafe { GetAsyncKeyState(vkey) as u16 & 0x8000 != 0 }
+    }
+}
 
 /// 白鍵のオクターブ内オフセット（C,D,E,F,G,A,B）。
 const WHITE_OFFSETS: [i32; 7] = [0, 2, 4, 5, 7, 9, 11];
@@ -74,6 +96,9 @@ pub struct KeyboardState {
     base_octave: i32,
     white_active: [Option<u8>; WHITE_COUNT],
     black_active: [Option<u8>; BLACK_SLOT_COUNT],
+    /// 前フレームの左右Ctrl押下状態（`GetAsyncKeyState`ポーリングのエッジ検出用）。
+    left_ctrl_down: bool,
+    right_ctrl_down: bool,
 }
 
 impl KeyboardState {
@@ -82,12 +107,32 @@ impl KeyboardState {
             base_octave: DEFAULT_BASE_OCTAVE,
             white_active: [None; WHITE_COUNT],
             black_active: [None; BLACK_SLOT_COUNT],
+            left_ctrl_down: false,
+            right_ctrl_down: false,
         }
     }
 
     fn shift_octave(&mut self, delta: i32) {
         self.base_octave = (self.base_octave + delta).clamp(MIN_BASE_OCTAVE, MAX_BASE_OCTAVE);
     }
+}
+
+/// 左右Ctrlキーの押下エッジでオクターブを移動する。ウィンドウがフォーカスを持つフレームでのみ
+/// 実際にオクターブを動かすが、押下状態自体は非フォーカス中も追跡し続ける（フォーカスを
+/// 得た瞬間、既に押されていたCtrlを「今押した」と誤検出して余計に1段動くのを防ぐため）。
+fn poll_ctrl_octave_shortcuts(ui: &egui::Ui, state: &mut KeyboardState) {
+    let focused = ui.ctx().input(|i| i.focused);
+    let left_down = win32::is_key_down(win32::VK_LCONTROL);
+    let right_down = win32::is_key_down(win32::VK_RCONTROL);
+
+    if focused && left_down && !state.left_ctrl_down {
+        state.shift_octave(-1);
+    }
+    if focused && right_down && !state.right_ctrl_down {
+        state.shift_octave(1);
+    }
+    state.left_ctrl_down = left_down;
+    state.right_ctrl_down = right_down;
 }
 
 /// 表示中の白鍵`gi`番目(0始まり)が属するオクターブ番号（Cn表記のn）。
@@ -122,11 +167,15 @@ fn black_key_binding(b: usize) -> Option<(egui::Key, &'static str)> {
 
 /// ZXCV(白鍵)/ASDF(黒鍵)の全キーで鍵盤をシミュレートする幅広ミニキーボード。
 /// 画面下に直接張り付く想定（呼び出し側でフレーム無しのPanel::bottomに入れること）。
-/// 4オクターブ分を表示し、左右端のボタンでオクターブを移動できる。タイピング操作は
-/// 2オクターブめ（ZがC4になる位置）のみ反応し、それ以外の表示鍵はマウスクリックのみで発音する。
+/// 4オクターブ分を表示し、左右端のボタンまたは左右Ctrlキーでオクターブを移動できる。
+/// タイピング操作は2オクターブめ（ZがC4になる位置）のみ反応し、それ以外の表示鍵は
+/// マウスクリックのみで発音する。
 ///
 /// `edit_channel`が`None`（「編集対象ch」未選択）の間は案内文のみを表示し、発音操作は無効化する。
+/// Ctrlキーによるオクターブ移動（`poll_ctrl_octave_shortcuts`）は発音の有無と無関係に常に有効。
 pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSink, edit_channel: Option<usize>) {
+    poll_ctrl_octave_shortcuts(ui, state);
+
     if edit_channel.is_none() {
         ui.colored_label(
             Color32::from_rgb(230, 160, 40),
@@ -144,7 +193,7 @@ pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSi
     ui.horizontal(|ui| {
         if ui
             .add_sized([button_w, total_h], egui::Button::new("◀"))
-            .on_hover_text("Octave down")
+            .on_hover_text("Octave down (Left Ctrl)")
             .clicked()
         {
             state.shift_octave(-1);
@@ -162,7 +211,7 @@ pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSi
 
         if ui
             .add_sized([button_w, total_h], egui::Button::new("▶"))
-            .on_hover_text("Octave up")
+            .on_hover_text("Octave up (Right Ctrl)")
             .clicked()
         {
             state.shift_octave(1);
