@@ -1,0 +1,22 @@
+[package]
+name = "latency-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 「鍵盤クリック→実際にスピーカーへ音が出るまで」のレイテンシを、WASAPIループバック録音で
+# ブラックボックス計測するツール。クリック注入と録音を同一プロセス内の同一クロックで行うため、
+# プロセス間の時刻合わせ（コード計測で必要だった）が不要になる。op505-core/sound-core等
+# 音源クレートには一切依存しない（対象アプリのウィンドウをOS越しに外部から叩くだけの
+# 独立したOS自動化ツールのため）。
+
+[[bin]]
+name = "latency-probe"
+path = "src/main.rs"
+
+[dependencies]
+# WASAPIプロセス単位ループバック録音（対象プロセスのPIDだけを録音対象にでき、
+# システム全体ミックスを録るより他アプリの音に汚染されにくい）。
+wasapi = "0.17"
+# クリック注入（SetCursorPos/mouse_event）はwindowsクレートを追加せず、
+# op505-standaloneのtray.rs/keyboard.rsと同じ生FFI宣言方針で完結させる。
