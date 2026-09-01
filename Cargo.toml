@@ -20,6 +20,7 @@ members = [
     "op505/tools/vgm2op505",
     "op505/tools/smf2op505",
     "op505/tools/latency-probe",
+    "op505/tools/loopback-record",
     "op505/standalone",
 ]
 # op505/tools/patchlab はPyO3拡張モジュール（cdylib）。共有ワークスペースの profile.release（panic=abort）
