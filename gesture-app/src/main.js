@@ -136,9 +136,6 @@ async function applyPerformanceLfoToActiveChannels() {
     labelEl.textContent = patch
       ? programName(bank, program)
       : `${programName(bank, program)}（.op505未登録）`;
-    // PRESETSサイドバー（editor-wasm）へBank/Program変更を伝える。見つかったか否かに
-    // 関わらず常に呼ぶ（サイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため）。
-    notifyEditorSelection();
     lastChordKey = null; // 同じコードでも即座に音色変更させる
   }
 
@@ -148,49 +145,6 @@ async function applyPerformanceLfoToActiveChannels() {
 
   syncBankField();
   applyProgram(); // 起動時に既定の音色（OP505 Bank0/Program0）を反映
-})();
-
-// ─────────────────────────────────────────────
-// タップテンポ（MC-505のタップボタン相当）
-// TimeEgのテンポ同期（sync_enabled）が対象にするBPMを、ボタン連打の間隔から算出する。
-// 3回タップ（間隔2区間）でBPM確定、以降のタップは直近区間の移動平均で更新し続ける。
-// タップ間隔が2秒を超えたら系列をリセットする（別のテンポで叩き直したいときの意図を汲む）。
-// ─────────────────────────────────────────────
-(() => {
-  const tapBtn = document.getElementById('tap-tempo-btn');
-  const displayEl = document.getElementById('tempo-display');
-  const MIN_BPM = 40;
-  const MAX_BPM = 300;
-  const RESET_GAP_MS = 2000;
-  const MOVING_AVERAGE_WINDOW = 4; // 直近何区間を平均するか
-
-  let tapTimestamps = [];
-
-  function updateDisplay(bpm) {
-    displayEl.textContent = `${Math.round(bpm)} BPM`;
-  }
-
-  tapBtn.addEventListener('click', async () => {
-    const now = performance.now();
-    if (tapTimestamps.length > 0 && now - tapTimestamps[tapTimestamps.length - 1] > RESET_GAP_MS) {
-      tapTimestamps = [];
-    }
-    tapTimestamps.push(now);
-    if (tapTimestamps.length > MOVING_AVERAGE_WINDOW + 1) {
-      tapTimestamps.shift();
-    }
-    if (tapTimestamps.length < 3) {
-      return; // 3タップ（2区間）が揃うまではBPMを確定しない
-    }
-    const intervals = [];
-    for (let i = 1; i < tapTimestamps.length; i++) {
-      intervals.push(tapTimestamps[i] - tapTimestamps[i - 1]);
-    }
-    const avgIntervalMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    const bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, 60000 / avgIntervalMs));
-    updateDisplay(bpm);
-    await invoke('set_tempo', { bpm });
-  });
 })();
 
 // ─────────────────────────────────────────────
@@ -264,8 +218,6 @@ function toMusicCoords(px, py) {
 // ─────────────────────────────────────────────
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
-function midiFreq(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
-
 function semitoneToRoot(semi) {
   const n = Math.round(semi);
   const clamped = Math.max(-24, Math.min(24, n));   // C2 〜 C6 程度
@@ -315,22 +267,22 @@ async function updateChord(px, py) {
 
   isUpdating = true;
   try {
-    const frequencies = chord.intervals.map(interval => midiFreq(root.midi + interval));
+    const notes = chord.intervals.map(interval => root.midi + interval);
     const prevCount = activeChannels.length;
     const nextChannels = [];
 
-    // 各声部は固定スロット（声部インデックス i）をチャンネルIDとして使う。
-    // 押し直し（前のコードを離した後の再発音）でも同じスロットIDへnote_onするため、
-    // エンジン側で直前のリリーステールが即座にカット&再アタックされる（同音チョーク）。
-    for (let i = 0; i < frequencies.length; i++) {
+    // 各声部は固定スロット（声部インデックス i）をMIDIチャンネルとして使う。
+    // 押し直し（前のコードを離した後の再発音）でも同じチャンネルへnote_onするため、
+    // standalone側で直前のリリーステールが即座にカット&再アタックされる（同音チョーク）。
+    for (let i = 0; i < notes.length; i++) {
       // velocity=100固定（普通に弾いた相当）。マウス演奏はまだ強弱を検出しない。
-      // 音色は set_program/set_patch で設定済みの保存済みパッチが使われる。
-      await invoke('note_on', { channel: i, frequency: frequencies[i], velocity: 100 });
+      // 音色は op505_set_program で設定済みのBank/Programが使われる。
+      await invoke('note_on', { channel: i, note: notes[i], velocity: 100 });
       nextChannels.push(i);
       await applyPerformanceLfo(i);
     }
     // 旧コードの方が声部が多い場合、余ったスロットをキーオフ
-    for (let i = frequencies.length; i < prevCount; i++) {
+    for (let i = notes.length; i < prevCount; i++) {
       await invoke('note_off', { channel: i });
     }
 
@@ -407,84 +359,6 @@ window.addEventListener('keydown', async (e) => {
     await applyPerformanceLfoToActiveChannels();
   }
 });
-
-// ─────────────────────────────────────────────
-// 音色エディタ（egui-wasm、editor-wasmクレート）
-// Eキーでオーバーレイ表示/非表示をトグル。初回表示時にwasmモジュールを遅延ロードする。
-// パラメーター変更はeditor-wasm内部でTauri IPC(ym38x6_set_patch/set_master_effects)へ
-// 直接送られ、main.js側のチャンネル発音ロジックとは独立して動く。
-//
-// Eキーのリスナーはキャプチャフェーズで登録する。エディタ表示中はeguiのcanvasに
-// フォーカスが移り、eguiが内部でkeydownを処理してbubbleフェーズまで伝播させない
-// （stopPropagation相当）ため、bubbleフェーズのリスナーだとエディタ起動後に
-// Eキーが届かず閉じられなくなる。キャプチャフェーズはcanvasより先に発火するため、
-// これを回避できる。
-// ─────────────────────────────────────────────
-const editorOverlay = document.getElementById('editor-overlay');
-let editorHandle  = null;
-let editorModule  = null; // import()したモジュール参照。notify_shift呼び出しに使う
-let editorVisible = false;
-
-// メイン画面のBank/Program欄の変更をeditor-wasm側へ伝える。未起動時は何もしない
-// （PRESETSサイドバーはメイン画面のBank/Program欄と常に一致させる仕様のため、次にエディタが
-// 再描画される際にサイドバーの再読み込みを予約する）。
-function notifyEditorSelection() {
-  if (editorModule) editorModule.notify_selection_changed();
-}
-
-async function toggleEditor() {
-  editorVisible = !editorVisible;
-  editorOverlay.style.display = editorVisible ? 'block' : 'none';
-  if (editorVisible && !editorHandle) {
-    // WebView2のHTTPディスクキャッシュ（%LOCALAPPDATA%/<identifier>/EBWebView、アプリ完全再起動でも
-    // 消えない）がeditor_wasm.js/editor_wasm_bg.wasmを古いまま返し続ける事故があったため、
-    // 両方のURLにタイムスタンプを付けて確実にディスクから再取得させる。
-    const cacheBust = Date.now();
-    editorModule = await import(`./editor-wasm/editor_wasm.js?t=${cacheBust}`);
-    await editorModule.default({
-      module_or_path: `./editor-wasm/editor_wasm_bg.wasm?t=${cacheBust}`,
-    });
-    editorHandle = new editorModule.EditorHandle();
-    await editorHandle.start('editor-canvas');
-  } else if (!editorVisible && editorHandle) {
-    // エディタを閉じてメイン画面に戻る瞬間に、Bank/Program欄をエディタ側の最新値へ同期する
-    // （リアルタイム同期はしない。既存のapplyProgram()リスナーへ委譲することで、
-    // savedFmBank等の内部状態や波形メモリモードとの整合性もそのまま保たれる）。
-    const { bank, program } = JSON.parse(editorModule.get_current_program());
-    const bankEl = document.getElementById('program-bank');
-    bankEl.value = bank;
-    document.getElementById('program-num').value = program;
-    bankEl.dispatchEvent(new Event('input'));
-  }
-}
-
-window.addEventListener('keydown', async (e) => {
-  if (e.key.toLowerCase() === 'e') {
-    e.stopPropagation();
-    e.preventDefault();
-    await toggleEditor();
-  }
-}, true);
-
-// 鍵盤UIのオクターブ移動（左Ctrl/右Ctrl）。
-// event.key（'Control'）は左右を区別できないため、物理キーを区別できるevent.code
-// （'ControlLeft'/'ControlRight'）を使う。event.location（1=左/2=右）も合わせてチェックし、
-// どちらか一方しか取れない環境でも動くようにする。
-// egui標準のキー入力経路では左右Ctrlを判別できない（editor-wasm/src/shift_keys.rs参照）ため、
-// ここで直接editor-wasmのnotify_shift()をwasm-bindgen経由で呼び出す。
-window.addEventListener('keydown', (e) => {
-  if (!editorVisible || !editorModule) return;
-  if (e.key !== 'Control') return;
-  const isLeft  = e.code === 'ControlLeft'  || e.location === 1;
-  const isRight = e.code === 'ControlRight' || e.location === 2;
-  if (isLeft) {
-    e.preventDefault();
-    editorModule.notify_shift('left');
-  } else if (isRight) {
-    e.preventDefault();
-    editorModule.notify_shift('right');
-  }
-}, true);
 
 // ─────────────────────────────────────────────
 // キャリブレーション

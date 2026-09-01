@@ -87,16 +87,19 @@ OP505（主力チップ）は専用のspec文書をまだ持たない。進捗�
     midi/                ← CC/NRPN解釈の共有クレート（クレート名op505-midi。op505-vstとsmf2op505が参照）
     tools/               ← レガシーFM音源→OP505直接変換ツール群・音色設計/性能検証ツール（opz2op505等）
 
-  gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象）
+  gesture-app/           ← 作曲支援デスクトップアプリ（メイン開発対象。エンジン・音声出力は持たない、
+                           ジェスチャーをMIDIへ変換してop505-standaloneへ送るだけのコントローラー。
+                           2026-09-01のMIDI送信化、詳細はCLAUDE.md gesture-app節）
     package.json
     src/                   ← フロントエンド（HTML/JS）
       index.html
-      main.js              ← キャリブレーション・ジェスチャーUI（音源エンジンはOP505単体、2026-08-20〜）
+      main.js              ← キャリブレーション・ジェスチャーUI
     src-tauri/             ← Rustバックエンド
       Cargo.toml
       build.rs
       tauri.conf.json
-      src/main.rs          ← cpalで音声出力、Tauriコマンド（note_on/note_off等）
+      src/main.rs          ← Tauriコマンド（note_on/note_off等）。`midi_out.rs`が名前付きパイプ
+                              経由でstandaloneへ標準MIDIバイト列を送信する
       icons/               ← アプリアイコン
       capabilities/        ← Tauri v2 パーミッション設定
 
@@ -107,7 +110,7 @@ OP505（主力チップ）は専用のspec文書をまだ持たない。進捗�
 ```
 言語:           Rust
 アプリ:         Tauri（VST3/CLAP両対応）
-音声出力:       cpal（デスクトップ）/ Core Audio（iOS、将来）
+音声出力:       cpal（op505-standalone、デスクトップ）/ Core Audio（iOS、将来）
 参照実装:       ymfm（C++、BSD 3-Clause）
 VSTプラグイン:  nice-plug（op505-vstはフェーズ1・2完了）
 ターゲット:     Windowsデスクトップ → タブレット（iOS/Android）→ VST

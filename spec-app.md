@@ -115,7 +115,9 @@ Bank <input> Program <input>
     未移植のため、現状は「未登録」表示になる。将来op505へ移植する可能性を見越してUIは残してある）
 ```
 
-Bank/Program変更時、開いていれば音色エディタ（Eキー、`editor-wasm`）側にも同期される。
+Bank/Program変更時、`op505_set_program`がBank Select(CC0/32) + Program Changeを送る
+（2026-09-01のMIDI送信化以降、gesture-app自体は音色エディタを持たない。編集は
+`op505-standalone`のトレイ起動音色エディタで行う、CLAUDE.md gesture-app節参照）。
 
 ## ジェスチャーレパートリー
 
