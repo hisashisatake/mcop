@@ -1,0 +1,21 @@
+[package]
+name = "loopback-record"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 対象プロセスのPIDが出している音声だけをWASAPIプロセス単位ループバックで一定時間録音し、
+# WAVファイルへ書き出すツール。latency-probeのcapture_loop（キー注入によるレイテンシ計測）から
+# 録音基盤だけを抜き出した用途違い版：CC/NRPNの演奏効果（ビブラート＝F0追跡、トレモロ＝RMS包絡線）
+# を録音物から数学的に検証する用途向け（MIDI送信は呼び出し側が別途行い、本ツールは
+# 「録音開始」を標準出力へ知らせるだけでタイミングを合わせる）。
+# op505-core/sound-core等音源クレートには一切依存しない（対象プロセスを外部から録音するだけの
+# 独立したOS自動化ツールのため、latency-probeと同じ方針）。
+
+[[bin]]
+name = "loopback-record"
+path = "src/main.rs"
+
+[dependencies]
+wasapi = "0.17"
+hound = "3"

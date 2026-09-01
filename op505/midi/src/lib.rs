@@ -4,6 +4,7 @@
 
 pub mod channel_state;
 pub mod control;
+pub mod cutoff_fg;
 pub mod expression;
 pub mod gain_fg;
 pub mod mono;
@@ -17,6 +18,7 @@ pub mod value;
 
 pub use channel_state::{ChannelState, DataEntryOutcome, EffectControlTarget, EFFECT_SLOT_COUNT};
 pub use control::{control_target, needs_voice_update, ControlTarget};
+pub use cutoff_fg::apply_cutoff_fg_expression;
 pub use expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
 pub use gain_fg::apply_gain_fg_expression;
 pub use mono::{MonoNoteOff, MonoNoteOn, MonoState};

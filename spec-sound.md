@@ -457,9 +457,10 @@ Gain FGのループ区間に`texture`を指定すればS&H/Random/Chaosの不規
 
 ## ファンクションジェネレーター（FG：Pitch / Cutoff / Gain）
 
-38x6のボイス単位モジュレーションは、**3つのファンクションジェネレーター（FG）スロット**——
-Pitch / Cutoff / Gain——に集約する。3スロットは共通の部品「ループ可能EG」を持ち、**行き先とDepthの
-性質だけが異なる**。MC-505のPitch / TVF（Filter）/ TVA（Level）3エンベロープに対応する構成である。
+op505のボイス単位モジュレーションは、**3つのファンクションジェネレーター（FG）スロット**——
+Pitch / Cutoff / Gain——に集約する。3スロットは共通の部品**TimeEg**（次節参照）を持ち、
+**行き先とDepthの性質だけが異なる**。MC-505のPitch / TVF（Filter）/ TVA（Level）3エンベロープに
+対応する構成である。
 
 FGは「**一発（ワンショット）にもループにもなる**」変調源で、アナログシンセ的なスイープ／うねり
 （アシッドフィルター・シンセタム・トレモロ）を一次源として持てる。ループさせればLFOに相当するが、
@@ -467,92 +468,102 @@ LFOのサイン波では出せない「上りと下りが非対称な軌跡」�
 （S&H/Random/Chaos）を指定すれば、決め打ちの軌跡ではなく乱数抽選された不規則な揺れも表現できる
 （[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 
-### 共通部品：ループ可能EG
-
-FGの本体は、38x6本体のFM EGと同じ**5段OPM形式EG**（`sound-core::Eg`、AR→D1R→D1L→D2R→RR＋Idle）に、
-次の4項目を足した拡張である。**新規の別部品は作らない**（＝Loop=0かつDelay=0で既存の5段EGと完全に一致し、後方互換）。
-
-| 追加項目 | 値域 | 役割 |
-|---|---|---|
-| Loop | 0/1（既定0） | 0=ワンショット（従来のADSR挙動そのまま）／1=ループ |
-| Floor | 0〜255（既定0） | ループ時の折り返しの底レベル（0=完全開閉、上げるほど浅い連続的なうねり） |
-| Curve | 0/1（既定0） | 0=線形（角の立つ三角）／1=サイン風（レイズドコサイン `0.5-0.5cos(π·進行度)` で角を丸める） |
-| Delay | 0〜255（既定0） | キーオンからAR開始までの遅延。0〜10秒（線形）。CC78の補正対象（下記） |
-
-- **Loop=0（既定）**：キーオンで AR→D1R→D1L→D2R と推移し、キーオフで RR。**従来の5段EGと完全に同一**
-  （既存パッチは Loop=0 扱いで挙動不変）。
-- **Loop=1**：**Floor⇄peak を AR（開く/戻り）と D1R（閉じる/下降）が独立レートで往復**するループ
-  （LoopToD1L相当・膝なし）。上りと下りの非対称を保てる点が、対称波形しか出せないLFOサイン波との
-  決定的な差。**キーオフで現在位置から RR へ離脱**する（連続性）。
-- **Curve** はEGのタイミング計算（一定レート折り返し）は変えず、**出力レベルだけを整形**する。上り(AR)と
-  下り(D1R)の非対称を保ったまま角を丸められる（アシッド系のうねりに有効。プロトタイプA/B検証で確定）。
-
 ### 3スロット
+
+3スロットとも共通の部品**TimeEg**（N点Time/Level方式EG、`sound-core::TimeEg`/`TimeEgParams`。
+段ごとに「所要時間(time)→到達レベル(level)」を指定、最大10段、任意区間をループ可能）を持ち、
+**行き先とDepthの性質だけが異なる**。
 
 | スロット | 行き先 | Depth | 適用点 | ループ用途 / ワンショット用途 |
 |---|---|---|---|---|
-| **Pitch FG** | F-Number（全Op） | **バイポーラ**（中心128、±） | ピッチ | ビブラート / シンセタム（一発のピッチ下降・上昇） |
-| **Cutoff FG** | Filter Cutoff（0〜255） | **バイポーラ**（中心128、±） | Cutoff（VCF前） | オートワウ・アシッド / フィルタースイープ |
-| **Gain FG** | Vcaゲイン | なし（Floorが深さ役） | Vcaゲイン（VCF後） | トレモロ / 通常アンプEG |
+| **Pitch FG** | F-Number（全Op） | **バイポーラ強度**（0〜255、符号なし。符号はEGレベル側が持つ） | ピッチ | ビブラート / シンセタム（一発のピッチ下降・上昇） |
+| **Cutoff FG** | Filter Cutoff（0〜255） | **バイポーラ強度**（0〜255、符号なし。符号はEGレベル側が持つ） | Cutoff（VCF前） | オートワウ・アシッド / フィルタースイープ |
+| **Gain FG** | Vcaゲイン | **振れ幅倍率**（0〜255、255=EGの形をそのまま使う） | Vcaゲイン（VCF後） | トレモロ / 通常アンプEG |
 
-各スロットは共通のループ可能EG（AR/D1R/D1L/D2R/RR/Loop/Floor/Curve/Delay）を持ち、加えて Pitch/Cutoff は
-**バイポーラDepth**（0〜255、中心128＝変調なし。128超＝＋方向、128未満＝−方向）を持つ。
-Gain は音量に負値が無いためDepthを持たず、Floor が深さを担う。
+- **Pitch/Cutoff FG**（`Op505BipolarFg { eg: TimeEgParams, depth: u8 }`）：EGのレベルは中心128の
+  バイポーラ値（`bipolar_level()`が`-1.0〜+127/128`へ写す）として**符号**を持ち、`depth`
+  （0〜255、符号なし）が**振れ幅の倍率**を担う。変調量は`bipolar_level(EG出力) × depth`。
+  「符号はレベル側の波形が持ち、Depthは強度だけ」という役割分担により、1音の中で上下対称に
+  振れるサイクル（三角波等）をFGの形だけで表現できる（旧方式は符号を`depth`側が中心128からの
+  相対値として固定で持ち、谷が必ずベース値へ張り付いていた。詳細はmemory
+  `project_bipolar_default_center_bugfix.md`）。Pitch FGはキーオン一発の**ピッチ下降/上昇**
+  （シンセタム）、ループ時はビブラートに使う。Cutoff FGは
+  `実効Cutoff = clamp(Cutoffベース + bipolar_level(EG出力) × depth, 0, 255)`
+  （`sound_core::effective_cutoff_bipolar_level`）でカットオフを開く/閉じる両方向のスイープを作る。
+- **Gain FG**（`Op505GainFg { eg: TimeEgParams, depth: u8 }`）：出力はVcaゲインへ直結
+  （ループ=トレモロ／ワンショット=通常アンプEG）。変調量は`1.0 - (1.0 - EG出力) × depth/255`
+  （EG出力は0.0〜1.0）。**Depth=255でEGの形をそのまま使う**（既定値。Depthを持たずEGレベルへ
+  直接深さを焼き込んでいた旧仕様と完全に一致するための互換既定）。Depthを下げるほど変調が浅くなる。
+  `gain_fg_to_master`/`gain_fg_to_operators`で出力先（VCF後段一括／OP単位）を独立にON/OFFできる
+  （詳細はmemory `project_chip_lfo_retirement_investigation.md`）。
 
-- **Pitch FG（新規）**：ピッチ変調の一次源。バイポーラDepthにより、キーオン一発の**ピッチ下降
-  （上から落とす）と上昇（下から上げる）の両方**を作れる（シンセタム）。ループ時はビブラート。
-- **Cutoff FG**：旧「Filter EG」の後継。Depthを**バイポーラ化**（旧0〜255単極→中心128の±。
-  MC-505のFilter Env Depth −63〜+63相当）。カットオフを開く/閉じる両方向のスイープが可能。
-  `実効Cutoff = clamp(Cutoffベース + FG出力 × (Depth-128)/128, 0, 255)`。
-- **Gain FG**：旧「VCA EG」の後継。出力はVcaゲインへ直結（ループ=トレモロ／ワンショット=通常アンプEG）。
+**STAGES=0（無効化）：** 3スロットとも`stage_count=0`にすると`Voice::tick`がそのFGのtick自体を
+スキップする。Pitch/Cutoff FGは変調量ゼロ（無変調）、Gain FGは常に透過（1.0、ゲートを閉じない）
+になる。新規パッチ・変換ツール出力の既定値（詳細はmemory
+`project_timeeg_fg_disable_and_loop_fix.md`）。
 
-旧チップ内LFO(PMS/PMD)は2026-08-20にPitch FGの2段三角ループへ完全統合され、旧質感LFOのS&H/Random/Chaosも
-同日、各FGループ区間の`texture`フィールドへ統合されたため、FGとは別レイヤーの加算的モジュレーション源は
-もはや存在しない（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
+TimeEg共通の機構（`loop_enabled`/`loop_start`/`release_point`によるループ・多段リリース、
+周回ごとの中心シフト/振れ幅変化`level_drift`/`depth_drift`、不規則な揺れ`texture`＝
+S&H/Random/Chaos、note-off非依存の自動リリース`auto_release`）の詳細は
+`sound/core/src/time_eg.rs`のdocコメント、`auto_release`は
+[TimeEgのワンショット化](#timeegのワンショット化auto_release)節を参照。
 
-### 演奏層による補正（Pitch FGのみ）
+旧チップ内LFO(PMS/PMD/AMS/AMD)は2026-08-20にPitch FGの2段三角ループ／Gain FGのOP単位配線へ
+完全統合され、旧質感LFOのS&H/Random/Chaosも同日、各FGループ区間の`texture`フィールドへ
+統合されたため、FGとは別レイヤーの加算的モジュレーション源はもはや存在しない
+（[チップ内LFO（廃止済み）](#チップ内lfo廃止済み)節参照）。
 
-②パート状態と③ジェスチャーのCCは **Pitch FGのみ** を補正する（Cutoff/Gain FGはパッチ/NRPN専用）。
-モジュレーションホイール＝ビブラート＝Pitch FGという古典的対応に従う。
+### 演奏層による補正とフォールバック形状
 
-| CC | 層 | 作用 |
+②パート状態と③ジェスチャーのCC/NRPNは、3スロットそれぞれ次の経路でのみ補正する
+（`op505-midi::ChannelState::apply_note_post_processing`が`apply_pitch_fg_expression`/
+`apply_gain_fg_expression`/`apply_cutoff_fg_expression`を呼ぶ）。
+
+| FG | 補正するCC/NRPN | 作用 |
 |---|---|---|
-| CC1（Modulation Wheel） | ③ジェスチャー | Pitch FG Depthへの**瞬間加算**（×RPN(0,5)/127でセント換算） |
-| CC77（Vibrato Depth） | ②パート状態 | Pitch FG Depthへの**0起点パート加算** |
-| CC76（Vibrato Rate） | ②パート状態 | Pitch FGの速さ（AR/D1Rを一括スケール）への**64中心相対補正**（64=無補正） |
-| CC78（Vibrato Delay） | ②パート状態 | Pitch FG Delayへの**64中心相対補正**（64=無補正） |
+| Pitch | CC1（③、瞬間加算） / CC77（②、0起点加算） / CC76（②、速さの64中心相対補正） / CC78（②、Delayの64中心相対補正） | `depth`への加算＋速さ・Delay補正 |
+| Gain | CC92（②、0起点加算） | `depth`への加算 |
+| Cutoff | NRPN(0,26)（絶対上書き、`PatchOverrides::cutoff_fg_depth`） | `depth`の絶対上書き |
 
-**実効Depth（三層加算）：** ①パッチが定義する基準Depthに②③を**加算**する（乗算ではない）。②③がゼロでも
-①のビブラートは鳴る（GM2互換：ホイールを触らなくてもパッチのビブラートは効く）。Pitch FGはループ時に
-AR/D1R の2レートを持つため、CC76「Vibrato Rate」は両レートを一括でスケールする（全体の速さ）。
+**実効Depth（三層加算、Pitch/Gain）：** ①パッチが定義する基準Depthに②③を**加算**する
+（乗算ではない）。②③がゼロでも①のビブラート/トレモロは鳴る（GM2互換：ホイールを触らなくても
+パッチ本来の変調は効く）。Cutoff FGには専用のCCが無く三層加算の対象外（NRPNのみが絶対値で上書き）。
 
-**具体式（実装確定、op505-vst。当初ym38x6-vstで実装、op505-midiへ移植済み）：**
+**具体式：**
 
-- **CC76（Rate）**：AR/D1Rは指数マッピング（`rate_to_delta`）のため、生コードへの単純加算では
-  ベース値によって体感速度が大きく変わってしまう（「一括スケール」の語義に反する）。そのため
-  `sound-core::Eg::tick`の`rate_scale`引数（時間軸への乗算係数、KSRと同じ仕組み）を経由する：
-  `rate_scale = cc76_to_rate_scale(CC76生値0〜127)`（64→1.0倍、0→0.25倍、127→4.0倍の指数カーブ）。
-  `ChannelParams`を経由せず、`pitch_bend`/`channel_volume`と同じ単一ボイス直接setter
-  （`set_pitch_fg_rate_scale`）でエンジンへ渡す
-- **CC78（Delay）**：`delay_to_seconds`が線形（0〜255が0〜10秒に比例）のため、生コード空間での
-  加算がそのままスケールと等価になる。`実効Delay = clamp(Delayベース値 + (CC78生値-64), 0, 255)`
-- **CC77（Depth）**：`実効Depth内訳 += cc_to_u8(CC77生値)`（0起点、そのまま加算）
-- **CC1（Depth、セント換算）**：`セント = (CC1生値/127) × (RPN0,5生値 × 50/64)`で求めたセント量を、
-  Pitch FGの`(Depth-128)/128×1200`という既存のDepth→セント変換式の逆算で0〜255単位空間へ戻し
-  （`depth_units = round(セント/1200×128)`）、実効Depthへ加算する
+- **CC76（Pitch FGの速さ）**：段の`time`は指数マッピングのため、生値への単純加算ではベース値
+  によって体感速度が大きく変わる（「一括スケール」の語義に反する）。そのため
+  `Op505Engine::set_pitch_fg_rate_scale`（`cc76_to_rate_scale(CC76生値0〜127)`、64→1.0倍・
+  0→0.25倍・127→4.0倍の指数カーブ、`sound-core::Eg`のKSRと同じ仕組み）でEG全体の時間軸を
+  伸縮する。`ChannelParams`を経由せず、`pitch_bend`/`channel_volume`と同じ単一ボイス直接
+  setterでエンジンへ渡す。
+- **CC78（Pitch FG Delay）**：TimeEgに専用のDelayフィールドは無いため、Pitch FGの第0段が
+  「無変調のまま待つ段」（レベルが中心128）であるときに限り、その段の`time`へ
+  `(CC78生値-64)`を加算してDelay相当とする。第0段がいきなり振れ始める形のときは対応する
+  概念が無いので何もしない。
+- **CC77（Pitch FG Depth）**：`depth += cc_byte_to_u8(CC77生値)`（0起点、そのまま加算）。
+- **CC1（Pitch FG Depth、セント換算）**：`セント = (CC1生値/127) × (RPN0,5生値 × 50/64)`を、
+  Pitch FGの`depth/255×1200`というDepth→セント変換式の逆算で0〜255単位空間へ戻し
+  （`depth_units = round(セント/1200×255)`）、`depth`へ加算する。
+- **CC92（Gain FG Depth）**：`depth += cc92生値`（0起点、そのまま加算、クランプ0〜255）。
 
-### 実装状況
+**フォールバック（2026-09-01、gesture-appコントローラー化Step2で実装）：** プリセットが形を
+持たない（`stage_count==0`）まま、上記の補正で`depth`が0より大きくなったときに限り、組み込みの
+標準形状をそのFGの`eg`へ書き込む（`op505_core::standard_bipolar_modulation_eg`/
+`standard_tremolo_gain_eg`）。モジュレーションホイールやトレモロCC/NRPNを送ってもEGの形が
+無ければ変調が一切効かない、という製品の穴（既定プリセットはほぼ全て`stage_count=0`・
+`depth=0`〈Gainは`depth=255`〉のため）を、プリセット本体（274ファイル）を一切書き換えずに塞ぐ。
 
-FGは`sound-core::Eg`にLoop/Floor/Curveを追加した拡張として実装する（ステップ6）。Loop=0既定で既存の
-5段EGテスト群が「音が1サンプルもズレない」ことを担保しながら進める。旧`Filter EG`（`VoiceFilter`）／
-`VCA EG`（`VoiceAmp`）はそれぞれ Cutoff FG／Gain FG へ移行し、Pitch FGを新設する。パッチの
-FGフィールド名（`pitch_fg`/`cutoff_fg`/`gain_fg`）と旧フィールド（`filter_eg_*`/`vca_eg_*`）の
-serde互換移行はステップ6で実施する。
+| FG | 標準形状 | 速さの決め方 |
+|---|---|---|
+| Pitch | 4段バイポーラループ（中央待機→谷→山⇄谷往復、ビブラート） | 固定ベース周期（`STANDARD_VIBRATO_HALF_PERIOD_SECONDS`＝AR/D1Rとも85ms）。CC76の`rate_scale`は既存経路でそのまま乗る |
+| Gain | 5段トレモロループ（平坦→下降→上昇→平坦、`floor=0`のフルスイング） | CC76（Pitch FGと共有するチャンネルのシャドウ値`pitch_fg_cc76`）を`sound_fm::chip_lfo_freq_to_hz`でHzへ変換し、段のtimeへ直接焼き込む（Gain FGに`rate_scale`APIが無いため） |
+| Cutoff | Pitchと同じ4段バイポーラループ（オートワウ） | Gainと同じくCC76由来のHzを直接焼き込む（Cutoff FGにも`rate_scale`APIが無いため） |
 
-Delayはステップ7でCC78「Pitch FG Delayへの64中心相対補正」の実装対象が存在しないという矛盾が
-見つかったため追加した項目（`EgParams::delay`、`#[serde(default)]`で後方互換）。Pitch/Cutoff/Gain
-FG共通の`EgParams`拡張のため3スロットとも「効果開始までの遅延」を持つ（オペレーター単位のFM EGへは
-展開せず、`OperatorParams`は12個の公開パラメーターのまま据え置く）。
+Gainのフォールバックは`depth`も同時に書き換える（既定`depth=255`は「無効化中の無意味な値」
+なのでCC92加算前に捨て、CC92そのものを新しい`depth`にする）。既定プリセット（CC/NRPNを送らない
+限り`depth=0`または`stage_count>0`のまま）は分岐へ入らないため出力ビット不変。ホスト
+（op505-vst/standalone/smf2op505）は`op505-midi`一箇所への実装のため無改造で恩恵を受ける。
 
 ---
 

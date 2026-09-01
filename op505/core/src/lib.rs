@@ -263,6 +263,74 @@ pub fn chip_lfo_am_to_gain_fg(
     })
 }
 
+/// 演奏用モジュレーション（ビブラート/オートワウ）の標準形状：中央(128)で`delay_seconds`秒待機→
+/// 谷(0)へ瞬時ジャンプ→山(255)⇄谷(0)を`half_period_a`/`half_period_b`秒ずつ往復する4段バイポーラ
+/// ループ。Pitch FG・Cutoff FGが共有する形（`chip_lfo_pitch_to_pitch_fg`と同型だが、変換元が
+/// レガシーFM音源のCHIP LFOではなくMIDI CC/NRPNの場合の入口）。
+///
+/// `op505-midi`のCC/NRPNフォールバック（プリセットが`stage_count==0`のまま演奏コントローラーで
+/// 深さだけ送られてきたとき、形が無いと変調が効かない穴を塞ぐ）と、旧gesture-appの
+/// `build_bipolar_vibrato_eg`（質感LFO退役後の演奏系LFO直接実装、Step3のMIDI送信化で撤去予定）
+/// の統合先。呼び出し側は戻り値をそのまま`pitch_fg.eg`/`cutoff_fg.eg`へ書き込む。
+pub fn standard_bipolar_modulation_eg(delay_seconds: f32, half_period_a: f32, half_period_b: f32) -> TimeEgParams {
+    let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
+    stages[0] =
+        TimeStage { time: sound_core::seconds_to_time(delay_seconds), level: BIPOLAR_NEUTRAL_RAW, curve: 0 };
+    stages[1] = TimeStage { time: 0, level: 0, curve: 0 };
+    stages[2] = TimeStage { time: sound_core::seconds_to_time(half_period_a), level: 255, curve: 0 };
+    stages[3] = TimeStage { time: sound_core::seconds_to_time(half_period_b), level: 0, curve: 0 };
+    TimeEgParams {
+        stages,
+        stage_count: 4,
+        loop_enabled: 1,
+        loop_start: 2,
+        release_point: 3,
+        retrigger_mode: RETRIGGER_MODE_RESET,
+        ..TimeEgParams::default()
+    }
+}
+
+/// Pitch FGビブラートの標準ベース周期（CC76由来の`pitch_fg_rate_scale`＝1.0＝無補正のとき）。
+/// AR≈85ms・D1R≈85msで往復1周期≈170ms≈5.9Hzのビブラートになる（旧ym38x6版レート方式EGでの
+/// 初期案AR=136/D1R=199の実測時間を踏襲、旧gesture-app `main.rs`の同名定数を移設）。
+/// CC76によるスケーリングはここでは焼き込まず、`Op505Engine::set_pitch_fg_rate_scale`が
+/// 別経路でEG全体の時間軸を伸縮する（既存のPitch FG速さ制御と同じ仕組みにフォールバック形状も
+/// 乗せるため）。
+pub const STANDARD_VIBRATO_HALF_PERIOD_SECONDS: f32 = 0.085;
+
+/// 演奏用モジュレーション（トレモロ）の標準形状：Gain FGの5段トレモロループ
+/// （`chip_lfo_am_to_gain_fg`と同型だが`floor_level=0`固定のフルスイング形状にする。
+/// 深さはGain FGの`depth`式（`1.0 - (1.0-eg)*(depth/255)`）に任せる——旧gesture-appが
+/// `floor=(1-depth)*255`でレベル側へ焼き込んでいたのと数学的に等価）。
+///
+/// Gain FGには`set_pitch_fg_rate_scale`に相当するAPIが無いため、呼び出し側が`hz`へ
+/// 速さを直接反映してから渡す（`op505-midi`はCC76から`sound_fm::chip_lfo_freq_to_hz`経由で
+/// 計算する）。
+pub fn standard_tremolo_gain_eg(delay_seconds: f32, hz: f32) -> TimeEgParams {
+    let quarter_period = 0.25 / hz;
+    let half_period = 0.5 / hz;
+
+    let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
+    stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+    stages[1] = TimeStage {
+        time: sound_core::seconds_to_time(delay_seconds + quarter_period),
+        level: 255,
+        curve: 0,
+    };
+    stages[2] = TimeStage { time: sound_core::seconds_to_time(quarter_period), level: 0, curve: 0 };
+    stages[3] = TimeStage { time: sound_core::seconds_to_time(quarter_period), level: 255, curve: 0 };
+    stages[4] = TimeStage { time: sound_core::seconds_to_time(half_period), level: 255, curve: 0 };
+    TimeEgParams {
+        stages,
+        stage_count: 5,
+        loop_enabled: 1,
+        loop_start: 2,
+        release_point: 4,
+        retrigger_mode: RETRIGGER_MODE_RESET,
+        ..TimeEgParams::default()
+    }
+}
+
 /// チャンネル単位パラメーター一式。ym38x6の`ChannelParams`から、旧`ChannelParamsWire`
 /// 後方互換層（フィールドリネーム・旧filter_eg_*/vca_eg_*からの移行）を取り除いた素直な新フォーマット。
 ///
