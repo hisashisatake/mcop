@@ -1,5 +1,4 @@
-use op505_core::Op505Patch;
-use sound_fm::chip_lfo::chip_lfo_freq_to_hz;
+use op505_core::{lfo_rate_to_hz, Op505Patch};
 
 use crate::value::cc_byte_to_u8;
 
@@ -15,12 +14,12 @@ use crate::value::cc_byte_to_u8;
 /// CC92そのものを新しいdepthにする。CC92>0のときだけ標準トレモロ形状
 /// （`op505_core::standard_tremolo_gain_eg`）を書き込む。速さはGain FGに`rate_scale`APIが
 /// 無いため、CC76(Vibrato Rate、Pitch FGと共有するチャンネルのシャドウ値)から
-/// `chip_lfo_freq_to_hz`でHzを求め段のtimeへ直接焼き込む。CC92未送信なら発火せず
+/// `lfo_rate_to_hz`でHzを求め段のtimeへ直接焼き込む。CC92未送信なら発火せず
 /// 既存プリセットは出力ビット不変。
 pub fn apply_gain_fg_expression(patch: &mut Op505Patch, cc92: u8, pitch_fg_cc76: u8) {
     if patch.channel.gain_fg.eg.stage_count == 0 {
         if cc92 > 0 {
-            let hz = chip_lfo_freq_to_hz(cc_byte_to_u8(pitch_fg_cc76));
+            let hz = lfo_rate_to_hz(cc_byte_to_u8(pitch_fg_cc76));
             patch.channel.gain_fg.eg = op505_core::standard_tremolo_gain_eg(0.0, hz);
             patch.channel.gain_fg.depth = cc92;
         }

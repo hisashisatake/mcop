@@ -4,15 +4,14 @@ mod op505_presets;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use op505_core::{
-    build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505BipolarFg, Op505ChannelParams, Op505Engine,
-    Op505GainFg, Op505Patch, Op505PresetBank,
+    build_op505_registry, lfo_rate_to_hz, op505_presets_dir, Op505BankRegistry, Op505BipolarFg,
+    Op505ChannelParams, Op505Engine, Op505GainFg, Op505Patch, Op505PresetBank,
 };
 use sound_core::{
     cc76_to_rate_scale, cutoff_depth, pitch_depth_cents, seconds_to_time, volume_depth,
     AudioProcessor, ChorusType, MasterEffects, ReverbType, TimeEgParams, TimeStage,
     Vco, BIPOLAR_NEUTRAL_RAW, MAX_STAGES, RETRIGGER_MODE_RESET,
 };
-use sound_fm::chip_lfo::chip_lfo_freq_to_hz;
 use std::sync::{Arc, Mutex};
 
 /// Destination（`0`〜`4`、`FmLfoDestination`の値と同じ並び）。旧`sound_fm::FmLfoDestination`は
@@ -194,7 +193,7 @@ fn op505_set_performance_lfo(
 
     if dest == PerformanceLfoDestination::Volume || dest == PerformanceLfoDestination::TlCarrier {
         let depth = volume_depth(cc77, cc1);
-        let hz = chip_lfo_freq_to_hz(rate);
+        let hz = lfo_rate_to_hz(rate);
         patch.channel.gain_fg.eg = build_tremolo_gain_fg(delay_seconds, hz, depth);
         patch.channel.gain_fg_to_master = true;
         patch.channel.gain_fg_to_operators = false;
@@ -206,7 +205,7 @@ fn op505_set_performance_lfo(
 
     if dest == PerformanceLfoDestination::Cutoff {
         let depth = cutoff_depth(cc77, cc1).round().clamp(0.0, 255.0) as u8;
-        let half_period = 0.5 / chip_lfo_freq_to_hz(rate);
+        let half_period = 0.5 / lfo_rate_to_hz(rate);
         patch.channel.cutoff_fg =
             Op505BipolarFg { eg: build_bipolar_vibrato_eg(delay_seconds, half_period, half_period), depth };
     } else {

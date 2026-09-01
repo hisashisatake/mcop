@@ -12,7 +12,6 @@ tauri-plugin-dialog = "2"
 cpal = "0.15"
 op505-core = { path = "../../op505/core" }
 sound-core = { path = "../../sound/core" }
-sound-fm = { path = "../../sound/fm" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
