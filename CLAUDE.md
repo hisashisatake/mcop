@@ -35,11 +35,13 @@ PowerShellのPATHにgitが含まれていないため、上記フルパスで呼
 cargo --version  # rustupでインストール済み前提
 ```
 
-### wasm32（gesture-app音色エディタ用、editor-wasm）
+### wasm32（op505/ui/preview-wasm用）
 
 このマシンのデフォルトcargo/rustcはscoop版（rustup未管理、`x86_64-pc-windows-msvc`のみ）。
-`gesture-app/editor-wasm`（egui-wasm音色エディタ）のビルドにはwasm32-unknown-unknownターゲットが必要なため、
-**rustupを追加導入**し、PATHは変更せずrustup配下のcargoをフルパスで使う運用にしている。
+`op505/ui/preview-wasm`（panel.xml DSLプレビューツールのegui-wasmラッパー）のビルドには
+wasm32-unknown-unknownターゲットが必要なため、**rustupを追加導入**し、PATHは変更せずrustup配下の
+cargoをフルパスで使う運用にしている（旧`gesture-app/editor-wasm`もこの構成を使っていたが、
+gesture-appのMIDI送信化に伴い2026-09-01に削除済み。詳細はgesture-app節参照）。
 
 ```powershell
 # 初回セットアップ（導入済みなら不要）
@@ -51,12 +53,12 @@ $rustup = "$env:USERPROFILE\.cargo\bin\rustup.exe"
 
 $rustupCargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
 $env:RUSTFLAGS = "-C debuginfo=0"  # PDBサイズ制限(LNK1140)回避
-& $rustupCargo install wasm-bindgen-cli --version 0.2.126 --force  # editor-wasm/Cargo.tomlのwasm-bindgen固定バージョンと一致させる
+& $rustupCargo install wasm-bindgen-cli --version 0.2.126 --force  # preview-wasm/Cargo.tomlのwasm-bindgen固定バージョンと一致させる
 Remove-Item Env:\RUSTFLAGS
 ```
 
 `cargo`コマンドは引き続きscoop版が解決される（`--no-modify-path`でPATH変更を避けたため）。
-wasm32ビルドは`gesture-app/scripts/build-editor-wasm.ps1`が`%USERPROFILE%\.cargo\bin\cargo.exe`/`wasm-bindgen.exe`をフルパスで呼ぶ。
+wasm32ビルドは`op505/tools/xml-panel-dsl/build-preview-wasm.ps1`が`%USERPROFILE%\.cargo\bin\cargo.exe`/`wasm-bindgen.exe`をフルパスで呼ぶ。
 
 ### i686（op505-mme-driver用、32bit WinMMホスト対応）
 
@@ -230,11 +232,11 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           （未指定時はリズム機能を完全に無効化、既存出力はビット不変）
       xml-panel-dsl/   ← panel.xmlのXML DSL編集・プレビューツール（自己完結HTML + preview-native、
                           op505-ui向け。詳細はREADME.md）
-  gesture-app/         ← 作曲支援Tauriアプリ
-    src-tauri/         ← Rustバックエンド（cpalで音声出力）
-    src/               ← フロントエンド（ジェスチャーUI、editor-wasmの生成物はsrc/editor-wasm/）
-    editor-wasm/       ← gesture-app埋め込み音色エディタ（egui-wasm。ワークスペース除外、wasm32専用）
-    scripts/           ← build-editor-wasm.ps1（tauri dev/build時に自動実行）
+  gesture-app/         ← 作曲支援Tauriアプリ（ジェスチャーをMIDIへ変換してop505-standaloneへ送る
+                          だけのコントローラー。エンジン・音声出力は持たない、詳細はgesture-app節）
+    src-tauri/         ← Rustバックエンド（`midi_out.rs`が名前付きパイプ`\\.\pipe\op505.mme.v1`
+                          経由でstandaloneへ標準MIDIバイト列を送信する）
+    src/               ← フロントエンド（ジェスチャーUI）
 ```
 
 Cargoのワークスペースメンバーパスとパッケージ名は独立しているため、`cargo check -p sound-core`等は
@@ -244,7 +246,8 @@ Cargoのワークスペースメンバーパスとパッケージ名は独立し
 Tauriにも依存しない純粋なRustライブラリ。音源エンジンの変更は`sound/`と`op505/core/`に閉じる
 （`op505-midi`はMIDI解釈層のため厳密には「音源エンジン」ではないが、同じく純粋ライブラリの原則を守る）。
 `ui-core`・`op505-ui`はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない
-（VSTとgesture-app双方の音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用）。
+（VSTとstandaloneの音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用。
+gesture-appは2026-09-01のMIDI送信化でエディタごとエンジンを手放したため、もうこの依存に含まれない）。
 
 ---
 
@@ -325,35 +328,22 @@ opz2op505/psr2op505/mucom2op505/opm2op505/vgm2op505は`op505-tools::golden`（�
 $env:UPDATE_GOLDEN=1; cargo test -p opz2op505; Remove-Item Env:\UPDATE_GOLDEN
 ```
 
-### アプリ起動（フェーズ1以降、Tauri設定後）
+### アプリ起動
+
+gesture-appはエンジンを持たないMIDIコントローラーのため、先に`op505-standalone`を起動しておく
+（未起動でも`gesture-app`はパイプ接続失敗時に自動起動を試みる、`midi_out.rs`の`ensure_started`参照。
+ただし確実なのは手動で先に立ち上げておくこと）。
 
 ```powershell
+cargo build --release -p op505-standalone
+Start-Process target\release\op505-standalone.exe
+
 cd gesture-app
 npm run tauri dev
 ```
 
-`tauri dev`/`tauri build`は`beforeDevCommand`/`beforeBuildCommand`で`scripts/build-editor-wasm.ps1`を自動実行し、
-`editor-wasm`（音色エディタ）をwasm32向けにビルドして`src/editor-wasm/`へ出力する（生成物はgitignore対象）。
-手動で単体ビルドしたい場合：
-
-```powershell
-cd gesture-app
-powershell -File scripts/build-editor-wasm.ps1
-```
-
-**注意（editor-wasmのIPC引数/Tauriコマンドを変更した場合）**: `tauri dev`は`src-tauri`/`op505-core`/`sound-core`の変更をファイル監視して自動リビルドするが、`editor-wasm`はwasm32専用でこの監視対象に**含まれない**（`beforeDevCommand`で起動時に一度ビルドされるだけ）。
-さらに、`beforeDevCommand`（rustup版cargoでwasm32ビルド）と`devCommand`（scoop版cargoで通常ビルド）は`%USERPROFILE%\.cargo`のパッケージキャッシュを共有しており、同時に走るとロック待ちでレースが起き、`beforeDevCommand`の完了（`wasm-bindgen`まで）を待たずに`devCommand`側が`gesture-app.exe`を起動してしまうことがある（起動ログで両方が`Blocking waiting for file lock on package cache`を出すのがその兆候）。
-`ipc.rs`のNoteOnArgs等、editor-wasm↔Tauriコマンド間のIPC引数を変更したら、`npm run tauri dev`の自動`beforeDevCommand`任せにせず、**先に単体で明示ビルドして成功ログを確認してから**`tauri dev`を起動する：
-
-```powershell
-cd gesture-app
-powershell -File scripts/build-editor-wasm.ps1   # "editor-wasm built -> ..." が出るまで確認
-npm run tauri dev
-```
-
-これを怠ると、起動中のgesture-appが古いwasmのまま残り、Rust側とIPCの形が食い違って**エラーも出さずに発音しなくなる**。
-
-アプリ内ではEキーで音色エディタのオーバーレイ表示をトグルできる（VSTと同じ`op505-ui`のノブパネル）。
+音色エディタ（旧Eキーのオーバーレイ）はgesture-app側には無い。standaloneのタスクトレイメニューから開く
+（`op505/standalone/src/editor/`、詳細はop505/standalone節）。
 
 ### ビルド
 
@@ -465,16 +455,28 @@ op505-core（OP505実装）
 コアは「この周波数でキーオン」「このパラメーターで発音」のAPIのみを提供する。
 MIDI・ジェスチャー解釈・UIはコアの外側で行う。
 
-### 音声出力（gesture-app/src-tauri）
+### gesture-app（ジェスチャー→MIDIコントローラー）
 
-cpalでWASAPIに直接出力。オーディオスレッドのコールバックでop505-coreを呼ぶ。
+2026-09-01のMIDI送信化（Step 3）で、gesture-appは`op505-standalone`（op505/standalone節参照）を
+唯一のエンジン・音声出力の所有者とするコントローラーへ再設計された。cpal/`Op505Engine`の直接所有・
+`editor-wasm`（音色エディタ）は撤去済み。詳細な設計判断はmemory
+`project_gesture_app_controller_roadmap.md`参照。
 
-```rust
-// コールバックイメージ
-stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
-    engine.render(output);
-}, ...);
-```
+- `src-tauri/src/midi_out.rs`が名前付きパイプ`\\.\pipe\op505.mme.v1`（`op505-mme-driver`と同じ
+  フレーム形式）経由で標準MIDIバイト列をstandaloneへ送信する（`op505/mme-driver/src/client.rs`と
+  同型のライタースレッド＋200ms再接続リトライ）。パイプ未接続なら同ディレクトリの
+  `op505-standalone.exe`を自動起動する（`ensure_started`、単一インスタンスMutexがあるため
+  二重起動しても安全）。
+- Tauriコマンド（`note_on`/`note_off`/`op505_set_performance_lfo`/`set_master_effects`/
+  `op505_set_program`）はいずれも生MIDIメッセージへ変換して送るだけで、エンジンには触れない。
+  演奏系LFO（Vキーのビブラート⇔トレモロ切替）のEG形状自体はもう組み立てない——standalone側の
+  `op505-midi`が「プリセットが形を持たずCC由来のdepthが正のときだけ標準形状を自動生成する」
+  演奏用FGフォールバック（Step 2で実装済み）に委ねている。
+- `set_tempo`（タップテンポ）はMIDI経由の対応先が無いため撤去済み（TimeEgのテンポ同期は
+  MIDI Clock等を別途実装しない限り効かない、既知の制約）。
+- `.op505`プリセットの一覧・名前解決（`op505_presets.rs`）は読み取り専用で残す。実際の音色選択は
+  Bank Select(CC0/32) + Program Changeとして送るだけで、ファイル編集（Open/Save/Save As/
+  +New Voice/Delete）はstandaloneのトレイ起動音色エディタが担う。
 
 ### ジェスチャーUI
 
@@ -482,14 +484,8 @@ stream = device.build_output_stream(&config, move |output: &mut [f32], _| {
 - グリッドなし
 - マウス版: 縦軸=ルート音、横軸=コード種類
 - タッチ版（フェーズ10・タブレット対応）: 指の間隔=インターバル、指の移動=ルート音シフト
-- ∞ジェスチャー: 軌跡がそのままF-Numberに追従（ビブラート・装飾音）
-
-### 音色エディタ（gesture-app/editor-wasm）
-
-- `op505-ui`をeframe(WebRunner)でwasm32コンパイルし、`index.html`の`#editor-canvas`に重ねて描画
-- Eキーでオーバーレイ表示をトグル（`main.js`。keydownリスナーはキャプチャフェーズ登録— エディタにフォーカスがある間はeguiがbubbleフェーズまでイベントを伝播させないため）
-- パラメーター変更は`editor-wasm`内部でローカル状態を更新しつつdirtyフラグを立て、1フレームに1回`op505_set_patch`/`set_master_effects`のTauri IPCへ送る（src-tauriの`Op505Engine`/`MasterEffects`を更新）
-- 演奏系LFO（Vキーのビブラート⇔トレモロ⇔オートワウ切替）はmain.js側のホイール/C・Bキー制御と連動し、`op505_set_performance_lfo`経由でPitch/Gain/Cutoff FGを一時的に差し替える（質感LFO退役に伴い独立LFOスロットは廃止、`OriginalFgs`が音色プリセット本来のFG値を保持し毎回そこから再構築する。エディタ側のノブ操作とは独立した演奏系入力）
+- ∞ジェスチャー: 軌跡がそのままF-Numberに追従（ビブラート・装飾音）。2026-09-01時点で未実装
+  （`midiFreq(root.midi+interval)`相当のMIDIノート番号ベースの12平均律のみ）
 
 ---
 

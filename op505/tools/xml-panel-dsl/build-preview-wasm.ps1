@@ -5,11 +5,11 @@
 # though the XML parsing/codegen/layout AND the preview rendering itself (real egui widgets via
 # eframe's WebRunner) now run as wasm instead of hand-written SVG-drawing JS.
 #
-# Uses cargo/wasm-bindgen under rustup's install (scoop's cargo has no wasm32 target), same setup
-# as gesture-app/scripts/build-editor-wasm.ps1. Renamed/rewritten from build-wasm.ps1 (which built
-# the older codegen-wasm crate, now superseded by preview-wasm and removed).
-# Note: this script is kept ASCII-only for the same reason as build-editor-wasm.ps1 (a spawned
-# legacy powershell.exe, not pwsh, may misread BOM-less UTF-8 source using the system codepage).
+# Uses cargo/wasm-bindgen under rustup's install (scoop's cargo has no wasm32 target); see
+# CLAUDE.md's "wasm32" section for the one-time setup. Renamed/rewritten from build-wasm.ps1
+# (which built the older codegen-wasm crate, now superseded by preview-wasm and removed).
+# Note: this script is kept ASCII-only because a spawned legacy powershell.exe (not pwsh) may
+# misread BOM-less UTF-8 source using the system codepage.
 # All file I/O below uses explicit UTF-8 encoding so the embedded JSDoc comments (which do contain
 # Japanese, copied verbatim from ui-codegen's Rust doc comments) survive intact regardless.
 
@@ -23,7 +23,7 @@ $wasmFile    = Join-Path $crateDir "target\wasm32-unknown-unknown\release\previe
 $tmpOutDir   = Join-Path $crateDir "target\wasm-bindgen-out"
 
 if (-not (Test-Path $rustupCargo)) {
-    throw "rustup cargo not found: $rustupCargo. Setup: see gesture-app/scripts/build-editor-wasm.ps1 header comment."
+    throw "rustup cargo not found: $rustupCargo. Setup: see CLAUDE.md's wasm32 section."
 }
 if (-not (Test-Path $wasmBindgen)) {
     throw "wasm-bindgen-cli not found: $wasmBindgen. Run: cargo install wasm-bindgen-cli --version 0.2.126 --force"

@@ -65,20 +65,6 @@
     #program-panel button:active {
       background: #3a5; color: #fff; border-color: #3a5;
     }
-    #tempo-display {
-      color: #aaa;
-    }
-
-    /* 音色エディタ（egui-wasm）オーバーレイ。Eキーでトグル表示。 */
-    #editor-overlay {
-      display: none;
-      position: fixed; inset: 0;
-      background: rgba(10,10,10,0.92);
-      z-index: 10;
-    }
-    #editor-canvas {
-      width: 100%; height: 100%; cursor: default;
-    }
 
     /* 右下の手動リサイズグリップ。Tauri/WebView2側の既知の不具合
        （tauri-apps/tauri#9023、装飾ウィンドウの右端・下端(East/South)のドラッグが
@@ -116,10 +102,6 @@
       Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
       Program <input type="number" id="program-num" value="0" min="0" max="127">
     </div>
-    <div class="program-row">
-      <button id="tap-tempo-btn" type="button">TAP</button>
-      <span id="tempo-display">120 BPM</span>
-    </div>
   </div>
 
   <div id="hud">
@@ -130,11 +112,7 @@
   <div id="hint">
     ドラッグ: 発音 &nbsp;|&nbsp; R: 再キャリブレーション<br>
     ホイール: LFO Depth &nbsp;|&nbsp; V: Vibrato/Tremolo切替<br>
-    C/B: LFO Rate down/up &nbsp;|&nbsp; E: 音色エディタ
-  </div>
-
-  <div id="editor-overlay">
-    <canvas id="editor-canvas"></canvas>
+    C/B: LFO Rate down/up
   </div>
 
   <div id="resize-grip" title="ドラッグで幅・高さをリサイズ（横だけ/縦だけの移動でその方向のみ変更）"></div>

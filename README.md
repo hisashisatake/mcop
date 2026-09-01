@@ -29,9 +29,10 @@ Directories are groups; crate names follow `<group>-<part>`. Each group's main c
     vst/              # OP505 VST3/CLAP plugin (crate: op505-vst, nice-plug)
     midi/             # CC/NRPN interpretation shared by op505-vst and smf2op505 (crate: op505-midi)
     tools/            # Legacy chip converters, patch design & perf tools
-  gesture-app/        # Composition app (Tauri v2, Windows desktop)
+  gesture-app/        # Composition app (Tauri v2, Windows desktop). Owns no engine or audio
+                      # output; translates gestures into MIDI sent to op505-standalone.
     src/              # Frontend: calibration + gesture UI (HTML/JS)
-    src-tauri/        # Backend: cpal WASAPI output, Tauri commands
+    src-tauri/        # Backend: sends MIDI over a named pipe (midi_out.rs), Tauri commands
 ```
 
 `sound-core`, `sound-fm`, and `op505-core` have zero dependencies on nice-plug, Tauri, or cpal. The audio engine is fully isolated.

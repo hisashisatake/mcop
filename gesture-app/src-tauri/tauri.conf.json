@@ -3,9 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.op505.app",
   "build": {
-    "frontendDist": "../src",
-    "beforeDevCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-editor-wasm.ps1",
-    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-editor-wasm.ps1"
+    "frontendDist": "../src"
   },
   "app": {
     "withGlobalTauri": true,

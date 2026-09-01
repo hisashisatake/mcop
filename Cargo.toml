@@ -30,10 +30,11 @@ members = [
 # Domino等の相手アプリのプロセスにロードされるユーザーモードMMEドライバDLLで、
 # パニックを外へ伝播させるとホストアプリごと落ちるため独立clate自身がpanic="unwind"を持つ
 # （ビルドはx86_64-pc-windows-msvc/i686-pc-windows-msvc向けに個別。詳細はop505/mme-driver/Cargo.toml）。
-# gesture-app/editor-wasm・op505/ui/preview-wasm はwasm32-unknown-unknown専用クレート
-# （wasm-bindgen依存）。ホストターゲット(x86_64-pc-windows-msvc)ではビルドできず
-# cargo check --workspaceを壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で
-# 個別に行う（editor-wasm・preview-wasmとも op505-ui/ui-codegen をpath依存で参照する）。
+# op505/ui/preview-wasm はwasm32-unknown-unknown専用クレート（wasm-bindgen依存）。
+# ホストターゲット(x86_64-pc-windows-msvc)ではビルドできずcargo check --workspaceを
+# 壊すため除外。ビルドはrustup配下のcargo（wasm32ターゲット導入済み）で個別に行う
+# （op505-ui/ui-codegen をpath依存で参照する。gesture-app/editor-wasmは
+# gesture-appのMIDI送信化に伴い2026-09-01に削除済み、CLAUDE.md gesture-app節参照）。
 # op505/tools/xml-panel-dsl/preview-native はeframe nativeのxml-panel-dslプレビュー用GUIツール
 # （分離・ドッキング可能なプレビュー等、preview-wasm＝ブラウザ版では実現できない機能向け）。
 # winit/glow等の重い依存を`cargo check --workspace`に持ち込まないため除外し、
@@ -44,7 +45,6 @@ members = [
 # op505/tools/common（op505-tools）は製品非依存ではなく、op505ツール群専用の共有クレート。
 exclude = [
     "op505/tools/patchlab",
-    "gesture-app/editor-wasm",
     "op505/ui/preview-wasm",
     "op505/tools/xml-panel-dsl/preview-native",
     "op505/mme-driver",
