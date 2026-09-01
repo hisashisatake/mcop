@@ -25,51 +25,42 @@
       </header>
       <row justify="start" gap="spacing">
         <stack gap="spacing" center="true">
-            <row gap="spacing">
-                <algorithm-diagram handle="algorithm"/>
-                <knob label="ALG" handle="algorithm"/>
-                <knob label="FB" handle="feedback"/>
-            </row>
+          <algorithm-diagram handle="algorithm"/>
+          <row justify="start" gap="spacing">
             <!-- 固定音階（GM2リズムチャンネル用）。有効時はnote_onの周波数を無視し
                  FIXED NOTE+FINEの固定ピッチで鳴らす（memory
                  `project_gm2_rhythm_channel_implementation.md`参照）。 -->
-            <row gap="spacing">
-                <checkbox label="FIXED" handle="fixed_note_enable"/>
-                <knob label="FIXED NOTE" handle="fixed_note"/>
-                <knob label="FINE" handle="fixed_note_fine" bipolar="true"/>
-            </row>
+            <checkbox label="FIXED" handle="fixed_note_enable"/>
+          </row>
+        </stack>
+        <stack gap="spacing">
+          <row justify="start" gap="spacing">
+            <knob label="ALG" handle="algorithm"/>
+            <knob label="FB" handle="feedback"/>
+          </row>
+          <row justify="start" gap="spacing">
+            <knob label="FIXED NOTE" handle="fixed_note"/>
+            <knob label="FINE" handle="fixed_note_fine" bipolar="true"/>
+          </row>
         </stack>
       </row>
     </panel>
-    <panel title="MASTER EFFECT (REVERB)" span="25%">
+    <panel title="MASTER EFFECT" span="75%">
       <header>
         <title/>
       </header>
       <row justify="start" gap="spacing">
-        <stack gap="spacing" center="true">
-            <row gap="spacing">
-                <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
-                <knob label="REV" handle="rev_send"/>
-                <knob label="R.TIME" handle="reverb_time"/>
-            </row>
-        </stack>
+        <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
+        <knob label="REV" handle="rev_send"/>
+        <knob label="R.TIME" handle="reverb_time"/>
       </row>
-    </panel>
-    <panel title="MASTER EFFECT (CHORUS)" span="50%">
-      <header>
-        <title/>
-      </header>
-      <row justify="between">
-        <stack gap="spacing" center="true">
-            <row gap="spacing">
-                <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
-                <knob label="CHO" handle="cho_send"/>
-                <knob label="C.RATE" handle="chorus_mod_rate"/>
-                <knob label="C.DEP" handle="chorus_mod_depth"/>
-                <knob label="C.FB" handle="chorus_feedback"/>
-                <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
-            </row>
-        </stack>
+      <row justify="start" gap="spacing">
+        <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>
+        <knob label="CHO" handle="cho_send"/>
+        <knob label="C.RATE" handle="chorus_mod_rate"/>
+        <knob label="C.DEP" handle="chorus_mod_depth"/>
+        <knob label="C.FB" handle="chorus_feedback"/>
+        <knob label="C&gt;R" handle="chorus_send_to_reverb"/>
       </row>
     </panel>
   </panels>
@@ -91,10 +82,10 @@
              （旧<enum label="NOTE">の置き換え、100×70）。両者は同じsync_rateの2つの見え方
              なので互いに追従する。 -->
         <stack gap="spacing" center="true">
-          <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7" height="36"/>
           <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
                乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
           <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13" height="36"/>
+          <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7" height="36"/>
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
           <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
@@ -113,20 +104,25 @@
              （1段=透過既定＝ゲートを一切閉じない、op505-coreのdefault_gain_fg参照）。
              STAGE=0は無効化（Voice::tickがgain_fg_outを1.0固定でスキップする、0.0ではない
              ことに注意——0.0だと無音になる）。 -->
-        <time-eg-editor handle="params.gain_fg.eg" mapping="AmplitudeLinear" tl-value="255" min-stages="0" terminal-level="free"/>
         <stack gap="spacing" center="true">
-          <enum label="RETRIG" handle="params.gain_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
-          <enum label="TEXTURE" handle="params.gain_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
+          <time-eg-editor handle="params.gain_fg.eg" mapping="AmplitudeLinear" tl-value="255" min-stages="0" terminal-level="free"/>
           <!-- 行先スイッチ（旧CHIP LFO AM経路の厳密代替）。MASTER=合成後の一括乗算、
                OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
-               両方ON/両方OFFも可（排他ではない）。 -->
+               両方ON/両方OFFも可（排他ではない）。TimeEgグラフ下の余白に横並びで置き、
+               専用カラムを持たせないことで横幅を節約する。 -->
+          <row justify="start" gap="spacing">
+            <checkbox label="MASTER" handle="gain_fg_to_master"/>
+            <checkbox label="OP" handle="gain_fg_to_operators"/>
+          </row>
+        </stack>
+        <stack gap="spacing" center="true">
+          <enum label="TEXTURE" handle="params.gain_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
+          <enum label="RETRIG" handle="params.gain_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
           <checkbox label="SYNC" handle="params.gain_fg.eg.sync_enabled_handle()"/>
           <sync-rate label="RATE" handle="params.gain_fg.eg.sync_rate_handle()" salt="10"/>
           <!-- Depthは符号を持たない振れ幅の倍率だが、既定255（EGの形をそのまま使う）である点が
                P.DEPTH/F.DEPTH（既定0＝無変調）と違う。詳細はOp505GainFgのdocコメント参照。 -->
           <knob label="G.DEPTH" handle="params.gain_fg.depth"/>
-          <checkbox label="MASTER" handle="gain_fg_to_master"/>
-          <checkbox label="OP" handle="gain_fg_to_operators"/>
         </stack>
       </row>
     </panel>

@@ -168,7 +168,7 @@ impl App {
             rust_out: String::new(),
             show_rust: false,
             undocked: false,
-            panel_width: 1300.0,
+            panel_width: 1320.0,
         };
         app.reparse();
         app
@@ -300,7 +300,7 @@ impl eframe::App for App {
                 ui.heading("XML panel DSL (native)");
                 ui.separator();
                 ui.label("PANEL W");
-                ui.add(egui::Slider::new(&mut self.panel_width, 360.0..=1400.0).suffix("px"));
+                ui.add(egui::Slider::new(&mut self.panel_width, 360.0..=1800.0).suffix("px"));
                 ui.separator();
                 ui.checkbox(&mut self.show_rust, "Rust出力を表示");
                 ui.separator();

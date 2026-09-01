@@ -51,7 +51,7 @@ fn op_header_title_and_readout() {
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     assert!(rust.contains("ui.label(egui::RichText::new(format!(\"OP {}\", i + 1)).strong());"));
     assert!(rust.contains(
-        "ui.label(egui::RichText::new(format!(\"×{:.2}\", mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8))).size(10.0).weak()).on_hover_text(\"MUL×FINEの実効周波数比（DT1は含まない）\");"
+        "ui.label(egui::RichText::new(format!(\"×{:.2}\", mul_fine_ratio(op.mul.value() as u8, op.op_fine_tune.value() as u8))).size(10.0).weak()).on_hover_text(\"Effective frequency ratio of MUL×FINE (excludes DT1)\");"
     ));
 }
 
@@ -88,10 +88,11 @@ fn header_title_from_attr_resolves() {
 }
 
 /// XMLに書かれたパネル（OP repeat + CHANNEL(span12) + FILTER +
-/// PITCH FG + CUTOFF FG + GAIN FG + MASTER EFFECT(REVERB/CHORUS)）が全て生成されている
+/// PITCH FG + CUTOFF FG + GAIN FG + MASTER EFFECT）が全て生成されている
 /// （要素の脱落がない）ことを確認する。CHIP LFOパネルは2026-08-20のCHIP LFO完全退役、
 /// TEXTURE LFOパネル（jack機構含む）は2026-08-21の質感LFO完全退役でXMLから削除済み
 /// （GAIN FGパネルのMASTER/OPチェックボックス・各FGパネルのTEXTUREドロップダウンが厳密代替）。
+/// MASTER EFFECTはREVERB/CHORUSの2パネル構成だったが、レイアウト調整で1パネルに統合された。
 #[test]
 fn all_panels_present() {
     let xml = panel_xml();
@@ -100,8 +101,7 @@ fn all_panels_present() {
     assert!(rust.contains("\"PITCH FG\""));
     assert!(rust.contains("\"CUTOFF FG\""));
     assert!(rust.contains("\"GAIN FG\""));
-    assert!(rust.contains("\"MASTER EFFECT (REVERB)\""));
-    assert!(rust.contains("\"MASTER EFFECT (CHORUS)\""));
+    assert!(rust.contains("\"MASTER EFFECT\""));
     assert!(rust.contains("params.gain_fg_to_master"));
     assert!(rust.contains("params.gain_fg_to_operators"));
     assert!(!rust.contains("\"TEXTURE LFO\""), "TEXTURE LFOパネルは質感LFO退役で削除済みのはず");
