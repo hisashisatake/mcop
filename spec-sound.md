@@ -557,7 +557,7 @@ S&H/Random/Chaos、note-off非依存の自動リリース`auto_release`）の詳
 | FG | 標準形状 | 速さの決め方 |
 |---|---|---|
 | Pitch | 4段バイポーラループ（中央待機→谷→山⇄谷往復、ビブラート） | 固定ベース周期（`STANDARD_VIBRATO_HALF_PERIOD_SECONDS`＝AR/D1Rとも85ms）。CC76の`rate_scale`は既存経路でそのまま乗る |
-| Gain | 5段トレモロループ（平坦→下降→上昇→平坦、`floor=0`のフルスイング） | CC76（Pitch FGと共有するチャンネルのシャドウ値`pitch_fg_cc76`）を`sound_fm::chip_lfo_freq_to_hz`でHzへ変換し、段のtimeへ直接焼き込む（Gain FGに`rate_scale`APIが無いため） |
+| Gain | 5段トレモロループ（平坦→下降→上昇→平坦、`floor=0`のフルスイング） | CC76（Pitch FGと共有するチャンネルのシャドウ値`pitch_fg_cc76`）を`op505_core::lfo_rate_to_hz`でHzへ変換し、段のtimeへ直接焼き込む（Gain FGに`rate_scale`APIが無いため） |
 | Cutoff | Pitchと同じ4段バイポーラループ（オートワウ） | Gainと同じくCC76由来のHzを直接焼き込む（Cutoff FGにも`rate_scale`APIが無いため） |
 
 Gainのフォールバックは`depth`も同時に書き換える（既定`depth=255`は「無効化中の無意味な値」
@@ -694,11 +694,16 @@ AM経路はGain FGのOP単位配線（`gain_fg_to_operators`、[ファンクシ�
 `project_chip_lfo_retirement_investigation.md`参照）。`Op505ChannelParams`の該当6フィールド
 （chip_lfo_freq/pmd/amd/delay、pms、ams）は削除され、op505-vst/op505-uiからもパネルごと消えている。
 
-`sound-fm::chip_lfo`モジュール自体は残っているが、いまはエンジンが直接使う機能ではなく、
-opz2op505/opm2op505等の変換ツールが実機レジスタ値→深さへ写像する際に使う数式ライブラリ
-（`chip_lfo_freq_to_hz`/`pms_to_cents_range`/`ams_to_depth`の3関数）としてのみ現役。
-三角波オシレーター本体（`ChipLfo`構造体）は本番コードから参照されず、op505-coreの回帰テストが
-Gain FGへの変換が実機挙動と一致することを裏取りするオラクルとして使うのみ。
+変換テーブル自体（`lfo_rate_to_hz`/`pms_to_cents_range`/`ams_to_depth`の3関数）は残っているが、
+いまはエンジンが直接使う機能ではなく、opz2op505/opm2op505等の変換ツールが実機レジスタ値→深さへ
+写像する際、また`op505-midi`のPitch/Gain/Cutoff FGフォールバック（CC76由来のレートをHzへ変換する
+入力、次節参照）として使う数式ライブラリとしてのみ現役。かつては`sound-fm::chip_lfo`（ym38x6/op505
+間で共有する製品非依存レイヤー）に置かれていたが、ym38x6削除後は実際の直接利用者がop505グループに
+閉じたため、2026-09-01に`op505-core::modulation_curves`へ移設し、退役済みエンジンの名残りだった
+名前も実態に合わせて改めた（`chip_lfo_freq_to_hz`→`lfo_rate_to_hz`、`ChipLfo`→`ReferenceLfo`。
+`pms_to_cents_range`/`ams_to_depth`は実機レジスタ名PMS/AMSそのものなので据え置き）。
+三角波オシレーター本体（`ReferenceLfo`構造体、旧`ChipLfo`）は本番コードから参照されず、
+op505-coreの回帰テストがGain FGへの変換が実機挙動と一致することを裏取りするオラクルとして使うのみ。
 
 ---
 

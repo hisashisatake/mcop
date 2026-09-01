@@ -1,35 +1,50 @@
 // ---------------------------------------------------------------------------
-// チップ内LFO（旧称「音色LFO」）— 2026-08-20、op505エンジンから完全退役済み。
+// モジュレーションカーブ：レガシー機種のLFO関連レジスタ値(PMS/AMS/FRQ、0〜255)を
+// 実際の物理量（セント幅・振幅深度・Hz）へ写す変換テーブル集。
 //
-// かつてPMS/PMD/AMS/AMD/FRQ/DLYとしてop505-coreのChannelが持っていたLFO本体（三角波、
-// AMはOperatorParams::am_enableでON/OFF）。ピッチ経路はPitch FGへ、AM経路はGain FGの
-// OP単位配線（gain_fg_to_operators）へ厳密変換され、`Op505ChannelParams`から
-// 該当6フィールドも削除された（memory `project_chip_lfo_retirement_investigation.md`参照）。
+// 由来は「チップ内LFO」（旧称「音色LFO」、かつてPMS/PMD/AMS/AMD/FRQ/DLYとして
+// op505-coreのChannelが持っていたLFO本体、三角波固定）。2026-08-20にop505エンジンから
+// 完全退役し、ピッチ経路はPitch FGへ、AM経路はGain FGのOP単位配線（gain_fg_to_operators）へ
+// 厳密変換された（`Op505ChannelParams`から該当6フィールドも削除済み、memory
+// `project_chip_lfo_retirement_investigation.md`参照）。エンジンとしては消えたが、
+// ここにある変換テーブル自体は今も2つの用途で現役：
 //
-// 3つの変換関数（`chip_lfo_freq_to_hz`/`pms_to_cents_range`/`ams_to_depth`）は
-// opz2op505/opm2op505等の変換ツールが実機レジスタ値→深さへ写像する入力として
-// 現役で使い続ける。`ChipLfo`本体（三角波オシレーター）はop505-coreの`chip_lfo_am_to_gain_fg`テスト
+// 1. opz2op505/opm2op505等の変換ツールが、実機のPMS/AMSレジスタ値→セント幅/振幅深度への
+//    写像として使う（本クレートの`chip_lfo_pitch_to_pitch_fg`/`chip_lfo_am_to_gain_fg`
+//    ラッパー経由の間接利用。変換ツール自身は本モジュールへ直接依存しない）。
+// 2. `op505-midi`のPitch/Gain/Cutoff FGフォールバック（stage_count=0のプリセットへ
+//    CC/NRPN経由で標準形状を書き込む機構、spec-sound.md「演奏用FGフォールバック」節）が、
+//    CC76由来のレート値をHzへ変換する入力として`lfo_rate_to_hz`を使う（LFOという概念こそ
+//    共通するが、対象はMIDI標準コントローラーでありチップ内LFOレジスタとは無関係）。
+//
+// かつては`sound-fm`（ym38x6/op505間で共有する製品非依存レイヤー）に`chip_lfo`という
+// 名前で置かれていたが、ym38x6削除後は実際の直接利用者がop505グループ（本クレートと
+// `op505-midi`）に閉じたため、2026-09-01にこちらへ移設した。移設に合わせて
+// 「chip_lfo」という退役済みエンジンの名残りだった名前も、実態（値変換カーブの集まり）に
+// 合わせて`modulation_curves`／`lfo_rate_to_hz`／`ReferenceLfo`へ改めた
+// （`pms_to_cents_range`/`ams_to_depth`は実機レジスタ名PMS/AMSそのものなので据え置き）。
+// `ReferenceLfo`（旧`ChipLfo`、三角波オシレーター本体）は`chip_lfo_am_to_gain_fg`テスト
 // （`chip_lfo_am_to_gain_fg_matches_chip_lfo_amplitude_extremes`）が、Gain FGへの変換が
 // 実機挙動と一致することを検証するオラクルとしてのみ使う（本番コードからの参照はゼロ）。
 // ---------------------------------------------------------------------------
 
-/// チップ内LFOの周波数(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
+/// LFOのレート値(0〜255)→Hz。OPN系LFOの周波数レンジ（約3〜80Hz）を指数マッピング（暫定）。
 ///
-/// 以前は`ChipLfo::tick()`から毎サンプル`powf()`を呼んでいた。`tl_to_gain`等と同じ
+/// 以前は`ReferenceLfo::tick()`から毎サンプル`powf()`を呼んでいた。`tl_to_gain`等と同じ
 /// 256要素テーブルパターンで初回アクセス時に1回だけ構築し（`OnceLock`、全チャンネル共有）、
 /// 以降は配列参照のみで済ませる。数式は変更していないため出力は従来とビット単位で同一。
-pub fn chip_lfo_freq_to_hz(freq: u8) -> f32 {
+pub fn lfo_rate_to_hz(rate: u8) -> f32 {
     static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         const F_MIN: f32 = 3.0;
         const F_MAX: f32 = 80.0;
         let mut table = [0.0f32; 256];
-        for (freq, slot) in table.iter_mut().enumerate() {
-            *slot = F_MIN * (F_MAX / F_MIN).powf(freq as f32 / 255.0);
+        for (rate, slot) in table.iter_mut().enumerate() {
+            *slot = F_MIN * (F_MAX / F_MIN).powf(rate as f32 / 255.0);
         }
         table
     });
-    table[freq as usize]
+    table[rate as usize]
 }
 
 /// PMS(0〜255)→ピッチ変調の最大幅（セント）。
@@ -38,7 +53,7 @@ pub fn chip_lfo_freq_to_hz(freq: u8) -> f32 {
 /// PMS=7(+/-700セント)の理論値を両端アンカーとした指数カーブにマッピングする。
 pub fn pms_to_cents_range(pms: u8) -> f32 {
     // pms=0（オフ特殊値）はテーブル構築時に0.0として焼き込む。数式は不変
-    // （`chip_lfo_freq_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()の排除）。
+    // （`lfo_rate_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()の排除）。
     static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         const MIN_CENTS: f32 = 5.0;
@@ -60,7 +75,7 @@ pub fn pms_to_cents_range(pms: u8) -> f32 {
 /// (operator.rsのamp_factor = (1 - chip_lfo_amp_mod).clamp(0,1)と整合)。
 pub fn ams_to_depth(ams: u8) -> f32 {
     // ams=0（オフ特殊値）はテーブル構築時に0.0として焼き込む。数式は不変
-    // （`chip_lfo_freq_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()×2の排除）。
+    // （`lfo_rate_to_hz`と同じOnceLockテーブル化、毎サンプルpowf()×2の排除）。
     static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         const MIN_DB: f32 = 23.9;
@@ -75,14 +90,14 @@ pub fn ams_to_depth(ams: u8) -> f32 {
     table[ams as usize]
 }
 
-/// チップ内LFO本体：三角波固定（spec.md準拠）+ Delay。
-/// op505エンジンからは退役済みで、現在は`op505-core`のテストオラクル専用（本ファイル冒頭コメント参照）。
-pub struct ChipLfo {
+/// 旧チップ内LFO本体の参照実装：三角波固定（spec.md準拠）+ Delay。
+/// op505エンジンからは退役済みで、現在は本クレートのテストオラクル専用（本ファイル冒頭コメント参照）。
+pub struct ReferenceLfo {
     phase: f32,
     elapsed: f32,
 }
 
-impl ChipLfo {
+impl ReferenceLfo {
     pub fn new() -> Self {
         Self { phase: 0.0, elapsed: 0.0 }
     }
@@ -94,7 +109,7 @@ impl ChipLfo {
     }
 
     /// 戻り値: -1.0〜1.0の三角波。Delay中は0.0。
-    pub fn tick(&mut self, sample_rate: f32, freq: u8, delay: u8) -> f32 {
+    pub fn tick(&mut self, sample_rate: f32, rate: u8, delay: u8) -> f32 {
         self.elapsed += 1.0 / sample_rate;
         // sound_core::lfo::delay_to_secondsと同型（0〜10秒、線形）。
         let delay_seconds = delay as f32 / 255.0 * 10.0;
@@ -102,7 +117,7 @@ impl ChipLfo {
             return 0.0;
         }
 
-        let hz = chip_lfo_freq_to_hz(freq);
+        let hz = lfo_rate_to_hz(rate);
         self.phase = (self.phase + hz / sample_rate).fract();
         if self.phase < 0.5 {
             4.0 * self.phase - 1.0
@@ -112,7 +127,7 @@ impl ChipLfo {
     }
 }
 
-impl Default for ChipLfo {
+impl Default for ReferenceLfo {
     fn default() -> Self {
         Self::new()
     }
@@ -127,10 +142,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chip_lfo_freq_to_hz_bounds() {
-        assert!((chip_lfo_freq_to_hz(0) - 3.0).abs() < 1e-3);
-        assert!((chip_lfo_freq_to_hz(255) - 80.0).abs() < 1e-2);
-        assert!(chip_lfo_freq_to_hz(255) > chip_lfo_freq_to_hz(0));
+    fn lfo_rate_to_hz_bounds() {
+        assert!((lfo_rate_to_hz(0) - 3.0).abs() < 1e-3);
+        assert!((lfo_rate_to_hz(255) - 80.0).abs() < 1e-2);
+        assert!(lfo_rate_to_hz(255) > lfo_rate_to_hz(0));
     }
 
     #[test]
@@ -169,7 +184,7 @@ mod tests {
     #[test]
     fn delay_holds_output_at_zero() {
         let sr = 44100.0;
-        let mut lfo = ChipLfo::new();
+        let mut lfo = ReferenceLfo::new();
         // delay=255 → 10秒。1秒分ティックしても出力0のはず
         for _ in 0..44100 {
             assert_eq!(lfo.tick(sr, 128, 255), 0.0);
@@ -179,11 +194,11 @@ mod tests {
     #[test]
     fn triangle_wave_is_periodic_and_bounded() {
         let sr = 44100.0;
-        let mut lfo = ChipLfo::new();
+        let mut lfo = ReferenceLfo::new();
         let mut min = f32::MAX;
         let mut max = f32::MIN;
         for _ in 0..(sr as usize) {
-            let v = lfo.tick(sr, 255, 0); // freq=255 → 約80Hz, delay=0
+            let v = lfo.tick(sr, 255, 0); // rate=255 → 約80Hz, delay=0
             assert!((-1.0..=1.0).contains(&v), "out of range: {v}");
             min = min.min(v);
             max = max.max(v);
@@ -195,7 +210,7 @@ mod tests {
     #[test]
     fn note_on_resets_phase_and_elapsed() {
         let sr = 44100.0;
-        let mut lfo = ChipLfo::new();
+        let mut lfo = ReferenceLfo::new();
         for _ in 0..1000 {
             lfo.tick(sr, 200, 0);
         }

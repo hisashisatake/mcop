@@ -1,21 +1,31 @@
 //! op505-core: ym38x6のEG（レート方式5段）をN点Time/Level方式（`sound_core::TimeEg`）に
 //! 全面移行した新チップのコアクレート。
 //!
-//! EG非依存の安定部分（アルゴリズム結線・波形・チップ内LFO・パラメーターマッピングテーブル・
-//! 質感LFO）は`sound-fm`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
+//! EG非依存の安定部分（アルゴリズム結線・波形・パラメーターマッピングテーブル）は
+//! `sound-fm`（`ym38x6-core`と共有する兄弟クレート）へ直接依存する
 //! （fork-on-write方針。将来op505独自に進化させたくなったら該当モジュールだけコピーして依存を切る）。
+//! 旧チップ内LFOの変換テーブル（レガシー実機LFOレジスタ値→物理量への写像）は元々`sound-fm`に
+//! あったが、実際の直接利用者がop505グループに閉じたため`modulation_curves`モジュールへ
+//! 移設済み（詳細は同モジュールのdocコメント参照）。
 //! `ym38x6-core`への依存は`[dev-dependencies]`のみ（`examples/op505_probe.rs`が既存`.38x6`
 //! からの変換に使う）。`src/`は一切依存しない（op505/デフォーク計画Phase 4）。
 //! EG関連（オペレーターEG・Pitch/Cutoff/Gain FG）は全面的にTimeEg化するため、
 //! `operator.rs`とChannel/Engine部のみ複製・改変する。
 
 pub mod eg_convert;
+pub mod modulation_curves;
 pub mod operator;
 pub mod preset;
 pub mod preset_registry;
 pub use operator::Op505OperatorParams;
 pub use preset::{op505_presets_dir, Op505Preset, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
 pub use preset_registry::{build_op505_registry, current_open_dir, resolve_patch, Op505BankFile, Op505BankRegistry};
+
+/// LFOレート値(0〜255)→Hz変換の再エクスポート。`op505-midi`のPitch/Gain/Cutoff FGフォールバック
+/// （CC76由来のレートをHzへ変換する）と、gesture-appの演奏系LFO（Step3で撤去予定）が使う。
+/// `op505-midi`は依存を`op505-core`/`sound-fm`の2本に絞る規約（`.claude/rules`参照）のため
+/// 本クレート経由で供給する（詳細は`modulation_curves`モジュールのdocコメント参照）。
+pub use modulation_curves::lfo_rate_to_hz;
 
 /// バイポーラFG（Pitch/Cutoff）の無変調レベル。`sound-core`の同名定数の再エクスポート。
 ///
@@ -34,8 +44,8 @@ pub use sound_core::{cc_to_time_scale, pan_gains};
 
 use std::collections::BTreeMap;
 
+use modulation_curves::{ams_to_depth, pms_to_cents_range};
 use sound_fm::algorithm::ALGORITHMS;
-use sound_fm::chip_lfo::{ams_to_depth, chip_lfo_freq_to_hz, pms_to_cents_range};
 use sound_fm::mapping::{
     carrier_velocity_gain, feedback_to_scale_with_max, fixed_note_fine_to_cents, frequency_to_note,
     note_to_frequency, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
@@ -140,7 +150,7 @@ pub fn chip_lfo_pitch_to_pitch_fg(
     let depth = ((cents_amplitude / 1200.0) * 255.0).round().clamp(0.0, 255.0) as u8;
 
     let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
-    let half_period_seconds = 0.5 / chip_lfo_freq_to_hz(chip_lfo_freq);
+    let half_period_seconds = 0.5 / lfo_rate_to_hz(chip_lfo_freq);
 
     let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
     stages[0] =
@@ -226,7 +236,7 @@ pub fn chip_lfo_am_to_gain_fg(
         return None;
     }
 
-    let hz = chip_lfo_freq_to_hz(chip_lfo_freq);
+    let hz = lfo_rate_to_hz(chip_lfo_freq);
     let quarter_period_seconds = 0.25 / hz;
     let half_period_seconds = 0.5 / hz;
     let delay_seconds = chip_lfo_delay as f32 / 255.0 * 10.0;
@@ -304,7 +314,7 @@ pub const STANDARD_VIBRATO_HALF_PERIOD_SECONDS: f32 = 0.085;
 /// `floor=(1-depth)*255`でレベル側へ焼き込んでいたのと数学的に等価）。
 ///
 /// Gain FGには`set_pitch_fg_rate_scale`に相当するAPIが無いため、呼び出し側が`hz`へ
-/// 速さを直接反映してから渡す（`op505-midi`はCC76から`sound_fm::chip_lfo_freq_to_hz`経由で
+/// 速さを直接反映してから渡す（`op505-midi`はCC76から`op505_core::lfo_rate_to_hz`経由で
 /// 計算する）。
 pub fn standard_tremolo_gain_eg(delay_seconds: f32, hz: f32) -> TimeEgParams {
     let quarter_period = 0.25 / hz;
@@ -1222,9 +1232,10 @@ impl Vco for Op505Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // `ChipLfo`は本番コードから退役済み（CHIP LFO完全退役）。ここではGain FGへの厳密変換が
-    // 実機挙動と一致することを裏取りするオラクルとしてのみ使う（chip_lfo.rs冒頭コメント参照）。
-    use sound_fm::chip_lfo::ChipLfo;
+    // `ReferenceLfo`（旧`ChipLfo`）は本番コードから退役済み（CHIP LFO完全退役）。ここではGain FGへの
+    // 厳密変換が実機挙動と一致することを裏取りするオラクルとしてのみ使う
+    // （modulation_curves.rs冒頭コメント参照）。
+    use modulation_curves::ReferenceLfo;
 
     fn stages_with(entries: &[(u8, u8, u8)]) -> [TimeStage; sound_core::MAX_STAGES] {
         let mut stages = [TimeStage::default(); sound_core::MAX_STAGES];
@@ -1927,7 +1938,7 @@ mod tests {
         let mut max_cents = f32::MIN;
         let mut min_cents = f32::MAX;
         // 数周期分ティックして山谷の到達を確認する。
-        let cycle_seconds = 1.0 / chip_lfo_freq_to_hz(freq) as f64;
+        let cycle_seconds = 1.0 / lfo_rate_to_hz(freq) as f64;
         let samples = ((cycle_seconds * 4.0) * sr as f64) as usize;
         for _ in 0..samples {
             let out = eg.tick(sr, fg.eg, 1.0);
@@ -2003,7 +2014,7 @@ mod tests {
         let mut min_level = f32::MAX;
         let mut max_level = f32::MIN;
         // 数周期分ティックして山谷の到達を確認する。
-        let cycle_seconds = 1.0 / chip_lfo_freq_to_hz(freq) as f64;
+        let cycle_seconds = 1.0 / lfo_rate_to_hz(freq) as f64;
         let samples = ((cycle_seconds * 4.0) * sr as f64) as usize;
         for _ in 0..samples {
             let level = eg.tick(sr, gain_fg.eg, 1.0) * 255.0;
@@ -2013,16 +2024,16 @@ mod tests {
         assert!((min_level - expected_floor).abs() < 3.0, "min_level={min_level} expected={expected_floor}");
         assert!((max_level - 255.0).abs() < 1.0, "max_level={max_level}");
 
-        // 参照実装（CHIP LFO本体 + operator.rsと同じamp_factor式）でも同じ谷/山に到達することを
-        // 確認する。ChipLfoは連続hzで駆動されGain FGは量子化された`time`で駆動されるため
+        // 参照実装（旧CHIP LFO本体 + operator.rsと同じamp_factor式）でも同じ谷/山に到達することを
+        // 確認する。ReferenceLfoは連続hzで駆動されGain FGは量子化された`time`で駆動されるため
         // 長時間では位相がずれるが、振幅の到達範囲（位相非依存）はどちらも同じ式
         // `ams_to_depth(ams)×(amd/255)`から導かれるので一致するはず。
-        let mut chip_lfo = ChipLfo::new();
-        chip_lfo.note_on();
+        let mut reference_lfo = ReferenceLfo::new();
+        reference_lfo.note_on();
         let mut ref_min = f32::MAX;
         let mut ref_max = f32::MIN;
         for _ in 0..samples {
-            let triangle = chip_lfo.tick(sr, freq, 0);
+            let triangle = reference_lfo.tick(sr, freq, 0);
             let chip_amp_mod = triangle * depth;
             let amp_factor = (1.0 - chip_amp_mod).clamp(0.0, 1.0);
             ref_min = ref_min.min(amp_factor * 255.0);

@@ -2042,7 +2042,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sound-core",
- "sound-fm",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

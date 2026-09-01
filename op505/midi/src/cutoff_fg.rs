@@ -1,5 +1,4 @@
-use op505_core::Op505Patch;
-use sound_fm::chip_lfo::chip_lfo_freq_to_hz;
+use op505_core::{lfo_rate_to_hz, Op505Patch};
 
 use crate::value::cc_byte_to_u8;
 
@@ -11,13 +10,13 @@ use crate::value::cc_byte_to_u8;
 /// 本関数より先に適用済み）でのみ動く。プリセットが形を持たない（`stage_count==0`）まま
 /// NRPN(0,26)でdepthが0より大きくなったときは標準オートワウ形状
 /// （`op505_core::standard_bipolar_modulation_eg`）を書き込む。速さはGain FGと同じくCC76
-/// （Pitch FGと共有するチャンネルのシャドウ値）から`chip_lfo_freq_to_hz`でHzを求め
+/// （Pitch FGと共有するチャンネルのシャドウ値）から`lfo_rate_to_hz`でHzを求め
 /// 段のtimeへ直接焼き込む（Cutoff FGにも`rate_scale`APIが無いため）。NRPN(0,26)未送信なら
 /// 発火せず既存プリセットは出力ビット不変。
 pub fn apply_cutoff_fg_expression(patch: &mut Op505Patch, pitch_fg_cc76: u8) {
     let depth = patch.channel.cutoff_fg.depth;
     if patch.channel.cutoff_fg.eg.stage_count == 0 && depth > 0 {
-        let hz = chip_lfo_freq_to_hz(cc_byte_to_u8(pitch_fg_cc76));
+        let hz = lfo_rate_to_hz(cc_byte_to_u8(pitch_fg_cc76));
         let half_period = 0.5 / hz;
         patch.channel.cutoff_fg.eg = op505_core::standard_bipolar_modulation_eg(0.0, half_period, half_period);
     }

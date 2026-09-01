@@ -131,9 +131,10 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                             リリース）はGM2リズムチャンネル向けのワンショット化機構（2026-08-24新設、
                             詳細はspec-sound.md「TimeEgのワンショット化」節）
     fm/                ← クレート名sound-fm。FM合成チップ間で共有する、EG非依存の汎用部品（op505-coreが依存）
-      algorithm/mapping/chip_lfo/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・波形生成。
-                            chip_lfoはop505エンジンから退役済み（2026-08-20）で、opz2op505等の変換ツールが
-                            実機レジスタ値を写像する数式ライブラリとしてのみ現役（詳細はspec-sound.md参照）
+      algorithm/mapping/waveform ← アルゴリズム結線表・TL/KSR等のパラメーターマッピング・波形生成。
+                            旧chip_lfoモジュール（op505エンジンから退役済み・2026-08-20の実機LFO
+                            レジスタ値変換テーブル）は、実際の直接利用者がop505グループに閉じたため
+                            2026-09-01にop505-core::modulation_curvesへ移設済み（詳細はspec-sound.md参照）
   ui/                  ← UIレイヤーの共有基盤（製品非依存、egui依存）
     core/              ← クレート名ui-core。ノブ・EGプレビュー・TimeEgエディタ・アルゴリズム結線図・
                           波形/enumセレクタ・パラメーターハンドルトレイト（op505-uiが依存）
