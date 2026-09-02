@@ -376,6 +376,18 @@ cargo nice-plug bundle op505-vst --release
 
 REAPER等のDAWで動作確認する場合は `target\bundled` をVST plug-in pathsに追加してRe-scanする。
 
+**REAPERでGUIを目視確認する際の罠（nice-plug VST3のリサイズ非対称性）**: nice-plug 0.1.9の
+VST3ラッパーは「プラグイン発リサイズ（プラグイン自身の右下角ドラッグ）」のみに対応し、
+「ホスト発リサイズ（REAPER本体ウィンドウやFXウィンドウの最大化・枠ドラッグ）」には追随しない
+（`onSize()`が未実装のスタブ、詳細はmemory`project_niceplug_vst3_clap_resize_unimplemented`）。
+REAPER本体を最大化しただけでは埋め込みGUIは初期サイズのまま変わらず、その状態でスクリーン
+ショットを撮ると、本来は正常なパネルが表示領域の都合で意図せず一部だけ潰れて見えたり、
+無地に見えたりすることがある（実際に2026-09-02、この状態を「OP1のTimeEgエディタがGRAPHタブで
+描画されない」という**実在しないバグ**と誤認した事例あり、詳細はmemory
+`feedback_niceplug_vst3_unresized_gui_false_positive`）。GUI確認・スクリーンショット取得の
+前には**必ずプラグイン自身の右下リサイズハンドルを手動（またはgui-probe経由で）ドラッグして
+広げてから**判定すること。何かが「描画されていない」ように見えたら、まずリサイズ不足を疑う。
+
 ### op505-standalone（常駐MIDIアプリ）とMMEドライバのインストール
 
 ```powershell
