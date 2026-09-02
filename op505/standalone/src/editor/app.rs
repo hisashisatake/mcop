@@ -11,9 +11,10 @@ use std::sync::Arc;
 
 use super::keyboard::{self, KeyboardState};
 use super::panel_params::{MasterEffectsState, Op505State};
-use super::preset_panel::{self, EditorPresetState};
+use super::preset_host::StandalonePresetHost;
 use crate::midi_source::MidiSink;
 use crate::shared::SharedEditState;
+use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
 
 /// PRESETSサイドバー（固定幅）の幅。op505-vstの`PRESETS_SIDEBAR_WIDTH`と揃える
 /// （Open/Save/Save Asの3ボタンが折り返さず並ぶ幅）。
@@ -84,7 +85,8 @@ impl eframe::App for EditorApp {
         });
 
         egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
-            preset_panel::draw_presets_panel(ui, &mut self.presets, &self.op505.patch, &self.op505.dirty, &self.shared);
+            let host = StandalonePresetHost { patch: &self.op505.patch, dirty: &self.op505.dirty, shared: &self.shared };
+            draw_presets_panel(ui, &mut self.presets, &host);
         });
 
         egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
