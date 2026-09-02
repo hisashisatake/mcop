@@ -23,7 +23,8 @@ use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpInt, Patch
 
 /// MASTER EFFECTS（Reverb/Chorus）パネル用の状態。`Op505Patch`の外側にあるエンジン非依存の
 /// ミラーのため分離して保持する（`op505-vst`のDAWパラメーターに相当するホスト側ミラー）。
-#[derive(Clone, Copy)]
+/// `PartialEq`はUndoスタック（`crate::undo::EditorSnapshot`）が操作前後の比較に使う。
+#[derive(Clone, Copy, PartialEq)]
 pub struct MasterEffectsState {
     pub rev_send: i32,
     pub reverb_type: i32,
