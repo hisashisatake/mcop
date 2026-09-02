@@ -440,12 +440,24 @@ fn handle_bank_changed(session: &mut PresetSession) {
     session.has_selection = false;
 }
 
+/// [`draw_presets_panel`]が返す、呼び出し側（Undoスタックを持つ側）が反応すべきイベント。
+/// パッチ内パラメーターと違い音色名は`PresetSession`が持つためハンドル(`begin_edit`/`end_edit`)
+/// 経由の記録ができない。フォーカス取得/喪失を音色名編集1操作の区切りとして呼び出し側へ伝える
+/// （`op505-editor`はUndoスタック本体を知らないため、記録自体は行わずイベントの通知に留める）。
+#[derive(Default, Clone, Copy)]
+pub struct PresetsPanelEvents {
+    /// 音色名欄がこのフレームでフォーカスを得た。
+    pub patch_name_focus_gained: bool,
+    /// 音色名欄がこのフレームでフォーカスを失った。
+    pub patch_name_focus_lost: bool,
+}
+
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
 /// 音色名→区切り線→PRESETSリスト（+ New Voice/DeleteはScrollArea内）の順）をそのまま踏襲する。
 /// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
 /// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
 /// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
-pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) {
+pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
     let session = &mut state.session;
 
     ui.horizontal(|ui| {
@@ -477,7 +489,12 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
     ui.label(format!("{file_label}{mark}"));
 
     let mut patch_name = session.patch_name.clone();
-    if ui.text_edit_singleline(&mut patch_name).changed() {
+    let patch_name_response = ui.text_edit_singleline(&mut patch_name);
+    let events = PresetsPanelEvents {
+        patch_name_focus_gained: patch_name_response.gained_focus(),
+        patch_name_focus_lost: patch_name_response.lost_focus(),
+    };
+    if patch_name_response.changed() {
         session.patch_name = patch_name;
         session.unsaved = true;
     }
@@ -530,6 +547,8 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
     poll_pending_delete(session, host);
     poll_pending_open(session, host);
     poll_pending_save_as(session, host);
+
+    events
 }
 
 /// PRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。

@@ -143,10 +143,21 @@ impl eframe::App for EditorApp {
             });
         });
 
-        egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
-            let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
-            draw_presets_panel(ui, &mut self.presets, &host);
-        });
+        let presets_panel_response =
+            egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
+                let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
+                draw_presets_panel(ui, &mut self.presets, &host)
+            });
+        // 音色名欄はPresetSession内にあり、begin_edit/end_editを持つハンドル経由の記録が
+        // できないため、フォーカス取得/喪失を1操作の区切りとして扱う
+        // （`draw_presets_panel`のdoc参照）。
+        let presets_events = presets_panel_response.inner;
+        if presets_events.patch_name_focus_gained {
+            self.undo.borrow_mut().note_begin_edit();
+        }
+        if presets_events.patch_name_focus_lost {
+            self.undo.borrow_mut().note_end_edit();
+        }
 
         egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
             keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);
