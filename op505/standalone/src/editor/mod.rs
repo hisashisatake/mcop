@@ -38,7 +38,10 @@ use app::EditorApp;
 /// スレッドが後始末を終えるまで`shutdown()`が待つ上限。
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// トレイメニューから操作する、常駐エディタスレッドへのハンドル。
+/// トレイメニューから操作する、常駐エディタスレッドへのハンドル。内部は全てArc/Sender
+/// （安価にClone可能）なので、パイプ経由のOpenEditorフレーム受信スレッド
+/// （`sources::pipe_src`）へもクローンを渡して`show()`を呼べる。
+#[derive(Clone)]
 pub struct EditorHandle {
     req_tx: Sender<()>,
     open: Arc<AtomicBool>,
@@ -90,6 +93,9 @@ impl EditorHandle {
 
     fn focus(&self) {
         if let Some(ctx) = self.ctx.lock().unwrap().clone() {
+            // ViewportCommand::Focusは「最小化中は効果なし」の仕様（egui-0.34.3のdoc参照）。
+            // 最小化されている場合に備え、先にMinimized(false)で復元してからFocusする。
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
@@ -143,6 +149,12 @@ fn run_editor_once(shared: &Arc<SharedEditState>, midi_sink: &MidiSink, ctx_slot
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
             *ctx_slot.lock().unwrap() = Some(cc.egui_ctx.clone());
+            // 新規ウィンドウ作成時、Windowsは背景プロセスからの前面化を既定で拒否する
+            // （フルスクリーン/最大化以外はwinitが`force_window_active`を自動で呼ばないため、
+            // `EditorHandle::show()`から起こされた場合は何もしないと背面に留まる）。
+            // `ViewportCommand::Focus`は「可視・非最小化・非フォアグラウンド」の条件を満たすと
+            // winit側でAltキー送出によるフォーカス強奪ハックを行う（`focus()`の既存経路と同じ）。
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             Ok(Box::new(EditorApp::new(shared_for_app, midi_sink_for_app, initial_patch)))
         }),
     );

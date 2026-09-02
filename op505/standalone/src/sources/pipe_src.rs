@@ -6,7 +6,10 @@
 //! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx。DLL側は
 //! `DriverCallback`のMOM_DONE通知までバッファライフサイクルを正しく完結させるが、
 //! op505側にSysEx解釈は無いためここでログのみ残して破棄する。MidiQueueへは積まない）,
-//! 2=Reset（payload無し。全16chへAll Sound Off(CC120)を合成して送る）。
+//! 2=Reset（payload無し。全16chへAll Sound Off(CC120)を合成して送る）,
+//! 3=OpenEditor（payload無し。トレイ起動音色エディタを開く/フォーカスする。MIDIメッセージ
+//! ではないためMidiQueueを経由せず、直接`EditorHandle::show()`を呼ぶ。`gesture-app`の
+//! Eキー押下専用で、`op505-mme-driver`（Domino等のクライアント）は送らない）。
 //!
 //! 名前付きパイプの「サーバー」役はRust標準ライブラリに無いAPI（CreateNamedPipeW /
 //! ConnectNamedPipe）が必要なため、その2関数だけをkernel32.dllから直接FFI宣言する
@@ -30,6 +33,7 @@ use std::io::Read;
 use std::os::windows::io::FromRawHandle;
 use std::sync::OnceLock;
 
+use crate::editor::EditorHandle;
 use crate::midi_source::{MidiSink, MidiSource};
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
@@ -39,6 +43,7 @@ const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
 const FRAME_KIND_LONG: u8 = 1;
 const FRAME_KIND_RESET: u8 = 2;
+const FRAME_KIND_OPEN_EDITOR: u8 = 3;
 
 #[allow(non_snake_case, non_camel_case_types, dead_code)]
 mod ffi {
@@ -147,12 +152,15 @@ impl MidiSource for PipeSource {
 /// パイプ受信サーバーをバックグラウンドスレッドで起動する（呼び出しはブロックしない）。
 /// 失敗時は標準エラーへ警告を出して諦める（MMEドライバ経由の入力が無効になるだけで、
 /// midir経由の既存入力は影響を受けない）。
-pub fn spawn(sink: MidiSink) -> PipeSource {
-    std::thread::spawn(move || accept_loop(sink));
+///
+/// `editor`はOpenEditorフレーム（kind=3）受信時に`EditorHandle::show()`を呼ぶために持つ
+/// （`main`側で音色エディタスレッド起動後に渡される、モジュールdoc参照）。
+pub fn spawn(sink: MidiSink, editor: EditorHandle) -> PipeSource {
+    std::thread::spawn(move || accept_loop(sink, editor));
     PipeSource
 }
 
-fn accept_loop(sink: MidiSink) {
+fn accept_loop(sink: MidiSink, editor: EditorHandle) {
     loop {
         let Some(handle) = create_pipe_instance() else {
             crate::log::log(&format!(
@@ -176,7 +184,8 @@ fn accept_loop(sink: MidiSink) {
         }
 
         let sink_for_client = sink.clone();
-        std::thread::spawn(move || serve_client(file, sink_for_client));
+        let editor_for_client = editor.clone();
+        std::thread::spawn(move || serve_client(file, sink_for_client, editor_for_client));
         // ループ先頭へ戻り、次のクライアント用に新しいインスタンスを作る
         // （複数のWinMMホストアプリが同時に接続してくる可能性があるため）。
     }
@@ -213,13 +222,18 @@ fn pipe_name_wide() -> Vec<u16> {
     OsStr::new(PIPE_PATH).encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn serve_client(mut file: File, sink: MidiSink) {
+fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle) {
     let mut buf = [0u8; 4096];
     loop {
         match file.read(&mut buf) {
             Ok(0) => break, // クライアントが切断
             Ok(n) => {
-                for message in decode_frame(&buf[..n]) {
+                let raw = &buf[..n];
+                if is_open_editor_frame(raw) {
+                    editor.show();
+                    continue;
+                }
+                for message in decode_frame(raw) {
                     sink.push(message);
                 }
             }
@@ -228,6 +242,13 @@ fn serve_client(mut file: File, sink: MidiSink) {
     }
     // fileのDropでCloseHandleされる（DisconnectNamedPipeは呼ばない。このインスタンスは
     // 使い捨てで、次のクライアントには別インスタンスをaccept_loopが新規作成するため）。
+}
+
+/// OpenEditorフレーム（kind=3、payload無し）かどうかを判定する。MIDIバイト列ではなく
+/// UIへの直接操作要求のため、`decode_frame`のVec<Vec<u8>>（MidiQueueへ積む想定の戻り値）
+/// とは別経路で扱う。
+fn is_open_editor_frame(raw: &[u8]) -> bool {
+    raw.len() >= 5 && raw[0] == FRAME_VERSION && raw[1] == FRAME_KIND_OPEN_EDITOR
 }
 
 /// 1回の`ReadFile`（メッセージモードのため常に1メッセージ境界と一致する）から

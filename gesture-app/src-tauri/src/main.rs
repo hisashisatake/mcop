@@ -168,6 +168,13 @@ fn op505_reload_presets(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>, re
     count
 }
 
+/// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスする）。
+/// gesture-appのEキー押下から呼ぶ。
+#[tauri::command]
+fn op505_open_editor() {
+    midi_out::open_editor();
+}
+
 fn main() {
     // presets_dir()の読み込みは起動時にここで1回だけ行う（%APPDATA%\op505\presets）。
     // gesture-appはエンジンを持たない読み取り専用のBank/Program解決用途にのみこれを使う
@@ -186,6 +193,7 @@ fn main() {
             op505_set_performance_lfo,
             op505_set_program,
             op505_reload_presets,
+            op505_open_editor,
             op505_presets::op505_list_bank_entries,
             op505_presets::op505_get_bank_file_name,
             op505_presets::op505_get_bank_program,

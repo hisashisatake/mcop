@@ -358,6 +358,9 @@ window.addEventListener('keydown', async (e) => {
     lfoRate = Math.min(255, lfoRate + LFO_RATE_STEP);
     await applyPerformanceLfoToActiveChannels();
   }
+  if (e.key.toLowerCase() === 'e') {
+    await invoke('op505_open_editor');
+  }
 });
 
 // ─────────────────────────────────────────────

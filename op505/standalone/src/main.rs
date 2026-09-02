@@ -149,11 +149,6 @@ fn main() {
     let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
     let mut registry = midi_source::SourceRegistry::new();
 
-    // midirソース（実機キーボード/loopMIDI）はタスクトレイのメニューから動的に
-    // 切り替えられる必要があるため、SourceRegistryへは入れず`tray::run`が
-    // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
-    registry.add(Box::new(sources::pipe_src::spawn(sink.clone())));
-
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
     let supported = device.default_output_config().expect("no default output config");
@@ -180,6 +175,13 @@ fn main() {
     // エディタスレッドはこのクローンを持つ（オーディオコールバックへは別クローンをmoveする）。
     // `sink.clone()`はエディタ下部の鍵盤が試聴用MIDIを積むために使う（実MIDI入力と同じキュー）。
     let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state), sink.clone());
+
+    // midirソース（実機キーボード/loopMIDI）はタスクトレイのメニューから動的に
+    // 切り替えられる必要があるため、SourceRegistryへは入れず`tray::run`が
+    // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
+    // OpenEditorフレーム（kind=3、gesture-appのEキー押下）を受けたら`editor_handle`の
+    // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
+    registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone())));
 
     let stream = device
         .build_output_stream::<f32, _, _>(

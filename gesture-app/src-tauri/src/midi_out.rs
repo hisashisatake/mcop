@@ -18,6 +18,9 @@ const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
 const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
+/// トレイ起動音色エディタを開く/フォーカスする制御フレーム（payload無し）。
+/// `op505/standalone/src/sources/pipe_src.rs`のOpenEditorフレーム（kind=3）と対になる。
+const FRAME_KIND_OPEN_EDITOR: u8 = 3;
 const DEVICE_ID: u8 = 0; // サーバー側は無視する（pipe_src.rsの_device_id）ため固定値で十分。
 
 static SENDER: OnceLock<SyncSender<Vec<u8>>> = OnceLock::new();
@@ -85,26 +88,31 @@ fn writer_loop(rx: Receiver<Vec<u8>>) {
     }
 }
 
-fn build_frame(payload: &[u8]) -> Vec<u8> {
+fn build_frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     let len = payload.len() as u16;
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(FRAME_VERSION);
-    frame.push(FRAME_KIND_SHORT);
+    frame.push(kind);
     frame.push(DEVICE_ID);
     frame.extend_from_slice(&len.to_le_bytes());
     frame.extend_from_slice(payload);
     frame
 }
 
-/// 1〜3バイトのデコード済みMIDIメッセージを送信キューへ積む。キューが溢れていれば
-/// 黙って破棄する（フロントエンドのイベントループをブロックしないため）。
-fn send_short(bytes: &[u8]) {
+/// フレームを送信キューへ積む。キューが溢れていれば黙って破棄する
+/// （フロントエンドのイベントループをブロックしないため）。
+fn send_frame(kind: u8, payload: &[u8]) {
     ensure_started();
     ensure_writer_thread();
     let Some(tx) = SENDER.get() else { return };
-    if let Err(TrySendError::Full(_)) = tx.try_send(build_frame(bytes)) {
+    if let Err(TrySendError::Full(_)) = tx.try_send(build_frame(kind, payload)) {
         eprintln!("midi_out: send queue full, dropping frame");
     }
+}
+
+/// 1〜3バイトのデコード済みMIDIメッセージを送信キューへ積む。
+fn send_short(bytes: &[u8]) {
+    send_frame(FRAME_KIND_SHORT, bytes);
 }
 
 pub fn note_on(channel: u8, note: u8, velocity: u8) {
@@ -144,4 +152,10 @@ pub fn nrpn_data_entry(channel: u8, param_msb: u8, param_lsb: u8, value: u8) {
     control_change(channel, 99, param_msb & 0x7F);
     control_change(channel, 98, param_lsb & 0x7F);
     control_change(channel, 6, value & 0x7F);
+}
+
+/// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスするだけ）よう
+/// 要求する。gesture-app側のEキー押下から呼ぶ制御フレーム（MIDIメッセージではない）。
+pub fn open_editor() {
+    send_frame(FRAME_KIND_OPEN_EDITOR, &[]);
 }
