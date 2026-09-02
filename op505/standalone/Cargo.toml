@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 op505-core = { path = "../core" }
 op505-midi = { path = "../midi" }
+op505-editor = { path = "../editor" }
 op505-ui = { path = "../ui" }
 ui-core = { path = "../../ui/core" }
 sound-core = { path = "../../sound/core" }

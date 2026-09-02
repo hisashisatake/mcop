@@ -3936,6 +3936,7 @@ dependencies = [
  "egui",
  "midir",
  "op505-core",
+ "op505-editor",
  "op505-midi",
  "op505-ui",
  "rfd",

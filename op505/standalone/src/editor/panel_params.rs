@@ -13,6 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use op505_core::Op505Patch;
+use op505_editor::param_spec::{FgSlot, FxInt, OpInt, PatchInt};
 use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 use sound_core::TimeEgParams;
 
@@ -32,17 +33,19 @@ pub struct MasterEffectsState {
 }
 
 impl Default for MasterEffectsState {
+    /// 各既定値はop505-editorの正本（`FxInt::spec().default`）と一致する
+    /// （op505-vstの`Op505VstParams::default()`と食い違うと無音デバッグ地獄になるため）。
     fn default() -> Self {
         Self {
-            rev_send: 0,
-            reverb_type: 3,
-            reverb_time: 128,
-            cho_send: 0,
-            chorus_type: 0,
-            chorus_mod_rate: 128,
-            chorus_mod_depth: 128,
-            chorus_feedback: 0,
-            chorus_send_to_reverb: 0,
+            rev_send: FxInt::RevSend.spec().default,
+            reverb_type: FxInt::ReverbType.spec().default,
+            reverb_time: FxInt::ReverbTime.spec().default,
+            cho_send: FxInt::ChoSend.spec().default,
+            chorus_type: FxInt::ChorusType.spec().default,
+            chorus_mod_rate: FxInt::ChorusModRate.spec().default,
+            chorus_mod_depth: FxInt::ChorusModDepth.spec().default,
+            chorus_feedback: FxInt::ChorusFeedback.spec().default,
+            chorus_send_to_reverb: FxInt::ChorusSendToReverb.spec().default,
         }
     }
 }
@@ -85,17 +88,18 @@ impl IntParamHandle for MasterEffectsIntField {
 }
 
 /// MASTER EFFECTSフィールド用の`Box<dyn IntParamHandle>`を組み立てる。
+/// `$spec`はop505-editorの正本（`FxInt::spec()`）。
 macro_rules! master_int_field {
-    ($state:expr, $dirty:expr, $field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
+    ($state:expr, $dirty:expr, $field:ident, $spec:expr) => {
         Box::new(crate::editor::panel_params::MasterEffectsIntField {
             state: $state.clone(),
             dirty: $dirty.clone(),
             get: |s: &MasterEffectsState| s.$field,
             set: |s: &mut MasterEffectsState, v: i32| s.$field = v,
-            min: $min,
-            max: $max,
-            default: $default,
-            name: $name,
+            min: $spec.min,
+            max: $spec.max,
+            default: $spec.default,
+            name: $spec.short_name,
         }) as Box<dyn IntParamHandle>
     };
 }
@@ -192,7 +196,8 @@ fn time_eg_handle(
     Box::new(Op505TimeEgHandle { state: state.clone(), dirty: dirty.clone(), get_eg, set_eg, name })
 }
 
-/// バイポーラFG（Pitch/Cutoff）1本ぶんの`Op505BipolarFgPanelParams`を組み立てる。
+/// バイポーラFG（Pitch/Cutoff/Gain）1本ぶんの`Op505BipolarFgPanelParams`を組み立てる。
+/// Depthのmin/max/defaultはop505-editorの正本（`PatchInt::FgDepth(fg).spec()`）。
 fn bipolar_fg_panel_params(
     state: &Rc<RefCell<Op505Patch>>,
     dirty: &Rc<Cell<bool>>,
@@ -201,9 +206,9 @@ fn bipolar_fg_panel_params(
     get_eg: fn(&Op505Patch) -> TimeEgParams,
     set_eg: fn(&mut Op505Patch, TimeEgParams),
     eg_name: &'static str,
-    depth_name: &'static str,
-    default_depth: i32,
+    fg: FgSlot,
 ) -> Op505BipolarFgPanelParams<'static> {
+    let spec = PatchInt::FgDepth(fg).spec();
     Op505BipolarFgPanelParams {
         eg: time_eg_handle(state, dirty, get_eg, set_eg, eg_name),
         depth: Box::new(Op505IntField {
@@ -211,10 +216,10 @@ fn bipolar_fg_panel_params(
             dirty: dirty.clone(),
             get: get_depth,
             set: set_depth,
-            min: 0,
-            max: 255,
-            default: default_depth,
-            name: depth_name,
+            min: spec.min,
+            max: spec.max,
+            default: spec.default,
+            name: spec.short_name,
         }) as Box<dyn IntParamHandle>,
     }
 }
@@ -224,16 +229,16 @@ fn operator_panel_params<const I: usize>(
     dirty: &Rc<Cell<bool>>,
 ) -> Op505OperatorPanelParams<'static> {
     macro_rules! op {
-        ($field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
+        ($field:ident, $spec:expr) => {
             Box::new(Op505IntField {
                 state: state.clone(),
                 dirty: dirty.clone(),
                 get: |p: &Op505Patch| p.operators[I].$field as i32,
                 set: |p: &mut Op505Patch, v: i32| p.operators[I].$field = v as u8,
-                min: $min,
-                max: $max,
-                default: $default,
-                name: $name,
+                min: $spec.min,
+                max: $spec.max,
+                default: $spec.default,
+                name: $spec.short_name,
             }) as Box<dyn IntParamHandle>
         };
     }
@@ -245,7 +250,7 @@ fn operator_panel_params<const I: usize>(
         _ => "OP EG",
     };
     Op505OperatorPanelParams {
-        tl: op!(tl, "TL", 0, 255, 200),
+        tl: op!(tl, OpInt::Tl.spec()),
         eg: time_eg_handle(
             state,
             dirty,
@@ -253,30 +258,21 @@ fn operator_panel_params<const I: usize>(
             |p: &mut Op505Patch, v: TimeEgParams| p.operators[I].eg = v,
             eg_name,
         ),
-        mul: op!(mul, "MUL", 0, 15, 1),
-        dt1: op!(dt1, "DT1", 0, 255, 128),
-        ksr: op!(ksr, "KSR", 0, 255, 64),
-        vel_sens: Box::new(Op505IntField {
-            state: state.clone(),
-            dirty: dirty.clone(),
-            get: |p: &Op505Patch| p.operators[I].velocity_sensitivity as i32,
-            set: |p: &mut Op505Patch, v: i32| p.operators[I].velocity_sensitivity = v as u8,
-            min: 0,
-            max: 255,
-            default: 0,
-            name: "VEL",
-        }) as Box<dyn IntParamHandle>,
-        op_fine_tune: op!(op_fine_tune, "FINE", 0, 255, 128),
+        mul: op!(mul, OpInt::Mul.spec()),
+        dt1: op!(dt1, OpInt::Dt1.spec()),
+        ksr: op!(ksr, OpInt::Ksr.spec()),
+        vel_sens: op!(velocity_sensitivity, OpInt::VelSens.spec()),
+        op_fine_tune: op!(op_fine_tune, OpInt::OpFineTune.spec()),
         ame: Box::new(Op505BoolField {
             state: state.clone(),
             dirty: dirty.clone(),
             get: |p: &Op505Patch| p.operators[I].am_enable,
             set: |p: &mut Op505Patch, v: bool| p.operators[I].am_enable = v,
         }) as Box<dyn BoolParamHandle>,
-        waveform: op!(waveform, "Waveform", 0, 255, 0),
-        eg_shift: op!(eg_shift, "EGSFT", 0, 255, 0),
-        level_scale: op!(level_scale, "LEVEL SCALE", 0, 255, 0),
-        velocity_gain: op!(velocity_gain, "V.GAIN", 0, 255, 255),
+        waveform: op!(waveform, OpInt::Waveform.spec()),
+        eg_shift: op!(eg_shift, OpInt::EgShift.spec()),
+        level_scale: op!(level_scale, OpInt::LevelScale.spec()),
+        velocity_gain: op!(velocity_gain, OpInt::VelocityGain.spec()),
     }
 }
 
@@ -302,33 +298,33 @@ impl Op505State {
         let state = &self.patch;
         let dirty = &self.dirty;
         macro_rules! ch {
-            ($field:ident, $name:literal, $min:expr, $max:expr, $default:expr) => {
+            ($field:ident, $spec:expr) => {
                 Box::new(Op505IntField {
                     state: state.clone(),
                     dirty: dirty.clone(),
                     get: |p: &Op505Patch| p.channel.$field as i32,
                     set: |p: &mut Op505Patch, v: i32| p.channel.$field = v as u8,
-                    min: $min,
-                    max: $max,
-                    default: $default,
-                    name: $name,
+                    min: $spec.min,
+                    max: $spec.max,
+                    default: $spec.default,
+                    name: $spec.short_name,
                 }) as Box<dyn IntParamHandle>
             };
         }
         Op505PanelParams {
-            algorithm: ch!(algorithm, "Algorithm", 0, 7, 0),
-            feedback: ch!(feedback, "Feedback", 0, 255, 0),
+            algorithm: ch!(algorithm, PatchInt::Algorithm.spec()),
+            feedback: ch!(feedback, PatchInt::Feedback.spec()),
             fixed_note_enable: Box::new(Op505BoolField {
                 state: state.clone(),
                 dirty: dirty.clone(),
                 get: |p: &Op505Patch| p.channel.fixed_note_enable,
                 set: |p: &mut Op505Patch, v: bool| p.channel.fixed_note_enable = v,
             }) as Box<dyn BoolParamHandle>,
-            fixed_note: ch!(fixed_note, "Fixed Note", 0, 127, 60),
-            fixed_note_fine: ch!(fixed_note_fine, "Fixed Note Fine", 0, 255, 128),
-            cutoff: ch!(filter_cutoff, "Filter Cutoff", 0, 255, 255),
-            resonance: ch!(filter_resonance, "Filter Resonance", 0, 255, 0),
-            filter_type: ch!(filter_type, "Filter Type", 0, 255, 0),
+            fixed_note: ch!(fixed_note, PatchInt::FixedNote.spec()),
+            fixed_note_fine: ch!(fixed_note_fine, PatchInt::FixedNoteFine.spec()),
+            cutoff: ch!(filter_cutoff, PatchInt::Cutoff.spec()),
+            resonance: ch!(filter_resonance, PatchInt::Resonance.spec()),
+            filter_type: ch!(filter_type, PatchInt::FilterType.spec()),
             filter_self_oscillation: Box::new(Op505BoolField {
                 state: state.clone(),
                 dirty: dirty.clone(),
@@ -343,8 +339,7 @@ impl Op505State {
                 |p: &Op505Patch| p.channel.pitch_fg.eg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.pitch_fg.eg = v,
                 "PITCH FG",
-                "Pitch FG Depth",
-                0,
+                FgSlot::Pitch,
             ),
             cutoff_fg: bipolar_fg_panel_params(
                 state,
@@ -354,8 +349,7 @@ impl Op505State {
                 |p: &Op505Patch| p.channel.cutoff_fg.eg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.cutoff_fg.eg = v,
                 "CUTOFF FG",
-                "Cutoff FG Depth",
-                0,
+                FgSlot::Cutoff,
             ),
             gain_fg: bipolar_fg_panel_params(
                 state,
@@ -365,8 +359,7 @@ impl Op505State {
                 |p: &Op505Patch| p.channel.gain_fg.eg,
                 |p: &mut Op505Patch, v: TimeEgParams| p.channel.gain_fg.eg = v,
                 "GAIN FG",
-                "Gain FG Depth",
-                255,
+                FgSlot::Gain,
             ),
             gain_fg_to_master: Box::new(Op505BoolField {
                 state: state.clone(),
@@ -380,15 +373,15 @@ impl Op505State {
                 get: |p: &Op505Patch| p.channel.gain_fg_to_operators,
                 set: |p: &mut Op505Patch, v: bool| p.channel.gain_fg_to_operators = v,
             }) as Box<dyn BoolParamHandle>,
-            rev_send: master_int_field!(master_state, master_dirty, rev_send, "Reverb Send", 0, 255, 0),
-            reverb_type: master_int_field!(master_state, master_dirty, reverb_type, "Reverb Type", 0, 7, 3),
-            reverb_time: master_int_field!(master_state, master_dirty, reverb_time, "Reverb Time", 0, 255, 128),
-            cho_send: master_int_field!(master_state, master_dirty, cho_send, "Chorus Send", 0, 255, 0),
-            chorus_type: master_int_field!(master_state, master_dirty, chorus_type, "Chorus Type", 0, 7, 0),
-            chorus_mod_rate: master_int_field!(master_state, master_dirty, chorus_mod_rate, "Chorus Mod Rate", 0, 255, 128),
-            chorus_mod_depth: master_int_field!(master_state, master_dirty, chorus_mod_depth, "Chorus Mod Depth", 0, 255, 128),
-            chorus_feedback: master_int_field!(master_state, master_dirty, chorus_feedback, "Chorus Feedback", 0, 255, 0),
-            chorus_send_to_reverb: master_int_field!(master_state, master_dirty, chorus_send_to_reverb, "Chorus Send To Reverb", 0, 255, 0),
+            rev_send: master_int_field!(master_state, master_dirty, rev_send, FxInt::RevSend.spec()),
+            reverb_type: master_int_field!(master_state, master_dirty, reverb_type, FxInt::ReverbType.spec()),
+            reverb_time: master_int_field!(master_state, master_dirty, reverb_time, FxInt::ReverbTime.spec()),
+            cho_send: master_int_field!(master_state, master_dirty, cho_send, FxInt::ChoSend.spec()),
+            chorus_type: master_int_field!(master_state, master_dirty, chorus_type, FxInt::ChorusType.spec()),
+            chorus_mod_rate: master_int_field!(master_state, master_dirty, chorus_mod_rate, FxInt::ChorusModRate.spec()),
+            chorus_mod_depth: master_int_field!(master_state, master_dirty, chorus_mod_depth, FxInt::ChorusModDepth.spec()),
+            chorus_feedback: master_int_field!(master_state, master_dirty, chorus_feedback, FxInt::ChorusFeedback.spec()),
+            chorus_send_to_reverb: master_int_field!(master_state, master_dirty, chorus_send_to_reverb, FxInt::ChorusSendToReverb.spec()),
             operators: [
                 operator_panel_params::<0>(state, dirty),
                 operator_panel_params::<1>(state, dirty),
