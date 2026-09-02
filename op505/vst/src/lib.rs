@@ -1,7 +1,7 @@
 mod editor;
 mod param_adapter;
 mod params;
-mod preset_panel;
+mod preset_host;
 
 use op505_midi::{
     cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,

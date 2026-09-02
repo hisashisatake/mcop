@@ -8,7 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::param_adapter::{vb, vi, vt};
 use crate::params::{Op505EgBank, Op505VstParams, OperatorVstParams};
-use crate::preset_panel::{draw_presets_panel, EditorPresetState};
+use crate::preset_host::VstPresetHost;
+use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
 
 pub(crate) struct EditorState {
     pub(crate) presets: EditorPresetState,
@@ -129,7 +130,13 @@ pub(crate) fn create_editor(
                         .resizable(false)
                         .exact_size(PRESETS_SIDEBAR_WIDTH)
                         .show_inside(ui, |ui| {
-                            draw_presets_panel(ui, &mut state.presets, &params, setter, &shared_preset_bank, &preset_bank_dirty);
+                            let host = VstPresetHost {
+                                params: &params,
+                                setter,
+                                shared_bank: &shared_preset_bank,
+                                dirty: &preset_bank_dirty,
+                            };
+                            draw_presets_panel(ui, &mut state.presets, &host);
                         });
 
                     // ---- 残りのパラメーター（右側・縦スクロール、op505-uiの共有レイアウト） ----
