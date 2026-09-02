@@ -52,8 +52,20 @@ impl<'a> Knob<'a> {
 
 impl Widget for Knob<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::splat(self.diameter), Sense::click_and_drag());
+        let (_, rect) = ui.allocate_space(Vec2::splat(self.diameter));
+        // `ui.next_auto_id()`ではなく描画位置からidを作る。`knob()`が使う
+        // `allocate_ui_with_layout`（`scope_dyn`経由）は子uiに入る前後でauto_id_saltを
+        // 1回しか進めない実装（egui本体の意図的なHACK、`repeat_button`と同じ原因）のため、
+        // 同じ行に並ぶノブや、OP1〜4のように構造的に同一のブロックが繰り返される場面で
+        // このノブのidが衝突していた（実機のデバッグビルドで発覚。`egui::Options::
+        // warn_on_id_clash`はリリースビルドでは既定offのため、通常運用では気づけなかった）。
+        // 実機のドラッグ/ダブルクリックリセット操作では値の取り違えは再現しなかったが
+        // （2026-09-02実機確認）、`repeat_button`と同じくrectは同一フレームで絶対に
+        // 重複しないため、位置をそのままsaltに使えば衝突自体を構造的になくせる。
+        let id = ui
+            .id()
+            .with(("op505_knob", rect.center().x.to_bits(), rect.center().y.to_bits()));
+        let mut response = ui.interact(rect, id, Sense::click_and_drag());
 
         if response.drag_started() {
             self.handle.begin_edit();

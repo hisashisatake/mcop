@@ -131,6 +131,10 @@ fn repeat_panel_with_columns_wraps_into_grid() {
     assert!(rust.contains("let i = i_row * 2 + i_col;"), "{rust}");
     assert!(rust.contains("ui.set_width(w_cell);"), "{rust}");
     assert!(rust.contains("ui.label(egui::RichText::new(format!(\"OP {}\", i + 1)).strong());"), "{rust}");
+    // 繰り返しの各回をpush_idで包まないと、egui標準のauto-idは呼び出し位置だけで決まるため
+    // OP1〜4のように構造的に同一のパネルが繰り返される場面でラベル・ノブが全て同じIDを
+    // 奪い合ってしまう（実機のデバッグビルドで発覚、2026-09-02）。
+    assert!(rust.contains("ui.push_id(i, |ui| {"), "{rust}");
 }
 
 /// `columns`なしの既存経路（縦一列）は今回の変更で壊れていないことを確認する回帰テスト。
@@ -142,6 +146,8 @@ fn repeat_panel_without_columns_stays_linear() {
     let rust = ui_codegen::generate_rust(xml).unwrap();
     assert!(rust.contains("for (i, op) in params.operators.iter().enumerate()"), "{rust}");
     assert!(!rust.contains("chunks("), "{rust}");
+    // グリッド版と同じ理由でpush_idが要る（上のrepeat_panel_with_columns_wraps_into_gridと対）。
+    assert!(rust.contains("ui.push_id(i, |ui| {"), "{rust}");
 }
 
 /// `<stack grow="true">`（2026-08-14追加、`<panel repeat columns="N">`でセル幅が狭まったOPパネルの

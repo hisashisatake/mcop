@@ -334,11 +334,16 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
             let as_ = p.as_.as_deref().unwrap_or("");
             match p.columns {
                 None => {
-                    let mut out =
-                        vec![format!("for ({}, {as_}) in params.{repeat}.iter().enumerate() {{", p.index)];
+                    let index = &p.index;
+                    let mut out = vec![
+                        format!("for ({index}, {as_}) in params.{repeat}.iter().enumerate() {{"),
+                        // グリッド版（`gen_repeat_grid`）と同じ理由でpush_idが要る。
+                        format!("    ui.push_id({index}, |ui| {{"),
+                    ];
                     for l in &inner {
-                        out.push(indent(l, 4));
+                        out.push(indent(l, 8));
                     }
+                    out.push("    });".to_string());
                     out.push("}".to_string());
                     out
                 }
@@ -390,10 +395,18 @@ fn gen_repeat_grid(
         format!("        ui.spacing_mut().item_spacing.x = {gap};"),
         format!("        for ({index}_col, {as_}) in {index}_chunk.iter().enumerate() {{"),
         format!("            let {index} = {index}_row * {cols} + {index}_col;"),
+        // `{index}`（繰り返し回数分の一意な値）をid_saltにする。egui標準の
+        // auto-idはコード上の呼び出し位置だけで決まり、for文の反復回数を区別しないため、
+        // push_idで包まなければOP1〜4のように構造的に同一のパネルが繰り返される場面で
+        // ラベル・ノブ・数値入力欄が全て同じIDを奪い合ってしまう（egui本体の
+        // `warn_on_id_clash`はリリースビルドでは既定offのため通常運用では気づけない、
+        // 実機のデバッグビルドで発覚）。
+        format!("            ui.push_id({index}, |ui| {{"),
     ];
     for l in inner {
-        out.push(indent(l, 12));
+        out.push(indent(l, 16));
     }
+    out.push("            });".to_string());
     out.push("        }".to_string());
     out.push("    });".to_string());
     out.push("}".to_string());
