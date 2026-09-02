@@ -543,6 +543,26 @@ impl EditorPresetState {
         session.sync_display_to_registry();
         EditorPresetState { session }
     }
+
+    /// 現在選択中のbank。Undoスナップショットの構築に使う。
+    pub fn bank(&self) -> u16 {
+        self.session.bank
+    }
+
+    /// 現在選択中のprogram番号。Undoスナップショットの構築に使う。
+    pub fn program(&self) -> u8 {
+        self.session.program
+    }
+
+    /// 現在の音色名（音欄の表示値）。Undoスナップショットの構築に使う。
+    pub fn patch_name(&self) -> &str {
+        &self.session.patch_name
+    }
+
+    /// PRESETSリストで実際に何かが選択されているか。Undoスナップショットの構築に使う。
+    pub fn has_selection(&self) -> bool {
+        self.session.has_selection
+    }
 }
 
 #[cfg(test)]

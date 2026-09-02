@@ -14,6 +14,7 @@ use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
 use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
+use op505_editor::undo::{EditorSnapshot, UndoStack};
 
 use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
@@ -31,6 +32,7 @@ pub struct EditorApp {
     dirty: Rc<Cell<bool>>,
     master: Rc<RefCell<MasterEffectsState>>,
     master_dirty: Rc<Cell<bool>>,
+    undo: Rc<RefCell<UndoStack>>,
     presets: EditorPresetState,
     keyboard: KeyboardState,
     /// UIローカルの編集対象ch選択。`None`＝「(なし)」（既定、`SharedEditState::NO_EDIT_CHANNEL`と
@@ -51,9 +53,22 @@ impl EditorApp {
             dirty: Rc::new(Cell::new(false)),
             master: Rc::new(RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
+            undo: Rc::new(RefCell::new(UndoStack::new())),
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
             edit_channel: None,
+        }
+    }
+
+    /// 現在の状態をUndo用のスナップショットとして丸ごと切り出す。
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            patch: *self.patch.borrow(),
+            master: *self.master.borrow(),
+            patch_name: self.presets.patch_name().to_string(),
+            bank: self.presets.bank(),
+            program: self.presets.program(),
+            has_selection: self.presets.has_selection(),
         }
     }
 }
@@ -61,6 +76,7 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let previous_edit_channel = self.edit_channel;
+        self.undo.borrow_mut().begin_frame(self.snapshot());
 
         egui::Panel::top("editor_top_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
@@ -105,11 +121,14 @@ impl eframe::App for EditorApp {
                     patch_dirty: self.dirty.clone(),
                     master: self.master.clone(),
                     master_dirty: self.master_dirty.clone(),
+                    undo: self.undo.clone(),
                 };
                 let panel = build_panel_params(&source);
                 op505_ui::draw_op505_panel(ui, &panel);
             });
         });
+
+        self.undo.borrow_mut().end_frame(self.snapshot());
 
         if self.edit_channel != previous_edit_channel {
             self.shared.set_edit_channel(self.edit_channel);
