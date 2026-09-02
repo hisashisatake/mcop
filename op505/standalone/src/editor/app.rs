@@ -158,6 +158,13 @@ impl eframe::App for EditorApp {
         if presets_events.patch_name_focus_lost {
             self.undo.borrow_mut().note_end_edit();
         }
+        // リスト選択(apply_entry)はbegin_edit/end_editを経由しない単発のパッチ全体差し替え
+        // なので、同フレームでbegin/endの両方を発行して1エントリとして記録する。
+        if presets_events.list_selection_applied {
+            let mut undo = self.undo.borrow_mut();
+            undo.note_begin_edit();
+            undo.note_end_edit();
+        }
 
         egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
             keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);

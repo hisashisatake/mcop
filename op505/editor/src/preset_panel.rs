@@ -450,6 +450,11 @@ pub struct PresetsPanelEvents {
     pub patch_name_focus_gained: bool,
     /// 音色名欄がこのフレームでフォーカスを失った。
     pub patch_name_focus_lost: bool,
+    /// PRESETSリストの通常クリック/Shift+クリックでプリセットがパッチへ適用された
+    /// （+ New Voice/Deleteはバンク構成自体を変える別操作のため対象外）。`apply_entry`は
+    /// `begin_edit`/`end_edit`を経由しないパッチ全体の差し替えのため、単発操作として
+    /// begin/endを同フレームで記録することを呼び出し側へ伝える。
+    pub list_selection_applied: bool,
 }
 
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
@@ -490,9 +495,10 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
 
     let mut patch_name = session.patch_name.clone();
     let patch_name_response = ui.text_edit_singleline(&mut patch_name);
-    let events = PresetsPanelEvents {
+    let mut events = PresetsPanelEvents {
         patch_name_focus_gained: patch_name_response.gained_focus(),
         patch_name_focus_lost: patch_name_response.lost_focus(),
+        list_selection_applied: false,
     };
     if patch_name_response.changed() {
         session.patch_name = patch_name;
@@ -533,6 +539,7 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
                 let keep_fg = ui.input(|i| i.modifiers.shift);
                 apply_entry(host, &entry, keep_fg);
                 session.select_entry(entry.program, entry.name);
+                events.list_selection_applied = true;
             }
         }
         if ui.selectable_label(false, "+ New Voice").clicked() {
