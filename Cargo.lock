@@ -3908,6 +3908,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "op505-editor"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "op505-core",
+ "op505-ui",
+ "rfd",
+ "sound-core",
+ "ui-core",
+]
+
+[[package]]
 name = "op505-midi"
 version = "0.1.0"
 dependencies = [

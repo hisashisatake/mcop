@@ -8,6 +8,7 @@ members = [
     "op505/core",
     "op505/midi",
     "op505/ui",
+    "op505/editor",
     "op505/vst",
     "gesture-app/src-tauri",
     "op505/tools/common",
