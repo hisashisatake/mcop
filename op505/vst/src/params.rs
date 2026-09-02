@@ -348,6 +348,137 @@ pub(crate) fn apply_patch_egs(egs: &mut Op505EgBank, patch: &Op505Patch) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use op505_editor::param_spec::{BoolField, FgSlot, FxInt, IntField, OpInt, PatchInt};
+
+    /// `field`に対応する`Op505VstParams`側の`IntParam`を返す。`_ =>`を使わない全列挙。
+    fn vst_int_param(params: &Op505VstParams, field: IntField) -> &IntParam {
+        match field {
+            IntField::Patch(PatchInt::Algorithm) => &params.algorithm,
+            IntField::Patch(PatchInt::Feedback) => &params.feedback,
+            IntField::Patch(PatchInt::FixedNote) => &params.fixed_note,
+            IntField::Patch(PatchInt::FixedNoteFine) => &params.fixed_note_fine,
+            IntField::Patch(PatchInt::Cutoff) => &params.cutoff,
+            IntField::Patch(PatchInt::Resonance) => &params.resonance,
+            IntField::Patch(PatchInt::FilterType) => &params.filter_type,
+            IntField::Patch(PatchInt::FgDepth(FgSlot::Pitch)) => &params.pitch_fg_depth,
+            IntField::Patch(PatchInt::FgDepth(FgSlot::Cutoff)) => &params.cutoff_fg_depth,
+            IntField::Patch(PatchInt::FgDepth(FgSlot::Gain)) => &params.gain_fg_depth,
+            IntField::Patch(PatchInt::Op(op, op_int)) => {
+                let o = &params.operators[op.index()];
+                match op_int {
+                    OpInt::Tl => &o.tl,
+                    OpInt::Mul => &o.mul,
+                    OpInt::Dt1 => &o.dt1,
+                    OpInt::Ksr => &o.ksr,
+                    OpInt::VelSens => &o.vel_sens,
+                    OpInt::OpFineTune => &o.op_fine_tune,
+                    OpInt::Waveform => &o.waveform,
+                    OpInt::EgShift => &o.eg_shift,
+                    OpInt::LevelScale => &o.level_scale,
+                    OpInt::VelocityGain => &o.velocity_gain,
+                }
+            }
+            IntField::Fx(fx) => match fx {
+                FxInt::RevSend => &params.rev_send,
+                FxInt::ReverbType => &params.reverb_type,
+                FxInt::ReverbTime => &params.reverb_time,
+                FxInt::ChoSend => &params.cho_send,
+                FxInt::ChorusType => &params.chorus_type,
+                FxInt::ChorusModRate => &params.chorus_mod_rate,
+                FxInt::ChorusModDepth => &params.chorus_mod_depth,
+                FxInt::ChorusFeedback => &params.chorus_feedback,
+                FxInt::ChorusSendToReverb => &params.chorus_send_to_reverb,
+            },
+        }
+    }
+
+    /// `field`に対応する`Op505VstParams`側の`BoolParam`を返す。`_ =>`を使わない全列挙。
+    fn vst_bool_param(params: &Op505VstParams, field: BoolField) -> &BoolParam {
+        match field {
+            BoolField::FixedNoteEnable => &params.fixed_note_enable,
+            BoolField::FilterSelfOscillation => &params.filter_self_oscillation,
+            BoolField::GainFgToMaster => &params.gain_fg_to_master,
+            BoolField::GainFgToOperators => &params.gain_fg_to_operators,
+            BoolField::Ame(op) => &params.operators[op.index()].ame,
+        }
+    }
+
+    /// op505-editorの正本（`param_spec`）とDAWパラメーターのname/range/defaultが1個も
+    /// 食い違わないことを検証する。「片方だけ変えても検出できない」問題の構造的解決
+    /// （計画`fancy-wishing-toast.md`のStep 2）。
+    #[test]
+    fn vst_int_params_match_spec() {
+        let params = Op505VstParams::default();
+        for field in IntField::all() {
+            let spec = field.spec();
+            let param = vst_int_param(&params, field);
+            let IntRange::Linear { min, max } = param.range() else {
+                panic!("{field:?} の range が Linear ではない");
+            };
+            assert_eq!(param.name(), spec.daw_name, "{field:?} の name が正本と不一致");
+            assert_eq!(min, spec.min, "{field:?} の min が正本と不一致");
+            assert_eq!(max, spec.max, "{field:?} の max が正本と不一致");
+            assert_eq!(param.default_plain_value(), spec.default, "{field:?} の default が正本と不一致");
+        }
+    }
+
+    #[test]
+    fn vst_bool_params_match_spec() {
+        let params = Op505VstParams::default();
+        for field in BoolField::ALL {
+            let spec = field.spec();
+            let param = vst_bool_param(&params, field);
+            assert_eq!(param.name(), spec.daw_name, "{field:?} の name が正本と不一致");
+            assert_eq!(param.default_plain_value(), spec.default, "{field:?} の default が正本と不一致");
+        }
+    }
+
+    /// DAWパラメーターIDの集合を凍結する。ここが変わると既存DAWプロジェクトの
+    /// オートメーション対応が壊れる（`#[id]`は絶対に変更しない、というリスク①の防御層）。
+    /// オペレーター単位のIDは`#[nested(array, ...)]`により`{id}_{1..=4}`へ展開される。
+    #[test]
+    fn param_ids_are_frozen() {
+        let params = Op505VstParams::default();
+        let mut ids: Vec<String> = params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        ids.sort();
+
+        let mut expected: Vec<String> = [
+            "algorithm",
+            "feedback",
+            "cutoff",
+            "resonance",
+            "filter_type",
+            "filter_self_osc",
+            "pitch_fg_depth",
+            "cutoff_fg_depth",
+            "gain_fg_depth",
+            "gain_fg_to_master",
+            "gain_fg_to_operators",
+            "fixed_note_enable",
+            "fixed_note",
+            "fixed_note_fine",
+            "rev_send",
+            "cho_send",
+            "rev_type",
+            "rev_time",
+            "cho_type",
+            "cho_rate",
+            "cho_depth",
+            "cho_fb",
+            "cho_to_rev",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for idx in 1..=4 {
+            for base in ["tl", "mul", "dt1", "ksr", "ame", "vel_sens", "op_fine", "wf", "op_eg_shift", "op_level_scale", "op_vel_gain"] {
+                expected.push(format!("{base}_{idx}"));
+            }
+        }
+        expected.sort();
+
+        assert_eq!(ids, expected, "DAWパラメーターID集合が変化した（#[id]属性の変更は禁止）");
+    }
 
     #[test]
     fn build_patch_reflects_daw_params_and_egs() {
