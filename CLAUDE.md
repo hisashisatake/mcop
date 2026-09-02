@@ -150,6 +150,15 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
     ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）。
                           `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成。
                           `preview-wasm/`（xml-panel-dsl用のwasm-bindgenラッパー）が同居。ワークスペース非メンバー
+    editor/            ← op505-vst/standaloneのエディタ重複（PRESETSパネル・パネル組み立て・
+                          min/max/default定義）を吸収する共有クレート（クレート名op505-editor、
+                          2026-09-02新設）。`PresetHost`/`PanelParamSource`の2トレイトでホスト差分を
+                          吸収する（`preset_panel.rs`/`panel_source.rs`）。`param_spec.rs`がDAW名・
+                          ノブ短縮名・min/max/defaultの正本。standalone側の実装（`Rc<RefCell<
+                          Op505Patch>>`ベース）は`patch_source.rs`にも同居する。fork-on-write方針の
+                          限定的な例外（詳細はspec-fm.md 8章⑧、依存ガードは`.claude/rules/
+                          crate-dependency-guard.md`）。nice-plug/eframe/winit/cpal/midir/serde/
+                          Tauriに依存しない
     vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了
                           2026-08-12、フェーズ2完了2026-08-12）。
                           パラメーターDAWパラメーター67個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
@@ -248,6 +257,9 @@ Tauriにも依存しない純粋なRustライブラリ。音源エンジンの�
 `ui-core`・`op505-ui`はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない
 （VSTとstandaloneの音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用。
 gesture-appは2026-09-01のMIDI送信化でエディタごとエンジンを手放したため、もうこの依存に含まれない）。
+`op505-editor`はegui+op505-core+op505-ui+ui-core+sound-core+rfdの6本のみに依存し、
+nice-plug/eframe/winit/cpal/midir/serde/Tauriに依存しない（VSTとstandaloneのPRESETSパネル・
+パネル組み立てが共有するロジック、詳細はspec-fm.md 8章⑧）。
 
 ---
 
