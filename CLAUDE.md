@@ -150,9 +150,18 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
     ui/                ← エディタパネル定義（クレート名op505-ui。egui+sound-core+ui-coreに依存）。
                           `src/panel.xml`が正本、build.rsがui-codegen経由で`panel.rs`へinclude!するRustを生成。
                           `preview-wasm/`（xml-panel-dsl用のwasm-bindgenラッパー）が同居。ワークスペース非メンバー
+    editor/            ← op505-vst/standaloneのエディタ重複（PRESETSパネル・パネル組み立て・
+                          min/max/default定義）を吸収する共有クレート（クレート名op505-editor、
+                          2026-09-02新設）。`PresetHost`/`PanelParamSource`の2トレイトでホスト差分を
+                          吸収する（`preset_panel.rs`/`panel_source.rs`）。`param_spec.rs`がDAW名・
+                          ノブ短縮名・min/max/defaultの正本。standalone側の実装（`Rc<RefCell<
+                          Op505Patch>>`ベース）は`patch_source.rs`にも同居する。fork-on-write方針の
+                          限定的な例外（詳細はspec-fm.md 8章⑧、依存ガードは`.claude/rules/
+                          crate-dependency-guard.md`）。nice-plug/eframe/winit/cpal/midir/serde/
+                          Tauriに依存しない
     vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了
                           2026-08-12、フェーズ2完了2026-08-12）。
-                          パラメーターDAWパラメーター75個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
+                          パラメーターDAWパラメーター67個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
                           （OP1〜4 EG・Pitch/Cutoff/Gain FG、計203値）はnice-plugの`#[persist]`で
                           プロジェクト保存（DAWパラメーター化するとEGグラフの点操作1回で29個の
                           オートメーションイベントが走り記録単位が壊れるため）。オーディオスレッドは
@@ -248,6 +257,9 @@ Tauriにも依存しない純粋なRustライブラリ。音源エンジンの�
 `ui-core`・`op505-ui`はegui+sound-coreに依存し、nice-plug/Tauri/cpalに依存しない
 （VSTとstandaloneの音色エディタが共有する描画ロジック。sound-coreはEG形状プレビュー計算用。
 gesture-appは2026-09-01のMIDI送信化でエディタごとエンジンを手放したため、もうこの依存に含まれない）。
+`op505-editor`はegui+op505-core+op505-ui+ui-core+sound-core+rfdの6本のみに依存し、
+nice-plug/eframe/winit/cpal/midir/serde/Tauriに依存しない（VSTとstandaloneのPRESETSパネル・
+パネル組み立てが共有するロジック、詳細はspec-fm.md 8章⑧）。
 
 ---
 
@@ -494,7 +506,7 @@ MIDI・ジェスチャー解釈・UIはコアの外側で行う。
 - `sound-core`/`sound-fm`と`op505-core`は常にnice-plug・Tauri・cpalに無依存を保つ
 - 波形フォーマットは1024×uint16_t対数で統一。変換パイプラインはsound-coreに実装
 - パラメーターは全て0〜255（8bit）統一。例外は周波数（オクターブ3bit + F-Number 13bit = 16bit、常にOP単位×4）とMUL（0〜15、OPM/OPN/OPQ/OPZ共通のMultiple 4bitに準拠）
-- `op505-vst`はフェーズ1（DAWパラメーター75個+persist EG7本、鳴らす・編集する・プリセット選択まで）・フェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等のMIDI表現系）とも完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ（詳細はspec-roadmap.mdフェーズ8）
+- `op505-vst`はフェーズ1（DAWパラメーター67個+persist EG7本、鳴らす・編集する・プリセット選択まで）・フェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等のMIDI表現系）とも完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ（詳細はspec-roadmap.mdフェーズ8）
 - VST3/CLAPプラグインフレームワークはnice-plug（nih-plugのフォーク、https://codeberg.org/RustAudio/nice-plug ）を使用する
 - **nice-plug制限: `ProcessContext::set_parameter()`未実装（nice-plug-core 0.1.4時点）**。`process()`内からDAWパラメーターを書き戻せないため、NRPNとDAWオートメーションの共存には「シャドウフィールド＋差分検知方式」で迂回している（`last_algorithm`・`last_operator_waveforms`等）。nice-plugがこれを実装したら差分検知ロジックを削除しNRPN受信時に`context.set_parameter()`を呼ぶ方式へ移行できる
 - Co-Authored-By:～はコミットメッセージに追加しない

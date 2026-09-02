@@ -1,17 +1,20 @@
 use nice_plug::prelude::*;
 use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch};
+use op505_editor::param_spec::{BoolField, FgSlot, FxInt, IntField, IntSpec, OpIndex, OpInt, PatchInt};
 use serde::{Deserialize, Serialize};
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
 use std::sync::{Arc, RwLock};
 
-pub(crate) const DEFAULT_ALGORITHM: u8 = 0;
-pub(crate) const DEFAULT_REVERB_TIME: u8 = 128;
-pub(crate) const DEFAULT_CHORUS_MOD_RATE: u8 = 128;
-pub(crate) const DEFAULT_CHORUS_MOD_DEPTH: u8 = 128;
-pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = 0;
-pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = 0;
-pub(crate) const DEFAULT_REVERB_TYPE: u8 = 3;
-pub(crate) const DEFAULT_CHORUS_TYPE: u8 = 0;
+/// op505-editorの正本（`param_spec`）から導出する。`PatchInt`/`FxInt`の`spec()`は`const fn`のため
+/// ここもconstのまま保てる（正本とリテラルが2箇所に分かれることを防ぐ）。
+pub(crate) const DEFAULT_ALGORITHM: u8 = PatchInt::Algorithm.spec().default as u8;
+pub(crate) const DEFAULT_REVERB_TIME: u8 = FxInt::ReverbTime.spec().default as u8;
+pub(crate) const DEFAULT_CHORUS_MOD_RATE: u8 = FxInt::ChorusModRate.spec().default as u8;
+pub(crate) const DEFAULT_CHORUS_MOD_DEPTH: u8 = FxInt::ChorusModDepth.spec().default as u8;
+pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = FxInt::ChorusFeedback.spec().default as u8;
+pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = FxInt::ChorusSendToReverb.spec().default as u8;
+pub(crate) const DEFAULT_REVERB_TYPE: u8 = FxInt::ReverbType.spec().default as u8;
+pub(crate) const DEFAULT_CHORUS_TYPE: u8 = FxInt::ChorusType.spec().default as u8;
 
 /// 中央128のバイポーラパラメーター（0〜255のオフセットバイナリ）を、DAWのオートメーション表示でも
 /// -128〜+127の符号付きで見せる。エディタ側は`ui_core::BipolarHandle`が同じ写像を行うので、
@@ -31,6 +34,34 @@ fn bipolar_int(param: IntParam) -> IntParam {
             // Rustのi32パースは先頭の'+'をそのまま受け付けるため、符号の前処理は不要。
             s.trim().parse::<i32>().ok().map(|centered| (centered + 128).clamp(0, 255))
         }))
+}
+
+/// `spec`からDAWの`IntParam`を組み立てる。`daw_bipolar`が立っていれば`bipolar_int`を適用する。
+fn param_from_int_spec(spec: IntSpec) -> IntParam {
+    let param = IntParam::new(spec.daw_name, spec.default, IntRange::Linear { min: spec.min, max: spec.max });
+    if spec.daw_bipolar {
+        bipolar_int(param)
+    } else {
+        param
+    }
+}
+
+/// `field`の正本（op505-editor::param_spec）からDAWの`IntParam`を組み立てる。
+fn int_param(field: IntField) -> IntParam {
+    param_from_int_spec(field.spec())
+}
+
+/// オペレーター単位の`OpInt`から直接組み立てる。`OperatorVstParams::default()`は4オペレーター
+/// 共通のため`OpIndex`を持たない（`OpInt::spec()`がオペレーター非依存であることは
+/// op505-editor側の`op_field_spec_is_operator_independent`でテスト済み）。
+fn op_int_param(op_int: OpInt) -> IntParam {
+    param_from_int_spec(op_int.spec())
+}
+
+/// `field`の正本からDAWの`BoolParam`を組み立てる。
+fn bool_param(field: BoolField) -> BoolParam {
+    let spec = field.spec();
+    BoolParam::new(spec.daw_name, spec.default)
 }
 
 /// キーオンから即座にフルレベルへ達しサステインし、キーオフでレベル0へ落ちる2段EG。
@@ -62,9 +93,10 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
 /// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
-/// **DAWパラメーター数（78個、Step 8でfixed_note_*3個追加により75→78）はこの束が`#[persist]`
-/// である限り不変**——段数拡張はここに
-/// 収まる値の中身が増えるだけで、DAWから見えるパラメーター一覧には影響しない。
+/// **DAWパラメーター数（67個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
+/// 59+8）はこの束が`#[persist]`である限り不変**——段数拡張はここに
+/// 収まる値の中身が増えるだけで、DAWから見えるパラメーター一覧には影響しない
+/// （従来コメントの「78個」は誤りだった。実数は`param_ids_are_frozen`テストで凍結済み）。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Op505EgBank {
     pub operators: [TimeEgParams; 4],
@@ -127,17 +159,18 @@ impl Default for OperatorVstParams {
     /// `Op505OperatorParams::default()`はtl=0で無音のため個別に明示値を設定する）。
     fn default() -> Self {
         Self {
-            tl: IntParam::new("TL", 200, IntRange::Linear { min: 0, max: 255 }),
-            mul: IntParam::new("MUL", 1, IntRange::Linear { min: 0, max: 15 }),
-            dt1: bipolar_int(IntParam::new("DT1", 128, IntRange::Linear { min: 0, max: 255 })),
-            ksr: IntParam::new("KSR", 64, IntRange::Linear { min: 0, max: 255 }),
-            ame: BoolParam::new("AM Enable", false),
-            vel_sens: IntParam::new("Velocity Sensitivity", 0, IntRange::Linear { min: 0, max: 255 }),
-            op_fine_tune: bipolar_int(IntParam::new("Op Fine Tune", 128, IntRange::Linear { min: 0, max: 255 })),
-            waveform: IntParam::new("Waveform", 0, IntRange::Linear { min: 0, max: 255 }),
-            eg_shift: IntParam::new("Op EG Shift", 0, IntRange::Linear { min: 0, max: 255 }),
-            level_scale: IntParam::new("Op Level Scale", 0, IntRange::Linear { min: 0, max: 255 }),
-            velocity_gain: IntParam::new("Op Velocity Gain", 255, IntRange::Linear { min: 0, max: 255 }),
+            tl: op_int_param(OpInt::Tl),
+            mul: op_int_param(OpInt::Mul),
+            dt1: op_int_param(OpInt::Dt1),
+            ksr: op_int_param(OpInt::Ksr),
+            // AM Enableの既定はオペレーター非依存（BoolField::Ame(_)のspec()参照）。
+            ame: bool_param(BoolField::Ame(OpIndex::Op1)),
+            vel_sens: op_int_param(OpInt::VelSens),
+            op_fine_tune: op_int_param(OpInt::OpFineTune),
+            waveform: op_int_param(OpInt::Waveform),
+            eg_shift: op_int_param(OpInt::EgShift),
+            level_scale: op_int_param(OpInt::LevelScale),
+            velocity_gain: op_int_param(OpInt::VelocityGain),
         }
     }
 }
@@ -218,30 +251,30 @@ pub(crate) struct Op505VstParams {
 impl Default for Op505VstParams {
     fn default() -> Self {
         Self {
-            algorithm: IntParam::new("Algorithm", DEFAULT_ALGORITHM as i32, IntRange::Linear { min: 0, max: 7 }),
-            feedback: IntParam::new("Feedback", 0, IntRange::Linear { min: 0, max: 255 }),
-            cutoff: IntParam::new("Filter Cutoff", 255, IntRange::Linear { min: 0, max: 255 }),
-            resonance: IntParam::new("Filter Resonance", 0, IntRange::Linear { min: 0, max: 255 }),
-            filter_type: IntParam::new("Filter Type", 0, IntRange::Linear { min: 0, max: 255 }),
-            filter_self_oscillation: BoolParam::new("Filter Self-Oscillation", true),
-            pitch_fg_depth: IntParam::new("Pitch FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            cutoff_fg_depth: IntParam::new("Cutoff FG Depth", 0, IntRange::Linear { min: 0, max: 255 }),
-            gain_fg_depth: IntParam::new("Gain FG Depth", 255, IntRange::Linear { min: 0, max: 255 }),
-            gain_fg_to_master: BoolParam::new("Gain FG to Master", true),
-            gain_fg_to_operators: BoolParam::new("Gain FG to Operators", false),
-            fixed_note_enable: BoolParam::new("Fixed Note Enable", false),
-            fixed_note: IntParam::new("Fixed Note", 60, IntRange::Linear { min: 0, max: 127 }),
-            fixed_note_fine: bipolar_int(IntParam::new("Fixed Note Fine", 128, IntRange::Linear { min: 0, max: 255 })),
+            algorithm: int_param(IntField::Patch(PatchInt::Algorithm)),
+            feedback: int_param(IntField::Patch(PatchInt::Feedback)),
+            cutoff: int_param(IntField::Patch(PatchInt::Cutoff)),
+            resonance: int_param(IntField::Patch(PatchInt::Resonance)),
+            filter_type: int_param(IntField::Patch(PatchInt::FilterType)),
+            filter_self_oscillation: bool_param(BoolField::FilterSelfOscillation),
+            pitch_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Pitch))),
+            cutoff_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Cutoff))),
+            gain_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Gain))),
+            gain_fg_to_master: bool_param(BoolField::GainFgToMaster),
+            gain_fg_to_operators: bool_param(BoolField::GainFgToOperators),
+            fixed_note_enable: bool_param(BoolField::FixedNoteEnable),
+            fixed_note: int_param(IntField::Patch(PatchInt::FixedNote)),
+            fixed_note_fine: int_param(IntField::Patch(PatchInt::FixedNoteFine)),
             operators: Default::default(),
-            rev_send: IntParam::new("Reverb Send", 0, IntRange::Linear { min: 0, max: 255 }),
-            cho_send: IntParam::new("Chorus Send", 0, IntRange::Linear { min: 0, max: 255 }),
-            reverb_type: IntParam::new("Reverb Type", DEFAULT_REVERB_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
-            reverb_time: IntParam::new("Reverb Time", DEFAULT_REVERB_TIME as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_type: IntParam::new("Chorus Type", DEFAULT_CHORUS_TYPE as i32, IntRange::Linear { min: 0, max: 7 }),
-            chorus_mod_rate: IntParam::new("Chorus Mod Rate", DEFAULT_CHORUS_MOD_RATE as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_mod_depth: IntParam::new("Chorus Mod Depth", DEFAULT_CHORUS_MOD_DEPTH as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_feedback: IntParam::new("Chorus Feedback", DEFAULT_CHORUS_FEEDBACK as i32, IntRange::Linear { min: 0, max: 255 }),
-            chorus_send_to_reverb: IntParam::new("Chorus Send To Reverb", DEFAULT_CHORUS_SEND_TO_REVERB as i32, IntRange::Linear { min: 0, max: 255 }),
+            rev_send: int_param(IntField::Fx(FxInt::RevSend)),
+            cho_send: int_param(IntField::Fx(FxInt::ChoSend)),
+            reverb_type: int_param(IntField::Fx(FxInt::ReverbType)),
+            reverb_time: int_param(IntField::Fx(FxInt::ReverbTime)),
+            chorus_type: int_param(IntField::Fx(FxInt::ChorusType)),
+            chorus_mod_rate: int_param(IntField::Fx(FxInt::ChorusModRate)),
+            chorus_mod_depth: int_param(IntField::Fx(FxInt::ChorusModDepth)),
+            chorus_feedback: int_param(IntField::Fx(FxInt::ChorusFeedback)),
+            chorus_send_to_reverb: int_param(IntField::Fx(FxInt::ChorusSendToReverb)),
             egs: Arc::new(RwLock::new(Op505EgBank::default())),
         }
     }
@@ -345,9 +378,140 @@ pub(crate) fn apply_patch_egs(egs: &mut Op505EgBank, patch: &Op505Patch) {
     egs.gain_fg = patch.channel.gain_fg.eg;
 }
 
+/// `field`に対応する`Op505VstParams`側の`IntParam`を返す。`_ =>`を使わない全列挙。
+/// `param_adapter::VstPanelSource`（パネル描画）と`#[cfg(test)]`側の一致検証テストの両方が使う。
+pub(crate) fn int_param_ref(params: &Op505VstParams, field: IntField) -> &IntParam {
+    match field {
+        IntField::Patch(PatchInt::Algorithm) => &params.algorithm,
+        IntField::Patch(PatchInt::Feedback) => &params.feedback,
+        IntField::Patch(PatchInt::FixedNote) => &params.fixed_note,
+        IntField::Patch(PatchInt::FixedNoteFine) => &params.fixed_note_fine,
+        IntField::Patch(PatchInt::Cutoff) => &params.cutoff,
+        IntField::Patch(PatchInt::Resonance) => &params.resonance,
+        IntField::Patch(PatchInt::FilterType) => &params.filter_type,
+        IntField::Patch(PatchInt::FgDepth(FgSlot::Pitch)) => &params.pitch_fg_depth,
+        IntField::Patch(PatchInt::FgDepth(FgSlot::Cutoff)) => &params.cutoff_fg_depth,
+        IntField::Patch(PatchInt::FgDepth(FgSlot::Gain)) => &params.gain_fg_depth,
+        IntField::Patch(PatchInt::Op(op, op_int)) => {
+            let o = &params.operators[op.index()];
+            match op_int {
+                OpInt::Tl => &o.tl,
+                OpInt::Mul => &o.mul,
+                OpInt::Dt1 => &o.dt1,
+                OpInt::Ksr => &o.ksr,
+                OpInt::VelSens => &o.vel_sens,
+                OpInt::OpFineTune => &o.op_fine_tune,
+                OpInt::Waveform => &o.waveform,
+                OpInt::EgShift => &o.eg_shift,
+                OpInt::LevelScale => &o.level_scale,
+                OpInt::VelocityGain => &o.velocity_gain,
+            }
+        }
+        IntField::Fx(fx) => match fx {
+            FxInt::RevSend => &params.rev_send,
+            FxInt::ReverbType => &params.reverb_type,
+            FxInt::ReverbTime => &params.reverb_time,
+            FxInt::ChoSend => &params.cho_send,
+            FxInt::ChorusType => &params.chorus_type,
+            FxInt::ChorusModRate => &params.chorus_mod_rate,
+            FxInt::ChorusModDepth => &params.chorus_mod_depth,
+            FxInt::ChorusFeedback => &params.chorus_feedback,
+            FxInt::ChorusSendToReverb => &params.chorus_send_to_reverb,
+        },
+    }
+}
+
+/// `field`に対応する`Op505VstParams`側の`BoolParam`を返す。`_ =>`を使わない全列挙。
+pub(crate) fn bool_param_ref(params: &Op505VstParams, field: BoolField) -> &BoolParam {
+    match field {
+        BoolField::FixedNoteEnable => &params.fixed_note_enable,
+        BoolField::FilterSelfOscillation => &params.filter_self_oscillation,
+        BoolField::GainFgToMaster => &params.gain_fg_to_master,
+        BoolField::GainFgToOperators => &params.gain_fg_to_operators,
+        BoolField::Ame(op) => &params.operators[op.index()].ame,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// op505-editorの正本（`param_spec`）とDAWパラメーターのname/range/defaultが1個も
+    /// 食い違わないことを検証する。「片方だけ変えても検出できない」問題の構造的解決
+    /// （計画`fancy-wishing-toast.md`のStep 2）。
+    #[test]
+    fn vst_int_params_match_spec() {
+        let params = Op505VstParams::default();
+        for field in IntField::all() {
+            let spec = field.spec();
+            let param = int_param_ref(&params, field);
+            let IntRange::Linear { min, max } = param.range() else {
+                panic!("{field:?} の range が Linear ではない");
+            };
+            assert_eq!(param.name(), spec.daw_name, "{field:?} の name が正本と不一致");
+            assert_eq!(min, spec.min, "{field:?} の min が正本と不一致");
+            assert_eq!(max, spec.max, "{field:?} の max が正本と不一致");
+            assert_eq!(param.default_plain_value(), spec.default, "{field:?} の default が正本と不一致");
+        }
+    }
+
+    #[test]
+    fn vst_bool_params_match_spec() {
+        let params = Op505VstParams::default();
+        for field in BoolField::ALL {
+            let spec = field.spec();
+            let param = bool_param_ref(&params, field);
+            assert_eq!(param.name(), spec.daw_name, "{field:?} の name が正本と不一致");
+            assert_eq!(param.default_plain_value(), spec.default, "{field:?} の default が正本と不一致");
+        }
+    }
+
+    /// DAWパラメーターIDの集合を凍結する。ここが変わると既存DAWプロジェクトの
+    /// オートメーション対応が壊れる（`#[id]`は絶対に変更しない、というリスク①の防御層）。
+    /// オペレーター単位のIDは`#[nested(array, ...)]`により`{id}_{1..=4}`へ展開される。
+    #[test]
+    fn param_ids_are_frozen() {
+        let params = Op505VstParams::default();
+        let mut ids: Vec<String> = params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        ids.sort();
+
+        let mut expected: Vec<String> = [
+            "algorithm",
+            "feedback",
+            "cutoff",
+            "resonance",
+            "filter_type",
+            "filter_self_osc",
+            "pitch_fg_depth",
+            "cutoff_fg_depth",
+            "gain_fg_depth",
+            "gain_fg_to_master",
+            "gain_fg_to_operators",
+            "fixed_note_enable",
+            "fixed_note",
+            "fixed_note_fine",
+            "rev_send",
+            "cho_send",
+            "rev_type",
+            "rev_time",
+            "cho_type",
+            "cho_rate",
+            "cho_depth",
+            "cho_fb",
+            "cho_to_rev",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for idx in 1..=4 {
+            for base in ["tl", "mul", "dt1", "ksr", "ame", "vel_sens", "op_fine", "wf", "op_eg_shift", "op_level_scale", "op_vel_gain"] {
+                expected.push(format!("{base}_{idx}"));
+            }
+        }
+        expected.sort();
+
+        assert_eq!(ids, expected, "DAWパラメーターID集合が変化した（#[id]属性の変更は禁止）");
+    }
 
     #[test]
     fn build_patch_reflects_daw_params_and_egs() {

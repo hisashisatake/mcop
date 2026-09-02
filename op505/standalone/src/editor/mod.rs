@@ -29,8 +29,7 @@ use crate::shared::SharedEditState;
 
 mod app;
 mod keyboard;
-mod panel_params;
-mod preset_panel;
+mod preset_host;
 
 use app::EditorApp;
 
@@ -129,13 +128,12 @@ fn run_editor_once(shared: &Arc<SharedEditState>, midi_sink: &MidiSink, ctx_slot
         event_loop_builder: Some(Box::new(|builder| {
             builder.with_any_thread(true).with_dpi_aware(false);
         })),
-        // 幅はop505-uiパネルの最小幅（panel.xmlから算出、ノブ等が折り返さず収まるサイズ）+
-        // PRESETSサイドバー(`app::PRESETS_SIDEBAR_WIDTH`と同値)+余白。
-        // 高さは4オペレーター分のTimeEgエディタが縦に並ぶため大きめに確保し、収まらない分は
-        // ScrollArea（`app.rs`）に任せる。
+        // 幅はop505-editorの正本（`op505_editor::layout::editor_min_width()`、op505-uiパネルの
+        // 最小幅+PRESETSサイドバー+余白）。高さは4オペレーター分のTimeEgエディタが縦に並ぶため
+        // 大きめに確保し、収まらない分はScrollArea（`app.rs`）に任せる。
         viewport: egui::ViewportBuilder::default()
             .with_title("op505 Tone Editor")
-            .with_inner_size([op505_ui::PANEL_MIN_WIDTH + 200.0 + 40.0, 720.0]),
+            .with_inner_size([op505_editor::layout::editor_min_width(), 720.0]),
         ..Default::default()
     };
 

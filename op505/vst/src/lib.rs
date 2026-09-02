@@ -1,7 +1,7 @@
 mod editor;
 mod param_adapter;
 mod params;
-mod preset_panel;
+mod preset_host;
 
 use op505_midi::{
     cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
@@ -186,12 +186,9 @@ impl Default for Op505Plugin {
             preset_bank: Op505PresetBank::default(),
             shared_preset_bank: Arc::new(RwLock::new(Op505PresetBank::default())),
             preset_bank_dirty: Arc::new(AtomicBool::new(false)),
-            // 既定サイズもeditor_min_size()以上にしておく（下回るとエディタが開いた瞬間から
+            // 既定サイズもeditor_min_width()以上にしておく（下回るとエディタが開いた瞬間から
             // 横スクロールを要求する状態になり体験が悪いため）。
-            egui_state: {
-                let (min_w, _) = editor::editor_min_size();
-                EguiState::from_size(min_w.ceil() as u32, 680)
-            },
+            egui_state: EguiState::from_size(op505_editor::layout::editor_min_width().ceil() as u32, 680),
         }
     }
 }

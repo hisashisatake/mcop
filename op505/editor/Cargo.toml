@@ -1,0 +1,16 @@
+[package]
+name = "op505-editor"
+version = "0.1.0"
+edition = "2021"
+
+# op505-vst/op505-standaloneのエディタ重複（PRESETSパネル・パネル組み立て・min/max/default定義）を
+# 集約する共有クレート。両ホストが既に持つ依存6本のみを使い、nice-plug/eframe/winit/cpal/midir/serde/
+# Tauriには依存しない（serde非依存はOp505EgBank誤移設を構造的に防ぐための意図的な制約。
+# 詳細は`.claude/plans/fancy-wishing-toast.md`とspec-fm.md 8章⑧）。
+[dependencies]
+egui = "0.34"
+op505-core = { path = "../core" }
+op505-ui = { path = "../ui" }
+ui-core = { path = "../../ui/core" }
+sound-core = { path = "../../sound/core" }
+rfd = "0.15"

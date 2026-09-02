@@ -611,9 +611,18 @@ op505-vstはどちらも現役のop505製品であり、この非対称性は存
 **境界線**: `op505-core::preset_registry`が持つのは「1バンク=1ファイルという規則そのもの」
 （`Op505BankFile`のメソッド群・`build_op505_registry`・`resolve_patch`）に限る。Tauri結合部
 （`#[tauri::command]`・`tauri::State`・`DialogExt`ネイティブダイアログ）はgesture-appに、
-egui/rfd結合部（PRESETSパネルの描画・ボタンハンドラ）はop505-vstに残す——「解釈のロジック」と
+~~egui/rfd結合部（PRESETSパネルの描画・ボタンハンドラ）はop505-vstに残す~~——「解釈のロジック」と
 「ホスト固有のUI/IPC」を分離する境界線は、⑤・GM2リズムチャンネルの`ChannelProgramState`と
 同じ形を保っている。
+
+**2026-09-02改訂**: 取り消し線部分は前提が変わったため撤回する。この段落を書いた時点
+（2026-08-27）でPRESETSパネルのもう一方の消費者は`gesture-app`（Tauri＋`DialogExt`ネイティブ
+ダイアログ）であり、「egui/rfd結合部はop505-vstに残す」は「Tauriという別のUIフレームワークと
+egui+rfdを同じ場所に同居させない」という前提に基づいていた。`gesture-app/editor-wasm`撤廃
+（2026-09-01）でこの前提が消え、`op505-standalone`もegui+rfd構成になった（`op505/standalone/
+Cargo.toml`参照）ため、egui/rfd結合部（PRESETSパネルの描画・ボタンハンドラ）は両ホストの
+共通項になった。⑧でこれを`op505-editor`側へ移設し、「解釈のロジック」と「ホスト固有のUI/IPC」
+を分離する境界線を「Tauri結合部だけがgesture-appに残る」形へ引き直した（詳細は⑧参照）。
 
 ### ⑦ MasterEffectsのマルチスロット化（NRPN(0,1) Channel Effect Route、2026-08-28）
 
@@ -650,3 +659,38 @@ CC91/93も送信チャンネルのeffect_route_slot追従にすることで、�
 エフェクト設定NRPNもCC91/93も音声も全部スロット0へ向かう→既存のSMF/プリセット/DAWオートメーションの
 出力はビット不変（`smf2op505`の`no_effect_routing_is_bit_identical_across_runs`・既存32テスト全通過
 で確認済み）。
+
+### ⑧ op505エディタの共通化（PRESETSパネル・パネル組み立て、⑤⑥と同じ例外条件、2026-09-02）
+
+`gesture-app/editor-wasm`の撤廃（2026-09-01、gesture-appのMIDI送信化に伴う）で、op505の音色
+エディタを描画するホストは`op505-vst`（DAWプラグイン）と`op505-standalone`（トレイ常駐アプリ）の
+**ネイティブ2つだけ**になった。両者は同じ`op505-ui::draw_op505_panel`を共有していたが、その
+**外側**（PRESETSパネル約550行が90%同一、パネル組み立て約155行、min/max/default 74個分の
+二重管理）が大量に重複していた。複製（fork-on-write）ではなく共有クレート`op505-editor`
+（`op505/editor`）への切り出しで対応した。
+
+**⑤・⑥と同じ例外条件に合致することを確認済み**:
+1. **複製すると正誤の基準が消える**: 「Saveで何がファイルに書かれるか」「Delete後どれが選ばれるか」
+   がVSTとstandaloneで食い違ったとき、どちらが正しいかを決める外部基準が無い。⑥は「1バンク=1
+   ファイル規則」だけを`op505-core::preset_registry`へ昇格し、**それを操作する側の意味論**
+   （PRESETSパネルのUI・状態遷移）は複製のまま残していた。⑧はその残りを回収する
+2. **両消費者が現役のop505製品**（op505/ym38x6のような非対称性が無い、⑤⑥と同じ確認事項）
+3. **新しい依存辺が増えない**: `op505-editor`の依存6本（egui/op505-core/op505-ui/ui-core/
+   sound-core/rfd）はすべて両ホストが既に持っている辺
+
+**境界線**: `op505-editor`が持つのは「ホスト差分を吸収する2トレイト」（`PresetHost`：
+`current_patch`/`apply_patch`/`publish_bank`の3操作、`PanelParamSource`：`int`/`boolean`/`eg`
+の3操作）と、それらを使う共有ロジック（`preset_panel.rs`のPRESETSパネル状態遷移・描画、
+`panel_source.rs`のパネル組み立て、`param_spec.rs`のmin/max/default/表示名の正本、
+`layout.rs`のPRESETSサイドバー幅・エディタ最小幅）に限る。ホスト固有部分（nice-plugのDAW
+パラメーター定義・`#[persist]`状態・`ParamSetter`はop505-vst、eframe常駐スレッド・鍵盤・
+`SharedEditState`はop505-standalone）は各ホストに残す。`op505-editor`はnice-plug/eframe/
+winit/cpal/midir/serde/Tauriに依存しない——特に`serde`を入れないことで、VSTの
+`#[persist = "op505_egs"]`対象である`Op505EgBank`（プロジェクトファイルにJSONとして焼かれて
+いる）をうっかり移設できない構造にしている。
+
+**⑥の境界線段落の改訂**: ⑥の「egui/rfd結合部はop505-vstに残す」という記述は前提
+（もう一方の消費者がgesture-app/Tauriだった）が変わったため撤回した（⑥本文の
+「2026-09-02改訂」注記参照）。egui/rfd結合部（PRESETSパネルの描画・状態遷移、rfdの
+スレッド分離パターン——`thread::spawn`+`mpsc`+毎フレーム`try_recv`——も含む）は丸ごと
+`op505-editor`側へ移設済み。
