@@ -766,6 +766,14 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     let params = handle.params();
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     if !ui.is_rect_visible(rect) {
+        // 可視性を失うと以降の`response.dragged()`/`drag_stopped()`判定に到達できず、
+        // ドラッグ中にスクロール等で画面外へ出た場合、`begin_edit`に対応する`end_edit`が
+        // 永久に発行されないままになる（Undo記録が壊れる）。可視性を失った時点で
+        // ドラッグを強制終了しておく。
+        if drag.is_some() {
+            handle.end_edit();
+            ui.memory_mut(|m| m.data.insert_temp(drag_id, None::<DragTarget>));
+        }
         return;
     }
     let painter = ui.painter();

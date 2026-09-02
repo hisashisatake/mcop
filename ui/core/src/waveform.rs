@@ -24,6 +24,31 @@ pub const SQUARE_VARIANTS: [&str; 8] = [
     "PWM 50%", "PWM 33%", "PWM 25%", "PWM 16.7%", "PWM 12.5%", "PWM 6.25%", "Half", "2x Half",
 ];
 
+/// `egui::DragValue`用のbegin/set/end発行ヘルパー。
+///
+/// `DragValue`はドラッグ操作（`drag_started`/`drag_stopped`で括れる）と、クリックしてテキストを
+/// 直接入力し確定する操作（ドラッグが一度も発生しない）の2経路を持つ。前者はドラッグの
+/// 開始/終了をUndoの操作境界として使えるが、後者は`drag_started`/`drag_stopped`が発火しないため
+/// 同じ扱いをすると`begin_edit`のない`end_edit`だけが飛び、Undo記録から漏れる。そこで
+/// ドラッグを伴わない変更は単発でbegin/set/endをまとめて発行する。
+fn commit_drag_value(handle: &dyn IntParamHandle, response: &egui::Response, value: i32) {
+    if response.drag_started() {
+        handle.begin_edit();
+    }
+    if response.changed() {
+        if response.dragged() {
+            handle.set(value);
+        } else {
+            handle.begin_edit();
+            handle.set(value);
+            handle.end_edit();
+        }
+    }
+    if response.drag_stopped() {
+        handle.end_edit();
+    }
+}
+
 /// オペレーターのWaveformパラメーター専用セレクター。
 /// カテゴリ(Sine/Saw/Square/Triangle/Noise/User)をコンボボックスで選び、
 /// ビルトイン4種はさらにOPZ8バリアントを選択する。
@@ -31,6 +56,7 @@ pub const SQUARE_VARIANTS: [&str; 8] = [
 /// `salt`はオペレーターごとにコンボボックスのIDを一意にするためのインデックス。
 pub fn waveform_selector(ui: &mut egui::Ui, handle: &dyn IntParamHandle, salt: usize) {
     let current = handle.value();
+    // カテゴリ/バリアントのコンボボックス選択は1クリックで完結する単発操作。
     let set = |value: i32| {
         handle.begin_edit();
         handle.set(value);
@@ -88,18 +114,16 @@ pub fn waveform_selector(ui: &mut egui::Ui, handle: &dyn IntParamHandle, salt: u
                     let mut np = (current - 32).clamp(0, 31);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("NP").size(9.0));
-                        if ui.add(egui::DragValue::new(&mut np).range(0..=31)).changed() {
-                            set(32 + np);
-                        }
+                        let response = ui.add(egui::DragValue::new(&mut np).range(0..=31));
+                        commit_drag_value(handle, &response, 32 + np);
                     });
                 }
                 None => {
                     let mut slot = current.clamp(64, 255);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Slot").size(9.0));
-                        if ui.add(egui::DragValue::new(&mut slot).range(64..=255)).changed() {
-                            set(slot);
-                        }
+                        let response = ui.add(egui::DragValue::new(&mut slot).range(64..=255));
+                        commit_drag_value(handle, &response, slot);
                     });
                 }
             }
