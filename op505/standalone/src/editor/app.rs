@@ -14,7 +14,7 @@ use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
 use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
-use op505_editor::undo::{EditorSnapshot, UndoStack};
+use op505_editor::undo::{EditorSnapshot, UndoApply, UndoStack};
 
 use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
@@ -71,12 +71,50 @@ impl EditorApp {
             has_selection: self.presets.has_selection(),
         }
     }
+
+    /// Undo/Redoが返した内容を実際に反映する。`dirty`/`master_dirty`経由で既存の
+    /// publish経路（`shared.publish_patch`→cpalコールバックの`apply_live_active`）に乗るため、
+    /// 発音中の音へも即時反映される。
+    fn apply_undo(&mut self, apply: UndoApply) {
+        *self.patch.borrow_mut() = apply.snapshot.patch;
+        self.dirty.set(true);
+        *self.master.borrow_mut() = apply.snapshot.master;
+        self.master_dirty.set(true);
+        self.presets.restore_selection(
+            apply.snapshot.patch_name,
+            apply.snapshot.bank,
+            apply.snapshot.program,
+            apply.snapshot.has_selection,
+        );
+        // bank_opは+New Voice/DeleteをUndo対象化する実装（別ステップ）まで発生しない。
+        debug_assert!(apply.bank_op.is_none(), "バンク操作のUndo適用は未実装");
+    }
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let previous_edit_channel = self.edit_channel;
         self.undo.borrow_mut().begin_frame(self.snapshot());
+
+        // テキスト欄（音色名・数値直接入力）にフォーカスがある間はeguiのTextEdit組み込みの
+        // 文字単位Undoに委ね、パッチ全体のUndo/Redoは発火させない
+        // （`preset_panel.rs`のDelete処理と同じ`!any_text_focused`ガード）。
+        let any_text_focused = ui.memory(|m| m.focused().is_some());
+        if !any_text_focused {
+            let want_undo = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z));
+            let want_redo = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y));
+            if want_undo {
+                let apply = self.undo.borrow_mut().undo();
+                if let Some(apply) = apply {
+                    self.apply_undo(apply);
+                }
+            } else if want_redo {
+                let apply = self.undo.borrow_mut().redo();
+                if let Some(apply) = apply {
+                    self.apply_undo(apply);
+                }
+            }
+        }
 
         egui::Panel::top("editor_top_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {

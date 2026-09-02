@@ -300,7 +300,9 @@ fn interact_key(
     let id = ui.make_persistent_id(("editor_kbd", is_black, slot));
     let response = ui.interact(key_rect, id, Sense::click_and_drag());
 
-    let kbd_down = key_binding.is_some_and(|(k, _)| ctx.input(|i| i.key_down(k)));
+    // Ctrl+Z（Undo）/Ctrl+Y（Redo）と同じキーが白鍵(Z)に割り当たっているため、Ctrl押下中は
+    // タイピング鍵盤を無効化する（`i.modifiers.command`はWindowsではCtrlを指す）。
+    let kbd_down = key_binding.is_some_and(|(k, _)| ctx.input(|i| i.key_down(k) && !i.modifiers.command));
     let mouse_down = response.is_pointer_button_down_on();
     let want_down = kbd_down || mouse_down;
 

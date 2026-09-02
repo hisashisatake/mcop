@@ -563,6 +563,16 @@ impl EditorPresetState {
     pub fn has_selection(&self) -> bool {
         self.session.has_selection
     }
+
+    /// Undo/Redo適用時、スナップショットが持つ選択状態を書き戻す。`file_name`/`unsaved`には
+    /// 触れない（Undo/Redoはパッチ内容の巻き戻しであり、ファイルとの対応関係や未保存状態の
+    /// 意味論は`select_entry`等の通常の選択操作とは別に扱う）。
+    pub fn restore_selection(&mut self, patch_name: String, bank: u16, program: u8, has_selection: bool) {
+        self.session.patch_name = patch_name;
+        self.session.bank = bank;
+        self.session.program = program;
+        self.session.has_selection = has_selection;
+    }
 }
 
 #[cfg(test)]
