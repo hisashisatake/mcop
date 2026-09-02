@@ -152,7 +152,7 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
                           `preview-wasm/`（xml-panel-dsl用のwasm-bindgenラッパー）が同居。ワークスペース非メンバー
     vst/               ← OP505 VST3/CLAPプラグイン（クレート名op505-vst、nice-plug。フェーズ1完了
                           2026-08-12、フェーズ2完了2026-08-12）。
-                          パラメーターDAWパラメーター75個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
+                          パラメーターDAWパラメーター67個（TL/ALG/LFO/FG Depth等）+ TimeEg 7本
                           （OP1〜4 EG・Pitch/Cutoff/Gain FG、計203値）はnice-plugの`#[persist]`で
                           プロジェクト保存（DAWパラメーター化するとEGグラフの点操作1回で29個の
                           オートメーションイベントが走り記録単位が壊れるため）。オーディオスレッドは
@@ -494,7 +494,7 @@ MIDI・ジェスチャー解釈・UIはコアの外側で行う。
 - `sound-core`/`sound-fm`と`op505-core`は常にnice-plug・Tauri・cpalに無依存を保つ
 - 波形フォーマットは1024×uint16_t対数で統一。変換パイプラインはsound-coreに実装
 - パラメーターは全て0〜255（8bit）統一。例外は周波数（オクターブ3bit + F-Number 13bit = 16bit、常にOP単位×4）とMUL（0〜15、OPM/OPN/OPQ/OPZ共通のMultiple 4bitに準拠）
-- `op505-vst`はフェーズ1（DAWパラメーター75個+persist EG7本、鳴らす・編集する・プリセット選択まで）・フェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等のMIDI表現系）とも完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ（詳細はspec-roadmap.mdフェーズ8）
+- `op505-vst`はフェーズ1（DAWパラメーター67個+persist EG7本、鳴らす・編集する・プリセット選択まで）・フェーズ2（NRPN・表情CC・ペダル・OP単位キーオン等のMIDI表現系）とも完了済み（2026-08-12）。`sound-core`/`op505-core`に新機能を実装したら、同じタイミングで`op505-vst`に配線しVST単体でも機能が使える状態を保つ（詳細はspec-roadmap.mdフェーズ8）
 - VST3/CLAPプラグインフレームワークはnice-plug（nih-plugのフォーク、https://codeberg.org/RustAudio/nice-plug ）を使用する
 - **nice-plug制限: `ProcessContext::set_parameter()`未実装（nice-plug-core 0.1.4時点）**。`process()`内からDAWパラメーターを書き戻せないため、NRPNとDAWオートメーションの共存には「シャドウフィールド＋差分検知方式」で迂回している（`last_algorithm`・`last_operator_waveforms`等）。nice-plugがこれを実装したら差分検知ロジックを削除しNRPN受信時に`context.set_parameter()`を呼ぶ方式へ移行できる
 - Co-Authored-By:～はコミットメッセージに追加しない
