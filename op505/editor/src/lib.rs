@@ -15,6 +15,7 @@
 //!
 //! 詳細設計・全11コミットの移行手順は`.claude/plans/fancy-wishing-toast.md`参照。
 
+pub mod layout;
 pub mod panel_source;
 pub mod param_spec;
 pub mod patch_source;

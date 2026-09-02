@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use op505_core::Op505Patch;
+use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
 use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
@@ -18,10 +19,6 @@ use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
 use crate::midi_source::MidiSink;
 use crate::shared::SharedEditState;
-
-/// PRESETSサイドバー（固定幅）の幅。op505-vstの`PRESETS_SIDEBAR_WIDTH`と揃える
-/// （Open/Save/Save Asの3ボタンが折り返さず並ぶ幅）。
-const PRESETS_SIDEBAR_WIDTH: f32 = 200.0;
 
 pub struct EditorApp {
     shared: Arc<SharedEditState>,
