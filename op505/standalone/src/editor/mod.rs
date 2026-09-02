@@ -29,7 +29,6 @@ use crate::shared::SharedEditState;
 
 mod app;
 mod keyboard;
-mod panel_params;
 mod preset_host;
 
 use app::EditorApp;

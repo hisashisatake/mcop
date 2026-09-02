@@ -174,6 +174,37 @@ impl SharedEditState {
 mod tests {
     use super::*;
 
+    /// `MasterEffectsState::values_in_fx_order()`（`op505-editor`の`FxInt::ALL`順で組み立てる）
+    /// が、この`shared.rs`が定義する`FX_*`定数の並びと一致することを凍結する。ずれると
+    /// reverb_typeとreverb_timeが入れ替わって無音デバッグ地獄になる（`app.rs`のpublish_fx参照）。
+    #[test]
+    fn fx_int_order_matches_fx_constants() {
+        use op505_editor::patch_source::MasterEffectsState;
+
+        let state = MasterEffectsState {
+            rev_send: 1,
+            reverb_type: 2,
+            reverb_time: 3,
+            cho_send: 4,
+            chorus_type: 5,
+            chorus_mod_rate: 6,
+            chorus_mod_depth: 7,
+            chorus_feedback: 8,
+            chorus_send_to_reverb: 9,
+        };
+        let values = state.values_in_fx_order();
+        assert_eq!(values.len(), FX_VALUE_COUNT);
+        assert_eq!(values[FX_REVERB_SEND], 1);
+        assert_eq!(values[FX_REVERB_TYPE], 2);
+        assert_eq!(values[FX_REVERB_TIME], 3);
+        assert_eq!(values[FX_CHORUS_SEND], 4);
+        assert_eq!(values[FX_CHORUS_TYPE], 5);
+        assert_eq!(values[FX_CHORUS_MOD_RATE], 6);
+        assert_eq!(values[FX_CHORUS_MOD_DEPTH], 7);
+        assert_eq!(values[FX_CHORUS_FEEDBACK], 8);
+        assert_eq!(values[FX_CHORUS_SEND_TO_REVERB], 9);
+    }
+
     #[test]
     fn unused_state_never_reports_dirty() {
         let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
