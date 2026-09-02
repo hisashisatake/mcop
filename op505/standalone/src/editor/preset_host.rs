@@ -1,8 +1,10 @@
-//! `op505_editor::preset_panel::PresetHost`のstandalone実装。`panel_params::Op505State`と
-//! 同じ`Rc<RefCell<Op505Patch>>`+`Rc<Cell<bool>>`表現と、`SharedEditState`への発行を束ねる。
+//! `op505_editor::preset_panel::PresetHost`のstandalone実装。`EditorApp`が持つ
+//! `Rc<RefCell<Op505Patch>>`/`Rc<Cell<bool>>`のRefCell/Cell部分だけを借用する
+//! （`PresetHost`は`&self`メソッドのみで完結し`PatchPanelSource`のようにハンドルを
+//! `'static`で持ち出す必要が無いため、`Rc`の二重間接参照は不要——deref coercionで
+//! `&Rc<RefCell<_>>`から素通しできる）。
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use op505_core::{Op505BankFile, Op505Patch};
@@ -11,8 +13,8 @@ use op505_editor::preset_panel::PresetHost;
 use crate::shared::SharedEditState;
 
 pub(crate) struct StandalonePresetHost<'a> {
-    pub(crate) patch: &'a Rc<RefCell<Op505Patch>>,
-    pub(crate) dirty: &'a Rc<Cell<bool>>,
+    pub(crate) patch: &'a RefCell<Op505Patch>,
+    pub(crate) dirty: &'a Cell<bool>,
     pub(crate) shared: &'a Arc<SharedEditState>,
 }
 
