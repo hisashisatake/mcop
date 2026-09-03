@@ -57,7 +57,8 @@ impl Default for MasterEffectsState {
 }
 
 impl MasterEffectsState {
-    fn field(self, fx: FxInt) -> i32 {
+    /// `fx`に対応する現在値を読む。VST側のUndo/Redo差分適用でも使うため`pub`。
+    pub fn field(self, fx: FxInt) -> i32 {
         match fx {
             FxInt::RevSend => self.rev_send,
             FxInt::ReverbType => self.reverb_type,
@@ -91,9 +92,22 @@ impl MasterEffectsState {
     pub fn values_in_fx_order(&self) -> [u8; 9] {
         FxInt::ALL.map(|fx| self.field(fx) as u8)
     }
+
+    /// `FxInt`ごとの読み取り関数から組み立てる。VST側がDAWパラメーター（`IntParam`）から
+    /// `MasterEffectsState`を構築するために使う（standaloneは`Rc<RefCell<MasterEffectsState>>`を
+    /// 直接持つため使わない）。
+    pub fn from_fn(mut read: impl FnMut(FxInt) -> i32) -> Self {
+        let mut state = Self::default();
+        for fx in FxInt::ALL {
+            state.set_field(fx, read(fx));
+        }
+        state
+    }
 }
 
-fn read_int(p: &Op505Patch, field: PatchInt) -> i32 {
+/// `field`に対応する`Op505Patch`側の現在値を読む。VST側のUndo/Redo差分適用（`diff_to`が返した
+/// フィールドの目標値を読む）でも使うため`pub`（`op505-editor`はop505-vst/standalone共有クレート）。
+pub fn read_int(p: &Op505Patch, field: PatchInt) -> i32 {
     match field {
         PatchInt::Algorithm => p.channel.algorithm as i32,
         PatchInt::Feedback => p.channel.feedback as i32,
@@ -155,7 +169,8 @@ fn write_op_int(op: &mut Op505OperatorParams, field: OpInt, value: i32) {
     }
 }
 
-fn read_bool(p: &Op505Patch, field: BoolField) -> bool {
+/// [`read_int`]と同じ理由で`pub`。
+pub fn read_bool(p: &Op505Patch, field: BoolField) -> bool {
     match field {
         BoolField::FixedNoteEnable => p.channel.fixed_note_enable,
         BoolField::FilterSelfOscillation => p.channel.filter_self_oscillation,
@@ -175,7 +190,8 @@ fn write_bool(p: &mut Op505Patch, field: BoolField, value: bool) {
     }
 }
 
-fn read_eg(p: &Op505Patch, slot: EgSlot) -> TimeEgParams {
+/// [`read_int`]と同じ理由で`pub`。
+pub fn read_eg(p: &Op505Patch, slot: EgSlot) -> TimeEgParams {
     match slot {
         EgSlot::Op(op) => p.operators[op.index()].eg,
         EgSlot::Fg(FgSlot::Pitch) => p.channel.pitch_fg.eg,
