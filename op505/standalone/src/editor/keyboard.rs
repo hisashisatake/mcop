@@ -194,13 +194,6 @@ fn black_key_binding(b: usize) -> Option<(egui::Key, &'static str)> {
 pub fn draw_keyboard(ui: &mut egui::Ui, state: &mut KeyboardState, sink: &MidiSink, edit_channel: Option<usize>) {
     poll_alt_octave_shortcuts(ui, state);
 
-    if edit_channel.is_none() {
-        ui.colored_label(
-            Color32::from_rgb(230, 160, 40),
-            "Select an \"Edit Channel\" above to play the keyboard",
-        );
-    }
-
     let label_h = 14.0;
     let white_h = 64.0;
     let black_h = white_h * 0.62;

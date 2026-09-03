@@ -537,11 +537,29 @@ pub struct UndoUiState {
 /// バーの一部」ではなく「メニューバーに間借りしている通常のコントロール」という位置づけのため、
 /// 他のパネルのコンボボックス等と同じ見た目に戻す（`ui.reset_style()`でMenuBarのスコープ内
 /// スタイル上書きを取り消し、`Context`の既定スタイルへ戻す）。
+///
+/// ☰File↺↻（左側グループ）と`right_content`（右側グループ）の間の空きスペースは2等分し、
+/// 左半分に現在選択中のバンク番号・音色名、右半分に`message`（Edit Channel関連の案内等、
+/// ホスト側が状態に応じて渡す）を表示する（ユーザー要望、2026-09-03）。両方とも固定幅で、
+/// 収まらない分は省略記号でクリップし、ホバー時のツールチップで全文を見せる
+/// （`.truncate()` + `.on_hover_text(...)`）——当初`message`側は横スクロールする
+/// マーキー表示にしていたが、実装・調整を重ねた末、単純な固定ラベル+ツールチップの方が
+/// 素直で良いという判断でマーキーは廃止した。
+///
+/// `right_content`の実際の描画幅は事前に分からないため、[`EditorPresetState::right_content_width`]
+/// に保存した実測値を使う。`right_content`自体は毎フレーム描画するが（インタラクティブな
+/// ウィジェットのため必須）、実測値が前回保存した値と実際に異なるときだけ`state`へ書き戻す
+/// （＝値が安定していれば書き込みは発生しない）。「メニューバー全体の幅が変わったときだけ
+/// 数フレーム測り直す」という条件分岐だった時期もあったが、`egui::ComboBox`が初回描画フレームで
+/// 内部レイアウト未確定のまま暫定サイズを返すことがあり、数フレームの猶予でも取り違えて
+/// 「Edit Channelラベルに隣の表示が食い込む」不具合が起きた（実機で確認済み、2026-09-03）。
+/// 値そのものの変化を直接見る今の方式ならこの手の脆さが原理的に起きない。
 pub fn draw_editor_top_bar(
     ui: &mut egui::Ui,
     state: &mut EditorPresetState,
     host: &dyn PresetHost,
     undo_ui: UndoUiState,
+    message: Option<&str>,
     right_content: impl FnOnce(&mut egui::Ui),
 ) -> PresetsPanelEvents {
     let mut events = PresetsPanelEvents::default();
@@ -574,10 +592,55 @@ pub fn draw_editor_top_bar(
             events.redo_requested = true;
         }
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // 左側グループ（☰File↺↻）描画直後の残り幅。中央スペース（音色名+メッセージ）の
+        // 合計を求めるのに使う（`right_content_width`を差し引く前の値）。
+        let after_left_group_width = ui.available_width();
+        let row_height = ui.available_height();
+
+        // 音色名：固定幅を確実に確保する。`allocate_ui`は「要求サイズを上限として、実際に
+        // 使った分（min_rect）しかカーソルを進めない」仕様のため、中身が短い/空だと後続の
+        // 表示がこちらへ食い込んできてしまっていた（`ui.rs`の`allocate_ui`doc「When
+        // finished, the amount of space actually used (min_rect) will be allocated」参照。
+        // 実機で確認済みの不具合、2026-09-03）。`allocate_exact_size`なら中身の有無に関わらず
+        // 指定サイズぴったりを確保できる。未選択状態（`has_selection == false`）ではパッチと
+        // 表示が食い違って見えるため何も描かない（PRESETSドロワー側の「選択状態を見せない」
+        // 方針と同じ、`sync_display_to_registry`のdoc参照）が、領域自体は変わらず確保する。
+        // 長い音色名は折り返さず省略記号でクリップし、ホバー時のツールチップで全文を見せる。
+        //
+        // `ui.put`は使わない——内部で`Layout::centered_and_justified`を使うため中央寄せに
+        // なってしまう（Redoボタンの直後にべったりくっつくのを避けるための左マージンも
+        // 中央寄せだと意味を持たなくなる）。`scope_builder`で`left_to_right`の子Uiを作り、
+        // 先頭に`add_space`で余白（だいたい全角2文字ぶん）を入れてから左寄せで描画する
+        // （ユーザー要望、2026-09-03）。
+        const NAME_LEFT_MARGIN: f32 = 18.0;
+        let (name_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
+        if state.session.has_selection {
+            let text = format!("Bank {}  {}", state.session.bank, state.session.patch_name);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                ui.add_space(NAME_LEFT_MARGIN);
+                let response = ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate().sense(egui::Sense::hover()));
+                response.on_hover_text(text);
+            });
+        }
+
+        // メッセージ：音色名と同じ固定幅（中央スペースの残り半分）。同じく省略記号でクリップし、
+        // ホバー時のツールチップで全文を見せる（旧マーキー表示の置き換え、2026-09-03）。
+        let (message_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
+        if let Some(message) = message {
+            let text = egui::RichText::new(message).color(ui.visuals().warn_fg_color);
+            let response = ui.put(message_rect, egui::Label::new(text).truncate().sense(egui::Sense::hover()));
+            response.on_hover_text(message);
+        }
+
+        let right_response = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.reset_style();
             right_content(ui);
         });
+        let right_width = right_response.response.rect.width();
+        if (right_width - state.right_content_width).abs() > 0.5 {
+            state.right_content_width = right_width;
+            state.center_half_width = ((after_left_group_width - right_width) / 2.0).max(0.0);
+        }
     });
 
     events
@@ -835,13 +898,37 @@ pub struct EditorPresetState {
     drawer_just_opened: bool,
     /// ドロワー開閉アニメーションの進行状態。
     drawer_anim: DrawerAnim,
+    /// `right_content`（standaloneのEdit Channel欄等）が実際に使った幅の最新の実測値。
+    /// `draw_editor_top_bar`が中央スペース（音色名・メッセージ）の幅計算に使う——`right_content`
+    /// は呼び出し側が渡すクロージャのため、描画前にその幅を知る手段が無く実測に頼る。
+    /// 初期値はだいたいの概算幅。
+    ///
+    /// 再計算のタイミング：`draw_editor_top_bar`は`right_content`を毎フレーム描画した上で、
+    /// その実測幅がこの値と実際に異なるときだけ書き込む（読むこと自体は毎フレーム行うが、
+    /// 値が変わっていなければ`state`への書き込みは発生しない）。当初は「メニューバー全体の
+    /// 幅が変わった最初の数フレームだけ測る」方式だったが、`egui::ComboBox`が初回描画フレームで
+    /// 内部レイアウト未確定のまま暫定サイズを返すことがあり、数フレームの猶予でも確定タイミングを
+    /// 取り違えて「Edit Channelラベルに隣の表示が食い込む」不具合が再発した（実機で確認済み、
+    /// 2026-09-03）。値そのものの変化を直接見る今の方式ならこの手の脆さが原理的に起きない。
+    right_content_width: f32,
+    /// 音色名・メッセージそれぞれに割り当てる固定幅（中央スペースを2等分した片側ぶん）。
+    /// `right_content_width`が更新されたときに合わせて再計算する——「中央の空きスペースを
+    /// 2分割してそれぞれ固定幅にしたい」というユーザー要望による（2026-09-03）。
+    center_half_width: f32,
 }
 
 impl EditorPresetState {
     pub fn new() -> Self {
         let mut session = PresetSession::new(build_op505_registry(&op505_presets_dir()));
         session.sync_display_to_registry();
-        EditorPresetState { session, drawer_open: false, drawer_just_opened: false, drawer_anim: DrawerAnim::default() }
+        EditorPresetState {
+            session,
+            drawer_open: false,
+            drawer_just_opened: false,
+            drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            center_half_width: 200.0,
+        }
     }
 
     /// PRESETSドロワーが開いているか（アニメーション目標状態。実際の表示率は
@@ -944,6 +1031,8 @@ mod tests {
             drawer_open: false,
             drawer_just_opened: false,
             drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            center_half_width: 200.0,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
@@ -965,6 +1054,8 @@ mod tests {
             drawer_open: false,
             drawer_just_opened: false,
             drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            center_half_width: 200.0,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };

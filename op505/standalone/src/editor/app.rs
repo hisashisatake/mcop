@@ -204,15 +204,16 @@ impl eframe::App for EditorApp {
         // 揃えるようユーザー指示で統合）。Edit Channelは`right_content`経由で右寄せに差し込む
         // ——`Layout::right_to_left`は「先に追加した項目ほど右端」に置くため、表示したい順序
         // （ラベル→コンボ→警告文）と逆順に追加する。
+        // Edit Channelの現在状態に応じた案内メッセージ（固定ラベル+ホバー時ツールチップ、
+        // マーキーは廃止した）。
+        let message = match self.edit_channel {
+            None => Some("Select an \"Edit Channel\" above to play the keyboard"),
+            Some(_) => Some("Program Change is ignored on this channel while editing"),
+        };
+
         let mut presets_events = egui::Panel::top("editor_top_bar")
             .show_inside(ui, |ui| {
-                draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui, |ui| {
-                    if self.edit_channel.is_some() {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(230, 160, 40),
-                            "Program Change is ignored on this channel while editing",
-                        );
-                    }
+                draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui, message, |ui| {
                     let selected_text = match self.edit_channel {
                         None => "(None)".to_string(),
                         Some(ch) => format!("{}", ch + 1),
