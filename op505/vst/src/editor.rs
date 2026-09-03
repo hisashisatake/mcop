@@ -2,11 +2,11 @@ use nice_plug::prelude::*;
 use nice_plug_egui::resizable_window::ResizableWindow;
 use nice_plug_egui::{create_egui_editor, EguiSettings, EguiState};
 use op505_core::Op505PresetBank;
-use op505_editor::layout::{editor_min_size, PRESETS_SIDEBAR_WIDTH};
+use op505_editor::layout::editor_min_size;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::param_spec::IntField;
 use op505_editor::patch_source::{read_bool, read_eg, read_int, MasterEffectsState};
-use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState, UndoUiState};
+use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, SnapshotDiff, UndoApply, UndoStack};
 use op505_ui::draw_op505_panel;
 use std::cell::RefCell;
@@ -137,23 +137,29 @@ pub(crate) fn create_editor(
             }
 
             ResizableWindow::new("op505_resize").min_size(editor_min_size(MIN_HEIGHT)).show(ui, &resize_state, |ui| {
-                // ---- プリセットブラウザ（左サイドバー・縦いっぱい） ----
+                let host =
+                    VstPresetHost { params: &params, setter, shared_bank: &shared_preset_bank, dirty: &preset_bank_dirty };
+
                 // + New Voice/Delete（BankChange）はハンドルのbegin_edit/end_edit経由で記録できない
                 // ため、パネル描画の前後でスナップショットを取り、bank_opが返ってきたときだけ
                 // push_bank_changeで明示的に1エントリ積む（standaloneの`EditorApp::ui`と同じ設計）。
                 let bank_change_before = vst_snapshot(&params, presets);
                 let undo_ui = UndoUiState { can_undo: undo.borrow().can_undo(), can_redo: undo.borrow().can_redo() };
-                let presets_panel_response =
-                    egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
-                        let host = VstPresetHost {
-                            params: &params,
-                            setter,
-                            shared_bank: &shared_preset_bank,
-                            dirty: &preset_bank_dirty,
-                        };
-                        draw_presets_panel(ui, presets, &host, undo_ui)
-                    });
-                let presets_events = presets_panel_response.inner;
+
+                let mut presets_events = egui::Panel::top("editor_top_bar")
+                    .show_inside(ui, |ui| draw_editor_top_bar(ui, presets, &host, undo_ui, None, |_ui| {}))
+                    .inner;
+
+                // ---- 残りのパラメーター（縦スクロール、op505-uiの共有レイアウト） ----
+                let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let source = VstPanelSource { params: &params, setter, undo };
+                    let panel = build_panel_params(&source);
+                    draw_op505_panel(ui, &panel);
+                });
+
+                // ---- PRESETSドロワー（ハンバーガー開閉のオーバーレイ、CentralPanelの残り領域へ重ねる） ----
+                presets_events.merge(draw_presets_drawer(ui.ctx(), presets, &host, central_response.response.rect));
+                presets_events.merge(poll_presets_events(presets, &host));
 
                 if let Some(op) = presets_events.bank_op.clone() {
                     undo.borrow_mut().push_bank_change(op, bank_change_before, vst_snapshot(&params, presets));
@@ -182,13 +188,6 @@ pub(crate) fn create_editor(
                         apply_vst_undo(&params, setter, presets, &shared_preset_bank, &preset_bank_dirty, apply);
                     }
                 }
-
-                // ---- 残りのパラメーター（右側・縦スクロール、op505-uiの共有レイアウト） ----
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let source = VstPanelSource { params: &params, setter, undo };
-                    let panel = build_panel_params(&source);
-                    draw_op505_panel(ui, &panel);
-                });
             });
 
             undo.borrow_mut().end_frame(vst_snapshot(&params, presets));

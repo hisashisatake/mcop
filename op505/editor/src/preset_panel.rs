@@ -18,6 +18,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::layout::PRESETS_SIDEBAR_WIDTH;
 use crate::undo::BankOp;
 
 /// ホスト差分（DAWパラメーター経由か、`Rc<RefCell<Op505Patch>>`直接かなど）を吸収する3操作。
@@ -494,6 +495,21 @@ pub struct PresetsPanelEvents {
     pub redo_requested: bool,
 }
 
+impl PresetsPanelEvents {
+    /// [`draw_editor_top_bar`]・[`draw_presets_drawer`]・[`poll_presets_events`]は同じフレームで
+    /// 個別に呼ばれるため、呼び出し側がこのメソッドで1つに合成してから処理する。
+    /// bool系フィールドはOR、`bank_op`は1フレームに高々1件しか発生しない前提で先勝ちにする。
+    pub fn merge(&mut self, other: PresetsPanelEvents) {
+        self.patch_name_focus_gained |= other.patch_name_focus_gained;
+        self.patch_name_focus_lost |= other.patch_name_focus_lost;
+        self.list_selection_applied |= other.list_selection_applied;
+        self.bank_op = self.bank_op.take().or(other.bank_op);
+        self.history_cleared |= other.history_cleared;
+        self.undo_requested |= other.undo_requested;
+        self.redo_requested |= other.redo_requested;
+    }
+}
+
 /// PRESETSパネルのUndo/Redoボタンの有効/無効状態。`UndoStack::can_undo`/`can_redo`から
 /// 呼び出し側が組み立てる（`op505-editor`は`UndoStack`本体を持たないため、ボタンの見た目だけを
 /// この構造体で受け取る）。
@@ -503,40 +519,160 @@ pub struct UndoUiState {
     pub can_redo: bool,
 }
 
-/// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
-/// 音色名→区切り線→PRESETSリスト（+ New Voice/DeleteはScrollArea内）の順）をそのまま踏襲する。
-/// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
-/// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
-/// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
-pub fn draw_presets_panel(
+/// エディタ上部のメニューバー（ハンバーガー・Fileメニュー・Undo/Redoアイコン）を描画する。
+/// 旧PRESETSサイドバーにあったOpen/Save/Save As・Undo/Redoボタンをここへ集約する
+/// （2026-09-03、PRESETSパネルの常設サイドバー→ハンバーガー開閉のオーバーレイ化に伴う移設）。
+///
+/// `egui::MenuBar`（`ui.horizontal`ではなく）を使うのは、egui公式デモ
+/// （<https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/demo_app_windows.rs>）
+/// と同じ見た目に揃えるため：`MenuBar`は既定で`menu::menu_style`（非ホバー時の背景・枠線を
+/// 透明化するスタイル）を子ウィジェットへ適用するので、☰・File・Undo/Redoが「押しっぱなしの
+/// ボタン」ではなく「ホバー時だけ反応するフラットなツールバー項目」に見える
+/// （egui-0.34.3 `containers/menu.rs`の`menu_style`関数参照）。
+///
+/// `right_content`はホスト固有の右寄せ項目（standaloneの"Edit Channel"セレクタ等）を同じ行へ
+/// 差し込むためのフック。`egui::Layout::right_to_left`は「先に追加した項目ほど右端」に置かれる
+/// ため、呼び出し側は表示したい順序と逆順に`ui`へ追加すること（VSTは`|_ui| {}`で何も足さない）。
+/// `MenuBar`のフラット化スタイルは`right_content`には適用しない——Edit Channel等は「メニュー
+/// バーの一部」ではなく「メニューバーに間借りしている通常のコントロール」という位置づけのため、
+/// 他のパネルのコンボボックス等と同じ見た目に戻す（`ui.reset_style()`でMenuBarのスコープ内
+/// スタイル上書きを取り消し、`Context`の既定スタイルへ戻す）。
+///
+/// ☰File↺↻（左側グループ）と`right_content`（右側グループ）の間の空きスペースは2等分し、
+/// 左半分に現在選択中のバンク番号・音色名、右半分に`message`（Edit Channel関連の案内等、
+/// ホスト側が状態に応じて渡す）を表示する（ユーザー要望、2026-09-03）。両方とも固定幅で、
+/// 収まらない分は省略記号でクリップし、ホバー時のツールチップで全文を見せる。
+/// `egui::Label::truncate()`は既定（`show_tooltip_when_elided: true`）で「省略された
+/// ときだけ全文をツールチップ表示する」機能を内蔵しているため、それに任せる——
+/// 明示的に`.on_hover_text(...)`も呼ぶと、省略時にツールチップが縦に2つ重なって
+/// 表示される不具合があった（実機で確認済み、2026-09-03）。
+/// ——当初`message`側は横スクロールするマーキー表示にしていたが、実装・調整を重ねた末、
+/// 単純な固定ラベル+ツールチップの方が素直で良いという判断でマーキーは廃止した。
+///
+/// `right_content`の実際の描画幅は事前に分からないため、[`EditorPresetState::right_content_width`]
+/// に保存した実測値を使う。`right_content`自体は毎フレーム描画するが（インタラクティブな
+/// ウィジェットのため必須）、実測値が前回保存した値と実際に異なるときだけ`state`へ書き戻す
+/// （＝値が安定していれば書き込みは発生しない）。「メニューバー全体の幅が変わったときだけ
+/// 数フレーム測り直す」という条件分岐だった時期もあったが、`egui::ComboBox`が初回描画フレームで
+/// 内部レイアウト未確定のまま暫定サイズを返すことがあり、数フレームの猶予でも取り違えて
+/// 「Edit Channelラベルに隣の表示が食い込む」不具合が起きた（実機で確認済み、2026-09-03）。
+/// 値そのものの変化を直接見る今の方式ならこの手の脆さが原理的に起きない。
+pub fn draw_editor_top_bar(
     ui: &mut egui::Ui,
     state: &mut EditorPresetState,
     host: &dyn PresetHost,
     undo_ui: UndoUiState,
+    message: Option<&str>,
+    right_content: impl FnOnce(&mut egui::Ui),
 ) -> PresetsPanelEvents {
-    let session = &mut state.session;
     let mut events = PresetsPanelEvents::default();
 
-    ui.horizontal(|ui| {
-        if ui.add_enabled(session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
-            request_open(session);
+    egui::MenuBar::new().ui(ui, |ui| {
+        if ui.button("☰").on_hover_text("Presets").clicked() {
+            state.drawer_open = !state.drawer_open;
+            state.drawer_just_opened = state.drawer_open;
         }
-        if ui.add_enabled(session.save_enabled(), egui::Button::new("Save")).clicked() {
-            events.history_cleared |= handle_save(session, host);
+
+        ui.menu_button("File", |ui| {
+            if ui.add_enabled(state.session.pending_open.is_none(), egui::Button::new("Open...")).clicked() {
+                request_open(&mut state.session);
+                ui.close();
+            }
+            if ui.add_enabled(state.session.save_enabled(), egui::Button::new("Save")).clicked() {
+                events.history_cleared |= handle_save(&mut state.session, host);
+                ui.close();
+            }
+            if ui.add_enabled(state.session.pending_save_as.is_none(), egui::Button::new("Save As...")).clicked() {
+                request_save_as(&mut state.session);
+                ui.close();
+            }
+        });
+
+        if ui.add_enabled(undo_ui.can_undo, egui::Button::new("↺")).on_hover_text("Undo (Ctrl+Z)").clicked() {
+            events.undo_requested = true;
         }
-        if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
-            request_save_as(session);
+        if ui.add_enabled(undo_ui.can_redo, egui::Button::new("↻")).on_hover_text("Redo (Ctrl+Y)").clicked() {
+            events.redo_requested = true;
+        }
+
+        // 左側グループ（☰File↺↻）描画直後の残り幅。中央スペース（音色名+メッセージ）の
+        // 合計を求めるのに使う（`right_content_width`を差し引く前の値）。
+        let after_left_group_width = ui.available_width();
+        let row_height = ui.available_height();
+
+        // 音色名：固定幅を確実に確保する。`allocate_ui`は「要求サイズを上限として、実際に
+        // 使った分（min_rect）しかカーソルを進めない」仕様のため、中身が短い/空だと後続の
+        // 表示がこちらへ食い込んできてしまっていた（`ui.rs`の`allocate_ui`doc「When
+        // finished, the amount of space actually used (min_rect) will be allocated」参照。
+        // 実機で確認済みの不具合、2026-09-03）。`allocate_exact_size`なら中身の有無に関わらず
+        // 指定サイズぴったりを確保できる。未選択状態（`has_selection == false`）ではパッチと
+        // 表示が食い違って見えるため何も描かない（PRESETSドロワー側の「選択状態を見せない」
+        // 方針と同じ、`sync_display_to_registry`のdoc参照）が、領域自体は変わらず確保する。
+        // 長い音色名は折り返さず省略記号でクリップし、ホバー時のツールチップで全文を見せる。
+        //
+        // `ui.put`は使わない——内部で`Layout::centered_and_justified`を使うため中央寄せに
+        // なってしまう（Redoボタンの直後にべったりくっつくのを避けるための左マージンも
+        // 中央寄せだと意味を持たなくなる）。`scope_builder`で`left_to_right`の子Uiを作り、
+        // 先頭に`add_space`で余白（だいたい全角2文字ぶん）を入れてから左寄せで描画する
+        // （ユーザー要望、2026-09-03）。
+        // `ui.scope_builder`は描画後に子UIの実測`min_rect`で親のカーソルを上書きする
+        // （`advance_cursor_after_rect`、egui-0.34.3 ui.rs）ため、テキストが短くて
+        // `name_rect`いっぱいまで埋まらないと、直前の`allocate_exact_size`で確保した
+        // カーソル位置が手前へ巻き戻ってしまう（後続のメッセージ欄が左へずれる不具合、
+        // 実機で確認済み、2026-09-03）。`ui.put`側（メッセージ欄）は`centered_and_justified`
+        // レイアウトのため`min_rect == max_rect`となりこの問題が起きないが、こちらは
+        // 左寄せ+マージンのため起きる。`new_child`はドキュメント通り親のカーソルを
+        // 一切動かさないため、既に確保済みの`name_rect`分の幅をそのまま維持できる。
+        const NAME_LEFT_MARGIN: f32 = 18.0;
+        let (name_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
+        if state.session.has_selection {
+            let text = format!("Bank {}  {}", state.session.bank, state.session.patch_name);
+            let mut name_ui = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            name_ui.add_space(NAME_LEFT_MARGIN);
+            name_ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate().sense(egui::Sense::hover()));
+        }
+
+        // メッセージ：音色名と同じ固定幅（中央スペースの残り半分）。同じく省略記号でクリップし、
+        // ホバー時のツールチップで全文を見せる（旧マーキー表示の置き換え、2026-09-03）。
+        let (message_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
+        if let Some(message) = message {
+            let text = egui::RichText::new(message).color(ui.visuals().warn_fg_color);
+            ui.put(message_rect, egui::Label::new(text).truncate().sense(egui::Sense::hover()));
+        }
+
+        let right_response = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.reset_style();
+            right_content(ui);
+        });
+        let right_width = right_response.response.rect.width();
+        let right_width_changed = (right_width - state.right_content_width).abs() > 0.5;
+        let available_width_changed = (after_left_group_width - state.available_width).abs() > 0.5;
+        if right_width_changed || available_width_changed {
+            state.right_content_width = right_width;
+            state.available_width = after_left_group_width;
+            // name_rect/message_rectそれぞれの直後にegui標準のitem_spacing分の余白が
+            // 残るよう、2箇所分（name→message間、message→right_content間）を差し引く。
+            // 差し引かないと、狭い幅でメッセージがtruncateされてrect右端いっぱいまで
+            // 文字が埋まったとき、右隣のright_content（Edit Channelラベル）と隙間なく
+            // 密着して見える（実機で確認済み、2026-09-03）。
+            let spacing = ui.spacing().item_spacing.x;
+            state.center_half_width = ((after_left_group_width - right_width - spacing * 2.0) / 2.0).max(0.0);
         }
     });
 
-    ui.horizontal(|ui| {
-        if ui.add_enabled(undo_ui.can_undo, egui::Button::new("Undo")).clicked() {
-            events.undo_requested = true;
-        }
-        if ui.add_enabled(undo_ui.can_redo, egui::Button::new("Redo")).clicked() {
-            events.redo_requested = true;
-        }
-    });
+    events
+}
+
+/// PRESETSドロワーの中身（Bank欄・ファイル名表示・音色名編集・PRESETSリスト）を描画する。
+/// gesture-appのレイアウト（Bank→ファイル名→音色名→区切り線→PRESETSリスト（+ New Voice/Delete
+/// はScrollArea内）の順）をそのまま踏襲する。呼び出し側（[`draw_presets_drawer`]）がオーバーレイ
+/// 用のArea・背景・開閉アニメーションを用意した上でこの関数を呼ぶ。
+/// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
+/// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
+/// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
+fn draw_presets_drawer_contents(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
+    let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
 
     ui.horizontal(|ui| {
         ui.label("Bank");
@@ -609,25 +745,221 @@ pub fn draw_presets_panel(
     if delete_by_key {
         request_delete(session);
     }
+
+    events
+}
+
+/// PRESETSドロワー本体。ハンバーガーボタンの開閉状態（[`EditorPresetState::drawer_open`]）に
+/// 応じて、`area_rect`（通常はCentralPanelが返した残り領域）へオーバーレイでスライドイン/アウト
+/// する。押しのけ方式（`egui::Panel::show_animated_inside`）ではなく`egui::Area`を使うのは、
+/// コントロール一式に覆いかぶさる見た目をユーザーが明示的に希望したため（メニューバー自体は
+/// 押しのけない・ユーザー提示のワイヤーフレーム参照）。
+///
+/// アニメーション中（`t`が0〜1の間）はArea自体を描画しないため、この関数は非同期ダイアログの
+/// 結果回収（Open/Save As/Delete確認のpoll）を行わない——ドロワーを閉じている間もOpen等の
+/// 結果を取りこぼさないよう、pollは[`poll_presets_events`]として毎フレーム無条件に呼ぶこと。
+///
+/// アニメーション時間は0.3秒＋`cubic_out`イージング（動き始めが速く、終端でゆっくり収まる）。
+/// 既定の`animate_bool`（0.2秒・線形）だと動きが速すぎて「スライドしている」と体感しづらかった
+/// （ユーザー指摘、2026-09-03）。
+///
+/// ドロワー外クリックで閉じる（[`egui::Response::clicked_elsewhere`]）。ただし開かせた張本人の
+/// クリック（ハンバーガーボタン自身、ドロワー矩形の外＝トップバー側にある）を「外側クリック」と
+/// 誤認して同フレーム中に閉じ直してしまわないよう、[`EditorPresetState::drawer_just_opened`]で
+/// そのクリックだけ1フレーム限り無効化する（`animate_bool`は経過時間ベースの漸増のため、
+/// 状態が変化した当フレームでも`t`は既に正の値になっており、素朴に「t==0の間はArea自体が
+/// 存在しないので大丈夫」という前提は成り立たなかった——実装時の落とし穴、
+/// `egui-0.34.3 animation_manager.rs`の`elapsed`計算参照）。
+///
+/// **中身は常に`PRESETS_SIDEBAR_WIDTH`ぶんのフル幅でレイアウトし、実際に見える範囲だけを
+/// `t`でクリップしてワイプさせる**（左端固定・`ui.shrink_clip_rect`で右端をアニメーション）。
+/// 当初は「Uiの幅自体を`t*width`まで縮めてレイアウトする」方式（egui公式の
+/// `Panel::get_animated_panel`と同じ「幅が伸びる」方式、
+/// <https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/backend_panel.rs>
+/// が使う`SidePanel::show_animated_inside`の内部実装）を試したが、これだと途中の狭い幅で
+/// ファイル名やPRESETSリストの各行テキストが折り返され（`ui.set_width`が小さいほどワード
+/// ラップが変わる）、伸びるにつれてラップ位置が何度も変わってガタつく見た目になった
+/// （egui公式は代わりに「アニメーション中は中身を描画しない、空箱が伸びるだけ」で回避しており、
+/// それも試したが今度は開き切った瞬間に文字が一斉に現れる不自然さがあった。ユーザー指摘、
+/// 2026-09-03）。**クリップ方式なら`ui.set_width`は常にフル幅で固定されるためラップは
+/// 一切変化せず、確定済みのレイアウトが左から右へワイプして現れる**（egui公式デモの
+/// Backendパネルと違い、中身込みで滑らかにスライドして見える）。
+pub fn draw_presets_drawer(ctx: &egui::Context, state: &mut EditorPresetState, host: &dyn PresetHost, area_rect: egui::Rect) -> PresetsPanelEvents {
+    // 「ドロワーを開かせた張本人のクリック」を今フレーム限りで無効化する（一度読んだら
+    // falseへ戻す）。これを先頭で消費しておくことで、以降のどのreturn経路でも取りこぼさない。
+    let just_opened = std::mem::take(&mut state.drawer_just_opened);
+
+    let id = egui::Id::new("op505_presets_drawer");
+    const ANIM_SECS: f64 = 0.3;
+    let now = ctx.input(|i| i.time);
+    let anim = &mut state.drawer_anim;
+    if anim.last_target != state.drawer_open {
+        anim.from = anim.frac;
+        anim.started_at = Some(now);
+        anim.last_target = state.drawer_open;
+    }
+    let target = if state.drawer_open { 1.0 } else { 0.0 };
+    anim.frac = match anim.started_at {
+        Some(start) => {
+            let raw = ((now - start) / ANIM_SECS).clamp(0.0, 1.0) as f32;
+            if raw >= 1.0 {
+                anim.started_at = None;
+                target
+            } else {
+                ctx.request_repaint();
+                anim.from + (target - anim.from) * egui::emath::easing::cubic_out(raw)
+            }
+        }
+        None => target,
+    };
+    let t = anim.frac;
+    if t <= 0.0 {
+        return PresetsPanelEvents::default();
+    }
+
+    let full_width = PRESETS_SIDEBAR_WIDTH.min(area_rect.width());
+    let full_rect = egui::Rect::from_min_size(area_rect.min, egui::vec2(full_width, area_rect.height()));
+    let visible_rect = egui::Rect::from_min_size(area_rect.min, egui::vec2(t * full_width, area_rect.height()));
+
+    let mut events = PresetsPanelEvents::default();
+    let area_response = egui::Area::new(id).order(egui::Order::Middle).fixed_pos(full_rect.min).movable(false).show(ctx, |ui| {
+        // Uiの幅は常にフル幅（ラップ位置を固定するため）。
+        ui.set_width(full_rect.width());
+        ui.set_height(full_rect.height());
+        // 背景は「見える範囲（`visible_rect`）だけ」に自前で塗る——`Frame::side_top_panel`の
+        // `fill`をそのまま使うとフル幅（`full_rect`）全体に対して塗ってしまい、アニメーション中
+        // でも下のCHANNEL等のコントロールが常に最大幅ぶん覆われて見える（ユーザー指摘、
+        // 2026-09-03）。marginはFrameから借りるが色は透過にし、塗りは自前でvisible_rect分だけ行う。
+        let panel_fill = ui.visuals().panel_fill;
+        ui.painter().rect_filled(visible_rect, 0.0, panel_fill);
+        // `Frame::window`（角丸+ドロップシャドウ）だとポップアップ/ダイアログに見えてしまう。
+        // 実際の`Panel`が使う`Frame::side_top_panel`と同じmargin構成（角丸なし・影なし）を
+        // 借りつつ、fill自体は上で塗った分と重複しないようtransparentにする。
+        egui::Frame::side_top_panel(ui.style()).fill(egui::Color32::TRANSPARENT).show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            // 実際に描画される範囲を`visible_rect`だけに制限する。Uiの幅そのもの
+            // （レイアウト・ラップ判定の基準）はフル幅のまま変えないため、ファイル名等の
+            // 折り返し位置はアニメーション中も一切変化しない——ここが直前に試した「事後マスク」
+            // 方式との違い：マスクは「描いてから隠す」ため背景の塗り自体はフル幅分残ってしまうが、
+            // クリップは「そもそも描かせない」ため背景・文字とも`visible_rect`の外には一切出ない。
+            ui.shrink_clip_rect(visible_rect);
+            events = draw_presets_drawer_contents(ui, state, host);
+        });
+        // 縁取りは右端（下のコントロールと接する境目）だけでよい——`Frame::stroke`は矩形四辺
+        // 全部を囲ってしまい「浮いたカード」に見えてしまうため、`Painter::vline`で右端だけ引く。
+        let stroke = ui.visuals().window_stroke();
+        ui.painter().vline(visible_rect.right(), visible_rect.y_range(), stroke);
+    });
+
+    if !just_opened && area_response.response.clicked_elsewhere() {
+        state.drawer_open = false;
+    }
+
+    events
+}
+
+/// 毎フレーム呼ぶ。PRESETSドロワーの開閉に関わらず、非同期ダイアログ（Open/Save As/Delete確認）の
+/// 結果を回収する。ドロワーを閉じている間にOpen/Save Asを実行しても結果を取りこぼさないための
+/// 分離（[`draw_presets_drawer`]のdoc参照）。
+pub fn poll_presets_events(state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
+    let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
     if let Some(op) = poll_pending_delete(session, host) {
         events.bank_op = Some(op);
     }
     events.history_cleared |= poll_pending_open(session, host);
     events.history_cleared |= poll_pending_save_as(session, host);
-
     events
+}
+
+/// PRESETSドロワー開閉アニメーションの進行状態。[`draw_presets_drawer`]が毎フレーム更新する。
+///
+/// `egui::Context::animate_bool_with_time_and_easing`を使わない理由：内部実装
+/// （egui-0.34.3 `animation_manager.rs`）は「前回このIDを呼んだフレームからの経過時間」を
+/// `input.stable_dt`でクランプしながら加算する方式のため、eframeのReactiveモード
+/// （入力が無い間は再描画しない）で「しばらく描画が無かった直後の最初の1フレーム」では
+/// `stable_dt`自体がその空白期間を反映した大きな値になり、クランプが実質無効化されて
+/// アニメーションが1フレームでほぼ完了してしまう（実機で確認済み、2026-09-03）。ここでは
+/// トグルした絶対時刻を記録し「今」との差分から経過率を計算する方式にすることで、
+/// 直前フレームの間隔に依存しない安定した所要時間にする。
+#[derive(Debug, Clone, Copy)]
+struct DrawerAnim {
+    /// 直近フレームで見た`drawer_open`の値（変化検知用）。
+    last_target: bool,
+    /// 直近のトグル開始時点での表示率（0.0=完全に閉, 1.0=完全に開）。トグルの度にその時点の
+    /// 表示率を保持し直すことで、アニメーション中の再トグル（開閉の連打）でも現在位置から
+    /// 滑らかに反転できる。
+    from: f32,
+    /// トグルした時刻（`ctx.input(|i| i.time)`）。Noneなら現在の`last_target`のまま安定している
+    /// （アニメーション不要）。
+    started_at: Option<f64>,
+    /// 直近フレームで計算した表示率（0.0〜1.0）。次にトグルされた際の`from`になる。
+    frac: f32,
+}
+
+impl Default for DrawerAnim {
+    fn default() -> Self {
+        DrawerAnim { last_target: false, from: 0.0, started_at: None, frac: 0.0 }
+    }
 }
 
 /// PRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。
 pub struct EditorPresetState {
     session: PresetSession,
+    /// PRESETSドロワー（ハンバーガーボタンで開閉するオーバーレイ）の開閉状態。
+    drawer_open: bool,
+    /// このフレームでハンバーガーボタンがドロワーを開いた（false→true）ばかりか。
+    /// [`draw_presets_drawer`]の「ドロワー外クリックで閉じる」判定用の一回限りガード
+    /// （ハンバーガー自身はドロワー矩形の外にあるため、そのクリックを「外側クリック」と
+    /// 誤認して同フレーム中に閉じ直してしまうのを防ぐ。詳細は`draw_presets_drawer`のdoc参照）。
+    drawer_just_opened: bool,
+    /// ドロワー開閉アニメーションの進行状態。
+    drawer_anim: DrawerAnim,
+    /// `right_content`（standaloneのEdit Channel欄等）が実際に使った幅の最新の実測値。
+    /// `draw_editor_top_bar`が中央スペース（音色名・メッセージ）の幅計算に使う——`right_content`
+    /// は呼び出し側が渡すクロージャのため、描画前にその幅を知る手段が無く実測に頼る。
+    /// 初期値はだいたいの概算幅。
+    ///
+    /// 再計算のタイミング：`draw_editor_top_bar`は`right_content`を毎フレーム描画した上で、
+    /// その実測幅がこの値と実際に異なるときだけ書き込む（読むこと自体は毎フレーム行うが、
+    /// 値が変わっていなければ`state`への書き込みは発生しない）。当初は「メニューバー全体の
+    /// 幅が変わった最初の数フレームだけ測る」方式だったが、`egui::ComboBox`が初回描画フレームで
+    /// 内部レイアウト未確定のまま暫定サイズを返すことがあり、数フレームの猶予でも確定タイミングを
+    /// 取り違えて「Edit Channelラベルに隣の表示が食い込む」不具合が再発した（実機で確認済み、
+    /// 2026-09-03）。値そのものの変化を直接見る今の方式ならこの手の脆さが原理的に起きない。
+    right_content_width: f32,
+    /// 左側グループ（☰File↺↻）描画直後の残り幅の直近値。`right_content_width`と同じ
+    /// 変化検知方式で`center_half_width`の再計算タイミングを決める（2026-09-03追加）。
+    /// この値が無いとウィンドウのリサイズ（`right_content_width`自体は変わらない）で
+    /// `center_half_width`が古いまま固定され、中央スペースが実際の残り幅からはみ出して
+    /// `right_content`（Edit Channelラベル）に食い込む不具合があった（実機で確認済み）。
+    available_width: f32,
+    /// 音色名・メッセージそれぞれに割り当てる固定幅（中央スペースを2等分した片側ぶん）。
+    /// `right_content_width`または`available_width`が更新されたときに合わせて再計算する
+    /// ——「中央の空きスペースを2分割してそれぞれ固定幅にしたい」というユーザー要望による
+    /// （2026-09-03）。
+    center_half_width: f32,
 }
 
 impl EditorPresetState {
     pub fn new() -> Self {
         let mut session = PresetSession::new(build_op505_registry(&op505_presets_dir()));
         session.sync_display_to_registry();
-        EditorPresetState { session }
+        EditorPresetState {
+            session,
+            drawer_open: false,
+            drawer_just_opened: false,
+            drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            available_width: 0.0,
+            center_half_width: 200.0,
+        }
+    }
+
+    /// PRESETSドロワーが開いているか（アニメーション目標状態。実際の表示率は
+    /// [`draw_presets_drawer`]内で`Context::animate_bool_with_time`が補間する）。
+    pub fn drawer_open(&self) -> bool {
+        self.drawer_open
     }
 
     /// 現在選択中のbank。Undoスナップショットの構築に使う。
@@ -719,7 +1051,15 @@ mod tests {
         let mut registry = Op505BankRegistry::new();
         let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "Existing")] };
         registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
-        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+        let mut state = EditorPresetState {
+            session: PresetSession::new(registry),
+            drawer_open: false,
+            drawer_just_opened: false,
+            drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            available_width: 0.0,
+            center_half_width: 200.0,
+        };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
         let op = BankOp::Add { bank: 0, program: 1, name: "Voice001".to_string(), patch: Op505Patch::default() };
@@ -735,7 +1075,15 @@ mod tests {
         let mut registry = Op505BankRegistry::new();
         let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "A"), entry(1, "B")] };
         registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
-        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+        let mut state = EditorPresetState {
+            session: PresetSession::new(registry),
+            drawer_open: false,
+            drawer_just_opened: false,
+            drawer_anim: DrawerAnim::default(),
+            right_content_width: 150.0,
+            available_width: 0.0,
+            center_half_width: 200.0,
+        };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
         let op = BankOp::Remove { bank: 0, program: 0, name: "A".to_string(), patch: Op505Patch::default() };
