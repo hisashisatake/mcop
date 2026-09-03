@@ -146,8 +146,9 @@ pub(crate) fn create_editor(
                 let bank_change_before = vst_snapshot(&params, presets);
                 let undo_ui = UndoUiState { can_undo: undo.borrow().can_undo(), can_redo: undo.borrow().can_redo() };
 
-                let mut presets_events =
-                    egui::Panel::top("editor_top_bar").show_inside(ui, |ui| draw_editor_top_bar(ui, presets, &host, undo_ui)).inner;
+                let mut presets_events = egui::Panel::top("editor_top_bar")
+                    .show_inside(ui, |ui| draw_editor_top_bar(ui, presets, &host, undo_ui, |_ui| {}))
+                    .inner;
 
                 // ---- 残りのパラメーター（縦スクロール、op505-uiの共有レイアウト） ----
                 let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {

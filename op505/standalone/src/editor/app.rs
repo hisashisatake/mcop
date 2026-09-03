@@ -198,14 +198,21 @@ impl eframe::App for EditorApp {
         let bank_change_before = self.snapshot();
         let undo_ui = UndoUiState { can_undo: self.undo.borrow().can_undo(), can_redo: self.undo.borrow().can_redo() };
 
+        // ハンバーガー・File（Open/Save/Save As）・Undo/Redoアイコンと、Edit Channelセレクタを
+        // 1本のメニューバーへまとめる（2026-09-03、PRESETSサイドバー常設→ハンバーガー開閉の
+        // オーバーレイ化に伴う移設。当初は2段に分けていたが、egui公式デモのメニューバー1行に
+        // 揃えるようユーザー指示で統合）。Edit Channelは`right_content`経由で右寄せに差し込む
+        // ——`Layout::right_to_left`は「先に追加した項目ほど右端」に置くため、表示したい順序
+        // （ラベル→コンボ→警告文）と逆順に追加する。
         let mut presets_events = egui::Panel::top("editor_top_bar")
             .show_inside(ui, |ui| {
-                // ハンバーガー・File（Open/Save/Save As）・Undo/Redoアイコンをまとめたメニューバー
-                // （2026-09-03、PRESETSサイドバー常設→ハンバーガー開閉のオーバーレイ化に伴う移設）。
-                let events = draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Edit Channel:");
+                draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui, |ui| {
+                    if self.edit_channel.is_some() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 160, 40),
+                            "Program Change is ignored on this channel while editing",
+                        );
+                    }
                     let selected_text = match self.edit_channel {
                         None => "(None)".to_string(),
                         Some(ch) => format!("{}", ch + 1),
@@ -221,14 +228,8 @@ impl eframe::App for EditorApp {
                             }
                         }
                     });
-                    if self.edit_channel.is_some() {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(230, 160, 40),
-                            "Program Change is ignored on this channel while editing",
-                        );
-                    }
-                });
-                events
+                    ui.label("Edit Channel:");
+                })
             })
             .inner;
 
