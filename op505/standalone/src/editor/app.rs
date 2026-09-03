@@ -86,8 +86,10 @@ impl EditorApp {
             apply.snapshot.program,
             apply.snapshot.has_selection,
         );
-        // bank_opは+New Voice/DeleteをUndo対象化する実装（別ステップ）まで発生しない。
-        debug_assert!(apply.bank_op.is_none(), "バンク操作のUndo適用は未実装");
+        if let Some(op) = &apply.bank_op {
+            let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
+            self.presets.apply_bank_op(op, &host);
+        }
     }
 }
 
@@ -143,6 +145,11 @@ impl eframe::App for EditorApp {
             });
         });
 
+        // + New Voice/Delete（BankChange）はハンドルのbegin_edit/end_edit経由で記録できない
+        // （registry自体の変更でありパッチ全体のMementoでは表現できないため）。
+        // パネル描画の前後でスナップショットを取り、bank_opが返ってきたときだけ
+        // `push_bank_change`で明示的に1エントリ積む。
+        let bank_change_before = self.snapshot();
         let presets_panel_response =
             egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
                 let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
@@ -152,6 +159,9 @@ impl eframe::App for EditorApp {
         // できないため、フォーカス取得/喪失を1操作の区切りとして扱う
         // （`draw_presets_panel`のdoc参照）。
         let presets_events = presets_panel_response.inner;
+        if let Some(op) = presets_events.bank_op.clone() {
+            self.undo.borrow_mut().push_bank_change(op, bank_change_before, self.snapshot());
+        }
         if presets_events.patch_name_focus_gained {
             self.undo.borrow_mut().note_begin_edit();
         }
