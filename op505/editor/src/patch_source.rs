@@ -20,10 +20,12 @@ use sound_core::TimeEgParams;
 
 use crate::panel_source::PanelParamSource;
 use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpInt, PatchInt};
+use crate::undo::UndoStack;
 
 /// MASTER EFFECTS（Reverb/Chorus）パネル用の状態。`Op505Patch`の外側にあるエンジン非依存の
 /// ミラーのため分離して保持する（`op505-vst`のDAWパラメーターに相当するホスト側ミラー）。
-#[derive(Clone, Copy)]
+/// `PartialEq`はUndoスタック（`crate::undo::EditorSnapshot`）が操作前後の比較に使う。
+#[derive(Clone, Copy, PartialEq)]
 pub struct MasterEffectsState {
     pub rev_send: i32,
     pub reverb_type: i32,
@@ -194,6 +196,7 @@ fn write_eg(p: &mut Op505Patch, slot: EgSlot, params: TimeEgParams) {
 struct PatchIntHandle {
     patch: Rc<RefCell<Op505Patch>>,
     dirty: Rc<Cell<bool>>,
+    undo: Rc<RefCell<UndoStack>>,
     field: PatchInt,
 }
 
@@ -213,18 +216,23 @@ impl IntParamHandle for PatchIntHandle {
     fn name(&self) -> String {
         self.field.spec().short_name.to_string()
     }
-    fn begin_edit(&self) {}
+    fn begin_edit(&self) {
+        self.undo.borrow_mut().note_begin_edit();
+    }
     fn set(&self, value: i32) {
         let clamped = value.clamp(self.min(), self.max());
         write_int(&mut self.patch.borrow_mut(), self.field, clamped);
         self.dirty.set(true);
     }
-    fn end_edit(&self) {}
+    fn end_edit(&self) {
+        self.undo.borrow_mut().note_end_edit();
+    }
 }
 
 struct PatchBoolHandle {
     patch: Rc<RefCell<Op505Patch>>,
     dirty: Rc<Cell<bool>>,
+    undo: Rc<RefCell<UndoStack>>,
     field: BoolField,
 }
 
@@ -232,17 +240,22 @@ impl BoolParamHandle for PatchBoolHandle {
     fn value(&self) -> bool {
         read_bool(&self.patch.borrow(), self.field)
     }
-    fn begin_edit(&self) {}
+    fn begin_edit(&self) {
+        self.undo.borrow_mut().note_begin_edit();
+    }
     fn set(&self, value: bool) {
         write_bool(&mut self.patch.borrow_mut(), self.field, value);
         self.dirty.set(true);
     }
-    fn end_edit(&self) {}
+    fn end_edit(&self) {
+        self.undo.borrow_mut().note_end_edit();
+    }
 }
 
 struct PatchTimeEgHandle {
     patch: Rc<RefCell<Op505Patch>>,
     dirty: Rc<Cell<bool>>,
+    undo: Rc<RefCell<UndoStack>>,
     slot: EgSlot,
 }
 
@@ -257,13 +270,18 @@ impl TimeEgHandle for PatchTimeEgHandle {
     fn name(&self) -> String {
         self.slot.name().to_string()
     }
-    fn begin_edit(&self) {}
-    fn end_edit(&self) {}
+    fn begin_edit(&self) {
+        self.undo.borrow_mut().note_begin_edit();
+    }
+    fn end_edit(&self) {
+        self.undo.borrow_mut().note_end_edit();
+    }
 }
 
 struct MasterEffectsIntHandle {
     state: Rc<RefCell<MasterEffectsState>>,
     dirty: Rc<Cell<bool>>,
+    undo: Rc<RefCell<UndoStack>>,
     fx: FxInt,
 }
 
@@ -283,13 +301,17 @@ impl IntParamHandle for MasterEffectsIntHandle {
     fn name(&self) -> String {
         self.fx.spec().short_name.to_string()
     }
-    fn begin_edit(&self) {}
+    fn begin_edit(&self) {
+        self.undo.borrow_mut().note_begin_edit();
+    }
     fn set(&self, value: i32) {
         let clamped = value.clamp(self.min(), self.max());
         self.state.borrow_mut().set_field(self.fx, clamped);
         self.dirty.set(true);
     }
-    fn end_edit(&self) {}
+    fn end_edit(&self) {
+        self.undo.borrow_mut().note_end_edit();
+    }
 }
 
 /// [`PanelParamSource`]の`Rc<RefCell<Op505Patch>>`ベース実装。`Rc`のcloneで各ハンドルを
@@ -300,23 +322,32 @@ pub struct PatchPanelSource {
     pub patch_dirty: Rc<Cell<bool>>,
     pub master: Rc<RefCell<MasterEffectsState>>,
     pub master_dirty: Rc<Cell<bool>>,
+    pub undo: Rc<RefCell<UndoStack>>,
 }
 
 impl PanelParamSource for PatchPanelSource {
     fn int(&self, field: IntField) -> Box<dyn IntParamHandle + '_> {
         match field {
-            IntField::Patch(patch_field) => {
-                Box::new(PatchIntHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), field: patch_field })
-            }
-            IntField::Fx(fx) => Box::new(MasterEffectsIntHandle { state: self.master.clone(), dirty: self.master_dirty.clone(), fx }),
+            IntField::Patch(patch_field) => Box::new(PatchIntHandle {
+                patch: self.patch.clone(),
+                dirty: self.patch_dirty.clone(),
+                undo: self.undo.clone(),
+                field: patch_field,
+            }),
+            IntField::Fx(fx) => Box::new(MasterEffectsIntHandle {
+                state: self.master.clone(),
+                dirty: self.master_dirty.clone(),
+                undo: self.undo.clone(),
+                fx,
+            }),
         }
     }
 
     fn boolean(&self, field: BoolField) -> Box<dyn BoolParamHandle + '_> {
-        Box::new(PatchBoolHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), field })
+        Box::new(PatchBoolHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), undo: self.undo.clone(), field })
     }
 
     fn eg(&self, slot: EgSlot) -> Box<dyn TimeEgHandle + '_> {
-        Box::new(PatchTimeEgHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), slot })
+        Box::new(PatchTimeEgHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), undo: self.undo.clone(), slot })
     }
 }

@@ -268,12 +268,69 @@ pub(crate) enum SpinGlyph {
     Plus,
 }
 
-/// 押下開始で1回、その後は初期遅延を挟んで一定間隔で繰り返し`true`を返すボタン（長押しリピート）。
-/// 一度ボタン上で押し始めたら、マウスがボタン矩形から外れてもマウスボタンを離すまでリピートを継続する。
-/// `rect`は呼び出し側が明示する（`ui.add_sized`等の自動配置に頼らない理由は`spin_control`のコメント参照）。
-pub(crate) fn repeat_button(ui: &mut egui::Ui, rect: egui::Rect, glyph: SpinGlyph) -> bool {
+/// 長押しリピート（ボタン/キー共通）の状態遷移。
+/// Undoは「物理的な押下開始」から「物理的な解放」までを1操作として記録するため、
+/// 呼び出し側は`started`でbegin_edit、`fired`のたびに値変更、`released`でend_editを行う。
+/// 1回のクリック/キー押下だけでも必ず (started=true,fired=true) の次のフレームで
+/// released=trueが来るため、begin/endが必ず対になる。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RepeatEvent {
+    /// このフレームで押下/押鍵が始まった（Undoのbegin_editを呼ぶタイミング）。
+    pub started: bool,
+    /// このフレームで値を変更すべき（開始時と、以後のリピートtickの両方でtrue）。
+    pub fired: bool,
+    /// このフレームで押下/押鍵が終わった（Undoのend_editを呼ぶタイミング）。
+    pub released: bool,
+}
+
+/// `is_down`（このフレームで対象が押されているか）から`RepeatEvent`を導出する共通ロジック。
+/// `id`は状態保存用（ボタンのrect由来id、キーならKeyから作ったidを渡す）。
+fn repeat_tick(ui: &egui::Ui, id: egui::Id, is_down: bool) -> RepeatEvent {
     const INITIAL_DELAY: f64 = 0.4;
     const REPEAT_INTERVAL: f64 = 0.05;
+    let active_id = id.with("repeat_active");
+    let next_id = id.with("repeat_next");
+    let now = ui.input(|i| i.time);
+    let active = ui.memory(|m| m.data.get_temp::<bool>(active_id)).unwrap_or(false);
+
+    if is_down && !active {
+        ui.memory_mut(|m| {
+            m.data.insert_temp(active_id, true);
+            m.data.insert_temp(next_id, now + INITIAL_DELAY);
+        });
+        ui.ctx().request_repaint();
+        return RepeatEvent { started: true, fired: true, released: false };
+    }
+    if active {
+        if !is_down {
+            ui.memory_mut(|m| {
+                m.data.remove::<bool>(active_id);
+                m.data.remove::<f64>(next_id);
+            });
+            return RepeatEvent { started: false, fired: false, released: true };
+        }
+        ui.ctx().request_repaint();
+        let next = ui.memory(|m| m.data.get_temp::<f64>(next_id)).unwrap_or(now);
+        if now >= next {
+            ui.memory_mut(|m| m.data.insert_temp(next_id, now + REPEAT_INTERVAL));
+            return RepeatEvent { started: false, fired: true, released: false };
+        }
+    }
+    RepeatEvent::default()
+}
+
+/// カーソルキー1個ぶんの長押しリピート状態（`repeat_button`のキーボード版、同じ間隔で動作）。
+/// `id`は呼び出し側が用意する一意なid（フォーカス喪失後に取り残された状態が残らないよう、
+/// `spin_control`の数値欄idから作る）。
+pub(crate) fn key_repeat(ui: &egui::Ui, id: egui::Id, key: egui::Key) -> RepeatEvent {
+    let is_down = ui.input(|i| i.key_down(key));
+    repeat_tick(ui, id, is_down)
+}
+
+/// 押下開始で1回、その後は初期遅延を挟んで一定間隔で繰り返しイベントを返すボタン（長押しリピート）。
+/// 一度ボタン上で押し始めたら、マウスがボタン矩形から外れてもマウスボタンを離すまでリピートを継続する。
+/// `rect`は呼び出し側が明示する（`ui.add_sized`等の自動配置に頼らない理由は`spin_control`のコメント参照）。
+pub(crate) fn repeat_button(ui: &mut egui::Ui, rect: egui::Rect, glyph: SpinGlyph) -> RepeatEvent {
 
     // ホバー/フォーカス時にボタンが膨張して縦幅が変わらないようにする（レイアウトのちらつき防止）
     {
@@ -329,44 +386,16 @@ pub(crate) fn repeat_button(ui: &mut egui::Ui, rect: egui::Rect, glyph: SpinGlyp
             color,
         );
     }
-    let active_id = response.id.with("spin_active");
-    let next_id = response.id.with("spin_next");
-
-    let now = ui.input(|i| i.time);
-    let active = ui
-        .memory(|m| m.data.get_temp::<bool>(active_id))
-        .unwrap_or(false);
-
-    // ボタン上で新たに押下開始：即1回発火し、リピート状態を立てる
-    if response.is_pointer_button_down_on() && !active {
-        ui.memory_mut(|m| {
-            m.data.insert_temp(active_id, true);
-            m.data.insert_temp(next_id, now + INITIAL_DELAY);
-        });
-        ui.ctx().request_repaint();
-        return true;
-    }
-
-    if active {
-        // マウスボタンを離したらリピート停止（ボタン矩形を外れても押している限り継続する）
-        if !ui.input(|i| i.pointer.primary_down()) {
-            ui.memory_mut(|m| {
-                m.data.remove::<bool>(active_id);
-                m.data.remove::<f64>(next_id);
-            });
-            return false;
-        }
-        // 押下継続中はイベントが来なくても再描画を要求し続け、時間経過でリピート発火する
-        ui.ctx().request_repaint();
-        let next = ui
-            .memory(|m| m.data.get_temp::<f64>(next_id))
-            .unwrap_or(now);
-        if now >= next {
-            ui.memory_mut(|m| m.data.insert_temp(next_id, now + REPEAT_INTERVAL));
-            return true;
-        }
-    }
-    false
+    // 開始判定（矩形上での押下）と継続判定（矩形に無関係にマウスボタンが押されているか）を
+    // 使い分ける。`is_down`を常に`response.is_pointer_button_down_on()`にすると、矩形を
+    // 外れた瞬間にリピートが止まり「押している限り継続する」という既存仕様が壊れるため。
+    let active = ui.memory(|m| m.data.get_temp::<bool>(response.id.with("repeat_active"))).unwrap_or(false);
+    let is_down = if active {
+        ui.input(|i| i.pointer.primary_down())
+    } else {
+        response.is_pointer_button_down_on()
+    };
+    repeat_tick(ui, response.id, is_down)
 }
 
 /// 直接入力できる数値欄に＋−ボタンを付けたスピンコントロール（横一列）。
@@ -382,11 +411,16 @@ pub(crate) fn repeat_button(ui: &mut egui::Ui, rect: egui::Rect, glyph: SpinGlyp
 /// 特別な理由がなければ`SPIN_WIDTH_DEFAULT`を渡すこと。
 pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: egui::TextStyle, desired_width: f32) {
     let (min, max) = (handle.min(), handle.max());
-    let set = |value: i32| {
+    // Enterでの直接確定など、begin/set/endが同一フレームで完結する単発操作用。
+    let set_atomic = |value: i32| {
         handle.begin_edit();
         handle.set(value.clamp(min, max));
         handle.end_edit();
     };
+    // ±ボタン長押し・↑↓キー長押し用の素のset。begin_edit/end_editは呼び出し側が
+    // `RepeatEvent`のstarted/releasedで別途発行する（押下開始から解放までを1操作として
+    // Undoへ記録するため、リピート中の毎tickでbegin/endを完結させてはならない）。
+    let set = |value: i32| handle.set(value.clamp(min, max));
     let step_up = || (handle.value() + 1).clamp(min, max);
     let step_down = || (handle.value() - 1).clamp(min, max);
 
@@ -435,8 +469,15 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
         );
 
         // ---- − ボタン（左・長押しリピート） ----
-        if repeat_button(ui, minus_rect, SpinGlyph::Minus) {
+        let minus = repeat_button(ui, minus_rect, SpinGlyph::Minus);
+        if minus.started {
+            handle.begin_edit();
+        }
+        if minus.fired {
             set(step_down());
+        }
+        if minus.released {
+            handle.end_edit();
         }
 
         // ---- 数値入力欄 ----
@@ -464,27 +505,50 @@ pub fn spin_control(ui: &mut egui::Ui, handle: &dyn IntParamHandle, text_style: 
         );
         if response.has_focus() {
             ui.memory_mut(|m| m.data.insert_temp(buffer_id, text.clone()));
-            // カーソルキー↑↓で増減（バッファを破棄して次フレームに新値を表示させる）
-            if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            // カーソルキー↑↓で増減（バッファを破棄して次フレームに新値を表示させる）。
+            // `repeat_button`と同じ押下開始〜解放の区切りをキーボードでも再現する（`key_repeat`）。
+            let up = key_repeat(ui, id.with("arrow_up"), egui::Key::ArrowUp);
+            if up.started {
+                handle.begin_edit();
+            }
+            if up.fired {
                 set(step_up());
                 ui.memory_mut(|m| m.data.remove::<String>(buffer_id));
-            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            }
+            if up.released {
+                handle.end_edit();
+            }
+            let down = key_repeat(ui, id.with("arrow_down"), egui::Key::ArrowDown);
+            if down.started {
+                handle.begin_edit();
+            }
+            if down.fired {
                 set(step_down());
                 ui.memory_mut(|m| m.data.remove::<String>(buffer_id));
+            }
+            if down.released {
+                handle.end_edit();
             }
         }
         if response.lost_focus() {
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if let Ok(value) = text.trim().parse::<i32>() {
-                    set(value);
+                    set_atomic(value);
                 }
             }
             ui.memory_mut(|m| m.data.remove::<String>(buffer_id));
         }
 
         // ---- ＋ボタン（右・長押しリピート） ----
-        if repeat_button(ui, plus_rect, SpinGlyph::Plus) {
+        let plus = repeat_button(ui, plus_rect, SpinGlyph::Plus);
+        if plus.started {
+            handle.begin_edit();
+        }
+        if plus.fired {
             set(step_up());
+        }
+        if plus.released {
+            handle.end_edit();
         }
     });
 }

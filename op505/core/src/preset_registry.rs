@@ -78,6 +78,23 @@ impl Op505BankFile {
         Ok(entry)
     }
 
+    /// Undo/Redo専用：指定programへエントリーを直接挿入する（無ければ追加、あれば上書き）。
+    /// `add_new_voice`と違いprogram番号を呼び出し側が指定する
+    /// （+ New VoiceのUndo取り消しで自動採番と同じ番号を復元するため）。
+    pub fn restore_entry(&mut self, program: u8, name: String, patch: Op505Patch) {
+        let list = entries_mut(&mut self.file);
+        match list.iter_mut().find(|e| e.program == program) {
+            Some(entry) => {
+                entry.name = name;
+                entry.patch = patch;
+            }
+            None => {
+                list.push(Op505PresetEntry { program, name, patch });
+                list.sort_by_key(|e| e.program);
+            }
+        }
+    }
+
     /// 指定programのエントリーを削除する（DELETEキー用）。
     pub fn remove(&mut self, program: u8) -> Result<(), String> {
         let list = entries_mut(&mut self.file);
@@ -288,6 +305,32 @@ mod tests {
             file: Op505PresetFile::Presets { bank: 0, presets: vec![Op505PresetEntry { program: 255, name: "Last".to_string(), patch: Op505Patch::default() }] },
         };
         assert!(bank_file.add_new_voice(Op505Patch::default()).is_err());
+    }
+
+    #[test]
+    fn restore_entry_inserts_at_specified_program_when_absent() {
+        let mut bank_file = Op505BankFile {
+            path: PathBuf::from("dummy.op505"),
+            file: Op505PresetFile::Presets { bank: 0, presets: vec![Op505PresetEntry { program: 0, name: "A".to_string(), patch: Op505Patch::default() }] },
+        };
+        bank_file.restore_entry(5, "Restored".to_string(), Op505Patch::default());
+        assert_eq!(bank_file.entries().len(), 2);
+        assert_eq!(bank_file.entries()[1].program, 5, "sortされ末尾に来るはず");
+        assert_eq!(bank_file.entries()[1].name, "Restored");
+    }
+
+    #[test]
+    fn restore_entry_overwrites_when_program_already_present() {
+        let mut bank_file = Op505BankFile {
+            path: PathBuf::from("dummy.op505"),
+            file: Op505PresetFile::Presets { bank: 0, presets: vec![Op505PresetEntry { program: 3, name: "Old".to_string(), patch: Op505Patch::default() }] },
+        };
+        let mut patch = Op505Patch::default();
+        patch.operators[0].tl = 99;
+        bank_file.restore_entry(3, "New".to_string(), patch);
+        assert_eq!(bank_file.entries().len(), 1);
+        assert_eq!(bank_file.entries()[0].name, "New");
+        assert_eq!(bank_file.entries()[0].patch.operators[0].tl, 99);
     }
 
     #[test]

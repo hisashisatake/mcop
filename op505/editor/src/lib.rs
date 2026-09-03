@@ -20,3 +20,4 @@ pub mod panel_source;
 pub mod param_spec;
 pub mod patch_source;
 pub mod preset_panel;
+pub mod undo;

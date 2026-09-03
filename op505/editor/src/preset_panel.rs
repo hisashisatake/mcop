@@ -18,6 +18,8 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::undo::BankOp;
+
 /// ホスト差分（DAWパラメーター経由か、`Rc<RefCell<Op505Patch>>`直接かなど）を吸収する3操作。
 ///
 /// # 規約
@@ -31,6 +33,11 @@ pub trait PresetHost {
     fn apply_patch(&self, patch: &Op505Patch);
     /// `bank_file`の内容を音声スレッド（MIDI Program Change解決）側の共有バンクへ即時反映する。
     fn publish_bank(&self, bank_file: &Op505BankFile);
+    /// バンク構成の変更（+ New Voice/Delete）を即座にディスクへ保存するか。
+    /// VST=true（従来通り即save）、standalone=false（Save/Save Asでのみ保存、Undoが効くようにするため）。
+    fn auto_save_bank_edits(&self) -> bool {
+        true
+    }
 }
 
 /// PRESETSパネルが保持するセッション状態（レジストリ＋今編集中の(bank, program)＋表示用文字列）。
@@ -222,23 +229,24 @@ fn request_open(session: &mut PresetSession) {
 }
 
 /// 毎フレーム呼ぶ。ファイル選択ダイアログの結果が届いていればロードを実行する。
-fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際にファイルを読み込めたか。キャンセル/読込失敗ならfalse）。
+fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let path = match session.pending_open.as_ref() {
         Some(pending) => match pending.receiver.try_recv() {
             Ok(path) => path,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => None,
         },
-        None => return,
+        None => return false,
     };
     let PendingOpen { bank, .. } = session.pending_open.take().expect("Some確認済み");
-    let Some(path) = path else { return }; // ダイアログをキャンセルした
-    let Ok(json) = std::fs::read_to_string(&path) else { return };
-    let Ok(file) = Op505PresetFile::from_json(&json) else { return };
+    let Some(path) = path else { return false }; // ダイアログをキャンセルした
+    let Ok(json) = std::fs::read_to_string(&path) else { return false };
+    let Ok(file) = Op505PresetFile::from_json(&json) else { return false };
     // ファイル自身が宣言しているbank番号は無視し、リクエスト時点のbankへ丸ごとロードする
     // （gesture-appと同じ、ユーザー確認済みの既定仕様）。
     let bank_file = Op505BankFile::from_loaded(path, file, bank);
-    let Some(entry) = bank_file.entries().first().cloned() else { return };
+    let Some(entry) = bank_file.entries().first().cloned() else { return false };
 
     // ダイアログ表示中にBankが切り替えられていた場合、パッチ・表示の更新は
     // 今見えているbankとは無関係になるためスキップする（レジストリへの登録自体は常に行う）。
@@ -248,22 +256,25 @@ fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) {
     }
     host.publish_bank(&bank_file);
     session.registry.insert(bank, bank_file);
+    true
 }
 
-fn handle_save(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際に保存できたか）。
+fn handle_save(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let patch = host.current_patch();
     let program = session.program;
     let patch_name = session.patch_name.clone();
-    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return };
+    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return false };
     if bank_file.upsert(program, patch_name, patch).is_err() {
-        return;
+        return false;
     }
     if bank_file.save().is_err() {
-        return;
+        return false;
     }
     let file_name = bank_file.file_name().unwrap_or("?").to_string();
     host.publish_bank(bank_file);
     session.on_saved(file_name);
+    true
 }
 
 /// Save As保存ダイアログの表示を要求する。理由・方式はOpen（`request_open`）と同じ
@@ -288,21 +299,22 @@ fn request_save_as(session: &mut PresetSession) {
 }
 
 /// 毎フレーム呼ぶ。保存ダイアログの結果が届いていれば書き出しを実行する。
-fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際に書き出せたか）。
+fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let path = match session.pending_save_as.as_ref() {
         Some(pending) => match pending.receiver.try_recv() {
             Ok(path) => path,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => None,
         },
-        None => return,
+        None => return false,
     };
     let PendingSaveAs { bank, program, patch_name, .. } = session.pending_save_as.take().expect("Some確認済み");
-    let Some(path) = path else { return }; // ダイアログをキャンセルした
+    let Some(path) = path else { return false }; // ダイアログをキャンセルした
 
     let patch = host.current_patch();
     let base_entries: Vec<Op505PresetEntry> = session.registry.get(&bank).map(|f| f.entries().to_vec()).unwrap_or_default();
-    let Ok(bank_file) = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path) else { return };
+    let Ok(bank_file) = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path) else { return false };
 
     let file_name = bank_file.file_name().unwrap_or("patch.op505").to_string();
     host.publish_bank(&bank_file);
@@ -310,9 +322,10 @@ fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) {
     if bank == session.bank {
         session.open_file(program, patch_name, Some(file_name));
     }
+    true
 }
 
-fn handle_add_new_voice(session: &mut PresetSession, host: &dyn PresetHost, copy_current: bool) {
+fn handle_add_new_voice(session: &mut PresetSession, host: &dyn PresetHost, copy_current: bool) -> Option<BankOp> {
     let source_patch = if copy_current { host.current_patch() } else { Op505Patch::default() };
     let Some(bank_file) = session.registry.get_mut(&session.bank) else {
         // gesture-app（`op505_presets.rs`の`op505_add_preset`）と同じ制約：担当ファイルが無い
@@ -321,16 +334,18 @@ fn handle_add_new_voice(session: &mut PresetSession, host: &dyn PresetHost, copy
         // モーダルが使えないため一時テキスト表示で代替する（2026-08-28、以前は無言でreturnしていた）。
         session.last_error =
             Some(("This bank has no file yet. Use Open or Save As first.".to_string(), std::time::Instant::now()));
-        return;
+        return None;
     };
-    let Ok(entry) = bank_file.add_new_voice(source_patch) else { return };
-    if bank_file.save().is_err() {
-        return;
+    let Ok(entry) = bank_file.add_new_voice(source_patch) else { return None };
+    if host.auto_save_bank_edits() && bank_file.save().is_err() {
+        return None;
     }
     session.last_error = None;
     host.publish_bank(bank_file);
     apply_entry(host, &entry, false);
+    let op = BankOp::Add { bank: session.bank, program: entry.program, name: entry.name.clone(), patch: entry.patch };
     session.select_entry(entry.program, entry.name);
+    Some(op)
 }
 
 /// Delete確認ダイアログの表示を要求する。`rfd::MessageDialog::show()`はブロッキング呼び出しで、
@@ -362,27 +377,29 @@ fn request_delete(session: &mut PresetSession) {
     session.pending_delete = Some(PendingDelete { bank, program, receiver: rx });
 }
 
-/// 毎フレーム呼ぶ。確認スレッドの結果が届いていれば削除を実行する（結果が未到着ならno-op）。
-fn poll_pending_delete(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 毎フレーム呼ぶ。確認スレッドの結果が届いていれば削除を実行する（結果が未到着ならNone）。
+fn poll_pending_delete(session: &mut PresetSession, host: &dyn PresetHost) -> Option<BankOp> {
     let confirmed = match session.pending_delete.as_ref() {
         Some(pending) => match pending.receiver.try_recv() {
             Ok(confirmed) => confirmed,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return None,
             Err(mpsc::TryRecvError::Disconnected) => false,
         },
-        None => return,
+        None => return None,
     };
     let PendingDelete { bank, program, .. } = session.pending_delete.take().expect("Some確認済み");
     if !confirmed {
-        return;
+        return None;
     }
 
-    let Some(bank_file) = session.registry.get_mut(&bank) else { return };
+    let Some(bank_file) = session.registry.get_mut(&bank) else { return None };
+    // Undo対象化のため、削除前にエントリー内容を退避する（BankOp::Remove/Undo時の再挿入用）。
+    let Some(removed) = bank_file.entries().iter().find(|e| e.program == program).cloned() else { return None };
     if bank_file.remove(program).is_err() {
-        return;
+        return None;
     }
-    if bank_file.save().is_err() {
-        return;
+    if host.auto_save_bank_edits() && bank_file.save().is_err() {
+        return None;
     }
     let remaining = bank_file.entries().to_vec();
     host.publish_bank(bank_file);
@@ -394,6 +411,7 @@ fn poll_pending_delete(session: &mut PresetSession, host: &dyn PresetHost) {
             apply_entry(host, &next, false);
         }
     }
+    Some(BankOp::Remove { bank, program, name: removed.name, patch: removed.patch })
 }
 
 /// Bank欄のハンドル。ノブ下の数値欄と同じ見た目（`ui_core::spin_control`）にするための橋渡し。
@@ -440,20 +458,48 @@ fn handle_bank_changed(session: &mut PresetSession) {
     session.has_selection = false;
 }
 
+/// [`draw_presets_panel`]が返す、呼び出し側（Undoスタックを持つ側）が反応すべきイベント。
+/// パッチ内パラメーターと違い音色名は`PresetSession`が持つためハンドル(`begin_edit`/`end_edit`)
+/// 経由の記録ができない。フォーカス取得/喪失を音色名編集1操作の区切りとして呼び出し側へ伝える
+/// （`op505-editor`はUndoスタック本体を知らないため、記録自体は行わずイベントの通知に留める）。
+#[derive(Default, Clone)]
+pub struct PresetsPanelEvents {
+    /// 音色名欄がこのフレームでフォーカスを得た。
+    pub patch_name_focus_gained: bool,
+    /// 音色名欄がこのフレームでフォーカスを失った。
+    pub patch_name_focus_lost: bool,
+    /// PRESETSリストの通常クリック/Shift+クリックでプリセットがパッチへ適用された
+    /// （+ New Voice/Deleteはバンク構成自体を変える別操作のため対象外）。`apply_entry`は
+    /// `begin_edit`/`end_edit`を経由しないパッチ全体の差し替えのため、単発操作として
+    /// begin/endを同フレームで記録することを呼び出し側へ伝える。
+    pub list_selection_applied: bool,
+    /// このフレームで+ New Voice/Deleteが実行された場合、その内容
+    /// （Undo/Redo時に呼び出し側が`EditorPresetState::apply_bank_op`へ渡す逆操作の元）。
+    /// パッチ内パラメーターと違い`op505-editor`はUndoスタック本体を知らないため、記録自体は
+    /// 呼び出し側（standaloneの`EditorApp`）へ委ねる（`patch_name_focus_*`と同じ設計）。
+    pub bank_op: Option<BankOp>,
+    /// このフレームでOpen/Save/Save Asが完了した（キャンセル・失敗は含まない）。
+    /// 呼び出し側は`UndoStack::clear()`を呼ぶこと——ファイルの内容がディスク上の実体と
+    /// 対応する新しい基点になったので、それ以前のUndo履歴（特にバンクファイルの内容を
+    /// 前提とする`BankOp`）は前提が崩れており巻き戻しの意味を持たない。
+    pub history_cleared: bool,
+}
+
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
 /// 音色名→区切り線→PRESETSリスト（+ New Voice/DeleteはScrollArea内）の順）をそのまま踏襲する。
 /// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
 /// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
 /// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
-pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) {
+pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
     let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
 
     ui.horizontal(|ui| {
         if ui.add_enabled(session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
             request_open(session);
         }
         if ui.add_enabled(session.save_enabled(), egui::Button::new("Save")).clicked() {
-            handle_save(session, host);
+            events.history_cleared |= handle_save(session, host);
         }
         if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
             request_save_as(session);
@@ -477,7 +523,10 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
     ui.label(format!("{file_label}{mark}"));
 
     let mut patch_name = session.patch_name.clone();
-    if ui.text_edit_singleline(&mut patch_name).changed() {
+    let patch_name_response = ui.text_edit_singleline(&mut patch_name);
+    events.patch_name_focus_gained = patch_name_response.gained_focus();
+    events.patch_name_focus_lost = patch_name_response.lost_focus();
+    if patch_name_response.changed() {
         session.patch_name = patch_name;
         session.unsaved = true;
     }
@@ -516,20 +565,25 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
                 let keep_fg = ui.input(|i| i.modifiers.shift);
                 apply_entry(host, &entry, keep_fg);
                 session.select_entry(entry.program, entry.name);
+                events.list_selection_applied = true;
             }
         }
         if ui.selectable_label(false, "+ New Voice").clicked() {
             let copy_current = ui.input(|i| i.modifiers.shift);
-            handle_add_new_voice(session, host, copy_current);
+            events.bank_op = handle_add_new_voice(session, host, copy_current);
         }
     });
 
     if delete_by_key {
         request_delete(session);
     }
-    poll_pending_delete(session, host);
-    poll_pending_open(session, host);
-    poll_pending_save_as(session, host);
+    if let Some(op) = poll_pending_delete(session, host) {
+        events.bank_op = Some(op);
+    }
+    events.history_cleared |= poll_pending_open(session, host);
+    events.history_cleared |= poll_pending_save_as(session, host);
+
+    events
 }
 
 /// PRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。
@@ -543,15 +597,120 @@ impl EditorPresetState {
         session.sync_display_to_registry();
         EditorPresetState { session }
     }
+
+    /// 現在選択中のbank。Undoスナップショットの構築に使う。
+    pub fn bank(&self) -> u16 {
+        self.session.bank
+    }
+
+    /// 現在選択中のprogram番号。Undoスナップショットの構築に使う。
+    pub fn program(&self) -> u8 {
+        self.session.program
+    }
+
+    /// 現在の音色名（音欄の表示値）。Undoスナップショットの構築に使う。
+    pub fn patch_name(&self) -> &str {
+        &self.session.patch_name
+    }
+
+    /// PRESETSリストで実際に何かが選択されているか。Undoスナップショットの構築に使う。
+    pub fn has_selection(&self) -> bool {
+        self.session.has_selection
+    }
+
+    /// Undo/Redo適用時、スナップショットが持つ選択状態を書き戻す。`file_name`/`unsaved`には
+    /// 触れない（Undo/Redoはパッチ内容の巻き戻しであり、ファイルとの対応関係や未保存状態の
+    /// 意味論は`select_entry`等の通常の選択操作とは別に扱う）。
+    pub fn restore_selection(&mut self, patch_name: String, bank: u16, program: u8, has_selection: bool) {
+        self.session.patch_name = patch_name;
+        self.session.bank = bank;
+        self.session.program = program;
+        self.session.has_selection = has_selection;
+    }
+
+    /// Undo/Redoが返した[`BankOp`]をバンクレジストリへ再適用する（+ New Voice/Deleteの
+    /// 巻き戻し・やり直し）。対象バンクの担当ファイルが無い等の異常系は静かに無視する
+    /// （Undoスタック自体がAdd/Removeの整合性を保証しているため通常起きない）。
+    /// パッチ選択状態（bank/program/patch_name等）はこのメソッドの対象外——呼び出し側が
+    /// `restore_selection`で別途復元する。
+    pub fn apply_bank_op(&mut self, op: &BankOp, host: &dyn PresetHost) {
+        let (&bank, program) = match op {
+            BankOp::Add { bank, program, .. } | BankOp::Remove { bank, program, .. } => (bank, *program),
+        };
+        let Some(bank_file) = self.session.registry.get_mut(&bank) else { return };
+        match op {
+            BankOp::Add { name, patch, .. } => bank_file.restore_entry(program, name.clone(), *patch),
+            BankOp::Remove { .. } => {
+                if bank_file.remove(program).is_err() {
+                    return;
+                }
+            }
+        }
+        if host.auto_save_bank_edits() && bank_file.save().is_err() {
+            return;
+        }
+        host.publish_bank(bank_file);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::path::PathBuf;
 
     fn entry(program: u8, name: &str) -> Op505PresetEntry {
         Op505PresetEntry { program, name: name.to_string(), patch: Op505Patch::default() }
+    }
+
+    /// `apply_bank_op`のテスト用モック。呼ばれた`publish_bank`の回数だけ記録する。
+    struct MockHost {
+        auto_save: bool,
+        published: RefCell<Vec<Op505PresetFile>>,
+    }
+
+    impl PresetHost for MockHost {
+        fn current_patch(&self) -> Op505Patch {
+            Op505Patch::default()
+        }
+        fn apply_patch(&self, _patch: &Op505Patch) {}
+        fn publish_bank(&self, bank_file: &Op505BankFile) {
+            self.published.borrow_mut().push(bank_file.as_presets_file());
+        }
+        fn auto_save_bank_edits(&self) -> bool {
+            self.auto_save
+        }
+    }
+
+    #[test]
+    fn apply_bank_op_add_reinserts_entry_at_original_program() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "Existing")] };
+        registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
+        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+
+        let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
+        let op = BankOp::Add { bank: 0, program: 1, name: "Voice001".to_string(), patch: Op505Patch::default() };
+        state.apply_bank_op(&op, &host);
+
+        assert_eq!(state.session.entries().len(), 2, "+ New VoiceのRedo/DeleteのUndoで元のprogramへ復元されるはず");
+        assert!(state.session.entries().iter().any(|e| e.program == 1 && e.name == "Voice001"));
+        assert_eq!(host.published.borrow().len(), 1, "auto_save無効でもpublish_bankは常に呼ぶはず");
+    }
+
+    #[test]
+    fn apply_bank_op_remove_deletes_entry() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "A"), entry(1, "B")] };
+        registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
+        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+
+        let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
+        let op = BankOp::Remove { bank: 0, program: 0, name: "A".to_string(), patch: Op505Patch::default() };
+        state.apply_bank_op(&op, &host);
+
+        assert_eq!(state.session.entries().len(), 1, "+ New VoiceのUndo/DeleteのRedoで対象エントリーが消えるはず");
+        assert_eq!(state.session.entries()[0].program, 1);
     }
 
     #[test]

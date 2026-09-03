@@ -31,4 +31,10 @@ impl PresetHost for StandalonePresetHost<'_> {
     fn publish_bank(&self, bank_file: &Op505BankFile) {
         self.shared.publish_bank_file(bank_file);
     }
+
+    /// standaloneはUndoが効くよう、+ New Voice/Deleteでの即時ディスク保存を行わない
+    /// （Save/Save Asでのみ書き込む。`op505-editor::preset_panel::PresetHost`のdoc参照）。
+    fn auto_save_bank_edits(&self) -> bool {
+        false
+    }
 }
