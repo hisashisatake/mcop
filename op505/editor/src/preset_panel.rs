@@ -746,24 +746,25 @@ pub fn draw_presets_drawer(ctx: &egui::Context, state: &mut EditorPresetState, h
         // Uiの幅は常にフル幅（ラップ位置を固定するため）。
         ui.set_width(full_rect.width());
         ui.set_height(full_rect.height());
-        // `Frame::window`（角丸+ドロップシャドウ）だとポップアップ/ダイアログに見えてしまう。
-        // 実際の`Panel`が使う`Frame::side_top_panel`（角丸なし・影なし、`panel_fill`一色）を使い、
-        // ウィンドウ本体に構造的に貼り付いた「スライドするパネル」に見えるようにする
-        // （フローティングカードとの違いはユーザー提示のワイヤーフレーム参照）。
+        // 背景は「見える範囲（`visible_rect`）だけ」に自前で塗る——`Frame::side_top_panel`の
+        // `fill`をそのまま使うとフル幅（`full_rect`）全体に対して塗ってしまい、アニメーション中
+        // でも下のCHANNEL等のコントロールが常に最大幅ぶん覆われて見える（ユーザー指摘、
+        // 2026-09-03）。marginはFrameから借りるが色は透過にし、塗りは自前でvisible_rect分だけ行う。
         let panel_fill = ui.visuals().panel_fill;
-        egui::Frame::side_top_panel(ui.style()).show(ui, |ui| {
+        ui.painter().rect_filled(visible_rect, 0.0, panel_fill);
+        // `Frame::window`（角丸+ドロップシャドウ）だとポップアップ/ダイアログに見えてしまう。
+        // 実際の`Panel`が使う`Frame::side_top_panel`と同じmargin構成（角丸なし・影なし）を
+        // 借りつつ、fill自体は上で塗った分と重複しないようtransparentにする。
+        egui::Frame::side_top_panel(ui.style()).fill(egui::Color32::TRANSPARENT).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
+            // 実際に描画される範囲を`visible_rect`だけに制限する。Uiの幅そのもの
+            // （レイアウト・ラップ判定の基準）はフル幅のまま変えないため、ファイル名等の
+            // 折り返し位置はアニメーション中も一切変化しない——ここが直前に試した「事後マスク」
+            // 方式との違い：マスクは「描いてから隠す」ため背景の塗り自体はフル幅分残ってしまうが、
+            // クリップは「そもそも描かせない」ため背景・文字とも`visible_rect`の外には一切出ない。
+            ui.shrink_clip_rect(visible_rect);
             events = draw_presets_drawer_contents(ui, state, host);
         });
-        // アニメーション中（t<1）はまだ見せたくない右側部分を、背景と同色の不透明矩形で
-        // 事後的に覆い隠す（`ui.shrink_clip_rect`でクリップする案も試したが、`Frame::show`が
-        // 内部で作る子UiがクリップされたUiを継承するらしく、テキストの折り返し幅の判定にも
-        // 影響してしまい、ファイル名等のラップ位置が伸びる途中で何度も変わってガタついた。
-        // 事後マスク方式ならレイアウト計算は常にフル幅で確定するため、ラップは一切変化しない）。
-        if t < 1.0 {
-            let mask_rect = egui::Rect::from_min_max(egui::pos2(visible_rect.right(), full_rect.top()), full_rect.right_bottom());
-            ui.painter().rect_filled(mask_rect, 0.0, panel_fill);
-        }
         // 縁取りは右端（下のコントロールと接する境目）だけでよい——`Frame::stroke`は矩形四辺
         // 全部を囲ってしまい「浮いたカード」に見えてしまうため、`Painter::vline`で右端だけ引く。
         let stroke = ui.visuals().window_stroke();
