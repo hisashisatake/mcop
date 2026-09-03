@@ -229,23 +229,24 @@ fn request_open(session: &mut PresetSession) {
 }
 
 /// 毎フレーム呼ぶ。ファイル選択ダイアログの結果が届いていればロードを実行する。
-fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際にファイルを読み込めたか。キャンセル/読込失敗ならfalse）。
+fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let path = match session.pending_open.as_ref() {
         Some(pending) => match pending.receiver.try_recv() {
             Ok(path) => path,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => None,
         },
-        None => return,
+        None => return false,
     };
     let PendingOpen { bank, .. } = session.pending_open.take().expect("Some確認済み");
-    let Some(path) = path else { return }; // ダイアログをキャンセルした
-    let Ok(json) = std::fs::read_to_string(&path) else { return };
-    let Ok(file) = Op505PresetFile::from_json(&json) else { return };
+    let Some(path) = path else { return false }; // ダイアログをキャンセルした
+    let Ok(json) = std::fs::read_to_string(&path) else { return false };
+    let Ok(file) = Op505PresetFile::from_json(&json) else { return false };
     // ファイル自身が宣言しているbank番号は無視し、リクエスト時点のbankへ丸ごとロードする
     // （gesture-appと同じ、ユーザー確認済みの既定仕様）。
     let bank_file = Op505BankFile::from_loaded(path, file, bank);
-    let Some(entry) = bank_file.entries().first().cloned() else { return };
+    let Some(entry) = bank_file.entries().first().cloned() else { return false };
 
     // ダイアログ表示中にBankが切り替えられていた場合、パッチ・表示の更新は
     // 今見えているbankとは無関係になるためスキップする（レジストリへの登録自体は常に行う）。
@@ -255,22 +256,25 @@ fn poll_pending_open(session: &mut PresetSession, host: &dyn PresetHost) {
     }
     host.publish_bank(&bank_file);
     session.registry.insert(bank, bank_file);
+    true
 }
 
-fn handle_save(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際に保存できたか）。
+fn handle_save(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let patch = host.current_patch();
     let program = session.program;
     let patch_name = session.patch_name.clone();
-    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return };
+    let Some(bank_file) = session.registry.get_mut(&session.bank) else { return false };
     if bank_file.upsert(program, patch_name, patch).is_err() {
-        return;
+        return false;
     }
     if bank_file.save().is_err() {
-        return;
+        return false;
     }
     let file_name = bank_file.file_name().unwrap_or("?").to_string();
     host.publish_bank(bank_file);
     session.on_saved(file_name);
+    true
 }
 
 /// Save As保存ダイアログの表示を要求する。理由・方式はOpen（`request_open`）と同じ
@@ -295,21 +299,22 @@ fn request_save_as(session: &mut PresetSession) {
 }
 
 /// 毎フレーム呼ぶ。保存ダイアログの結果が届いていれば書き出しを実行する。
-fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) {
+/// 戻り値はUndo履歴クリアの要否（実際に書き出せたか）。
+fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) -> bool {
     let path = match session.pending_save_as.as_ref() {
         Some(pending) => match pending.receiver.try_recv() {
             Ok(path) => path,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => None,
         },
-        None => return,
+        None => return false,
     };
     let PendingSaveAs { bank, program, patch_name, .. } = session.pending_save_as.take().expect("Some確認済み");
-    let Some(path) = path else { return }; // ダイアログをキャンセルした
+    let Some(path) = path else { return false }; // ダイアログをキャンセルした
 
     let patch = host.current_patch();
     let base_entries: Vec<Op505PresetEntry> = session.registry.get(&bank).map(|f| f.entries().to_vec()).unwrap_or_default();
-    let Ok(bank_file) = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path) else { return };
+    let Ok(bank_file) = Op505BankFile::write_as(patch, patch_name.clone(), bank, program, &base_entries, path) else { return false };
 
     let file_name = bank_file.file_name().unwrap_or("patch.op505").to_string();
     host.publish_bank(&bank_file);
@@ -317,6 +322,7 @@ fn poll_pending_save_as(session: &mut PresetSession, host: &dyn PresetHost) {
     if bank == session.bank {
         session.open_file(program, patch_name, Some(file_name));
     }
+    true
 }
 
 fn handle_add_new_voice(session: &mut PresetSession, host: &dyn PresetHost, copy_current: bool) -> Option<BankOp> {
@@ -472,6 +478,11 @@ pub struct PresetsPanelEvents {
     /// パッチ内パラメーターと違い`op505-editor`はUndoスタック本体を知らないため、記録自体は
     /// 呼び出し側（standaloneの`EditorApp`）へ委ねる（`patch_name_focus_*`と同じ設計）。
     pub bank_op: Option<BankOp>,
+    /// このフレームでOpen/Save/Save Asが完了した（キャンセル・失敗は含まない）。
+    /// 呼び出し側は`UndoStack::clear()`を呼ぶこと——ファイルの内容がディスク上の実体と
+    /// 対応する新しい基点になったので、それ以前のUndo履歴（特にバンクファイルの内容を
+    /// 前提とする`BankOp`）は前提が崩れており巻き戻しの意味を持たない。
+    pub history_cleared: bool,
 }
 
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
@@ -481,13 +492,14 @@ pub struct PresetsPanelEvents {
 /// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
 pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
     let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
 
     ui.horizontal(|ui| {
         if ui.add_enabled(session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
             request_open(session);
         }
         if ui.add_enabled(session.save_enabled(), egui::Button::new("Save")).clicked() {
-            handle_save(session, host);
+            events.history_cleared |= handle_save(session, host);
         }
         if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
             request_save_as(session);
@@ -512,12 +524,8 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
 
     let mut patch_name = session.patch_name.clone();
     let patch_name_response = ui.text_edit_singleline(&mut patch_name);
-    let mut events = PresetsPanelEvents {
-        patch_name_focus_gained: patch_name_response.gained_focus(),
-        patch_name_focus_lost: patch_name_response.lost_focus(),
-        list_selection_applied: false,
-        bank_op: None,
-    };
+    events.patch_name_focus_gained = patch_name_response.gained_focus();
+    events.patch_name_focus_lost = patch_name_response.lost_focus();
     if patch_name_response.changed() {
         session.patch_name = patch_name;
         session.unsaved = true;
@@ -572,8 +580,8 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
     if let Some(op) = poll_pending_delete(session, host) {
         events.bank_op = Some(op);
     }
-    poll_pending_open(session, host);
-    poll_pending_save_as(session, host);
+    events.history_cleared |= poll_pending_open(session, host);
+    events.history_cleared |= poll_pending_save_as(session, host);
 
     events
 }

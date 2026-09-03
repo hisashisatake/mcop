@@ -7,7 +7,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 use op505_core::Op505Patch;
 use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
@@ -39,6 +39,11 @@ pub struct EditorApp {
     /// 対応）。ウィンドウを開いた直後に演奏中のチャンネルを勝手に上書きしないよう、既定は
     /// 必ず`None`にする（ユーザー確認済み、gesture-appコントローラー化ロードマップのplan参照）。
     edit_channel: Option<usize>,
+    /// 未保存の確認ダイアログの結果待ち（`request_close_confirm`/`poll_close_confirm`参照）。
+    pending_close_confirm: Option<mpsc::Receiver<bool>>,
+    /// 確認ダイアログで「閉じる」が選ばれた後に送り直す`ViewportCommand::Close`を、
+    /// 同じ未保存チェックで再度横取りしない（無限ループ防止）ためのフラグ。
+    close_confirmed: bool,
 }
 
 impl EditorApp {
@@ -57,6 +62,8 @@ impl EditorApp {
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
             edit_channel: None,
+            pending_close_confirm: None,
+            close_confirmed: false,
         }
     }
 
@@ -91,11 +98,67 @@ impl EditorApp {
             self.presets.apply_bank_op(op, &host);
         }
     }
+
+    /// 未保存の変更がある状態でウィンドウを閉じようとしたときの確認ダイアログを別スレッドで
+    /// 表示する。`rfd::MessageDialog::show()`はブロッキング呼び出しで、egui描画コールバック
+    /// の内側で直接呼ぶとネストしたメッセージループがホストごとクラッシュしうる
+    /// （`preset_panel.rs`のDelete確認ダイアログと同じ理由・同じ非同期パターン）。
+    fn request_close_confirm(&mut self) {
+        if self.pending_close_confirm.is_some() {
+            return; // 確認中の二重リクエストを防ぐ
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let confirmed = matches!(
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("Unsaved Changes")
+                    .set_description("You have unsaved changes (+ New Voice / Delete not yet saved). Close anyway?")
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show(),
+                rfd::MessageDialogResult::Yes
+            );
+            let _ = tx.send(confirmed);
+        });
+        self.pending_close_confirm = Some(rx);
+    }
+
+    /// 毎フレーム呼ぶ。確認ダイアログの結果が届いていれば反映する（未到着ならno-op）。
+    fn poll_close_confirm(&mut self, ctx: &egui::Context) {
+        let confirmed = match &self.pending_close_confirm {
+            Some(rx) => match rx.try_recv() {
+                Ok(confirmed) => confirmed,
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            },
+            None => return,
+        };
+        self.pending_close_confirm = None;
+        if confirmed {
+            // 一度キャンセルした`Close`を送り直す。次フレームでも同じチェックに引っかからない
+            // よう`close_confirmed`を立てておく（無限ループ防止）。
+            self.close_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let previous_edit_channel = self.edit_channel;
+
+        // 未保存（Undo履歴が残っている＝Save/Save Asで基点をクリアしていない）のままウィンドウを
+        // 閉じようとした場合、一旦キャンセルして確認ダイアログを出す。standaloneはプリセット
+        // レジストリの寿命がウィンドウの寿命に紐づく（`EditorPresetState::new()`が開くたびに
+        // ディスクから再構築する）ため、これが無いと遅延保存化（Step 8）により
+        // 「+ New Voiceして閉じたら消える」事故になる。
+        self.poll_close_confirm(ui.ctx());
+        let close_requested = ui.ctx().input(|i| i.viewport().close_requested());
+        if close_requested && !self.close_confirmed && self.undo.borrow().can_undo() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request_close_confirm();
+        }
+
         self.undo.borrow_mut().begin_frame(self.snapshot());
 
         // テキスト欄（音色名・数値直接入力）にフォーカスがある間はeguiのTextEdit組み込みの
@@ -161,6 +224,12 @@ impl eframe::App for EditorApp {
         let presets_events = presets_panel_response.inner;
         if let Some(op) = presets_events.bank_op.clone() {
             self.undo.borrow_mut().push_bank_change(op, bank_change_before, self.snapshot());
+        }
+        if presets_events.history_cleared {
+            // Open/Save/Save Asが完了した：ディスク上の実体と対応する新しい基点ができたので、
+            // それ以前のUndo履歴（特にバンクファイルの内容を前提とする`BankOp`）は前提が
+            // 崩れており巻き戻しの意味を持たない。
+            self.undo.borrow_mut().clear();
         }
         if presets_events.patch_name_focus_gained {
             self.undo.borrow_mut().note_begin_edit();
