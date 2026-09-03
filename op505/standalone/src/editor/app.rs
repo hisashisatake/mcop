@@ -13,7 +13,7 @@ use op505_core::Op505Patch;
 use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
-use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState};
+use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, UndoApply, UndoStack};
 
 use super::keyboard::{self, KeyboardState};
@@ -76,6 +76,22 @@ impl EditorApp {
             bank: self.presets.bank(),
             program: self.presets.program(),
             has_selection: self.presets.has_selection(),
+        }
+    }
+
+    /// `UndoStack::undo()`を呼び、結果があれば`apply_undo`で反映する。Ctrl+Zとボタンの両方から呼ぶ。
+    fn try_undo(&mut self) {
+        let apply = self.undo.borrow_mut().undo();
+        if let Some(apply) = apply {
+            self.apply_undo(apply);
+        }
+    }
+
+    /// `UndoStack::redo()`を呼び、結果があれば`apply_undo`で反映する。Ctrl+Yとボタンの両方から呼ぶ。
+    fn try_redo(&mut self) {
+        let apply = self.undo.borrow_mut().redo();
+        if let Some(apply) = apply {
+            self.apply_undo(apply);
         }
     }
 
@@ -169,15 +185,9 @@ impl eframe::App for EditorApp {
             let want_undo = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z));
             let want_redo = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y));
             if want_undo {
-                let apply = self.undo.borrow_mut().undo();
-                if let Some(apply) = apply {
-                    self.apply_undo(apply);
-                }
+                self.try_undo();
             } else if want_redo {
-                let apply = self.undo.borrow_mut().redo();
-                if let Some(apply) = apply {
-                    self.apply_undo(apply);
-                }
+                self.try_redo();
             }
         }
 
@@ -213,10 +223,11 @@ impl eframe::App for EditorApp {
         // パネル描画の前後でスナップショットを取り、bank_opが返ってきたときだけ
         // `push_bank_change`で明示的に1エントリ積む。
         let bank_change_before = self.snapshot();
+        let undo_ui = UndoUiState { can_undo: self.undo.borrow().can_undo(), can_redo: self.undo.borrow().can_redo() };
         let presets_panel_response =
             egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
                 let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
-                draw_presets_panel(ui, &mut self.presets, &host)
+                draw_presets_panel(ui, &mut self.presets, &host, undo_ui)
             });
         // 音色名欄はPresetSession内にあり、begin_edit/end_editを持つハンドル経由の記録が
         // できないため、フォーカス取得/喪失を1操作の区切りとして扱う
@@ -243,6 +254,12 @@ impl eframe::App for EditorApp {
             let mut undo = self.undo.borrow_mut();
             undo.note_begin_edit();
             undo.note_end_edit();
+        }
+        if presets_events.undo_requested {
+            self.try_undo();
+        }
+        if presets_events.redo_requested {
+            self.try_redo();
         }
 
         egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {

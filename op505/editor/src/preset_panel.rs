@@ -34,7 +34,11 @@ pub trait PresetHost {
     /// `bank_file`の内容を音声スレッド（MIDI Program Change解決）側の共有バンクへ即時反映する。
     fn publish_bank(&self, bank_file: &Op505BankFile);
     /// バンク構成の変更（+ New Voice/Delete）を即座にディスクへ保存するか。
-    /// VST=true（従来通り即save）、standalone=false（Save/Save Asでのみ保存、Undoが効くようにするため）。
+    /// VST=true（即save維持のままUndo対応。`apply_bank_op`が逆操作の適用後に再saveするため、
+    /// Undo/RedoでバンクファイルもUndoスタックの内容に追従して巻き戻る。VSTはウィンドウclose
+    /// を横取りできず未保存確認ダイアログを出せないため、standaloneのような遅延保存化はしない）。
+    /// standalone=false（Save/Save Asでのみ保存。ウィンドウclose時に未保存確認ダイアログを
+    /// 挟めるため、Undo未確定のバンク変更をディスクへ書く前に確認できる）。
     fn auto_save_bank_edits(&self) -> bool {
         true
     }
@@ -483,6 +487,20 @@ pub struct PresetsPanelEvents {
     /// 対応する新しい基点になったので、それ以前のUndo履歴（特にバンクファイルの内容を
     /// 前提とする`BankOp`）は前提が崩れており巻き戻しの意味を持たない。
     pub history_cleared: bool,
+    /// Undoボタンが押された。`UndoStack`本体は`op505-editor`が知らないため、記録・適用は
+    /// 呼び出し側（standalone/VSTの`EditorApp`相当）へ委ねる（`bank_op`と同じ設計）。
+    pub undo_requested: bool,
+    /// Redoボタンが押された。
+    pub redo_requested: bool,
+}
+
+/// PRESETSパネルのUndo/Redoボタンの有効/無効状態。`UndoStack::can_undo`/`can_redo`から
+/// 呼び出し側が組み立てる（`op505-editor`は`UndoStack`本体を持たないため、ボタンの見た目だけを
+/// この構造体で受け取る）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UndoUiState {
+    pub can_undo: bool,
+    pub can_redo: bool,
 }
 
 /// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
@@ -490,7 +508,12 @@ pub struct PresetsPanelEvents {
 /// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
 /// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
 /// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
-pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
+pub fn draw_presets_panel(
+    ui: &mut egui::Ui,
+    state: &mut EditorPresetState,
+    host: &dyn PresetHost,
+    undo_ui: UndoUiState,
+) -> PresetsPanelEvents {
     let session = &mut state.session;
     let mut events = PresetsPanelEvents::default();
 
@@ -503,6 +526,15 @@ pub fn draw_presets_panel(ui: &mut egui::Ui, state: &mut EditorPresetState, host
         }
         if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
             request_save_as(session);
+        }
+    });
+
+    ui.horizontal(|ui| {
+        if ui.add_enabled(undo_ui.can_undo, egui::Button::new("Undo")).clicked() {
+            events.undo_requested = true;
+        }
+        if ui.add_enabled(undo_ui.can_redo, egui::Button::new("Redo")).clicked() {
+            events.redo_requested = true;
         }
     });
 

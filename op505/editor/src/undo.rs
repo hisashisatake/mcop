@@ -31,7 +31,8 @@
 
 use op505_core::Op505Patch;
 
-use crate::patch_source::MasterEffectsState;
+use crate::param_spec::{BoolField, EgSlot, FxInt, IntField, PatchInt};
+use crate::patch_source::{read_bool, read_eg, read_int, MasterEffectsState};
 
 /// ある瞬間のエディタ状態をまるごと保持するスナップショット（Memento）。
 #[derive(Clone, PartialEq)]
@@ -42,6 +43,48 @@ pub struct EditorSnapshot {
     pub bank: u16,
     pub program: u8,
     pub has_selection: bool,
+}
+
+/// `EditorSnapshot::diff_to`が返す、書き換えが必要なフィールドの一覧。
+/// VST側のUndo/Redo適用が「変わった値だけ`ParamSetter`へ書く」ために使う
+/// （`apply_patch`の一括再適用と違い、DAWへ記録されるgestureを実際の変更分だけに絞る）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SnapshotDiff {
+    pub ints: Vec<IntField>,
+    pub bools: Vec<BoolField>,
+    pub egs: Vec<EgSlot>,
+}
+
+impl EditorSnapshot {
+    /// `self`（現在値）から`target`へ移すために書き換えが必要なフィールドだけを列挙する。
+    /// パッチ内パラメーター（`IntField::Patch`/`BoolField`/`EgSlot::Op`+`Fg`）と
+    /// MASTER EFFECTS（`IntField::Fx`）の両方を対象にする。
+    pub fn diff_to(&self, target: &EditorSnapshot) -> SnapshotDiff {
+        let mut ints = Vec::new();
+        for field in PatchInt::all() {
+            if read_int(&self.patch, field) != read_int(&target.patch, field) {
+                ints.push(IntField::Patch(field));
+            }
+        }
+        for fx in FxInt::ALL {
+            if self.master.field(fx) != target.master.field(fx) {
+                ints.push(IntField::Fx(fx));
+            }
+        }
+        let mut bools = Vec::new();
+        for field in BoolField::ALL {
+            if read_bool(&self.patch, field) != read_bool(&target.patch, field) {
+                bools.push(field);
+            }
+        }
+        let mut egs = Vec::new();
+        for slot in EgSlot::ALL {
+            if read_eg(&self.patch, slot) != read_eg(&target.patch, slot) {
+                egs.push(slot);
+            }
+        }
+        SnapshotDiff { ints, bools, egs }
+    }
 }
 
 /// バンク構成の変更（+New Voice/Delete）。対象は常にバンク内の1エントリ。
@@ -178,6 +221,7 @@ impl UndoStack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param_spec::OpIndex;
 
     fn snapshot(tl: u8, program: u8) -> EditorSnapshot {
         let mut patch = Op505Patch::default();
@@ -320,5 +364,62 @@ mod tests {
             Some(BankOp::Add { program, .. }) => assert_eq!(program, 1),
             _ => panic!("BankOp::Addが期待される"),
         }
+    }
+
+    #[test]
+    fn diff_to_identical_snapshots_is_empty() {
+        let s = snapshot(10, 0);
+        let diff = s.diff_to(&s);
+        assert!(diff.ints.is_empty());
+        assert!(diff.bools.is_empty());
+        assert!(diff.egs.is_empty());
+    }
+
+    #[test]
+    fn diff_to_single_int_field_change() {
+        let before = snapshot(10, 0);
+        let mut after = before.clone();
+        after.patch.channel.feedback = 200;
+
+        let diff = before.diff_to(&after);
+        assert_eq!(diff.ints, vec![IntField::Patch(PatchInt::Feedback)]);
+        assert!(diff.bools.is_empty());
+        assert!(diff.egs.is_empty());
+    }
+
+    #[test]
+    fn diff_to_single_bool_field_change() {
+        let before = snapshot(10, 0);
+        let mut after = before.clone();
+        after.patch.channel.fixed_note_enable = !before.patch.channel.fixed_note_enable;
+
+        let diff = before.diff_to(&after);
+        assert!(diff.ints.is_empty());
+        assert_eq!(diff.bools, vec![BoolField::FixedNoteEnable]);
+        assert!(diff.egs.is_empty());
+    }
+
+    #[test]
+    fn diff_to_single_eg_slot_change() {
+        let before = snapshot(10, 0);
+        let mut after = before.clone();
+        after.patch.operators[2].eg.stage_count = after.patch.operators[2].eg.stage_count.wrapping_add(1);
+
+        let diff = before.diff_to(&after);
+        assert!(diff.ints.is_empty());
+        assert!(diff.bools.is_empty());
+        assert_eq!(diff.egs, vec![EgSlot::Op(OpIndex::Op3)]);
+    }
+
+    #[test]
+    fn diff_to_master_effects_change_reports_fx_field() {
+        let before = snapshot(10, 0);
+        let mut after = before.clone();
+        after.master.rev_send = after.master.rev_send.wrapping_add(1);
+
+        let diff = before.diff_to(&after);
+        assert_eq!(diff.ints, vec![IntField::Fx(FxInt::RevSend)]);
+        assert!(diff.bools.is_empty());
+        assert!(diff.egs.is_empty());
     }
 }

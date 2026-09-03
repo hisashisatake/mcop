@@ -1,6 +1,6 @@
 use nice_plug::prelude::*;
 use op505_core::{Op505BipolarFg, Op505ChannelParams, Op505GainFg, Op505OperatorParams, Op505Patch};
-use op505_editor::param_spec::{BoolField, FgSlot, FxInt, IntField, IntSpec, OpIndex, OpInt, PatchInt};
+use op505_editor::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, IntSpec, OpIndex, OpInt, PatchInt};
 use serde::{Deserialize, Serialize};
 use sound_core::{TimeEgParams, TimeStage, MAX_STAGES};
 use std::sync::{Arc, RwLock};
@@ -376,6 +376,20 @@ pub(crate) fn apply_patch_egs(egs: &mut Op505EgBank, patch: &Op505Patch) {
     egs.pitch_fg = patch.channel.pitch_fg.eg;
     egs.cutoff_fg = patch.channel.cutoff_fg.eg;
     egs.gain_fg = patch.channel.gain_fg.eg;
+}
+
+/// `apply_patch_egs`の1本版：`slot`が指すTimeEgだけを`egs`へ書く。Undo/Redoの差分適用
+/// （`EditorSnapshot::diff_to`が返した`EgSlot`だけを書き換える）で使う。`_ =>`を使わない全列挙。
+pub(crate) fn write_eg_bank_slot(egs: &mut Op505EgBank, slot: EgSlot, params: TimeEgParams) {
+    match slot {
+        EgSlot::Op(OpIndex::Op1) => egs.operators[0] = params,
+        EgSlot::Op(OpIndex::Op2) => egs.operators[1] = params,
+        EgSlot::Op(OpIndex::Op3) => egs.operators[2] = params,
+        EgSlot::Op(OpIndex::Op4) => egs.operators[3] = params,
+        EgSlot::Fg(FgSlot::Pitch) => egs.pitch_fg = params,
+        EgSlot::Fg(FgSlot::Cutoff) => egs.cutoff_fg = params,
+        EgSlot::Fg(FgSlot::Gain) => egs.gain_fg = params,
+    }
 }
 
 /// `field`に対応する`Op505VstParams`側の`IntParam`を返す。`_ =>`を使わない全列挙。
