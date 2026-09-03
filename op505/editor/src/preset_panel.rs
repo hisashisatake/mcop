@@ -541,10 +541,13 @@ pub struct UndoUiState {
 /// ☰File↺↻（左側グループ）と`right_content`（右側グループ）の間の空きスペースは2等分し、
 /// 左半分に現在選択中のバンク番号・音色名、右半分に`message`（Edit Channel関連の案内等、
 /// ホスト側が状態に応じて渡す）を表示する（ユーザー要望、2026-09-03）。両方とも固定幅で、
-/// 収まらない分は省略記号でクリップし、ホバー時のツールチップで全文を見せる
-/// （`.truncate()` + `.on_hover_text(...)`）——当初`message`側は横スクロールする
-/// マーキー表示にしていたが、実装・調整を重ねた末、単純な固定ラベル+ツールチップの方が
-/// 素直で良いという判断でマーキーは廃止した。
+/// 収まらない分は省略記号でクリップし、ホバー時のツールチップで全文を見せる。
+/// `egui::Label::truncate()`は既定（`show_tooltip_when_elided: true`）で「省略された
+/// ときだけ全文をツールチップ表示する」機能を内蔵しているため、それに任せる——
+/// 明示的に`.on_hover_text(...)`も呼ぶと、省略時にツールチップが縦に2つ重なって
+/// 表示される不具合があった（実機で確認済み、2026-09-03）。
+/// ——当初`message`側は横スクロールするマーキー表示にしていたが、実装・調整を重ねた末、
+/// 単純な固定ラベル+ツールチップの方が素直で良いという判断でマーキーは廃止した。
 ///
 /// `right_content`の実際の描画幅は事前に分からないため、[`EditorPresetState::right_content_width`]
 /// に保存した実測値を使う。`right_content`自体は毎フレーム描画するが（インタラクティブな
@@ -612,15 +615,21 @@ pub fn draw_editor_top_bar(
         // 中央寄せだと意味を持たなくなる）。`scope_builder`で`left_to_right`の子Uiを作り、
         // 先頭に`add_space`で余白（だいたい全角2文字ぶん）を入れてから左寄せで描画する
         // （ユーザー要望、2026-09-03）。
+        // `ui.scope_builder`は描画後に子UIの実測`min_rect`で親のカーソルを上書きする
+        // （`advance_cursor_after_rect`、egui-0.34.3 ui.rs）ため、テキストが短くて
+        // `name_rect`いっぱいまで埋まらないと、直前の`allocate_exact_size`で確保した
+        // カーソル位置が手前へ巻き戻ってしまう（後続のメッセージ欄が左へずれる不具合、
+        // 実機で確認済み、2026-09-03）。`ui.put`側（メッセージ欄）は`centered_and_justified`
+        // レイアウトのため`min_rect == max_rect`となりこの問題が起きないが、こちらは
+        // 左寄せ+マージンのため起きる。`new_child`はドキュメント通り親のカーソルを
+        // 一切動かさないため、既に確保済みの`name_rect`分の幅をそのまま維持できる。
         const NAME_LEFT_MARGIN: f32 = 18.0;
         let (name_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
         if state.session.has_selection {
             let text = format!("Bank {}  {}", state.session.bank, state.session.patch_name);
-            ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                ui.add_space(NAME_LEFT_MARGIN);
-                let response = ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate().sense(egui::Sense::hover()));
-                response.on_hover_text(text);
-            });
+            let mut name_ui = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            name_ui.add_space(NAME_LEFT_MARGIN);
+            name_ui.add(egui::Label::new(egui::RichText::new(&text).weak()).truncate().sense(egui::Sense::hover()));
         }
 
         // メッセージ：音色名と同じ固定幅（中央スペースの残り半分）。同じく省略記号でクリップし、
@@ -628,8 +637,7 @@ pub fn draw_editor_top_bar(
         let (message_rect, _) = ui.allocate_exact_size(egui::vec2(state.center_half_width, row_height), egui::Sense::hover());
         if let Some(message) = message {
             let text = egui::RichText::new(message).color(ui.visuals().warn_fg_color);
-            let response = ui.put(message_rect, egui::Label::new(text).truncate().sense(egui::Sense::hover()));
-            response.on_hover_text(message);
+            ui.put(message_rect, egui::Label::new(text).truncate().sense(egui::Sense::hover()));
         }
 
         let right_response = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -637,9 +645,18 @@ pub fn draw_editor_top_bar(
             right_content(ui);
         });
         let right_width = right_response.response.rect.width();
-        if (right_width - state.right_content_width).abs() > 0.5 {
+        let right_width_changed = (right_width - state.right_content_width).abs() > 0.5;
+        let available_width_changed = (after_left_group_width - state.available_width).abs() > 0.5;
+        if right_width_changed || available_width_changed {
             state.right_content_width = right_width;
-            state.center_half_width = ((after_left_group_width - right_width) / 2.0).max(0.0);
+            state.available_width = after_left_group_width;
+            // name_rect/message_rectそれぞれの直後にegui標準のitem_spacing分の余白が
+            // 残るよう、2箇所分（name→message間、message→right_content間）を差し引く。
+            // 差し引かないと、狭い幅でメッセージがtruncateされてrect右端いっぱいまで
+            // 文字が埋まったとき、右隣のright_content（Edit Channelラベル）と隙間なく
+            // 密着して見える（実機で確認済み、2026-09-03）。
+            let spacing = ui.spacing().item_spacing.x;
+            state.center_half_width = ((after_left_group_width - right_width - spacing * 2.0) / 2.0).max(0.0);
         }
     });
 
@@ -911,9 +928,16 @@ pub struct EditorPresetState {
     /// 取り違えて「Edit Channelラベルに隣の表示が食い込む」不具合が再発した（実機で確認済み、
     /// 2026-09-03）。値そのものの変化を直接見る今の方式ならこの手の脆さが原理的に起きない。
     right_content_width: f32,
+    /// 左側グループ（☰File↺↻）描画直後の残り幅の直近値。`right_content_width`と同じ
+    /// 変化検知方式で`center_half_width`の再計算タイミングを決める（2026-09-03追加）。
+    /// この値が無いとウィンドウのリサイズ（`right_content_width`自体は変わらない）で
+    /// `center_half_width`が古いまま固定され、中央スペースが実際の残り幅からはみ出して
+    /// `right_content`（Edit Channelラベル）に食い込む不具合があった（実機で確認済み）。
+    available_width: f32,
     /// 音色名・メッセージそれぞれに割り当てる固定幅（中央スペースを2等分した片側ぶん）。
-    /// `right_content_width`が更新されたときに合わせて再計算する——「中央の空きスペースを
-    /// 2分割してそれぞれ固定幅にしたい」というユーザー要望による（2026-09-03）。
+    /// `right_content_width`または`available_width`が更新されたときに合わせて再計算する
+    /// ——「中央の空きスペースを2分割してそれぞれ固定幅にしたい」というユーザー要望による
+    /// （2026-09-03）。
     center_half_width: f32,
 }
 
@@ -927,6 +951,7 @@ impl EditorPresetState {
             drawer_just_opened: false,
             drawer_anim: DrawerAnim::default(),
             right_content_width: 150.0,
+            available_width: 0.0,
             center_half_width: 200.0,
         }
     }
@@ -1032,6 +1057,7 @@ mod tests {
             drawer_just_opened: false,
             drawer_anim: DrawerAnim::default(),
             right_content_width: 150.0,
+            available_width: 0.0,
             center_half_width: 200.0,
         };
 
@@ -1055,6 +1081,7 @@ mod tests {
             drawer_just_opened: false,
             drawer_anim: DrawerAnim::default(),
             right_content_width: 150.0,
+            available_width: 0.0,
             center_half_width: 200.0,
         };
 
