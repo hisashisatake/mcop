@@ -10,10 +10,9 @@ use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 
 use op505_core::Op505Patch;
-use op505_editor::layout::PRESETS_SIDEBAR_WIDTH;
 use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
-use op505_editor::preset_panel::{draw_presets_panel, EditorPresetState, UndoUiState};
+use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, UndoApply, UndoStack};
 
 use super::keyboard::{self, KeyboardState};
@@ -191,48 +190,73 @@ impl eframe::App for EditorApp {
             }
         }
 
-        egui::Panel::top("editor_top_bar").show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Edit Channel:");
-                let selected_text = match self.edit_channel {
-                    None => "(None)".to_string(),
-                    Some(ch) => format!("{}", ch + 1),
-                };
-                egui::ComboBox::from_id_salt("edit_channel_combo").selected_text(selected_text).show_ui(ui, |ui| {
-                    if ui.selectable_label(self.edit_channel.is_none(), "(None)").clicked() {
-                        self.edit_channel = None;
-                    }
-                    for ch in 0..16usize {
-                        let label = format!("{}", ch + 1);
-                        if ui.selectable_label(self.edit_channel == Some(ch), label).clicked() {
-                            self.edit_channel = Some(ch);
-                        }
-                    }
-                });
-                if self.edit_channel.is_some() {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(230, 160, 40),
-                        "Program Change is ignored on this channel while editing",
-                    );
-                }
-            });
-        });
-
         // + New Voice/Delete（BankChange）はハンドルのbegin_edit/end_edit経由で記録できない
         // （registry自体の変更でありパッチ全体のMementoでは表現できないため）。
         // パネル描画の前後でスナップショットを取り、bank_opが返ってきたときだけ
         // `push_bank_change`で明示的に1エントリ積む。
+        let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
         let bank_change_before = self.snapshot();
         let undo_ui = UndoUiState { can_undo: self.undo.borrow().can_undo(), can_redo: self.undo.borrow().can_redo() };
-        let presets_panel_response =
-            egui::Panel::left("presets_panel").resizable(false).exact_size(PRESETS_SIDEBAR_WIDTH).show_inside(ui, |ui| {
-                let host = StandalonePresetHost { patch: &self.patch, dirty: &self.dirty, shared: &self.shared };
-                draw_presets_panel(ui, &mut self.presets, &host, undo_ui)
+
+        let mut presets_events = egui::Panel::top("editor_top_bar")
+            .show_inside(ui, |ui| {
+                // ハンバーガー・File（Open/Save/Save As）・Undo/Redoアイコンをまとめたメニューバー
+                // （2026-09-03、PRESETSサイドバー常設→ハンバーガー開閉のオーバーレイ化に伴う移設）。
+                let events = draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Edit Channel:");
+                    let selected_text = match self.edit_channel {
+                        None => "(None)".to_string(),
+                        Some(ch) => format!("{}", ch + 1),
+                    };
+                    egui::ComboBox::from_id_salt("edit_channel_combo").selected_text(selected_text).show_ui(ui, |ui| {
+                        if ui.selectable_label(self.edit_channel.is_none(), "(None)").clicked() {
+                            self.edit_channel = None;
+                        }
+                        for ch in 0..16usize {
+                            let label = format!("{}", ch + 1);
+                            if ui.selectable_label(self.edit_channel == Some(ch), label).clicked() {
+                                self.edit_channel = Some(ch);
+                            }
+                        }
+                    });
+                    if self.edit_channel.is_some() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 160, 40),
+                            "Program Change is ignored on this channel while editing",
+                        );
+                    }
+                });
+                events
+            })
+            .inner;
+
+        egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
+            keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);
+        });
+
+        let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("op505_editor_scroll").show(ui, |ui| {
+                let source = PatchPanelSource {
+                    patch: self.patch.clone(),
+                    patch_dirty: self.dirty.clone(),
+                    master: self.master.clone(),
+                    master_dirty: self.master_dirty.clone(),
+                    undo: self.undo.clone(),
+                };
+                let panel = build_panel_params(&source);
+                op505_ui::draw_op505_panel(ui, &panel);
             });
+        });
+
+        // ---- PRESETSドロワー（ハンバーガー開閉のオーバーレイ、CentralPanelの残り領域へ重ねる） ----
+        presets_events.merge(draw_presets_drawer(ui.ctx(), &mut self.presets, &host, central_response.response.rect));
+        presets_events.merge(poll_presets_events(&mut self.presets, &host));
+
         // 音色名欄はPresetSession内にあり、begin_edit/end_editを持つハンドル経由の記録が
         // できないため、フォーカス取得/喪失を1操作の区切りとして扱う
-        // （`draw_presets_panel`のdoc参照）。
-        let presets_events = presets_panel_response.inner;
+        // （`draw_presets_drawer_contents`のdoc参照）。
         if let Some(op) = presets_events.bank_op.clone() {
             self.undo.borrow_mut().push_bank_change(op, bank_change_before, self.snapshot());
         }
@@ -261,24 +285,6 @@ impl eframe::App for EditorApp {
         if presets_events.redo_requested {
             self.try_redo();
         }
-
-        egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
-            keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);
-        });
-
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            egui::ScrollArea::vertical().id_salt("op505_editor_scroll").show(ui, |ui| {
-                let source = PatchPanelSource {
-                    patch: self.patch.clone(),
-                    patch_dirty: self.dirty.clone(),
-                    master: self.master.clone(),
-                    master_dirty: self.master_dirty.clone(),
-                    undo: self.undo.clone(),
-                };
-                let panel = build_panel_params(&source);
-                op505_ui::draw_op505_panel(ui, &panel);
-            });
-        });
 
         self.undo.borrow_mut().end_frame(self.snapshot());
 

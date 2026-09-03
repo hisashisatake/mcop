@@ -18,6 +18,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::layout::PRESETS_SIDEBAR_WIDTH;
 use crate::undo::BankOp;
 
 /// ホスト差分（DAWパラメーター経由か、`Rc<RefCell<Op505Patch>>`直接かなど）を吸収する3操作。
@@ -494,6 +495,21 @@ pub struct PresetsPanelEvents {
     pub redo_requested: bool,
 }
 
+impl PresetsPanelEvents {
+    /// [`draw_editor_top_bar`]・[`draw_presets_drawer`]・[`poll_presets_events`]は同じフレームで
+    /// 個別に呼ばれるため、呼び出し側がこのメソッドで1つに合成してから処理する。
+    /// bool系フィールドはOR、`bank_op`は1フレームに高々1件しか発生しない前提で先勝ちにする。
+    pub fn merge(&mut self, other: PresetsPanelEvents) {
+        self.patch_name_focus_gained |= other.patch_name_focus_gained;
+        self.patch_name_focus_lost |= other.patch_name_focus_lost;
+        self.list_selection_applied |= other.list_selection_applied;
+        self.bank_op = self.bank_op.take().or(other.bank_op);
+        self.history_cleared |= other.history_cleared;
+        self.undo_requested |= other.undo_requested;
+        self.redo_requested |= other.redo_requested;
+    }
+}
+
 /// PRESETSパネルのUndo/Redoボタンの有効/無効状態。`UndoStack::can_undo`/`can_redo`から
 /// 呼び出し側が組み立てる（`op505-editor`は`UndoStack`本体を持たないため、ボタンの見た目だけを
 /// この構造体で受け取る）。
@@ -503,40 +519,58 @@ pub struct UndoUiState {
     pub can_redo: bool,
 }
 
-/// PRESETSパネル本体を描画する。gesture-appのレイアウト（Open/Save/Save As→Bank→ファイル名→
-/// 音色名→区切り線→PRESETSリスト（+ New Voice/DeleteはScrollArea内）の順）をそのまま踏襲する。
-/// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
-/// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
-/// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
-pub fn draw_presets_panel(
+/// エディタ上部のメニューバー（ハンバーガー・Fileメニュー・Undo/Redoアイコン）を描画する。
+/// 旧PRESETSサイドバーにあったOpen/Save/Save As・Undo/Redoボタンをここへ集約する
+/// （2026-09-03、PRESETSパネルの常設サイドバー→ハンバーガー開閉のオーバーレイ化に伴う移設）。
+pub fn draw_editor_top_bar(
     ui: &mut egui::Ui,
     state: &mut EditorPresetState,
     host: &dyn PresetHost,
     undo_ui: UndoUiState,
 ) -> PresetsPanelEvents {
-    let session = &mut state.session;
     let mut events = PresetsPanelEvents::default();
 
     ui.horizontal(|ui| {
-        if ui.add_enabled(session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
-            request_open(session);
+        if ui.button("☰").on_hover_text("Presets").clicked() {
+            state.drawer_open = !state.drawer_open;
         }
-        if ui.add_enabled(session.save_enabled(), egui::Button::new("Save")).clicked() {
-            events.history_cleared |= handle_save(session, host);
-        }
-        if ui.add_enabled(session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
-            request_save_as(session);
-        }
-    });
 
-    ui.horizontal(|ui| {
-        if ui.add_enabled(undo_ui.can_undo, egui::Button::new("Undo")).clicked() {
+        ui.menu_button("File", |ui| {
+            if ui.add_enabled(state.session.pending_open.is_none(), egui::Button::new("Open")).clicked() {
+                request_open(&mut state.session);
+                ui.close();
+            }
+            if ui.add_enabled(state.session.save_enabled(), egui::Button::new("Save")).clicked() {
+                events.history_cleared |= handle_save(&mut state.session, host);
+                ui.close();
+            }
+            if ui.add_enabled(state.session.pending_save_as.is_none(), egui::Button::new("Save As")).clicked() {
+                request_save_as(&mut state.session);
+                ui.close();
+            }
+        });
+
+        if ui.add_enabled(undo_ui.can_undo, egui::Button::new("↺")).on_hover_text("Undo (Ctrl+Z)").clicked() {
             events.undo_requested = true;
         }
-        if ui.add_enabled(undo_ui.can_redo, egui::Button::new("Redo")).clicked() {
+        if ui.add_enabled(undo_ui.can_redo, egui::Button::new("↻")).on_hover_text("Redo (Ctrl+Y)").clicked() {
             events.redo_requested = true;
         }
     });
+
+    events
+}
+
+/// PRESETSドロワーの中身（Bank欄・ファイル名表示・音色名編集・PRESETSリスト）を描画する。
+/// gesture-appのレイアウト（Bank→ファイル名→音色名→区切り線→PRESETSリスト（+ New Voice/Delete
+/// はScrollArea内）の順）をそのまま踏襲する。呼び出し側（[`draw_presets_drawer`]）がオーバーレイ
+/// 用のArea・背景・開閉アニメーションを用意した上でこの関数を呼ぶ。
+/// `ScrollArea::auto_shrink([false,false])`は残り領域を全部占有するため、**ScrollAreaより後に
+/// 置いたウィジェットは表示されない**——ここより下に新しいウィジェットを足す場合は必ずScrollArea
+/// の中に置くこと（memory `project_preset_list_scrollbar_and_add_delete`参照）。
+fn draw_presets_drawer_contents(ui: &mut egui::Ui, state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
+    let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
 
     ui.horizontal(|ui| {
         ui.label("Bank");
@@ -609,25 +643,74 @@ pub fn draw_presets_panel(
     if delete_by_key {
         request_delete(session);
     }
+
+    events
+}
+
+/// PRESETSドロワー本体。ハンバーガーボタンの開閉状態（[`EditorPresetState::drawer_open`]）に
+/// 応じて、`area_rect`（通常はCentralPanelが返した残り領域）へオーバーレイでスライドイン/アウト
+/// する。押しのけ方式（`egui::Panel::show_animated_inside`）ではなく`egui::Area`を使うのは、
+/// コントロール一式に覆いかぶさる見た目をユーザーが明示的に希望したため（メニューバー自体は
+/// 押しのけない・ユーザー提示のワイヤーフレーム参照）。
+///
+/// アニメーション中（`t`が0〜1の間）はArea自体を描画しないため、この関数は非同期ダイアログの
+/// 結果回収（Open/Save As/Delete確認のpoll）を行わない——ドロワーを閉じている間もOpen等の
+/// 結果を取りこぼさないよう、pollは[`poll_presets_events`]として毎フレーム無条件に呼ぶこと。
+pub fn draw_presets_drawer(ctx: &egui::Context, state: &mut EditorPresetState, host: &dyn PresetHost, area_rect: egui::Rect) -> PresetsPanelEvents {
+    let id = egui::Id::new("op505_presets_drawer");
+    let t = ctx.animate_bool_with_time(id, state.drawer_open, 0.2);
+    if t <= 0.0 {
+        return PresetsPanelEvents::default();
+    }
+
+    let width = PRESETS_SIDEBAR_WIDTH.min(area_rect.width());
+    let x = area_rect.left() - (1.0 - t) * width;
+    let rect = egui::Rect::from_min_size(egui::pos2(x, area_rect.top()), egui::vec2(width, area_rect.height()));
+
+    let mut events = PresetsPanelEvents::default();
+    egui::Area::new(id).order(egui::Order::Middle).fixed_pos(rect.min).movable(false).show(ctx, |ui| {
+        ui.set_width(rect.width());
+        ui.set_height(rect.height());
+        egui::Frame::window(ui.style()).show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            events = draw_presets_drawer_contents(ui, state, host);
+        });
+    });
+    events
+}
+
+/// 毎フレーム呼ぶ。PRESETSドロワーの開閉に関わらず、非同期ダイアログ（Open/Save As/Delete確認）の
+/// 結果を回収する。ドロワーを閉じている間にOpen/Save Asを実行しても結果を取りこぼさないための
+/// 分離（[`draw_presets_drawer`]のdoc参照）。
+pub fn poll_presets_events(state: &mut EditorPresetState, host: &dyn PresetHost) -> PresetsPanelEvents {
+    let session = &mut state.session;
+    let mut events = PresetsPanelEvents::default();
     if let Some(op) = poll_pending_delete(session, host) {
         events.bank_op = Some(op);
     }
     events.history_cleared |= poll_pending_open(session, host);
     events.history_cleared |= poll_pending_save_as(session, host);
-
     events
 }
 
 /// PRESETSパネル分の状態。エディタ生成時に一度だけレジストリを構築する。
 pub struct EditorPresetState {
     session: PresetSession,
+    /// PRESETSドロワー（ハンバーガーボタンで開閉するオーバーレイ）の開閉状態。
+    drawer_open: bool,
 }
 
 impl EditorPresetState {
     pub fn new() -> Self {
         let mut session = PresetSession::new(build_op505_registry(&op505_presets_dir()));
         session.sync_display_to_registry();
-        EditorPresetState { session }
+        EditorPresetState { session, drawer_open: false }
+    }
+
+    /// PRESETSドロワーが開いているか（アニメーション目標状態。実際の表示率は
+    /// [`draw_presets_drawer`]内で`Context::animate_bool_with_time`が補間する）。
+    pub fn drawer_open(&self) -> bool {
+        self.drawer_open
     }
 
     /// 現在選択中のbank。Undoスナップショットの構築に使う。
@@ -719,7 +802,7 @@ mod tests {
         let mut registry = Op505BankRegistry::new();
         let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "Existing")] };
         registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
-        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+        let mut state = EditorPresetState { session: PresetSession::new(registry), drawer_open: false };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
         let op = BankOp::Add { bank: 0, program: 1, name: "Voice001".to_string(), patch: Op505Patch::default() };
@@ -735,7 +818,7 @@ mod tests {
         let mut registry = Op505BankRegistry::new();
         let file = Op505PresetFile::Presets { bank: 0, presets: vec![entry(0, "A"), entry(1, "B")] };
         registry.insert(0, Op505BankFile::from_loaded(PathBuf::from("bank0.op505"), file, 0));
-        let mut state = EditorPresetState { session: PresetSession::new(registry) };
+        let mut state = EditorPresetState { session: PresetSession::new(registry), drawer_open: false };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
         let op = BankOp::Remove { bank: 0, program: 0, name: "A".to_string(), patch: Op505Patch::default() };
