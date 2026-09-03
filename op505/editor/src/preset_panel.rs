@@ -31,6 +31,11 @@ pub trait PresetHost {
     fn apply_patch(&self, patch: &Op505Patch);
     /// `bank_file`の内容を音声スレッド（MIDI Program Change解決）側の共有バンクへ即時反映する。
     fn publish_bank(&self, bank_file: &Op505BankFile);
+    /// バンク構成の変更（+ New Voice/Delete）を即座にディスクへ保存するか。
+    /// VST=true（従来通り即save）、standalone=false（Save/Save Asでのみ保存、Undoが効くようにするため）。
+    fn auto_save_bank_edits(&self) -> bool {
+        true
+    }
 }
 
 /// PRESETSパネルが保持するセッション状態（レジストリ＋今編集中の(bank, program)＋表示用文字列）。
@@ -324,7 +329,7 @@ fn handle_add_new_voice(session: &mut PresetSession, host: &dyn PresetHost, copy
         return;
     };
     let Ok(entry) = bank_file.add_new_voice(source_patch) else { return };
-    if bank_file.save().is_err() {
+    if host.auto_save_bank_edits() && bank_file.save().is_err() {
         return;
     }
     session.last_error = None;
@@ -381,7 +386,7 @@ fn poll_pending_delete(session: &mut PresetSession, host: &dyn PresetHost) {
     if bank_file.remove(program).is_err() {
         return;
     }
-    if bank_file.save().is_err() {
+    if host.auto_save_bank_edits() && bank_file.save().is_err() {
         return;
     }
     let remaining = bank_file.entries().to_vec();
