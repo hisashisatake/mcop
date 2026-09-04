@@ -13,12 +13,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use op505_core::{Op505OperatorParams, Op505Patch};
-use op505_ui::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use sound_core::TimeEgParams;
+use op505_ui::{BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
+use sound_core::{MeterBridge, Measurement, TimeEgParams};
 
-use crate::panel_source::PanelParamSource;
+use crate::panel_source::{MeterField, PanelParamSource};
 use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpInt, PatchInt};
 use crate::undo::UndoStack;
 
@@ -36,6 +37,7 @@ pub struct MasterEffectsState {
     pub chorus_mod_depth: i32,
     pub chorus_feedback: i32,
     pub chorus_send_to_reverb: i32,
+    pub master_volume: i32,
 }
 
 impl Default for MasterEffectsState {
@@ -52,6 +54,7 @@ impl Default for MasterEffectsState {
             chorus_mod_depth: FxInt::ChorusModDepth.spec().default,
             chorus_feedback: FxInt::ChorusFeedback.spec().default,
             chorus_send_to_reverb: FxInt::ChorusSendToReverb.spec().default,
+            master_volume: FxInt::MasterVolume.spec().default,
         }
     }
 }
@@ -69,6 +72,7 @@ impl MasterEffectsState {
             FxInt::ChorusModDepth => self.chorus_mod_depth,
             FxInt::ChorusFeedback => self.chorus_feedback,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb,
+            FxInt::MasterVolume => self.master_volume,
         }
     }
 
@@ -83,13 +87,14 @@ impl MasterEffectsState {
             FxInt::ChorusModDepth => self.chorus_mod_depth = value,
             FxInt::ChorusFeedback => self.chorus_feedback = value,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb = value,
+            FxInt::MasterVolume => self.master_volume = value,
         }
     }
 
-    /// `FxInt::ALL`と同じ並び順の9値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
+    /// `FxInt::ALL`と同じ並び順の10値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
     /// この順序をそのまま送る——呼び出し側で並びを凍結するテストを持つこと（ずれるとreverb_typeと
     /// reverb_timeが入れ替わって無音デバッグ地獄になる）。
-    pub fn values_in_fx_order(&self) -> [u8; 9] {
+    pub fn values_in_fx_order(&self) -> [u8; 10] {
         FxInt::ALL.map(|fx| self.field(fx) as u8)
     }
 
@@ -330,6 +335,25 @@ impl IntParamHandle for MasterEffectsIntHandle {
     }
 }
 
+/// マスター出力のレベルメーターへの読み取り専用ハンドル。`MeterBridge::read()`/`reset_clip()`は
+/// 内部で`Mutex`をロックするだけで、`Rc<RefCell<..>>`系の他ハンドルと違いUndo/dirty通知は不要
+/// （メーター自体はGUI操作の対象ではなく、オーディオスレッドが一方的に書く値のため）。
+struct MasterMeterHandle {
+    bridge: Arc<MeterBridge>,
+}
+
+impl MeterHandle for MasterMeterHandle {
+    fn snapshot(&self) -> Measurement {
+        self.bridge.read()
+    }
+    fn reset_clip(&self) {
+        self.bridge.reset_clip();
+    }
+    fn name(&self) -> String {
+        "Master Output".to_string()
+    }
+}
+
 /// [`PanelParamSource`]の`Rc<RefCell<Op505Patch>>`ベース実装。`Rc`のcloneで各ハンドルを
 /// 作るため戻り値は`'static`になり、`Box<dyn .. + '_>`（`PanelParamSource`が要求するのはこれより
 /// 弱い制約）へ問題なく収まる。
@@ -339,6 +363,8 @@ pub struct PatchPanelSource {
     pub master: Rc<RefCell<MasterEffectsState>>,
     pub master_dirty: Rc<Cell<bool>>,
     pub undo: Rc<RefCell<UndoStack>>,
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し、`sound_core::MasterOutput`が書く）。
+    pub master_meter: Arc<MeterBridge>,
 }
 
 impl PanelParamSource for PatchPanelSource {
@@ -365,5 +391,11 @@ impl PanelParamSource for PatchPanelSource {
 
     fn eg(&self, slot: EgSlot) -> Box<dyn TimeEgHandle + '_> {
         Box::new(PatchTimeEgHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), undo: self.undo.clone(), slot })
+    }
+
+    fn meter(&self, field: MeterField) -> Box<dyn MeterHandle + '_> {
+        match field {
+            MeterField::MasterOutput => Box::new(MasterMeterHandle { bridge: self.master_meter.clone() }),
+        }
     }
 }

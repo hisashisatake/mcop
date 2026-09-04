@@ -26,7 +26,8 @@ use crate::eg_preview::{eg_preview, EgAmplitudeMapping};
 use crate::knob::{bool_checkbox, dual_knob, knob};
 use crate::layout;
 use crate::mapping::mul_fine_ratio;
-use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
+use crate::level_meter::level_meter;
+use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
 use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES, TEXTURE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
@@ -130,6 +131,26 @@ fn default_time_eg_params() -> TimeEgParams {
     TimeEgParams { stages, stage_count: 2, loop_enabled: 0, loop_start: 0, release_point: 0 , ..Default::default()}
 }
 
+/// プレビュー専用のモックメーターハンドル（`<level-meter>`）。実際の計測値は無いため、
+/// 経過時間から動く疑似値を返し、レイアウト確認時に「メーターらしく」見えるようにする。
+struct MockMeter {
+    name: String,
+    start: std::time::Instant,
+}
+
+impl MeterHandle for MockMeter {
+    fn snapshot(&self) -> sound_core::Measurement {
+        let t = self.start.elapsed().as_secs_f32();
+        let peak_l = (0.5 + 0.4 * (t * 1.3).sin()).clamp(0.0, 1.0);
+        let peak_r = (0.5 + 0.4 * (t * 1.7).sin()).clamp(0.0, 1.0);
+        sound_core::Measurement { peak_l, peak_r, clipped: (t * 0.3).sin() > 0.95 }
+    }
+    fn reset_clip(&self) {}
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
 /// 解決済みハンドルパス文字列（例:`"op.tl"`、リピートパネル内は[`scoped`]で
 /// `"{index}#op.tl"`へ変換したもの）→モックハンドルの対応。呼び出し側（`preview-wasm`のApp）が
 /// フレームをまたいで使い回すことで、ドラッグ操作の値が次フレームにも保持される。
@@ -138,6 +159,7 @@ pub struct HandleStore {
     ints: HashMap<String, MockInt>,
     bools: HashMap<String, MockBool>,
     time_egs: HashMap<String, MockTimeEg>,
+    meters: HashMap<String, MockMeter>,
 }
 
 impl HandleStore {
@@ -164,6 +186,13 @@ impl HandleStore {
             .time_egs
             .entry(key.to_string())
             .or_insert_with(|| MockTimeEg { value: Cell::new(default_time_eg_params()), name: key.to_string() })
+    }
+
+    fn meter(&mut self, key: &str) -> &MockMeter {
+        &*self
+            .meters
+            .entry(key.to_string())
+            .or_insert_with(|| MockMeter { name: key.to_string(), start: std::time::Instant::now() })
     }
 }
 
@@ -367,6 +396,10 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let handle_mock = store.time_eg(&key);
             let profile = crate::TimeEgProfile { min_stages: *min_stages, terminal_level_zero: *terminal_level_zero };
             time_eg_editor(ui, egui::vec2(leaf.size.w, leaf.size.h), handle_mock, mapping_v, tl_v, profile);
+        }
+        Widget::LevelMeter { label, handle } => {
+            let key = scoped(handle, idx);
+            level_meter(ui, store.meter(&key), label, egui::vec2(leaf.size.w, leaf.size.h));
         }
         Widget::Raw(_) => draw_raw_placeholder(ui, egui::vec2(leaf.size.w, leaf.size.h)),
     }

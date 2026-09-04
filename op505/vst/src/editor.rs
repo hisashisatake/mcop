@@ -9,6 +9,7 @@ use op505_editor::patch_source::{read_bool, read_eg, read_int, MasterEffectsStat
 use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, SnapshotDiff, UndoApply, UndoStack};
 use op505_ui::draw_op505_panel;
+use sound_core::MeterBridge;
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
@@ -105,6 +106,9 @@ pub(crate) fn create_editor(
     params: Arc<Op505VstParams>,
     shared_preset_bank: Arc<RwLock<Op505PresetBank>>,
     preset_bank_dirty: Arc<AtomicBool>,
+    master_meter: Arc<MeterBridge>,
+    meter_fps: u32,
+    level_meter_gap_px: f32,
 ) -> Option<Box<dyn Editor>> {
     let resize_state = egui_state.clone();
     create_egui_editor(
@@ -114,6 +118,11 @@ pub(crate) fn create_editor(
         |_ctx, _queue, _state| {},
         move |ui, setter, _queue, state| {
             let EditorState { presets, undo } = state;
+
+            // レベルメーターを継続的に動かすため、egui既定のイベント駆動更新に加えて
+            // `meter_fps`間隔での再描画を要求する（standaloneの`EditorApp::ui`と同じ設計）。
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / meter_fps as f32));
+            ui_core::level_meter::set_segment_gap_px(ui.ctx(), level_meter_gap_px);
 
             undo.borrow_mut().begin_frame(vst_snapshot(&params, presets));
 
@@ -152,7 +161,7 @@ pub(crate) fn create_editor(
 
                 // ---- 残りのパラメーター（縦スクロール、op505-uiの共有レイアウト） ----
                 let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let source = VstPanelSource { params: &params, setter, undo };
+                    let source = VstPanelSource { params: &params, setter, undo, master_meter: &master_meter };
                     let panel = build_panel_params(&source);
                     draw_op505_panel(ui, &panel);
                 });

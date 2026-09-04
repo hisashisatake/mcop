@@ -45,7 +45,16 @@
         </stack>
       </row>
     </panel>
-    <panel title="MASTER EFFECT" span="75%">
+    <panel title="MASTER VOLUME" span="20%">
+      <header>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <level-meter label="LEVEL" handle="master_meter"/>
+        <knob label="VOLUME" handle="master_volume"/>
+      </row>
+    </panel>
+    <panel title="MASTER EFFECT" span="55%">
       <header>
         <title/>
       </header>

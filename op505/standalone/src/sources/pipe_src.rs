@@ -4,8 +4,9 @@
 //! フレーム形式（op505/mme-driver/src/client.rsのbuild_frameと対になる。変更時は両方揃える）:
 //! `[u8 version=1][u8 kind][u8 device_id][u16 len（リトルエンディアン）][bytes; len]`
 //! kind: 0=Short（デコード済み1〜3バイトのMIDIメッセージ）, 1=Long（SysEx。DLL側は
-//! `DriverCallback`のMOM_DONE通知までバッファライフサイクルを正しく完結させるが、
-//! op505側にSysEx解釈は無いためここでログのみ残して破棄する。MidiQueueへは積まない）,
+//! `DriverCallback`のMOM_DONE通知までバッファライフサイクルを正しく完結させる。
+//! payloadをそのままMidiQueueへ積み、GM2 Universal SysEx（Master Volume等）の解釈は
+//! `handle_midi_message`側で行う）,
 //! 2=Reset（payload無し。全16chへAll Sound Off(CC120)を合成して送る）,
 //! 3=OpenEditor（payload無し。トレイ起動音色エディタを開く/フォーカスする。MIDIメッセージ
 //! ではないためMidiQueueを経由せず、直接`EditorHandle::show()`を呼ぶ。`gesture-app`の
@@ -271,10 +272,70 @@ fn decode_frame(raw: &[u8]) -> Vec<Vec<u8>> {
         // All Sound Off(CC120)を全16chへ合成する。既存のhandle_control_changeが
         // 対応済みのCCなので、専用の処理を新設せずに済む。
         FRAME_KIND_RESET => (0u8..16).map(|ch| vec![0xB0 | ch, 120, 0]).collect(),
-        FRAME_KIND_LONG => {
-            crate::log::log(&format!("MMEドライバからSysEx(len={})を受信しましたが未解釈のため破棄します", payload.len()));
-            Vec::new()
-        }
+        // SysEx（0xF0開始・0xF7終端の完全なメッセージ）をそのままMidiQueueへ積む。
+        // 解釈はhandle_midi_message側（GM2 Universal SysEx Master Volume等）が行う。
+        FRAME_KIND_LONG => vec![payload.to_vec()],
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_frame(kind: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![FRAME_VERSION, kind, 0u8];
+        frame.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    #[test]
+    fn short_frame_passes_payload_through() {
+        let frame = build_frame(FRAME_KIND_SHORT, &[0x90, 60, 100]);
+        assert_eq!(decode_frame(&frame), vec![vec![0x90, 60, 100]]);
+    }
+
+    #[test]
+    fn reset_frame_expands_to_all_sound_off_on_16_channels() {
+        let frame = build_frame(FRAME_KIND_RESET, &[]);
+        let messages = decode_frame(&frame);
+        assert_eq!(messages.len(), 16);
+        assert_eq!(messages[0], vec![0xB0, 120, 0]);
+        assert_eq!(messages[15], vec![0xBF, 120, 0]);
+    }
+
+    /// Long（SysEx）フレームはpayloadがそのままキューへ渡される
+    /// （以前は未解釈のため破棄していたが、GM2 Master Volume対応で素通しに変更した）。
+    #[test]
+    fn long_frame_passes_sysex_payload_through() {
+        let sysex = vec![0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x00, 0x7F, 0xF7];
+        let frame = build_frame(FRAME_KIND_LONG, &sysex);
+        assert_eq!(decode_frame(&frame), vec![sysex]);
+    }
+
+    #[test]
+    fn truncated_frame_is_rejected() {
+        let mut frame = build_frame(FRAME_KIND_SHORT, &[0x90, 60, 100]);
+        frame.truncate(frame.len() - 1); // 宣言長よりpayloadが短い
+        assert!(decode_frame(&frame).is_empty());
+    }
+
+    #[test]
+    fn too_short_frame_is_rejected() {
+        assert!(decode_frame(&[FRAME_VERSION, FRAME_KIND_SHORT]).is_empty());
+    }
+
+    #[test]
+    fn wrong_version_is_rejected() {
+        let mut frame = build_frame(FRAME_KIND_SHORT, &[0x90, 60, 100]);
+        frame[0] = FRAME_VERSION + 1;
+        assert!(decode_frame(&frame).is_empty());
+    }
+
+    #[test]
+    fn unknown_kind_is_ignored() {
+        let frame = build_frame(0xFF, &[0x01, 0x02]);
+        assert!(decode_frame(&frame).is_empty());
     }
 }

@@ -201,7 +201,7 @@ impl PatchInt {
     }
 }
 
-/// MASTER EFFECTS（Reverb/Chorus）のintパラメーター9個。
+/// MASTER EFFECTS（Reverb/Chorus）+ マスターボリュームのintパラメーター10個。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FxInt {
     RevSend,
@@ -213,12 +213,15 @@ pub enum FxInt {
     ChorusModDepth,
     ChorusFeedback,
     ChorusSendToReverb,
+    MasterVolume,
 }
 
 impl FxInt {
     /// `shared::FX_*`定数（standalone側）と同じ順序で保つこと——ずれるとreverb_typeと
     /// reverb_timeが入れ替わって無音デバッグ地獄になる（Step 7で相互検証テストを追加する）。
-    pub const ALL: [FxInt; 9] = [
+    /// `MasterVolume`は既存9個の後に追加した欄のため、既存の並びを保つよう**末尾に追加**する
+    /// （途中に挿入すると`shared::FX_*`の数値との対応が全てずれる）。
+    pub const ALL: [FxInt; 10] = [
         FxInt::RevSend,
         FxInt::ReverbType,
         FxInt::ReverbTime,
@@ -228,6 +231,7 @@ impl FxInt {
         FxInt::ChorusModDepth,
         FxInt::ChorusFeedback,
         FxInt::ChorusSendToReverb,
+        FxInt::MasterVolume,
     ];
 
     pub const fn spec(self) -> IntSpec {
@@ -279,12 +283,22 @@ impl FxInt {
                 daw_name: "Chorus Send To Reverb",
                 daw_bipolar: false,
             },
+            // 既定255＝無補正（MasterOutputの既定と一致させ、初回起動時に音量が変わって
+            // 聞こえる回帰を防ぐ）。
+            FxInt::MasterVolume => IntSpec {
+                min: 0,
+                max: 255,
+                default: 255,
+                short_name: "Master Volume",
+                daw_name: "Master Volume",
+                daw_bipolar: false,
+            },
         }
     }
 }
 
-/// intパラメーターの全識別子（`Op505Patch`側の50個 + MASTER EFFECTS側の9個＝59個）。
-/// MASTER EFFECTS 9個が`Op505Patch`外である事実をバリアント分割で型に載せる
+/// intパラメーターの全識別子（`Op505Patch`側の50個 + MASTER EFFECTS+マスターボリューム側の
+/// 10個＝60個）。これらが`Op505Patch`外である事実をバリアント分割で型に載せる
 /// （`Op505Patch`への読み書き関数は`PatchInt`だけを網羅すればよく、取り違えるとコンパイルエラーになる）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntField {
@@ -414,7 +428,7 @@ mod tests {
 
     #[test]
     fn enum_counts_match_plan() {
-        assert_eq!(IntField::all().len(), 59, "IntField（Patch 50 + Fx 9）");
+        assert_eq!(IntField::all().len(), 60, "IntField（Patch 50 + Fx 10）");
         assert_eq!(BoolField::ALL.len(), 8, "BoolField（単一4 + Ame×4）");
         assert_eq!(EgSlot::ALL.len(), 7, "EgSlot（Op×4 + Fg×3）");
     }

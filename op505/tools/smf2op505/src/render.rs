@@ -39,9 +39,9 @@
 use op505_core::{Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
+    MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
-use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, MasterSection, Vco};
 
 use crate::bank::PatchBank;
 use crate::smf::{parse_smf, EvKind};
@@ -219,11 +219,11 @@ fn note_on_voice(
 /// イベント境界に揃うため、エフェクトのオートメーションがサンプル正確に反映される。
 ///
 /// 誰もNRPN(0,1)を送らなければ全チャンネルの`effect_route_slot`は0のままなので、
-/// 全音声が`effects[0]`だけを通り、この機能追加前の単一`MasterEffects`と同じ出力になる
+/// 全音声がスロット0だけを通り、この機能追加前の単一`MasterEffects`と同じ出力になる
 /// （ビット不変、`no_effect_routing_is_bit_identical_across_runs`で検証）。
 fn render_chunk(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     channels: &[ChannelState],
     out: &mut Vec<f32>,
     rendered: &mut usize,
@@ -232,18 +232,10 @@ fn render_chunk(
     if target > *rendered {
         let n = target - *rendered;
         let channel_slot: [u8; 16] = std::array::from_fn(|i| channels[i].effect_route_slot);
-        let mut slot_buffer = vec![0.0f32; n * EFFECT_SLOT_COUNT];
-        engine.render_routed(&mut slot_buffer, n, &channel_slot, 1);
-
-        let mut mixed = vec![0.0f32; n];
-        for (slot, fx) in effects.iter_mut().enumerate() {
-            let buf = &mut slot_buffer[slot * n..(slot + 1) * n];
-            fx.process(buf, 1);
-            for (m, s) in mixed.iter_mut().zip(buf.iter()) {
-                *m += s;
-            }
-        }
-        out.extend_from_slice(&mixed);
+        let mixed = master.render(n, 1, |slot_buf, stride| {
+            engine.render_routed(slot_buf, stride, &channel_slot, 1);
+        });
+        out.extend_from_slice(mixed);
         *rendered = target;
     }
 }
@@ -292,8 +284,7 @@ pub fn render_smf_with_drums(
     // main.rs の `--reverb-*`（op505-tools::fx）はこれとは独立した後段の診断用リバーブ。
     // エフェクトスロット数分だけ持ち、各チャンネルの`effect_route_slot`（NRPN(0,1)）が
     // 指すスロットへルーティングする（誰も送らなければ全チャンネルがslot 0へ集まる）。
-    let mut effects: [MasterEffects; EFFECT_SLOT_COUNT] =
-        std::array::from_fn(|_| MasterEffects::new(sample_rate));
+    let mut master = MasterSection::new(sample_rate, EFFECT_SLOT_COUNT);
     let mut out: Vec<f32> = Vec::new();
 
     let rhythm_kits_available = drums.map(|d| d.has_bank_in(RHYTHM_BANK_RANGE)).unwrap_or(false);
@@ -309,7 +300,7 @@ pub fn render_smf_with_drums(
 
     let max_samples = max_secs.map(|s| (s * sample_rate).max(0.0) as usize);
 
-    for e in &events {
+    for e in events {
         let dt = e.tick - cur_tick;
         sample_pos += dt as f64 * spt;
         cur_tick = e.tick;
@@ -317,12 +308,12 @@ pub fn render_smf_with_drums(
         // 時短打ち切り: 上限に達したらそこまでレンダリングして以降のイベントは無視する。
         if let Some(maxs) = max_samples {
             if target >= maxs {
-                render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, maxs);
+                render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, maxs);
                 eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
                 return Ok(out);
             }
         }
-        render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, target);
+        render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, target);
         peak_voices = peak_voices.max(engine.active_voice_count());
 
         match e.kind {
@@ -391,7 +382,14 @@ pub fn render_smf_with_drums(
                 apply_live(&mut engine, chi, &channels[chi], bank, drums);
             }
             EvKind::ControlChange(ch, cc, val) => {
-                handle_control_change(&mut engine, &mut effects, &mut channels, ch as usize, cc, val, bank, drums);
+                handle_control_change(&mut engine, &mut master, &mut channels, ch as usize, cc, val, bank, drums);
+            }
+            EvKind::SysEx(bytes) => {
+                if let Some(sound_midi::UniversalSysEx::MasterVolume { value14, .. }) =
+                    sound_midi::parse_universal_sysex(&bytes)
+                {
+                    master.output_mut().set_volume(sound_midi::value14_to_u8(value14));
+                }
             }
         }
     }
@@ -401,7 +399,7 @@ pub fn render_smf_with_drums(
     if let Some(maxs) = max_samples {
         tail_target = tail_target.min(maxs);
     }
-    render_chunk(&mut engine, &mut effects, &channels, &mut out, &mut rendered, tail_target);
+    render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, tail_target);
     peak_voices = peak_voices.max(engine.active_voice_count());
     eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
     Ok(out)
@@ -412,7 +410,7 @@ pub fn render_smf_with_drums(
 #[allow(clippy::too_many_arguments)]
 fn handle_control_change(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     channels: &mut [ChannelState],
     chi: usize,
     cc: u8,
@@ -514,16 +512,8 @@ fn handle_control_change(
                 }
             }
             DataEntryOutcome::Effect(slot, target, value) => {
-                let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
-                match target {
-                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
-                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
-                    EffectControlTarget::ReverbTime => fx.set_reverb_time(value),
-                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(value),
-                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
-                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
-                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
-                }
+                let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
+                sound_midi::apply_effect_control(fx, target, value);
             }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
@@ -565,8 +555,8 @@ fn handle_control_change(
             apply_live(engine, chi, &channels[chi], bank, drums);
         }
         // CC91/93: エフェクト送りレベル。送信チャンネルの`effect_route_slot`が指すスロットへ適用。
-        91 => effects[channels[chi].effect_route_slot as usize].set_reverb_send(cc_to_u8(val)),
-        93 => effects[channels[chi].effect_route_slot as usize].set_chorus_send(cc_to_u8(val)),
+        91 => master.slot_mut(channels[chi].effect_route_slot as usize).set_reverb_send(cc_to_u8(val)),
+        93 => master.slot_mut(channels[chi].effect_route_slot as usize).set_chorus_send(cc_to_u8(val)),
         // CC102: Program Change 代替（VST3で MidiProgramChange が届かないため）。
         102 => {
             channels[chi].program_change(cc_to_u7(val));
@@ -968,6 +958,53 @@ mod tests {
         let buf_b = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
         assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "出力が無音");
         assert_eq!(buf_a, buf_b);
+    }
+
+    // --- GM2 Universal SysEx Master Volume E2Eテスト ---
+
+    /// SMF内にGM2 Master Volume SysEx（value14=0）を置くと、以降の発音が無音になる。
+    #[test]
+    fn sysex_master_volume_zero_silences_subsequent_notes() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xF0, 0x07, 0x7F, 0x7F, 0x04, 0x01, 0x00, 0x00, 0xF7]),
+            (0, vec![0x90, 60, 100]),
+            (480, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().all(|s| s.abs() < 1e-6), "マスターボリューム0のはずが音が出ている");
+    }
+
+    /// マスターボリュームSysExを送らない既存のSMFは、この機能追加前と同じく発音すること
+    /// （ビット不変の直接証明、`no_effect_routing_is_bit_identical_across_runs`と同型）。
+    #[test]
+    fn no_master_volume_sysex_is_bit_identical_across_runs() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![(0u32, vec![0x90, 60, 100]), (480, vec![0x80, 60, 0])];
+        let smf = build_smf(&events);
+        let buf_a = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        let buf_b = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "出力が無音");
+        assert_eq!(buf_a, buf_b);
+    }
+
+    /// GM2 Master Volume以外の未知のSysExはパニックせず無視され、後続イベントの解釈にも
+    /// 影響しない。
+    #[test]
+    fn unrecognized_sysex_is_ignored_and_playback_continues() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xF0, 0x04, 0x43, 0x10, 0x00, 0xF7]), // 他ベンダーのSysEx
+            (0, vec![0x90, 60, 100]),
+            (480, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "未知SysExの後も発音するはず");
     }
 
     /// ch1をNRPN(0,1)でスロット1へルーティングすると、ch0のCC91 Reverb Send（スロット0のみを

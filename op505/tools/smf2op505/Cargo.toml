@@ -21,3 +21,4 @@ op505-core = { path = "../../core" }
 op505-midi = { path = "../../midi" }
 op505-tools = { path = "../common" }
 sound-core = { path = "../../../sound/core" }
+sound-midi = { path = "../../../sound/midi" }

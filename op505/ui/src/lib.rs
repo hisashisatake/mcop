@@ -16,7 +16,7 @@
 // 消えたため）。将来OP/フィードバック等への配線でジャックを復活させる布石として、
 // 描画コード自体は`ui-core`に温存する方針（memory `project_texture_lfo_retirement.md`参照）。
 #[allow(unused_imports)]
-pub(crate) use ui_core::{algorithm_diagram, knob, layout, param_handle, patchbay, selector, time_eg_editor, waveform};
+pub(crate) use ui_core::{algorithm_diagram, knob, layout, level_meter, param_handle, patchbay, selector, time_eg_editor, waveform};
 
 mod panel;
 
@@ -24,4 +24,4 @@ mod panel;
 // PANEL_MIN_WIDTHはpanel.xmlから算出した「重ならずに収まる最小幅」（ui-codegen生成）。
 // ホスト側（op505-vst/gesture-app）がウィンドウ最小サイズを決めるのに使う。
 pub use panel::{draw_op505_panel, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, PANEL_MIN_WIDTH};
-pub use param_handle::{BoolParamHandle, IntParamHandle, TimeEgHandle};
+pub use param_handle::{BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};

@@ -242,6 +242,8 @@ pub(crate) struct Op505VstParams {
     pub chorus_feedback: IntParam,
     #[id = "cho_to_rev"]
     pub chorus_send_to_reverb: IntParam,
+    #[id = "master_volume"]
+    pub master_volume: IntParam,
 
     // ---- TimeEg 7本（persist状態、DAWパラメーターではない。plan参照） ----
     #[persist = "op505_egs"]
@@ -275,6 +277,7 @@ impl Default for Op505VstParams {
             chorus_mod_depth: int_param(IntField::Fx(FxInt::ChorusModDepth)),
             chorus_feedback: int_param(IntField::Fx(FxInt::ChorusFeedback)),
             chorus_send_to_reverb: int_param(IntField::Fx(FxInt::ChorusSendToReverb)),
+            master_volume: int_param(IntField::Fx(FxInt::MasterVolume)),
             egs: Arc::new(RwLock::new(Op505EgBank::default())),
         }
     }
@@ -431,6 +434,7 @@ pub(crate) fn int_param_ref(params: &Op505VstParams, field: IntField) -> &IntPar
             FxInt::ChorusModDepth => &params.chorus_mod_depth,
             FxInt::ChorusFeedback => &params.chorus_feedback,
             FxInt::ChorusSendToReverb => &params.chorus_send_to_reverb,
+            FxInt::MasterVolume => &params.master_volume,
         },
     }
 }
@@ -513,6 +517,7 @@ mod tests {
             "cho_depth",
             "cho_fb",
             "cho_to_rev",
+            "master_volume",
         ]
         .into_iter()
         .map(String::from)

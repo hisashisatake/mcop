@@ -6,17 +6,25 @@
 //! 扱いづらくなる。VSTは借用ベースで`'s`、standaloneは`Rc`のcloneで`'static`（`'static: 's`
 //! なのでどちらも通る）。詳細設計は`.claude/plans/fancy-wishing-toast.md`「② PanelParamSource」参照。
 
-use op505_ui::{BoolParamHandle, IntParamHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
+use op505_ui::{BoolParamHandle, IntParamHandle, MeterHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
 
 use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpIndex, OpInt, PatchInt};
 
-/// ホスト差分（DAWパラメーター経由か`Rc<RefCell<Op505Patch>>`直接かなど）を吸収する3操作。
-/// `IntField`/`BoolField`/`EgSlot`はop505-editorの正本（`param_spec`）が全列挙するため、
-/// 実装側は`_ =>`を使わず全パターンを網羅すること。
+/// メーター種別（現状はマスター出力の1個のみ）。将来オペレーター単位のメーター等が
+/// 増えたときに備え、`IntField`等と同じ「閉じた列挙」の形にしておく。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MeterField {
+    MasterOutput,
+}
+
+/// ホスト差分（DAWパラメーター経由か`Rc<RefCell<Op505Patch>>`直接かなど）を吸収する4操作。
+/// `IntField`/`BoolField`/`EgSlot`/`MeterField`はop505-editorの正本（`param_spec`/
+/// `panel_source`）が全列挙するため、実装側は`_ =>`を使わず全パターンを網羅すること。
 pub trait PanelParamSource {
     fn int(&self, field: IntField) -> Box<dyn IntParamHandle + '_>;
     fn boolean(&self, field: BoolField) -> Box<dyn BoolParamHandle + '_>;
     fn eg(&self, slot: EgSlot) -> Box<dyn TimeEgHandle + '_>;
+    fn meter(&self, field: MeterField) -> Box<dyn MeterHandle + '_>;
 }
 
 /// `src`から`Op505PanelParams`（`op505_ui::draw_op505_panel`への入力一式）を組み立てる。
@@ -45,6 +53,8 @@ pub fn build_panel_params<'a>(src: &'a dyn PanelParamSource) -> Op505PanelParams
         chorus_mod_depth: src.int(IntField::Fx(FxInt::ChorusModDepth)),
         chorus_feedback: src.int(IntField::Fx(FxInt::ChorusFeedback)),
         chorus_send_to_reverb: src.int(IntField::Fx(FxInt::ChorusSendToReverb)),
+        master_volume: src.int(IntField::Fx(FxInt::MasterVolume)),
+        master_meter: src.meter(MeterField::MasterOutput),
         operators: OpIndex::ALL.map(|op| operator_panel_params(src, op)),
     }
 }

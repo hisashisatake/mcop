@@ -13,9 +13,10 @@
 //! egui/eframeに依存しない（`op505-core`型のみを扱う）。
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use op505_core::{Op505BankFile, Op505Patch, Op505PresetBank};
+use sound_core::MeterBridge;
 
 /// `edit_channel`の「編集対象なし」を表す番兵値。MIDIチャンネルは0〜15のため衝突しない。
 pub const NO_EDIT_CHANNEL: u8 = 0xFF;
@@ -31,7 +32,10 @@ pub const FX_CHORUS_MOD_RATE: usize = 5;
 pub const FX_CHORUS_MOD_DEPTH: usize = 6;
 pub const FX_CHORUS_FEEDBACK: usize = 7;
 pub const FX_CHORUS_SEND_TO_REVERB: usize = 8;
-pub const FX_VALUE_COUNT: usize = 9;
+/// マスターボリューム（`sound_core::MasterOutput::set_volume`と対応）。既存9個の後に
+/// 追加した欄のため末尾（9番目）に置く（`FxInt::ALL`と同じ並びを保つ）。
+pub const FX_MASTER_VOLUME: usize = 9;
+pub const FX_VALUE_COUNT: usize = 10;
 
 /// トレイ起動音色エディタとオーディオスレッドの間で共有する状態。
 ///
@@ -60,6 +64,12 @@ pub struct SharedEditState {
     fx_values: [AtomicU8; FX_VALUE_COUNT],
     fx_slot: AtomicU8,
     fx_dirty: AtomicBool,
+
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し）。`fx_values`等と違いdirty
+    /// フラグは使わない——`MeterBridge`自体が`try_lock`ベースの橋渡しを既に実装しているため
+    /// （`sound_core::MeterBridge`のdoc参照）。オーディオスレッド・GUIスレッド双方が
+    /// この同じ`Arc`を共有する。
+    master_meter: Arc<MeterBridge>,
 }
 
 impl SharedEditState {
@@ -75,7 +85,13 @@ impl SharedEditState {
             fx_values: std::array::from_fn(|_| AtomicU8::new(0)),
             fx_slot: AtomicU8::new(0),
             fx_dirty: AtomicBool::new(false),
+            master_meter: Arc::new(MeterBridge::new()),
         }
+    }
+
+    /// マスター出力の計測値ブリッジを取得する（オーディオスレッド・GUIスレッド双方が使う）。
+    pub fn master_meter(&self) -> Arc<MeterBridge> {
+        self.master_meter.clone()
     }
 
     // ---- GUIスレッド側API（ブロッキング可） ----
@@ -191,6 +207,7 @@ mod tests {
             chorus_mod_depth: 7,
             chorus_feedback: 8,
             chorus_send_to_reverb: 9,
+            master_volume: 10,
         };
         let values = state.values_in_fx_order();
         assert_eq!(values.len(), FX_VALUE_COUNT);
@@ -203,6 +220,7 @@ mod tests {
         assert_eq!(values[FX_CHORUS_MOD_DEPTH], 7);
         assert_eq!(values[FX_CHORUS_FEEDBACK], 8);
         assert_eq!(values[FX_CHORUS_SEND_TO_REVERB], 9);
+        assert_eq!(values[FX_MASTER_VOLUME], 10);
     }
 
     #[test]

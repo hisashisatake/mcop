@@ -42,9 +42,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
+    MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
-use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, ReverbType, Vco};
 
 mod config;
 mod editor;
@@ -157,11 +157,10 @@ fn main() {
     let stream_config: cpal::StreamConfig = supported.into();
 
     let mut engine = Op505Engine::new(sample_rate);
-    // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングする。
-    let mut effects: [MasterEffects; EFFECT_SLOT_COUNT] = std::array::from_fn(|_| MasterEffects::new(sample_rate));
-    // `render_routed`のスロット別出力スクラッチ。cpalコールバックの`output`長に合わせて
-    // grow-onlyでリサイズし、以降は使い回す（オーディオスレッドでの反復ヒープ確保を避ける）。
-    let mut slot_buf: Vec<f32> = Vec::new();
+    // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングし、
+    // 合算後にマスターボリューム/レベル計測を適用する（`sound_core::MasterSection`、
+    // スロット配列・スクラッチ確保・合算ループを一本化した共通実装）。
+    let mut master = MasterSection::new(sample_rate, EFFECT_SLOT_COUNT);
     // トレイ起動音色エディタ（Step 1以降）が発音中ボイスへ即時反映する際の、発音中ボイスID
     // 一覧のスクラッチバッファ（`slot_buf`と同じ理由でオーディオスレッドの反復ヒープ確保を
     // 避ける）。エディタが無い/未操作の間は`apply_live_active`自体が呼ばれないため使われない。
@@ -172,6 +171,12 @@ fn main() {
     // トレイ起動音色エディタとの共有状態（Step 1以降）。エディタが一度も開かれなければ
     // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
     let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
+    // レベルメーターのpublish間隔（`%APPDATA%\op505\ui.json`、既定10fps）。ピーク検出自体は
+    // 毎ブロック行い、この間隔でまとめて`MeterBridge`へ渡す（取りこぼしを避けるため
+    // 区間内の最大値を累積してから送る）。
+    let meter_fps = op505_core::meter_fps(&op505_core::ui_config::load());
+    let publish_interval_frames = ((sample_rate / meter_fps as f32).max(1.0)) as usize;
+    let meter_bridge = shared_edit_state.master_meter();
     // エディタスレッドはこのクローンを持つ（オーディオコールバックへは別クローンをmoveする）。
     // `sink.clone()`はエディタ下部の鍵盤が試聴用MIDIを積むために使う（実MIDI入力と同じキュー）。
     let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state), sink.clone());
@@ -183,30 +188,46 @@ fn main() {
     // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
     registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone())));
 
+    // レベルメーターのpublish区間中に累積するピーク値（取りこぼし防止、`main.rs`モジュールdoc
+    // 「レベルメーターのpublish間隔」参照）。オーディオコールバックのクロージャが単独所有する。
+    let mut meter_peak_l = 0.0f32;
+    let mut meter_peak_r = 0.0f32;
+    let mut meter_clipped = false;
+    let mut frames_since_publish = 0usize;
+
     let stream = device
         .build_output_stream::<f32, _, _>(
             &stream_config,
             move |output: &mut [f32], _| {
-                sync_editor_state(&shared_edit_state, &mut engine, &mut effects, &mut state, &mut active_ids);
-                drain_midi_queue(&midi_queue, &mut engine, &mut effects, &mut state);
+                sync_editor_state(&shared_edit_state, &mut engine, &mut master, &mut state, &mut active_ids);
+                drain_midi_queue(&midi_queue, &mut engine, &mut master, &mut state);
                 output.fill(0.0);
 
                 let interleaved_len = output.len();
-                let slot_total_len = interleaved_len * EFFECT_SLOT_COUNT;
-                if slot_total_len > slot_buf.len() {
-                    slot_buf.resize(slot_total_len, 0.0);
-                }
-                let slot_out = &mut slot_buf[..slot_total_len];
-                slot_out.fill(0.0);
-
                 let channel_slot: [u8; 16] = std::array::from_fn(|i| state.channels[i].effect_route_slot);
-                engine.render_routed(slot_out, interleaved_len, &channel_slot, num_channels);
-                for (slot, fx) in effects.iter_mut().enumerate() {
-                    let s = &mut slot_out[slot * interleaved_len..(slot + 1) * interleaved_len];
-                    fx.process(s, num_channels);
-                    for (o, v) in output.iter_mut().zip(s.iter()) {
-                        *o += v;
-                    }
+                let engine_ref = &mut engine;
+                let mixed = master.render(interleaved_len, num_channels, |slot_buf, stride| {
+                    engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);
+                });
+                for (o, v) in output.iter_mut().zip(mixed.iter()) {
+                    *o += v;
+                }
+
+                let m = master.output_mut().take_measurement();
+                meter_peak_l = meter_peak_l.max(m.peak_l);
+                meter_peak_r = meter_peak_r.max(m.peak_r);
+                meter_clipped |= m.clipped;
+                frames_since_publish += interleaved_len / num_channels;
+                if frames_since_publish >= publish_interval_frames {
+                    meter_bridge.publish(&sound_core::Measurement {
+                        peak_l: meter_peak_l,
+                        peak_r: meter_peak_r,
+                        clipped: meter_clipped,
+                    });
+                    meter_peak_l = 0.0;
+                    meter_peak_r = 0.0;
+                    meter_clipped = false;
+                    frames_since_publish = 0;
                 }
             },
             |err| log::log(&format!("audio error: {err}")),
@@ -250,7 +271,7 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
 fn sync_editor_state(
     shared: &SharedEditState,
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     active_ids: &mut Vec<usize>,
 ) {
@@ -268,7 +289,7 @@ fn sync_editor_state(
     }
 
     if let Some((slot, values)) = shared.take_fx_if_dirty() {
-        let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+        let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
         fx.set_reverb_send(values[shared::FX_REVERB_SEND]);
         fx.set_reverb_type(ReverbType::from_u8(values[shared::FX_REVERB_TYPE]));
         fx.set_reverb_time(values[shared::FX_REVERB_TIME]);
@@ -278,6 +299,9 @@ fn sync_editor_state(
         fx.set_chorus_mod_depth(values[shared::FX_CHORUS_MOD_DEPTH]);
         fx.set_chorus_feedback(values[shared::FX_CHORUS_FEEDBACK]);
         fx.set_chorus_send_to_reverb(values[shared::FX_CHORUS_SEND_TO_REVERB]);
+        // マスターボリュームはスロットに属さない全体で1個の値のため、`slot`とは無関係に
+        // 常に`MasterOutput`（`master.output_mut()`）へ適用する。
+        master.output_mut().set_volume(values[shared::FX_MASTER_VOLUME]);
     }
 }
 
@@ -285,12 +309,12 @@ fn sync_editor_state(
 fn drain_midi_queue(
     queue: &MidiQueue,
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
 ) {
     let mut pending = queue.lock().unwrap();
     while let Some(bytes) = pending.pop_front() {
-        handle_midi_message(engine, effects, state, &bytes);
+        handle_midi_message(engine, master, state, &bytes);
     }
 }
 
@@ -299,7 +323,7 @@ fn drain_midi_queue(
 /// 固定長スライスパターンではなくステータス別に必要な長さを都度チェックする。
 fn handle_midi_message(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     bytes: &[u8],
 ) {
@@ -326,7 +350,7 @@ fn handle_midi_message(
         }
         0xB0 => {
             let &[_, cc, val] = bytes else { return };
-            handle_control_change(engine, effects, state, chi, cc, val);
+            handle_control_change(engine, master, state, chi, cc, val);
         }
         0xC0 => {
             let &[_, program] = bytes else { return };
@@ -343,6 +367,14 @@ fn handle_midi_message(
             let cents = raw as f32 / 8192.0 * state.channels[chi].pitch_bend_range * 100.0;
             state.channels[chi].bend_cents = cents;
             engine.set_pitch_bend_group(chi, cents);
+        }
+        // 0xF0: SysEx。GM2 Universal SysEx Master Volume（Domino等から送出される）のみ解釈する。
+        0xF0 => {
+            if let Some(sound_midi::UniversalSysEx::MasterVolume { value14, .. }) =
+                sound_midi::parse_universal_sysex(bytes)
+            {
+                master.output_mut().set_volume(sound_midi::value14_to_u8(value14));
+            }
         }
         _ => {}
     }
@@ -500,7 +532,7 @@ fn apply_live_active(engine: &mut Op505Engine, state: &mut MidiState, chi: usize
 /// Program Change選択済みの単一プリセット集合を持つ）。
 fn handle_control_change(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     chi: usize,
     cc: u8,
@@ -600,16 +632,8 @@ fn handle_control_change(
                 }
             }
             DataEntryOutcome::Effect(slot, target, value) => {
-                let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
-                match target {
-                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
-                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
-                    EffectControlTarget::ReverbTime => fx.set_reverb_time(value),
-                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(value),
-                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
-                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
-                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
-                }
+                let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
+                sound_midi::apply_effect_control(fx, target, value);
             }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
@@ -649,8 +673,8 @@ fn handle_control_change(
             apply_live(engine, state, chi);
         }
         // CC91/93: エフェクト送りレベル。送信チャンネルのeffect_route_slotが指すスロットへ適用。
-        91 => effects[state.channels[chi].effect_route_slot as usize].set_reverb_send(cc_to_u8(val)),
-        93 => effects[state.channels[chi].effect_route_slot as usize].set_chorus_send(cc_to_u8(val)),
+        91 => master.slot_mut(state.channels[chi].effect_route_slot as usize).set_reverb_send(cc_to_u8(val)),
+        93 => master.slot_mut(state.channels[chi].effect_route_slot as usize).set_chorus_send(cc_to_u8(val)),
         // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
         103..=106 => {
             let op_index = (cc - 103) as usize;
@@ -754,5 +778,57 @@ mod base_patch_for_tests {
 
         let resolved = state.base_patch_for(4, 60).expect("編集対象外chは従来のPC解決のまま");
         assert_eq!(resolved.channel.pitch_fg.depth, 10, "編集対象外chはedit_patchの影響を受けないはず");
+    }
+}
+
+#[cfg(test)]
+mod sysex_tests {
+    use super::*;
+
+    fn fresh_state() -> (Op505Engine, MasterSection, MidiState) {
+        let engine = Op505Engine::new(8000.0);
+        let master = MasterSection::new(8000.0, EFFECT_SLOT_COUNT);
+        let state = MidiState::new(Op505PresetBank::default(), Op505Patch::default());
+        (engine, master, state)
+    }
+
+    /// GM2 Universal SysEx Master Volume（0）を受信するとマスター出力が無音になる
+    /// （Domino→pipe_src→handle_midi_messageの経路をエンドツーエンドで確認する）。
+    #[test]
+    fn master_volume_sysex_zero_silences_output() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let sysex = vec![0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x00, 0x00, 0xF7];
+        handle_midi_message(&mut engine, &mut master, &mut state, &sysex);
+
+        let mixed = master
+            .render(2, 2, |slot_buf, stride| {
+                slot_buf[..stride].fill(1.0);
+            })
+            .to_vec();
+        assert_eq!(mixed, vec![0.0, 0.0], "マスターボリューム0なので無音になるはず");
+    }
+
+    /// フルスケール（16383）を受信すると既定値と同じ透過ゲイン(255)相当になる。
+    #[test]
+    fn master_volume_sysex_full_scale_is_transparent() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let sysex = vec![0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x7F, 0x7F, 0xF7];
+        handle_midi_message(&mut engine, &mut master, &mut state, &sysex);
+
+        let mixed = master
+            .render(2, 2, |slot_buf, stride| {
+                slot_buf[..stride].fill(0.5);
+            })
+            .to_vec();
+        assert_eq!(mixed, vec![0.5, 0.5], "フルスケールでは透過のはず");
+    }
+
+    /// GM2 Master Volume形式に一致しないSysExはパニックせず無視される。
+    #[test]
+    fn unrecognized_sysex_is_ignored_without_panic() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let unknown_sysex = vec![0xF0, 0x43, 0x10, 0x00, 0xF7]; // 他ベンダーのSysEx
+        handle_midi_message(&mut engine, &mut master, &mut state, &unknown_sysex);
+        // パニックしなければ成功。
     }
 }

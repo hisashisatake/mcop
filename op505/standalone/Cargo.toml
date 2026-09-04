@@ -20,6 +20,7 @@ op505-editor = { path = "../editor" }
 op505-ui = { path = "../ui" }
 ui-core = { path = "../../ui/core" }
 sound-core = { path = "../../sound/core" }
+sound-midi = { path = "../../sound/midi" }
 midir = "0.11"
 cpal = "0.15"
 # 設定ファイル（%APPDATA%\op505\standalone.json）用。op505-coreの.op505プリセット形式と

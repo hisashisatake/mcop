@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 # ALGORITHMSのキャリア判定のみに使う。MasterEffects等sound-core型はAPIに出さない
-# （CC/NRPN解釈はop505-vst/smf2op505の両方が参照する共有クレートのため、依存はこの2本のみに絞る）。
+# （CC/NRPN解釈はop505-vst/smf2op505の両方が参照する共有クレートのため、依存は絞る）。
 op505-core = { path = "../core" }
 sound-fm = { path = "../../sound/fm" }
+# EffectControlTarget/apply_effect_control（MasterEffects適用の3ホスト重複解消）と
+# GM2 Universal SysExパーサ（sound-core型のみに依存する中立クレート）。
+sound-midi = { path = "../../sound/midi" }

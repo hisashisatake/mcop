@@ -14,6 +14,7 @@ use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
 use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, UndoApply, UndoStack};
+use sound_core::MeterBridge;
 
 use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
@@ -31,6 +32,16 @@ pub struct EditorApp {
     dirty: Rc<Cell<bool>>,
     master: Rc<RefCell<MasterEffectsState>>,
     master_dirty: Rc<Cell<bool>>,
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し、`SharedEditState::master_meter()`
+    /// から取得した`Arc`を共有する）。
+    master_meter: Arc<MeterBridge>,
+    /// レベルメーターの再描画レート（fps、`%APPDATA%\op505\ui.json`から起動時に1回読む）。
+    /// egui既定のイベント駆動更新ではメーターの値が動いても画面に反映されないため、
+    /// `ui()`内で`request_repaint_after`を呼んで継続的な再描画を要求する。
+    meter_fps: u32,
+    /// レベルメーターのセグメント間の隙間（px、`%APPDATA%\op505\ui.json`から起動時に1回読む）。
+    /// `ui()`内で毎フレーム`ui_core::level_meter::set_segment_gap_px`へ反映する。
+    level_meter_gap_px: f32,
     undo: Rc<RefCell<UndoStack>>,
     presets: EditorPresetState,
     keyboard: KeyboardState,
@@ -50,6 +61,8 @@ impl EditorApp {
     /// 前回このエディタで編集した値が残っていればそれ）。エディタを開くたびにゼロから
     /// 組み立て直すのではなく、直前の状態を引き継ぐ。
     pub fn new(shared: Arc<SharedEditState>, midi_sink: MidiSink, initial_patch: Op505Patch) -> Self {
+        let master_meter = shared.master_meter();
+        let ui_config = op505_core::ui_config::load();
         Self {
             shared,
             midi_sink,
@@ -57,6 +70,9 @@ impl EditorApp {
             dirty: Rc::new(Cell::new(false)),
             master: Rc::new(RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
+            master_meter,
+            meter_fps: op505_core::meter_fps(&ui_config),
+            level_meter_gap_px: op505_core::level_meter_gap_px(&ui_config),
             undo: Rc::new(RefCell::new(UndoStack::new())),
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
@@ -160,6 +176,12 @@ impl EditorApp {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // レベルメーターを継続的に動かすため、egui既定のイベント駆動更新に加えて
+        // `meter_fps`間隔での再描画を要求する（別スレッドのオーディオコールバックとは
+        // 無関係なので音声合成への影響は無い）。
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / self.meter_fps as f32));
+        ui_core::level_meter::set_segment_gap_px(ui.ctx(), self.level_meter_gap_px);
+
         let previous_edit_channel = self.edit_channel;
 
         // 未保存（Undo履歴が残っている＝Save/Save Asで基点をクリアしていない）のままウィンドウを
@@ -246,6 +268,7 @@ impl eframe::App for EditorApp {
                     master: self.master.clone(),
                     master_dirty: self.master_dirty.clone(),
                     undo: self.undo.clone(),
+                    master_meter: self.master_meter.clone(),
                 };
                 let panel = build_panel_params(&source);
                 op505_ui::draw_op505_panel(ui, &panel);
