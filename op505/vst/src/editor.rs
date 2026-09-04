@@ -107,6 +107,7 @@ pub(crate) fn create_editor(
     shared_preset_bank: Arc<RwLock<Op505PresetBank>>,
     preset_bank_dirty: Arc<AtomicBool>,
     master_meter: Arc<MeterBridge>,
+    meter_fps: u32,
 ) -> Option<Box<dyn Editor>> {
     let resize_state = egui_state.clone();
     create_egui_editor(
@@ -116,6 +117,10 @@ pub(crate) fn create_editor(
         |_ctx, _queue, _state| {},
         move |ui, setter, _queue, state| {
             let EditorState { presets, undo } = state;
+
+            // レベルメーターを継続的に動かすため、egui既定のイベント駆動更新に加えて
+            // `meter_fps`間隔での再描画を要求する（standaloneの`EditorApp::ui`と同じ設計）。
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / meter_fps as f32));
 
             undo.borrow_mut().begin_frame(vst_snapshot(&params, presets));
 

@@ -35,6 +35,10 @@ pub struct EditorApp {
     /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し、`SharedEditState::master_meter()`
     /// から取得した`Arc`を共有する）。
     master_meter: Arc<MeterBridge>,
+    /// レベルメーターの再描画レート（fps、`%APPDATA%\op505\ui.json`から起動時に1回読む）。
+    /// egui既定のイベント駆動更新ではメーターの値が動いても画面に反映されないため、
+    /// `ui()`内で`request_repaint_after`を呼んで継続的な再描画を要求する。
+    meter_fps: u32,
     undo: Rc<RefCell<UndoStack>>,
     presets: EditorPresetState,
     keyboard: KeyboardState,
@@ -63,6 +67,7 @@ impl EditorApp {
             master: Rc::new(RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
             master_meter,
+            meter_fps: op505_core::meter_fps(&op505_core::ui_config::load()),
             undo: Rc::new(RefCell::new(UndoStack::new())),
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
@@ -166,6 +171,11 @@ impl EditorApp {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // レベルメーターを継続的に動かすため、egui既定のイベント駆動更新に加えて
+        // `meter_fps`間隔での再描画を要求する（別スレッドのオーディオコールバックとは
+        // 無関係なので音声合成への影響は無い）。
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / self.meter_fps as f32));
+
         let previous_edit_channel = self.edit_channel;
 
         // 未保存（Undo履歴が残っている＝Save/Save Asで基点をクリアしていない）のままウィンドウを

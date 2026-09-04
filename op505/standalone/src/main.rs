@@ -171,6 +171,12 @@ fn main() {
     // トレイ起動音色エディタとの共有状態（Step 1以降）。エディタが一度も開かれなければ
     // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
     let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
+    // レベルメーターのpublish間隔（`%APPDATA%\op505\ui.json`、既定10fps）。ピーク検出自体は
+    // 毎ブロック行い、この間隔でまとめて`MeterBridge`へ渡す（取りこぼしを避けるため
+    // 区間内の最大値を累積してから送る）。
+    let meter_fps = op505_core::meter_fps(&op505_core::ui_config::load());
+    let publish_interval_frames = ((sample_rate / meter_fps as f32).max(1.0)) as usize;
+    let meter_bridge = shared_edit_state.master_meter();
     // エディタスレッドはこのクローンを持つ（オーディオコールバックへは別クローンをmoveする）。
     // `sink.clone()`はエディタ下部の鍵盤が試聴用MIDIを積むために使う（実MIDI入力と同じキュー）。
     let editor_handle = editor::EditorHandle::spawn(Arc::clone(&shared_edit_state), sink.clone());
@@ -181,6 +187,13 @@ fn main() {
     // OpenEditorフレーム（kind=3、gesture-appのEキー押下）を受けたら`editor_handle`の
     // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
     registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone())));
+
+    // レベルメーターのpublish区間中に累積するピーク値（取りこぼし防止、`main.rs`モジュールdoc
+    // 「レベルメーターのpublish間隔」参照）。オーディオコールバックのクロージャが単独所有する。
+    let mut meter_peak_l = 0.0f32;
+    let mut meter_peak_r = 0.0f32;
+    let mut meter_clipped = false;
+    let mut frames_since_publish = 0usize;
 
     let stream = device
         .build_output_stream::<f32, _, _>(
@@ -198,6 +211,23 @@ fn main() {
                 });
                 for (o, v) in output.iter_mut().zip(mixed.iter()) {
                     *o += v;
+                }
+
+                let m = master.output_mut().take_measurement();
+                meter_peak_l = meter_peak_l.max(m.peak_l);
+                meter_peak_r = meter_peak_r.max(m.peak_r);
+                meter_clipped |= m.clipped;
+                frames_since_publish += interleaved_len / num_channels;
+                if frames_since_publish >= publish_interval_frames {
+                    meter_bridge.publish(&sound_core::Measurement {
+                        peak_l: meter_peak_l,
+                        peak_r: meter_peak_r,
+                        clipped: meter_clipped,
+                    });
+                    meter_peak_l = 0.0;
+                    meter_peak_r = 0.0;
+                    meter_clipped = false;
+                    frames_since_publish = 0;
                 }
             },
             |err| log::log(&format!("audio error: {err}")),

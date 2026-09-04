@@ -151,6 +151,14 @@ struct Op505Plugin {
     // `MasterSection::render()`後に`take_measurement()`でピークを読み、`publish()`する
     // （`sound_core::MeterBridge`、`try_lock`のみを使いオーディオ側は待たない）。
     master_meter: Arc<MeterBridge>,
+    // レベルメーターのpublish区間中に累積するピーク値（取りこぼし防止。standaloneの
+    // オーディオコールバックと同じ設計、`main.rs`参照）。
+    meter_peak_l: f32,
+    meter_peak_r: f32,
+    meter_clipped: bool,
+    frames_since_publish: usize,
+    // publish間隔（フレーム数）。サンプルレートに依存するため`initialize()`で再計算する。
+    publish_interval_frames: usize,
 }
 
 impl Default for Op505Plugin {
@@ -190,11 +198,25 @@ impl Default for Op505Plugin {
             // 横スクロールを要求する状態になり体験が悪いため）。
             egui_state: EguiState::from_size(op505_editor::layout::editor_min_width().ceil() as u32, 680),
             master_meter: Arc::new(MeterBridge::new()),
+            meter_peak_l: 0.0,
+            meter_peak_r: 0.0,
+            meter_clipped: false,
+            frames_since_publish: 0,
+            publish_interval_frames: Self::compute_publish_interval_frames(DEFAULT_SR),
         }
     }
 }
 
 impl Op505Plugin {
+    /// レベルメーターのpublish間隔（フレーム数）を計算する。`%APPDATA%\op505\ui.json`の
+    /// `meter_fps`（既定10fps、standaloneと同じ`op505_core::meter_fps`）を読む。
+    /// 設定ファイルの読み込みはファイルI/Oを伴うため、`initialize()`（非リアルタイム
+    /// コンテキスト）でのみ呼ぶこと。
+    fn compute_publish_interval_frames(sample_rate: f32) -> usize {
+        let meter_fps = op505_core::meter_fps(&op505_core::ui_config::load());
+        ((sample_rate / meter_fps as f32).max(1.0)) as usize
+    }
+
     /// 現在のDAWパラメーター・`cached_egs`から`Op505Patch`を構築する（MIDIチャンネル非依存。
     /// NRPN(0,9)〜(0,15)由来の`overrides`はここでは適用しない。Program Change選択中の
     /// チャンネルでも必ず後段適用できるよう、`apply_pitch_fg_expression`と同じ「note_patchへの
@@ -369,6 +391,7 @@ impl Plugin for Op505Plugin {
         self.sample_rate = buffer_config.sample_rate;
         self.engine = Op505Engine::new(self.sample_rate);
         self.master = MasterSection::new(self.sample_rate, EFFECT_SLOT_COUNT);
+        self.publish_interval_frames = Self::compute_publish_interval_frames(self.sample_rate);
         self.preset_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
         // GUI側が参照する共有バンクも同じ内容で揃える。エディタを開いたままサンプルレート変更等で
         // 再initialize()されると、presets_dir**外**のファイルをOpenして音声側へ載せていたバンクは
@@ -404,15 +427,22 @@ impl Plugin for Op505Plugin {
         self.last_chorus_feedback = DEFAULT_CHORUS_FEEDBACK;
         self.last_chorus_send_to_reverb = DEFAULT_CHORUS_SEND_TO_REVERB;
         self.program_patch = [None; 16];
+        self.meter_peak_l = 0.0;
+        self.meter_peak_r = 0.0;
+        self.meter_clipped = false;
+        self.frames_since_publish = 0;
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // エディタを開くたびの1回だけ読む（GUIスレッドかつ低頻度のためファイルI/Oを許容する）。
+        let meter_fps = op505_core::meter_fps(&op505_core::ui_config::load());
         editor::create_editor(
             self.egui_state.clone(),
             self.params.clone(),
             self.shared_preset_bank.clone(),
             self.preset_bank_dirty.clone(),
             self.master_meter.clone(),
+            meter_fps,
         )
     }
 
@@ -921,6 +951,26 @@ impl Plugin for Op505Plugin {
             for s in 0..num_samples {
                 output_slices[ch][s] += mixed[s * num_channels + ch];
             }
+        }
+
+        // レベルメーターのpublish（standaloneのオーディオコールバックと同じ設計、
+        // `op505-standalone/src/main.rs`参照）。ピーク検出は毎ブロック行い、取りこぼしを
+        // 避けるため区間内の最大値を累積してから`meter_fps`間隔でまとめて送る。
+        let m = self.master.output_mut().take_measurement();
+        self.meter_peak_l = self.meter_peak_l.max(m.peak_l);
+        self.meter_peak_r = self.meter_peak_r.max(m.peak_r);
+        self.meter_clipped |= m.clipped;
+        self.frames_since_publish += num_samples;
+        if self.frames_since_publish >= self.publish_interval_frames {
+            self.master_meter.publish(&sound_core::Measurement {
+                peak_l: self.meter_peak_l,
+                peak_r: self.meter_peak_r,
+                clipped: self.meter_clipped,
+            });
+            self.meter_peak_l = 0.0;
+            self.meter_peak_r = 0.0;
+            self.meter_clipped = false;
+            self.frames_since_publish = 0;
         }
 
         ProcessStatus::Normal
