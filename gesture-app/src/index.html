@@ -58,6 +58,9 @@
     #program-label {
       color: #aaa; text-align: right;
     }
+    #tempo-display {
+      color: #aaa;
+    }
     #program-panel button {
       background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 8px; cursor: pointer;
@@ -101,6 +104,10 @@
     <div class="program-row">
       Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
       Program <input type="number" id="program-num" value="0" min="0" max="127">
+    </div>
+    <div class="program-row">
+      <button id="tap-tempo-btn" type="button">TAP</button>
+      <span id="tempo-display">120 BPM</span>
     </div>
   </div>
 

@@ -8,6 +8,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
@@ -158,4 +159,45 @@ pub fn nrpn_data_entry(channel: u8, param_msb: u8, param_lsb: u8, value: u8) {
 /// 要求する。gesture-app側のEキー押下から呼ぶ制御フレーム（MIDIメッセージではない）。
 pub fn open_editor() {
     send_frame(FRAME_KIND_OPEN_EDITOR, &[]);
+}
+
+// ─────────────────────────────────────────────
+// MIDI Clock送信（タップテンポ）
+// gesture-appがマスターとなり24 PPQNのクロックパルス(0xF8)をstandaloneへ送り続ける。
+// standalone側の`TempoClock`（`op505/standalone/src/tempo_clock.rs`）がパルス間隔から
+// BPMを算出しTimeEgのテンポ同期(sync_enabled)へ反映する。
+// ─────────────────────────────────────────────
+const CLOCK_PPQN: u32 = 24;
+
+/// f32::to_bits()で格納。0は「未タップ（クロック未送出）」を表す番兵。
+static CLOCK_BPM_BITS: AtomicU32 = AtomicU32::new(0);
+static CLOCK_THREAD_INIT: Once = Once::new();
+
+/// タップテンポで確定したBPMを設定する。初回呼び出し時にクロック送信スレッドを起動する。
+pub fn set_clock_bpm(bpm: f32) {
+    CLOCK_BPM_BITS.store(bpm.to_bits(), Ordering::Relaxed);
+    ensure_clock_thread();
+}
+
+fn ensure_clock_thread() {
+    CLOCK_THREAD_INIT.call_once(|| {
+        std::thread::spawn(clock_loop);
+    });
+}
+
+/// BPM未設定の間は100ms間隔で設定の有無だけポーリングし、設定後は24 PPQN間隔で
+/// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
+/// 移動平均で吸収される想定のため、高精度タイマーは使わない。
+fn clock_loop() {
+    loop {
+        let bits = CLOCK_BPM_BITS.load(Ordering::Relaxed);
+        if bits == 0 {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+        let bpm = f32::from_bits(bits);
+        send_short(&[0xF8]);
+        let interval = Duration::from_secs_f32(60.0 / bpm / CLOCK_PPQN as f32);
+        std::thread::sleep(interval);
+    }
 }
