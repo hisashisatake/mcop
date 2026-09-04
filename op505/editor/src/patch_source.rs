@@ -36,6 +36,7 @@ pub struct MasterEffectsState {
     pub chorus_mod_depth: i32,
     pub chorus_feedback: i32,
     pub chorus_send_to_reverb: i32,
+    pub master_volume: i32,
 }
 
 impl Default for MasterEffectsState {
@@ -52,6 +53,7 @@ impl Default for MasterEffectsState {
             chorus_mod_depth: FxInt::ChorusModDepth.spec().default,
             chorus_feedback: FxInt::ChorusFeedback.spec().default,
             chorus_send_to_reverb: FxInt::ChorusSendToReverb.spec().default,
+            master_volume: FxInt::MasterVolume.spec().default,
         }
     }
 }
@@ -69,6 +71,7 @@ impl MasterEffectsState {
             FxInt::ChorusModDepth => self.chorus_mod_depth,
             FxInt::ChorusFeedback => self.chorus_feedback,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb,
+            FxInt::MasterVolume => self.master_volume,
         }
     }
 
@@ -83,13 +86,14 @@ impl MasterEffectsState {
             FxInt::ChorusModDepth => self.chorus_mod_depth = value,
             FxInt::ChorusFeedback => self.chorus_feedback = value,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb = value,
+            FxInt::MasterVolume => self.master_volume = value,
         }
     }
 
-    /// `FxInt::ALL`と同じ並び順の9値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
+    /// `FxInt::ALL`と同じ並び順の10値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
     /// この順序をそのまま送る——呼び出し側で並びを凍結するテストを持つこと（ずれるとreverb_typeと
     /// reverb_timeが入れ替わって無音デバッグ地獄になる）。
-    pub fn values_in_fx_order(&self) -> [u8; 9] {
+    pub fn values_in_fx_order(&self) -> [u8; 10] {
         FxInt::ALL.map(|fx| self.field(fx) as u8)
     }
 

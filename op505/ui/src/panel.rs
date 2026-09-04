@@ -70,6 +70,8 @@ pub struct Op505PanelParams<'a> {
     pub chorus_mod_depth: Box<dyn IntParamHandle + 'a>,
     pub chorus_feedback: Box<dyn IntParamHandle + 'a>,
     pub chorus_send_to_reverb: Box<dyn IntParamHandle + 'a>,
+    /// マスターボリューム（全エフェクトスロット合算後の最終段、`sound_core::MasterOutput`）。
+    pub master_volume: Box<dyn IntParamHandle + 'a>,
     // OPERATORS
     pub operators: [Op505OperatorPanelParams<'a>; 4],
 }

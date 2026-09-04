@@ -31,7 +31,10 @@ pub const FX_CHORUS_MOD_RATE: usize = 5;
 pub const FX_CHORUS_MOD_DEPTH: usize = 6;
 pub const FX_CHORUS_FEEDBACK: usize = 7;
 pub const FX_CHORUS_SEND_TO_REVERB: usize = 8;
-pub const FX_VALUE_COUNT: usize = 9;
+/// マスターボリューム（`sound_core::MasterOutput::set_volume`と対応）。既存9個の後に
+/// 追加した欄のため末尾（9番目）に置く（`FxInt::ALL`と同じ並びを保つ）。
+pub const FX_MASTER_VOLUME: usize = 9;
+pub const FX_VALUE_COUNT: usize = 10;
 
 /// トレイ起動音色エディタとオーディオスレッドの間で共有する状態。
 ///
@@ -191,6 +194,7 @@ mod tests {
             chorus_mod_depth: 7,
             chorus_feedback: 8,
             chorus_send_to_reverb: 9,
+            master_volume: 10,
         };
         let values = state.values_in_fx_order();
         assert_eq!(values.len(), FX_VALUE_COUNT);
@@ -203,6 +207,7 @@ mod tests {
         assert_eq!(values[FX_CHORUS_MOD_DEPTH], 7);
         assert_eq!(values[FX_CHORUS_FEEDBACK], 8);
         assert_eq!(values[FX_CHORUS_SEND_TO_REVERB], 9);
+        assert_eq!(values[FX_MASTER_VOLUME], 10);
     }
 
     #[test]

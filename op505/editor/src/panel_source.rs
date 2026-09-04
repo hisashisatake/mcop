@@ -45,6 +45,7 @@ pub fn build_panel_params<'a>(src: &'a dyn PanelParamSource) -> Op505PanelParams
         chorus_mod_depth: src.int(IntField::Fx(FxInt::ChorusModDepth)),
         chorus_feedback: src.int(IntField::Fx(FxInt::ChorusFeedback)),
         chorus_send_to_reverb: src.int(IntField::Fx(FxInt::ChorusSendToReverb)),
+        master_volume: src.int(IntField::Fx(FxInt::MasterVolume)),
         operators: OpIndex::ALL.map(|op| operator_panel_params(src, op)),
     }
 }

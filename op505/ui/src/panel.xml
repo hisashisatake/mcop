@@ -53,6 +53,7 @@
         <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
         <knob label="REV" handle="rev_send"/>
         <knob label="R.TIME" handle="reverb_time"/>
+        <knob label="M.VOL" handle="master_volume"/>
       </row>
       <row justify="start" gap="spacing">
         <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>

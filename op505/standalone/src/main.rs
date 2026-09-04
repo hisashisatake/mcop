@@ -269,6 +269,9 @@ fn sync_editor_state(
         fx.set_chorus_mod_depth(values[shared::FX_CHORUS_MOD_DEPTH]);
         fx.set_chorus_feedback(values[shared::FX_CHORUS_FEEDBACK]);
         fx.set_chorus_send_to_reverb(values[shared::FX_CHORUS_SEND_TO_REVERB]);
+        // マスターボリュームはスロットに属さない全体で1個の値のため、`slot`とは無関係に
+        // 常に`MasterOutput`（`master.output_mut()`）へ適用する。
+        master.output_mut().set_volume(values[shared::FX_MASTER_VOLUME]);
     }
 }
 
