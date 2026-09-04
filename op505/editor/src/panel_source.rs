@@ -54,6 +54,8 @@ pub fn build_panel_params<'a>(src: &'a dyn PanelParamSource) -> Op505PanelParams
         chorus_feedback: src.int(IntField::Fx(FxInt::ChorusFeedback)),
         chorus_send_to_reverb: src.int(IntField::Fx(FxInt::ChorusSendToReverb)),
         master_volume: src.int(IntField::Fx(FxInt::MasterVolume)),
+        delay_sync: src.int(IntField::Fx(FxInt::DelaySync)),
+        delay_sync_rate: src.int(IntField::Fx(FxInt::DelaySyncRate)),
         master_meter: src.meter(MeterField::MasterOutput),
         operators: OpIndex::ALL.map(|op| operator_panel_params(src, op)),
     }

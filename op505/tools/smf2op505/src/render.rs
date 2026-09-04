@@ -320,6 +320,12 @@ pub fn render_smf_with_drums(
             EvKind::Tempo(us) => {
                 tempo_us = us as f64;
                 spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64;
+                // TimeEg（Op505Engine::set_tempo）・マスターディレイ（MasterSection::set_tempo）
+                // 両方のテンポ同期に反映する。旧実装はtick→サンプル換算にしか使っておらず、
+                // これらの同期が常に既定120BPM固定になっていた（2026-09-04発見・修正）。
+                let bpm = 60_000_000.0 / tempo_us;
+                engine.set_tempo(bpm as f32);
+                master.set_tempo(bpm as f32);
             }
             EvKind::Program(ch, p) => {
                 channels[ch as usize].program_change(p);

@@ -45,6 +45,15 @@ impl MasterSection {
         &mut self.output
     }
 
+    /// テンポ（BPM）を全スロットへ配る。Delay/Panning Delayのテンポ同期用
+    /// （`MasterEffects::set_tempo`参照）。どのスロットが同期を使っているか
+    /// ホスト側は知らないため、常に全スロットへ通知する。
+    pub fn set_tempo(&mut self, bpm: f32) {
+        for fx in self.slots.iter_mut() {
+            fx.set_tempo(bpm);
+        }
+    }
+
     /// スロット別レンダリング→合算→マスター出力適用までを行い、結果のスライスを返す。
     ///
     /// `fill_slots`は`slot_buffer`（`slot_count * interleaved_len`長、ゼロ埋め済み）へ

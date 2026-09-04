@@ -630,8 +630,12 @@ const SYNC_NOTE_ANCHORS: [u8; SYNC_NOTE_COUNT] = [
 
 /// 音価index(0〜19)→その音価にぴったり乗る`sync_rate`値。範囲外はクランプする。
 /// UIのドロップダウンで音価を選んだときに、この値をノブへ書き込む。
-pub fn sync_note_anchor(index: u8) -> u8 {
-    SYNC_NOTE_ANCHORS[(index as usize).min(SYNC_NOTE_COUNT - 1)]
+///
+/// `const fn`にしてあるのは、他モジュール（`effects::reverb`等）が既定値を
+/// マジックナンバーでなくこの関数経由で定数として持てるようにするため。
+pub const fn sync_note_anchor(index: u8) -> u8 {
+    let i = index as usize;
+    if i < SYNC_NOTE_COUNT { SYNC_NOTE_ANCHORS[i] } else { SYNC_NOTE_ANCHORS[SYNC_NOTE_COUNT - 1] }
 }
 
 /// `sync_rate`(0〜255)→拍数の256要素テーブルを構築する。

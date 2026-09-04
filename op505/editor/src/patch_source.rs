@@ -38,6 +38,8 @@ pub struct MasterEffectsState {
     pub chorus_feedback: i32,
     pub chorus_send_to_reverb: i32,
     pub master_volume: i32,
+    pub delay_sync: i32,
+    pub delay_sync_rate: i32,
 }
 
 impl Default for MasterEffectsState {
@@ -55,6 +57,8 @@ impl Default for MasterEffectsState {
             chorus_feedback: FxInt::ChorusFeedback.spec().default,
             chorus_send_to_reverb: FxInt::ChorusSendToReverb.spec().default,
             master_volume: FxInt::MasterVolume.spec().default,
+            delay_sync: FxInt::DelaySync.spec().default,
+            delay_sync_rate: FxInt::DelaySyncRate.spec().default,
         }
     }
 }
@@ -73,6 +77,8 @@ impl MasterEffectsState {
             FxInt::ChorusFeedback => self.chorus_feedback,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb,
             FxInt::MasterVolume => self.master_volume,
+            FxInt::DelaySync => self.delay_sync,
+            FxInt::DelaySyncRate => self.delay_sync_rate,
         }
     }
 
@@ -88,13 +94,15 @@ impl MasterEffectsState {
             FxInt::ChorusFeedback => self.chorus_feedback = value,
             FxInt::ChorusSendToReverb => self.chorus_send_to_reverb = value,
             FxInt::MasterVolume => self.master_volume = value,
+            FxInt::DelaySync => self.delay_sync = value,
+            FxInt::DelaySyncRate => self.delay_sync_rate = value,
         }
     }
 
-    /// `FxInt::ALL`と同じ並び順の10値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
+    /// `FxInt::ALL`と同じ並び順の12値配列。ホスト側（standaloneの`SharedEditState::publish_fx`）は
     /// この順序をそのまま送る——呼び出し側で並びを凍結するテストを持つこと（ずれるとreverb_typeと
     /// reverb_timeが入れ替わって無音デバッグ地獄になる）。
-    pub fn values_in_fx_order(&self) -> [u8; 10] {
+    pub fn values_in_fx_order(&self) -> [u8; 12] {
         FxInt::ALL.map(|fx| self.field(fx) as u8)
     }
 

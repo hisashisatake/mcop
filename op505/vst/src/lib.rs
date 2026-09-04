@@ -11,7 +11,8 @@ use op505_midi::{
 const EFFECT_SLOT_COUNT: usize = op505_midi::EFFECT_SLOT_COUNT as usize;
 use params::{
     Op505VstParams, DEFAULT_CHORUS_FEEDBACK, DEFAULT_CHORUS_MOD_DEPTH, DEFAULT_CHORUS_MOD_RATE,
-    DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE, DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
+    DEFAULT_CHORUS_SEND_TO_REVERB, DEFAULT_CHORUS_TYPE, DEFAULT_DELAY_SYNC, DEFAULT_DELAY_SYNC_RATE,
+    DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
 };
 
 use nice_plug::prelude::*;
@@ -106,6 +107,8 @@ struct Op505Plugin {
     last_chorus_mod_depth: u8,
     last_chorus_feedback: u8,
     last_chorus_send_to_reverb: u8,
+    last_delay_sync: u8,
+    last_delay_sync_rate: u8,
 
     // AT/Poly AT Destination（NRPN(0,16)/(0,17)）・CC2/CC4の加算先（NRPN(0,34)/(0,35)）は
     // `channels[ch].at_destination`/`poly_at_destination`/`cc2_destination`/`cc4_destination`
@@ -189,6 +192,8 @@ impl Default for Op505Plugin {
             last_chorus_mod_depth: DEFAULT_CHORUS_MOD_DEPTH,
             last_chorus_feedback: DEFAULT_CHORUS_FEEDBACK,
             last_chorus_send_to_reverb: DEFAULT_CHORUS_SEND_TO_REVERB,
+            last_delay_sync: DEFAULT_DELAY_SYNC,
+            last_delay_sync_rate: DEFAULT_DELAY_SYNC_RATE,
             rhythm_kits_available: false,
             program_patch: [None; 16],
             preset_bank: Op505PresetBank::default(),
@@ -339,8 +344,8 @@ impl Op505Plugin {
     /// `cc_to_u7`で生バイト相当（0〜127）へ変換してから渡す（`cc_to_u7`は冪等なので
     /// `ChannelState`側の`cc_byte_to_u7`と完全一致する）。
     ///
-    /// エフェクト系NRPN(0,2)〜(0,8)だけは`DataEntryOutcome::Effect`で通知される
-    /// （`MasterEffects`はsound-core型のため`op505-midi`のAPIに出せず、`op505-midi`側は
+    /// エフェクト系NRPN（NRPN(0,2)〜(0,8)・(0,36)・(0,37)）だけは`DataEntryOutcome::Effect`で
+    /// 通知される（`MasterEffects`はsound-core型のため`op505-midi`のAPIに出せず、`op505-midi`側は
     /// 状態を変化させず値を返すだけ。呼び出し側＝ここで自分の`effects`へ適用する）。
     ///
     /// `voice_update`は無視してよい：`voice_update:true`を返す全ターゲット
@@ -426,6 +431,8 @@ impl Plugin for Op505Plugin {
         self.last_chorus_mod_depth = DEFAULT_CHORUS_MOD_DEPTH;
         self.last_chorus_feedback = DEFAULT_CHORUS_FEEDBACK;
         self.last_chorus_send_to_reverb = DEFAULT_CHORUS_SEND_TO_REVERB;
+        self.last_delay_sync = DEFAULT_DELAY_SYNC;
+        self.last_delay_sync_rate = DEFAULT_DELAY_SYNC_RATE;
         self.program_patch = [None; 16];
         self.meter_peak_l = 0.0;
         self.meter_peak_r = 0.0;
@@ -485,10 +492,12 @@ impl Plugin for Op505Plugin {
             }
         }
 
-        // TimeEgのテンポ同期用BPM。ホストが未再生等でtempoを返さない場合は前回値を保持する
-        // （Op505Engine::set_tempoが0以下を無視するのと同じ防御）。
+        // TimeEg・マスターディレイのテンポ同期用BPM。ホストが未再生等でtempoを返さない場合は
+        // 前回値を保持する（Op505Engine::set_tempo/MasterSection::set_tempoが0以下を無視するのと
+        // 同じ防御）。
         if let Some(tempo) = context.transport().tempo {
             self.engine.set_tempo(tempo as f32);
+            self.master.set_tempo(tempo as f32);
         }
 
         // Algorithm/Filter Type/Self-Oscillation/Waveform：DAWオートメーションで値が変化したら、
@@ -584,6 +593,16 @@ impl Plugin for Op505Plugin {
         if chorus_send_to_reverb != self.last_chorus_send_to_reverb {
             self.master.slot_mut(0).set_chorus_send_to_reverb(chorus_send_to_reverb);
             self.last_chorus_send_to_reverb = chorus_send_to_reverb;
+        }
+        let delay_sync = self.params.delay_sync.value() as u8;
+        if delay_sync != self.last_delay_sync {
+            self.master.slot_mut(0).set_reverb_delay_sync(delay_sync);
+            self.last_delay_sync = delay_sync;
+        }
+        let delay_sync_rate = self.params.delay_sync_rate.value() as u8;
+        if delay_sync_rate != self.last_delay_sync_rate {
+            self.master.slot_mut(0).set_reverb_delay_sync_rate(delay_sync_rate);
+            self.last_delay_sync_rate = delay_sync_rate;
         }
 
         // マスターボリューム：NRPN/SysEx経由の上書き経路が無い（VSTは`SysExMessage = ()`）ため、

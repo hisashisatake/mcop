@@ -9,6 +9,9 @@ pub const REVERB_TYPE_NAMES: [&str; 8] = [
 pub const CHORUS_TYPE_NAMES: [&str; 8] = [
     "Chorus1", "Chorus2", "Chorus3", "Chorus4", "Fb.Chorus", "Flanger", "Sh.Delay", "Sh.DelayFb",
 ];
+/// Delay/Panning Delayのテンポ同期有効/無効（0/1）。FX側パラメーターは全てintのため
+/// `<enum>`で0/1を選ばせる（`BoolField`はパッチ側専用の作りのため流用しない）。
+pub const DELAY_SYNC_NAMES: [&str; 2] = ["OFF", "ON"];
 /// TimeEgのテンポ同期音価名（宣言順=`sound_core::sync_note_beats`のindex0〜19、所要時間の昇順）。
 /// index10="1/4"が既定。付点はD、3連はTのサフィックス。
 /// `sync_rate`(0〜255)はこの20音価を`sound_core::sync_note_anchor()`のアンカーとして踏むので、

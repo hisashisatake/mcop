@@ -206,6 +206,7 @@ fn main() {
             move |output: &mut [f32], _| {
                 if let Some(bpm) = tempo_clock_for_audio.current_bpm() {
                     engine.set_tempo(bpm);
+                    master.set_tempo(bpm);
                 }
                 sync_editor_state(&shared_edit_state, &mut engine, &mut master, &mut state, &mut active_ids);
                 drain_midi_queue(&midi_queue, &mut engine, &mut master, &mut state);
@@ -307,6 +308,8 @@ fn sync_editor_state(
         fx.set_chorus_mod_depth(values[shared::FX_CHORUS_MOD_DEPTH]);
         fx.set_chorus_feedback(values[shared::FX_CHORUS_FEEDBACK]);
         fx.set_chorus_send_to_reverb(values[shared::FX_CHORUS_SEND_TO_REVERB]);
+        fx.set_reverb_delay_sync(values[shared::FX_DELAY_SYNC]);
+        fx.set_reverb_delay_sync_rate(values[shared::FX_DELAY_SYNC_RATE]);
         // マスターボリュームはスロットに属さない全体で1個の値のため、`slot`とは無関係に
         // 常に`MasterOutput`（`master.output_mut()`）へ適用する。
         master.output_mut().set_volume(values[shared::FX_MASTER_VOLUME]);
