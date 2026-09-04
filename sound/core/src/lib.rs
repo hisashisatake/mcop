@@ -21,6 +21,9 @@ pub use master_output::{Measurement, MasterOutput};
 pub mod master_section;
 pub use master_section::MasterSection;
 
+pub mod metering;
+pub use metering::MeterBridge;
+
 // ---------------------------------------------------------------------------
 // VCO 抽象境界 / 後段プロセッサー境界（フェーズ7の土台）
 // ---------------------------------------------------------------------------
