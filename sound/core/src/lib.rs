@@ -15,6 +15,12 @@ pub use lfo::{LfoWaveform, LfoFadeMode, PerformanceLfoShape, PerformanceLfo, Lfo
 pub mod effects;
 pub use effects::{ChorusType, MasterEffects, ReverbType};
 
+pub mod master_output;
+pub use master_output::{Measurement, MasterOutput};
+
+pub mod master_section;
+pub use master_section::MasterSection;
+
 // ---------------------------------------------------------------------------
 // VCO 抽象境界 / 後段プロセッサー境界（フェーズ7の土台）
 // ---------------------------------------------------------------------------

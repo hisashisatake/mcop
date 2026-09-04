@@ -17,7 +17,7 @@ use params::{
 use nice_plug::prelude::*;
 use nice_plug_egui::EguiState;
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
-use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, ReverbType, Vco};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -50,15 +50,12 @@ fn midi_channel_note_id(channel: u8, note: u8) -> usize {
 struct Op505Plugin {
     params: Arc<Op505VstParams>,
     engine: Op505Engine,
-    // エフェクトスロット数分の`MasterEffects`。各MIDIチャンネルの`channels[ch].effect_route_slot`
-    // （NRPN(0,1) Channel Effect Route、既定0）が指すスロットへ音声・エフェクト設定NRPN・
-    // CC91/93が適用される（詳細はspec-fm.md 8章）。DAWパラメーター9個とCC91/93の初期値は
-    // 従来どおり`effects[0]`のみを対象にする。
-    effects: [MasterEffects; EFFECT_SLOT_COUNT],
-    render_buffer: Vec<f32>,
-    // `render_routed`のスロット別出力スクラッチ（`EFFECT_SLOT_COUNT`本分を1本のVecへ連結、
-    // `render_buffer`と同じgrow-onlyパターンで使い回す）。
-    slot_render_buffer: Vec<f32>,
+    // エフェクトスロット配列 + スクラッチ確保 + 合算 + マスターボリューム/レベル計測を
+    // まとめて持つ（`sound_core::MasterSection`）。各MIDIチャンネルの
+    // `channels[ch].effect_route_slot`（NRPN(0,1) Channel Effect Route、既定0）が指す
+    // スロットへ音声・エフェクト設定NRPN・CC91/93が適用される（詳細はspec-fm.md 8章）。
+    // DAWパラメーター9個とCC91/93の初期値は従来どおりスロット0のみを対象にする。
+    master: MasterSection,
     sample_rate: f32,
 
     // TimeEg 7本（`params.egs`のpersist状態）のオーディオスレッド側キャッシュ。
@@ -159,9 +156,7 @@ impl Default for Op505Plugin {
         Self {
             params,
             engine: Op505Engine::new(DEFAULT_SR),
-            effects: std::array::from_fn(|_| MasterEffects::new(DEFAULT_SR)),
-            render_buffer: Vec::new(),
-            slot_render_buffer: Vec::new(),
+            master: MasterSection::new(DEFAULT_SR, EFFECT_SLOT_COUNT),
             sample_rate: DEFAULT_SR,
             cached_egs,
             active_ids: Vec::with_capacity(256),
@@ -329,7 +324,7 @@ impl Op505Plugin {
         match self.channels[midi_ch].apply_data_entry(cc_to_u7(value)) {
             DataEntryOutcome::StateChanged { voice_update: _ } => {}
             DataEntryOutcome::Effect(slot, target, v) => {
-                let fx = &mut self.effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+                let fx = self.master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
                 match target {
                     EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(v)),
                     EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(v)),
@@ -369,19 +364,13 @@ impl Plugin for Op505Plugin {
 
     fn initialize(
         &mut self,
-        audio_io_layout: &AudioIOLayout,
+        _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         self.engine = Op505Engine::new(self.sample_rate);
-        self.effects = std::array::from_fn(|_| MasterEffects::new(self.sample_rate));
-        let num_out = audio_io_layout
-            .main_output_channels
-            .map(|n| n.get() as usize)
-            .unwrap_or(2);
-        self.render_buffer
-            .resize(buffer_config.max_buffer_size as usize * num_out, 0.0);
+        self.master = MasterSection::new(self.sample_rate, EFFECT_SLOT_COUNT);
         self.preset_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
         // GUI側が参照する共有バンクも同じ内容で揃える。エディタを開いたままサンプルレート変更等で
         // 再initialize()されると、presets_dir**外**のファイルをOpenして音声側へ載せていたバンクは
@@ -400,7 +389,7 @@ impl Plugin for Op505Plugin {
 
     fn reset(&mut self) {
         self.engine = Op505Engine::new(self.sample_rate);
-        self.effects = std::array::from_fn(|_| MasterEffects::new(self.sample_rate));
+        self.master = MasterSection::new(self.sample_rate, EFFECT_SLOT_COUNT);
         // GM2 System Reset相当。CC121(Reset All Controllers)はbank/programをリセットしない
         // （ChannelProgramState::resetのdocコメント参照）ため、ここでのみ呼ぶ。
         let rhythm = self.rhythm_kits_available;
@@ -512,51 +501,51 @@ impl Plugin for Op505Plugin {
         // DAWパラメーターはスロット選択UIを持たないため、常に`effects[0]`（スロット1）のみを対象にする。
         let rev_send = self.params.rev_send.value() as u8;
         if rev_send != self.last_rev_send {
-            self.effects[0].set_reverb_send(rev_send);
+            self.master.slot_mut(0).set_reverb_send(rev_send);
             self.last_rev_send = rev_send;
         }
         let cho_send = self.params.cho_send.value() as u8;
         if cho_send != self.last_cho_send {
-            self.effects[0].set_chorus_send(cho_send);
+            self.master.slot_mut(0).set_chorus_send(cho_send);
             self.last_cho_send = cho_send;
         }
 
-        // マスター単位パラメーター：DAWオートメーションで値が変化した場合のみeffects[0]へ反映する。
+        // マスター単位パラメーター：DAWオートメーションで値が変化した場合のみスロット0へ反映する。
         // NRPN(0,2)〜(0,8)はeffects[slot]へ直接書き込まれ、ここでの値が前回と同じ間は上書きされない
         // （差分検知方式。NRPNの変更はnice-plug側のパラメーター表示には反映されない）。
         let reverb_type = self.params.reverb_type.value() as u8;
         if reverb_type != self.last_reverb_type {
-            self.effects[0].set_reverb_type(ReverbType::from_u8(reverb_type));
+            self.master.slot_mut(0).set_reverb_type(ReverbType::from_u8(reverb_type));
             self.last_reverb_type = reverb_type;
         }
         let reverb_time = self.params.reverb_time.value() as u8;
         if reverb_time != self.last_reverb_time {
-            self.effects[0].set_reverb_time(reverb_time);
+            self.master.slot_mut(0).set_reverb_time(reverb_time);
             self.last_reverb_time = reverb_time;
         }
         let chorus_type = self.params.chorus_type.value() as u8;
         if chorus_type != self.last_chorus_type {
-            self.effects[0].set_chorus_type(ChorusType::from_u8(chorus_type));
+            self.master.slot_mut(0).set_chorus_type(ChorusType::from_u8(chorus_type));
             self.last_chorus_type = chorus_type;
         }
         let chorus_mod_rate = self.params.chorus_mod_rate.value() as u8;
         if chorus_mod_rate != self.last_chorus_mod_rate {
-            self.effects[0].set_chorus_mod_rate(chorus_mod_rate);
+            self.master.slot_mut(0).set_chorus_mod_rate(chorus_mod_rate);
             self.last_chorus_mod_rate = chorus_mod_rate;
         }
         let chorus_mod_depth = self.params.chorus_mod_depth.value() as u8;
         if chorus_mod_depth != self.last_chorus_mod_depth {
-            self.effects[0].set_chorus_mod_depth(chorus_mod_depth);
+            self.master.slot_mut(0).set_chorus_mod_depth(chorus_mod_depth);
             self.last_chorus_mod_depth = chorus_mod_depth;
         }
         let chorus_feedback = self.params.chorus_feedback.value() as u8;
         if chorus_feedback != self.last_chorus_feedback {
-            self.effects[0].set_chorus_feedback(chorus_feedback);
+            self.master.slot_mut(0).set_chorus_feedback(chorus_feedback);
             self.last_chorus_feedback = chorus_feedback;
         }
         let chorus_send_to_reverb = self.params.chorus_send_to_reverb.value() as u8;
         if chorus_send_to_reverb != self.last_chorus_send_to_reverb {
-            self.effects[0].set_chorus_send_to_reverb(chorus_send_to_reverb);
+            self.master.slot_mut(0).set_chorus_send_to_reverb(chorus_send_to_reverb);
             self.last_chorus_send_to_reverb = chorus_send_to_reverb;
         }
 
@@ -835,9 +824,13 @@ impl Plugin for Op505Plugin {
                         // CC91/93: エフェクト送りレベル。送信チャンネルのeffect_route_slotが
                         // 指すスロットへ適用する（既定はスロット0、`op505-midi`側で
                         // EFFECT_SLOT_COUNT-1へクランプ済み）。
-                        91 => self.effects[self.channels[midi_ch].effect_route_slot as usize]
+                        91 => self
+                            .master
+                            .slot_mut(self.channels[midi_ch].effect_route_slot as usize)
                             .set_reverb_send(cc_to_u8(value)),
-                        93 => self.effects[self.channels[midi_ch].effect_route_slot as usize]
+                        93 => self
+                            .master
+                            .slot_mut(self.channels[midi_ch].effect_route_slot as usize)
                             .set_chorus_send(cc_to_u8(value)),
                         // CC102: Program Change 代替（VST3ではMidiProgramChangeが届かないため、
                         // `ym38x6-vst`と同じくGM2未定義ブロック先頭のCC102で代替する）。
@@ -904,36 +897,21 @@ impl Plugin for Op505Plugin {
         let num_samples = buffer.samples();
         let interleaved_len = num_samples * num_channels;
 
-        if interleaved_len > self.render_buffer.len() {
-            self.render_buffer.resize(interleaved_len, 0.0);
-        }
-        let slot_total_len = interleaved_len * EFFECT_SLOT_COUNT;
-        if slot_total_len > self.slot_render_buffer.len() {
-            self.slot_render_buffer.resize(slot_total_len, 0.0);
-        }
-        let buf = &mut self.render_buffer[..interleaved_len];
-        buf.fill(0.0);
-        let slot_buf = &mut self.slot_render_buffer[..slot_total_len];
-        slot_buf.fill(0.0);
-
         // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）に従ってスロット別へ
-        // レンダリングし、スロットごとにMasterEffectsを適用してから合成する。誰もNRPN(0,1)を
-        // 送らなければ全チャンネルがslot0へ集まり、単一MasterEffects時代と同じ出力になる。
+        // レンダリングし、スロットごとにMasterEffectsを適用後に合算・マスターボリューム/
+        // レベル計測を適用する（`sound_core::MasterSection`）。誰もNRPN(0,1)を送らなければ
+        // 全チャンネルがslot0へ集まり、単一MasterEffects時代と同じ出力になる。
         let channel_slot: [u8; MIDI_CHANNEL_COUNT] =
             std::array::from_fn(|i| self.channels[i].effect_route_slot);
-        self.engine.render_routed(slot_buf, interleaved_len, &channel_slot, num_channels);
-        for (slot, fx) in self.effects.iter_mut().enumerate() {
-            let s = &mut slot_buf[slot * interleaved_len..(slot + 1) * interleaved_len];
-            fx.process(s, num_channels);
-            for (b, v) in buf.iter_mut().zip(s.iter()) {
-                *b += v;
-            }
-        }
+        let engine = &mut self.engine;
+        let mixed = self.master.render(interleaved_len, num_channels, |slot_buf, stride| {
+            engine.render_routed(slot_buf, stride, &channel_slot, num_channels);
+        });
 
         let output_slices = buffer.as_slice();
         for ch in 0..num_channels {
             for s in 0..num_samples {
-                output_slices[ch][s] += buf[s * num_channels + ch];
+                output_slices[ch][s] += mixed[s * num_channels + ch];
             }
         }
 

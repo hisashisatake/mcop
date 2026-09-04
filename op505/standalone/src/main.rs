@@ -44,7 +44,7 @@ use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
     EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
-use sound_core::{cc76_to_rate_scale, AudioProcessor, ChorusType, MasterEffects, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, ReverbType, Vco};
 
 mod config;
 mod editor;
@@ -157,11 +157,10 @@ fn main() {
     let stream_config: cpal::StreamConfig = supported.into();
 
     let mut engine = Op505Engine::new(sample_rate);
-    // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングする。
-    let mut effects: [MasterEffects; EFFECT_SLOT_COUNT] = std::array::from_fn(|_| MasterEffects::new(sample_rate));
-    // `render_routed`のスロット別出力スクラッチ。cpalコールバックの`output`長に合わせて
-    // grow-onlyでリサイズし、以降は使い回す（オーディオスレッドでの反復ヒープ確保を避ける）。
-    let mut slot_buf: Vec<f32> = Vec::new();
+    // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングし、
+    // 合算後にマスターボリューム/レベル計測を適用する（`sound_core::MasterSection`、
+    // スロット配列・スクラッチ確保・合算ループを一本化した共通実装）。
+    let mut master = MasterSection::new(sample_rate, EFFECT_SLOT_COUNT);
     // トレイ起動音色エディタ（Step 1以降）が発音中ボイスへ即時反映する際の、発音中ボイスID
     // 一覧のスクラッチバッファ（`slot_buf`と同じ理由でオーディオスレッドの反復ヒープ確保を
     // 避ける）。エディタが無い/未操作の間は`apply_live_active`自体が呼ばれないため使われない。
@@ -187,26 +186,18 @@ fn main() {
         .build_output_stream::<f32, _, _>(
             &stream_config,
             move |output: &mut [f32], _| {
-                sync_editor_state(&shared_edit_state, &mut engine, &mut effects, &mut state, &mut active_ids);
-                drain_midi_queue(&midi_queue, &mut engine, &mut effects, &mut state);
+                sync_editor_state(&shared_edit_state, &mut engine, &mut master, &mut state, &mut active_ids);
+                drain_midi_queue(&midi_queue, &mut engine, &mut master, &mut state);
                 output.fill(0.0);
 
                 let interleaved_len = output.len();
-                let slot_total_len = interleaved_len * EFFECT_SLOT_COUNT;
-                if slot_total_len > slot_buf.len() {
-                    slot_buf.resize(slot_total_len, 0.0);
-                }
-                let slot_out = &mut slot_buf[..slot_total_len];
-                slot_out.fill(0.0);
-
                 let channel_slot: [u8; 16] = std::array::from_fn(|i| state.channels[i].effect_route_slot);
-                engine.render_routed(slot_out, interleaved_len, &channel_slot, num_channels);
-                for (slot, fx) in effects.iter_mut().enumerate() {
-                    let s = &mut slot_out[slot * interleaved_len..(slot + 1) * interleaved_len];
-                    fx.process(s, num_channels);
-                    for (o, v) in output.iter_mut().zip(s.iter()) {
-                        *o += v;
-                    }
+                let engine_ref = &mut engine;
+                let mixed = master.render(interleaved_len, num_channels, |slot_buf, stride| {
+                    engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);
+                });
+                for (o, v) in output.iter_mut().zip(mixed.iter()) {
+                    *o += v;
                 }
             },
             |err| log::log(&format!("audio error: {err}")),
@@ -250,7 +241,7 @@ fn load_presets() -> (Op505PresetBank, Op505Patch) {
 fn sync_editor_state(
     shared: &SharedEditState,
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     active_ids: &mut Vec<usize>,
 ) {
@@ -268,7 +259,7 @@ fn sync_editor_state(
     }
 
     if let Some((slot, values)) = shared.take_fx_if_dirty() {
-        let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+        let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
         fx.set_reverb_send(values[shared::FX_REVERB_SEND]);
         fx.set_reverb_type(ReverbType::from_u8(values[shared::FX_REVERB_TYPE]));
         fx.set_reverb_time(values[shared::FX_REVERB_TIME]);
@@ -285,12 +276,12 @@ fn sync_editor_state(
 fn drain_midi_queue(
     queue: &MidiQueue,
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
 ) {
     let mut pending = queue.lock().unwrap();
     while let Some(bytes) = pending.pop_front() {
-        handle_midi_message(engine, effects, state, &bytes);
+        handle_midi_message(engine, master, state, &bytes);
     }
 }
 
@@ -299,7 +290,7 @@ fn drain_midi_queue(
 /// 固定長スライスパターンではなくステータス別に必要な長さを都度チェックする。
 fn handle_midi_message(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     bytes: &[u8],
 ) {
@@ -326,7 +317,7 @@ fn handle_midi_message(
         }
         0xB0 => {
             let &[_, cc, val] = bytes else { return };
-            handle_control_change(engine, effects, state, chi, cc, val);
+            handle_control_change(engine, master, state, chi, cc, val);
         }
         0xC0 => {
             let &[_, program] = bytes else { return };
@@ -500,7 +491,7 @@ fn apply_live_active(engine: &mut Op505Engine, state: &mut MidiState, chi: usize
 /// Program Change選択済みの単一プリセット集合を持つ）。
 fn handle_control_change(
     engine: &mut Op505Engine,
-    effects: &mut [MasterEffects; EFFECT_SLOT_COUNT],
+    master: &mut MasterSection,
     state: &mut MidiState,
     chi: usize,
     cc: u8,
@@ -600,7 +591,7 @@ fn handle_control_change(
                 }
             }
             DataEntryOutcome::Effect(slot, target, value) => {
-                let fx = &mut effects[(slot as usize).min(EFFECT_SLOT_COUNT - 1)];
+                let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
                 match target {
                     EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
                     EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
@@ -649,8 +640,8 @@ fn handle_control_change(
             apply_live(engine, state, chi);
         }
         // CC91/93: エフェクト送りレベル。送信チャンネルのeffect_route_slotが指すスロットへ適用。
-        91 => effects[state.channels[chi].effect_route_slot as usize].set_reverb_send(cc_to_u8(val)),
-        93 => effects[state.channels[chi].effect_route_slot as usize].set_chorus_send(cc_to_u8(val)),
+        91 => master.slot_mut(state.channels[chi].effect_route_slot as usize).set_reverb_send(cc_to_u8(val)),
+        93 => master.slot_mut(state.channels[chi].effect_route_slot as usize).set_chorus_send(cc_to_u8(val)),
         // CC103〜106: Operator Key On/Off（≧64でキーオン/<64でキーオフ、全OP独立）。
         103..=106 => {
             let op_index = (cc - 103) as usize;
