@@ -71,6 +71,23 @@ impl MasterEffects {
         self.reverb.set_time(value);
     }
 
+    /// NRPN(0,36)：Delay/Panning DelayタイプのReverb Sync（0=OFF/1以上=ON）。
+    /// Room1〜Plateタイプには効果がない。
+    pub fn set_reverb_delay_sync(&mut self, value: u8) {
+        self.reverb.set_delay_sync(value);
+    }
+
+    /// NRPN(0,37)：Delay/Panning Delayのテンポ同期先レート（TimeEgの`sync_rate`と同じ
+    /// 0〜255連続値、20音価にアンカーされる）。
+    pub fn set_reverb_delay_sync_rate(&mut self, value: u8) {
+        self.reverb.set_delay_sync_rate(value);
+    }
+
+    /// テンポ（BPM）を設定する。Delay/Panning Delayが同期有効のときのみ使う。
+    pub fn set_tempo(&mut self, bpm: f32) {
+        self.reverb.set_tempo(bpm);
+    }
+
     /// NRPN(0,3)：Chorus Type。
     pub fn set_chorus_type(&mut self, chorus_type: ChorusType) {
         self.chorus.set_type(chorus_type);

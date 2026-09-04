@@ -482,6 +482,12 @@ impl ChannelState {
                 self.cc4_destination = ExpressionDestination::from_u8(cc_byte_to_u7(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
             }
+            ControlTarget::DelaySync => {
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::DelaySync, cc_byte_to_u7(raw_value))
+            }
+            ControlTarget::DelaySyncRate => {
+                DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::DelaySyncRate, cc_byte_to_u8(raw_value))
+            }
             ControlTarget::Unassigned => DataEntryOutcome::StateChanged { voice_update: false },
         }
     }

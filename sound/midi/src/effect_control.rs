@@ -20,6 +20,11 @@ pub enum EffectControlTarget {
     ChorusModDepth,
     ChorusFeedback,
     ChorusSendToReverb,
+    /// NRPN(0,36)：Delay/Panning Delayのテンポ同期有効/無効（0=OFF/1以上=ON）。
+    DelaySync,
+    /// NRPN(0,37)：Delay/Panning Delayのテンポ同期先レート（0〜255、TimeEgの
+    /// `sync_rate`と同じ音価アンカーを踏む）。
+    DelaySyncRate,
 }
 
 /// `target`が指す`MasterEffects`のフィールドへ`value`を書き込む。
@@ -32,6 +37,8 @@ pub fn apply_effect_control(fx: &mut MasterEffects, target: EffectControlTarget,
         EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
         EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
         EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
+        EffectControlTarget::DelaySync => fx.set_reverb_delay_sync(value),
+        EffectControlTarget::DelaySyncRate => fx.set_reverb_delay_sync_rate(value),
     }
 }
 
@@ -69,6 +76,8 @@ mod tests {
             EffectControlTarget::ChorusModDepth,
             EffectControlTarget::ChorusFeedback,
             EffectControlTarget::ChorusSendToReverb,
+            EffectControlTarget::DelaySync,
+            EffectControlTarget::DelaySyncRate,
         ] {
             apply_effect_control(&mut fx, target, 100);
         }

@@ -99,6 +99,12 @@ pub enum ControlTarget {
     Cc2Destination,
     /// NRPN(0,35): CC4(フット)Destination
     Cc4Destination,
+    /// NRPN(0,36): Delay/Panning Delayのテンポ同期有効/無効（0=OFF/1以上=ON）。
+    /// Room1〜Plateタイプには効果がない（詳細はspec-sound.md「マスターエフェクト」節）。
+    DelaySync,
+    /// NRPN(0,37): Delay/Panning Delayの同期先レート（0〜255、TimeEgの`sync_rate`と同じ
+    /// 20音価アンカー＋幾何補間）。
+    DelaySyncRate,
 }
 
 /// RPN/NRPN選択状態から制御対象を解決する。
@@ -140,6 +146,8 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 33) => ControlTarget::GainFgCurve,
         RpnSelection::Nrpn(0, 34) => ControlTarget::Cc2Destination,
         RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
+        RpnSelection::Nrpn(0, 36) => ControlTarget::DelaySync,
+        RpnSelection::Nrpn(0, 37) => ControlTarget::DelaySyncRate,
         RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
     }
 }
@@ -183,7 +191,9 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::GainFgLoop
         | ControlTarget::GainFgCurve
         | ControlTarget::Cc2Destination
-        | ControlTarget::Cc4Destination => false,
+        | ControlTarget::Cc4Destination
+        | ControlTarget::DelaySync
+        | ControlTarget::DelaySyncRate => false,
     }
 }
 
@@ -270,6 +280,15 @@ mod tests {
     fn unknown_nrpn_group_is_unassigned() {
         assert_eq!(control_target(RpnSelection::Nrpn(1, 0)), ControlTarget::Unassigned);
         assert_eq!(control_target(RpnSelection::None), ControlTarget::Unassigned);
+    }
+
+    /// NRPN(0,36)/(0,37)はDelay/Panning Delayのテンポ同期2項目（2026-09-04実装）。
+    #[test]
+    fn delay_sync_addresses() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 36)), ControlTarget::DelaySync);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 37)), ControlTarget::DelaySyncRate);
+        assert!(!needs_voice_update(ControlTarget::DelaySync));
+        assert!(!needs_voice_update(ControlTarget::DelaySyncRate));
     }
 
     /// RPN(0,1)/(0,2)はGM2必須セットのChannel Fine/Coarse Tuning。

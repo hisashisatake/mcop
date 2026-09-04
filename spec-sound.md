@@ -582,9 +582,11 @@ GM2準拠のセンドエフェクト2系統。各ボイス（FM合成 → SVFフ
 | Chorus Mod Depth | NRPN | 0〜255 | マスター |
 | Chorus Feedback | NRPN | 0〜255 | マスター |
 | Chorus Send To Reverb | NRPN | 0〜255 | マスター。GM2準拠、ChorusバスからReverbバスへの送り量 |
+| Delay Sync | NRPN | 0〜1 | マスター。Reverb Type=Delay/Panning Delayのテンポ同期有効/無効（2026-09-04新設、下記「ディレイのテンポ同期」節参照） |
+| Delay Sync Rate | NRPN | 0〜255 | マスター。同期先レート（TimeEgの`sync_rate`と同じ20音価アンカー＋幾何補間）。同上 |
 
-※「Reverb Time」「Chorus Mod Rate/Depth/Feedback」「Chorus Send To Reverb」は、
-NRPNに加えてnice-plugのマスターパラメーターとしても公開する
+※「Reverb Time」「Chorus Mod Rate/Depth/Feedback」「Chorus Send To Reverb」「Delay Sync」
+「Delay Sync Rate」は、NRPNに加えてnice-plugのマスターパラメーターとしても公開する
 （MIDI実装方針のDAWオートメーション参照）。
 「Reverb Type」「Chorus Type」はNRPN専用（DAWオートメーション対象外）。
 
@@ -624,9 +626,29 @@ NRPNに加えてnice-plugのマスターパラメーターとしても公開す�
 ```
 
 **実装方式：**
-- Reverb：FDN（Feedback Delay Network、8ライン・Householder行列によるライン混合＋プリディレイ＋入力拡散オールパス）方式のアルゴリズミックリバーブ（Room1〜Plate）。Delay/Panning Delayタイプはフィードバックディレイラインで実現
+- Reverb：FDN（Feedback Delay Network、8ライン・Householder行列によるライン混合＋プリディレイ＋入力拡散オールパス）方式のアルゴリズミックリバーブ（Room1〜Plate）。Delay/Panning Delayタイプはフィードバックディレイラインで実現（テンポ同期対応、下記参照）
 - Chorus：LFO変調ディレイライン（Chorus1〜4、Flanger、Feedback Chorus）。Short Delay系タイプは変調なしの短ディレイ
 - `sound-core`に依存ゼロのDSPモジュールとして実装し、各エンジンの`render()`出力に対してapp/plugin側のレンダリング後段で適用する
+
+**ディレイのテンポ同期（2026-09-04新設）：**
+
+Delay/Panning DelayタイプはBPM×指定音価でディレイ長を同期できる。BPM供給基盤
+（MIDI Clock受信、`op505-standalone`の`TempoClock`／op505-vstはDAWホストのtransport／
+smf2op505はSMFのテンポメタ）が既に配線済みの`Vco::set_tempo(bpm)`と対になる
+`MasterSection::set_tempo(bpm)`経由でリバーブへBPMが届く。
+
+- **Delay Sync**（NRPN(0,36)）が有効なとき、ディレイ長は`Delay Sync Rate`（NRPN(0,37)、
+  TimeEgの`sync_rate`と同型の0〜255連続値・20音価アンカー）×BPMから決まる。
+  「Reverb Time」ノブは（同期有効時は）ディレイ長ではなく**フィードバック量のみ**を制御する
+  （無効時は従来通りディレイ長200〜800ms＋フィードバック0.3〜0.85の両方を制御）。
+- 同期先の音価が長すぎてディレイ長が4秒を超える場合（遅いテンポの長い音価）は、
+  4秒に収まるまで半分に折り返す（音価のグリッド上に留めたまま長さだけ縮める）。
+- **BPM変化への追従はロック＋クロスフェード方式**。ディレイバッファは4秒分を固定確保し、
+  書き込み位置を動かさず読み出し位置（ディレイ長）だけを動かす。MIDI Clock由来のBPMは
+  常時わずかに揺れるため、ロック中の値から±1.5%以上ズレた状態が0.25秒続いたときだけ
+  再ロックし、30msかけて旧タップ→新タップへ線形クロスフェードする（作り直し＝瞬時切り替え
+  だと鳴っているエコーが消えてしまうため）。`time`ノブ・SYNC ON/OFF・sync_rateの変更は
+  ユーザー操作のため確認時間を待たず即座にフェードを開始する。
 
 **OPQコンバーターとの関係：**
 エフェクトはOPQ由来パラメーターではないため、OPQ変換対象外。38x6独自フォーマット（.38x6）にのみ保存される。
@@ -1258,17 +1280,22 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Gain FG Curve | 0, 33 | 0=線形 / 1=サイン風 |
 | CC2 Destination | 0, 34 | 0〜5（destination enum、下記参照。既定5=TLキャリア一括） |
 | CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
+| Delay Sync | 0, 36 | 0=OFF / 非0=ON。Reverb Type=Delay/Panning Delayのテンポ同期（[マスターエフェクト](#マスターエフェクトreverb--chorus)節「ディレイのテンポ同期」参照）。2026-09-04新設 |
+| Delay Sync Rate | 0, 37 | 0〜255（TimeEgの`sync_rate`と同型）。同上、2026-09-04新設 |
 
 **エフェクトスロット（2026-08-28新設）：**
 
 `MasterEffects`（Reverb/Chorus）はMIDIチャンネル数と同数（16個）のスロットを持つ。各MIDIチャンネルは
-NRPN(0,1) Channel Effect Routeで自分の音声・エフェクト設定NRPN(0,2)〜(0,8)・CC91/93の適用先スロット
-（既定0）を選択する。「エフェクト関連の設定はすべて送信したMIDIチャンネルのルーティング先スロットへ
-適用する」という1レジスタ統合方式で、NRPN(0,2)〜(0,8)・CC91/93はいずれも別途スロット選択レジスタを
-持たず、送信チャンネルの`effect_route_slot`が指すスロットへそのまま適用される。誰もNRPN(0,1)を送らな
-ければ全チャンネルがスロット0（＝従来の唯一の`MasterEffects`相当）へ集まるため、既存のSMF/プリセット/
-DAWオートメーションの出力はビット不変。op505-vstのDAWパラメーター9個（Reverb/Chorus関連）はスロット
-選択UIを持たないため常にスロット0固定。詳細はspec-fm.md 8章参照。
+NRPN(0,1) Channel Effect Routeで自分の音声・エフェクト設定NRPN(0,2)〜(0,8)・(0,36)・(0,37)・CC91/93の
+適用先スロット（既定0）を選択する。「エフェクト関連の設定はすべて送信したMIDIチャンネルのルーティング
+先スロットへ適用する」という1レジスタ統合方式で、これらのNRPN・CC91/93はいずれも別途スロット選択
+レジスタを持たず、送信チャンネルの`effect_route_slot`が指すスロットへそのまま適用される。誰もNRPN(0,1)
+を送らなければ全チャンネルがスロット0（＝従来の唯一の`MasterEffects`相当）へ集まるため、既存のSMF/
+プリセット/DAWオートメーションの出力はビット不変。op505-vstのDAWパラメーター11個（Reverb/Chorus/Delay
+Sync関連）はスロット選択UIを持たないため常にスロット0固定。詳細はspec-fm.md 8章参照。
+
+※テンポ（BPM）は`effect_route_slot`とは無関係に、`MasterSection::set_tempo()`で全スロットへ
+一律配られる（詳細は「マスターエフェクト」節「ディレイのテンポ同期」参照）。
 
 **op505-vstのNRPNテーブル仕様（2026-08、フェーズ2実装時、`op505/vst/src/lib.rs`）：**
 

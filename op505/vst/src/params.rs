@@ -15,6 +15,8 @@ pub(crate) const DEFAULT_CHORUS_FEEDBACK: u8 = FxInt::ChorusFeedback.spec().defa
 pub(crate) const DEFAULT_CHORUS_SEND_TO_REVERB: u8 = FxInt::ChorusSendToReverb.spec().default as u8;
 pub(crate) const DEFAULT_REVERB_TYPE: u8 = FxInt::ReverbType.spec().default as u8;
 pub(crate) const DEFAULT_CHORUS_TYPE: u8 = FxInt::ChorusType.spec().default as u8;
+pub(crate) const DEFAULT_DELAY_SYNC: u8 = FxInt::DelaySync.spec().default as u8;
+pub(crate) const DEFAULT_DELAY_SYNC_RATE: u8 = FxInt::DelaySyncRate.spec().default as u8;
 
 /// 中央128のバイポーラパラメーター（0〜255のオフセットバイナリ）を、DAWのオートメーション表示でも
 /// -128〜+127の符号付きで見せる。エディタ側は`ui_core::BipolarHandle`が同じ写像を行うので、
@@ -93,10 +95,10 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
 /// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
-/// **DAWパラメーター数（67個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
-/// 59+8）はこの束が`#[persist]`である限り不変**——段数拡張はここに
-/// 収まる値の中身が増えるだけで、DAWから見えるパラメーター一覧には影響しない
-/// （従来コメントの「78個」は誤りだった。実数は`param_ids_are_frozen`テストで凍結済み）。
+/// **DAWパラメーター数（70個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
+/// 62+8、2026-09-04のDelay Sync/Delay Sync Rate追加で60+8=68→62+8=70）はこの束が
+/// `#[persist]`である限り不変**——段数拡張はここに収まる値の中身が増えるだけで、
+/// DAWから見えるパラメーター一覧には影響しない（実数は`param_ids_are_frozen`テストで凍結済み）。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Op505EgBank {
     pub operators: [TimeEgParams; 4],
@@ -244,6 +246,10 @@ pub(crate) struct Op505VstParams {
     pub chorus_send_to_reverb: IntParam,
     #[id = "master_volume"]
     pub master_volume: IntParam,
+    #[id = "dly_sync"]
+    pub delay_sync: IntParam,
+    #[id = "dly_rate"]
+    pub delay_sync_rate: IntParam,
 
     // ---- TimeEg 7本（persist状態、DAWパラメーターではない。plan参照） ----
     #[persist = "op505_egs"]
@@ -278,6 +284,8 @@ impl Default for Op505VstParams {
             chorus_feedback: int_param(IntField::Fx(FxInt::ChorusFeedback)),
             chorus_send_to_reverb: int_param(IntField::Fx(FxInt::ChorusSendToReverb)),
             master_volume: int_param(IntField::Fx(FxInt::MasterVolume)),
+            delay_sync: int_param(IntField::Fx(FxInt::DelaySync)),
+            delay_sync_rate: int_param(IntField::Fx(FxInt::DelaySyncRate)),
             egs: Arc::new(RwLock::new(Op505EgBank::default())),
         }
     }
@@ -435,6 +443,8 @@ pub(crate) fn int_param_ref(params: &Op505VstParams, field: IntField) -> &IntPar
             FxInt::ChorusFeedback => &params.chorus_feedback,
             FxInt::ChorusSendToReverb => &params.chorus_send_to_reverb,
             FxInt::MasterVolume => &params.master_volume,
+            FxInt::DelaySync => &params.delay_sync,
+            FxInt::DelaySyncRate => &params.delay_sync_rate,
         },
     }
 }
@@ -518,6 +528,8 @@ mod tests {
             "cho_fb",
             "cho_to_rev",
             "master_volume",
+            "dly_sync",
+            "dly_rate",
         ]
         .into_iter()
         .map(String::from)

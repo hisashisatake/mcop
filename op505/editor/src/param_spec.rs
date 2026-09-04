@@ -214,14 +214,17 @@ pub enum FxInt {
     ChorusFeedback,
     ChorusSendToReverb,
     MasterVolume,
+    DelaySync,
+    DelaySyncRate,
 }
 
 impl FxInt {
     /// `shared::FX_*`定数（standalone側）と同じ順序で保つこと——ずれるとreverb_typeと
     /// reverb_timeが入れ替わって無音デバッグ地獄になる（Step 7で相互検証テストを追加する）。
-    /// `MasterVolume`は既存9個の後に追加した欄のため、既存の並びを保つよう**末尾に追加**する
-    /// （途中に挿入すると`shared::FX_*`の数値との対応が全てずれる）。
-    pub const ALL: [FxInt; 10] = [
+    /// `MasterVolume`・`DelaySync`・`DelaySyncRate`は既存9個の後に追加した欄のため、
+    /// 既存の並びを保つよう**末尾に追加**する（途中に挿入すると`shared::FX_*`の数値との
+    /// 対応が全てずれる）。
+    pub const ALL: [FxInt; 12] = [
         FxInt::RevSend,
         FxInt::ReverbType,
         FxInt::ReverbTime,
@@ -232,6 +235,8 @@ impl FxInt {
         FxInt::ChorusFeedback,
         FxInt::ChorusSendToReverb,
         FxInt::MasterVolume,
+        FxInt::DelaySync,
+        FxInt::DelaySyncRate,
     ];
 
     pub const fn spec(self) -> IntSpec {
@@ -291,6 +296,20 @@ impl FxInt {
                 default: 255,
                 short_name: "Master Volume",
                 daw_name: "Master Volume",
+                daw_bipolar: false,
+            },
+            // Delay/Panning Delayのテンポ同期（NRPN(0,36)/(0,37)、詳細はspec-sound.md
+            // 「マスターエフェクト」節）。Room1〜Plateタイプには効果がない。
+            FxInt::DelaySync => {
+                IntSpec { min: 0, max: 1, default: 0, short_name: "Delay Sync", daw_name: "Delay Sync", daw_bipolar: false }
+            }
+            FxInt::DelaySyncRate => IntSpec {
+                min: 0,
+                max: 255,
+                // TimeEgのsync_rate既定と同じ1/4アンカー。
+                default: sound_core::sync_note_anchor(10) as i32,
+                short_name: "Delay Sync Rate",
+                daw_name: "Delay Sync Rate",
                 daw_bipolar: false,
             },
         }
@@ -428,7 +447,7 @@ mod tests {
 
     #[test]
     fn enum_counts_match_plan() {
-        assert_eq!(IntField::all().len(), 60, "IntField（Patch 50 + Fx 10）");
+        assert_eq!(IntField::all().len(), 62, "IntField（Patch 50 + Fx 12）");
         assert_eq!(BoolField::ALL.len(), 8, "BoolField（単一4 + Ame×4）");
         assert_eq!(EgSlot::ALL.len(), 7, "EgSlot（Op×4 + Fg×3）");
     }

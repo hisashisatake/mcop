@@ -61,7 +61,13 @@
       <row justify="start" gap="spacing">
         <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
         <knob label="REV" handle="rev_send"/>
+        <!-- R.TIMEはRoom1〜Plateでは残響時間、Delay/Panning DelayではD.SYNC=OFF時のみ
+             ディレイ長+フィードバックの両方、D.SYNC=ON時はフィードバックのみを制御する
+             （ディレイ長はD.SYNC/D.RATE×テンポが決める。詳細はspec-sound.md参照）。
+             D.SYNC/D.RATEはDelay/Panning Delay以外のタイプでは無視される。 -->
         <knob label="R.TIME" handle="reverb_time"/>
+        <enum label="D.SYNC" handle="delay_sync" names="DELAY_SYNC_NAMES" salt="16"/>
+        <sync-rate label="D.RATE" handle="delay_sync_rate" salt="17"/>
       </row>
       <row justify="start" gap="spacing">
         <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>

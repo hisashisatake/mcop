@@ -35,7 +35,11 @@ pub const FX_CHORUS_SEND_TO_REVERB: usize = 8;
 /// マスターボリューム（`sound_core::MasterOutput::set_volume`と対応）。既存9個の後に
 /// 追加した欄のため末尾（9番目）に置く（`FxInt::ALL`と同じ並びを保つ）。
 pub const FX_MASTER_VOLUME: usize = 9;
-pub const FX_VALUE_COUNT: usize = 10;
+/// Delay/Panning Delayのテンポ同期（`sound_core::MasterEffects::set_reverb_delay_sync`/
+/// `set_reverb_delay_sync_rate`と対応）。既存10個の後に追加した欄のため末尾に置く。
+pub const FX_DELAY_SYNC: usize = 10;
+pub const FX_DELAY_SYNC_RATE: usize = 11;
+pub const FX_VALUE_COUNT: usize = 12;
 
 /// トレイ起動音色エディタとオーディオスレッドの間で共有する状態。
 ///
@@ -208,6 +212,8 @@ mod tests {
             chorus_feedback: 8,
             chorus_send_to_reverb: 9,
             master_volume: 10,
+            delay_sync: 11,
+            delay_sync_rate: 12,
         };
         let values = state.values_in_fx_order();
         assert_eq!(values.len(), FX_VALUE_COUNT);
@@ -221,6 +227,8 @@ mod tests {
         assert_eq!(values[FX_CHORUS_FEEDBACK], 8);
         assert_eq!(values[FX_CHORUS_SEND_TO_REVERB], 9);
         assert_eq!(values[FX_MASTER_VOLUME], 10);
+        assert_eq!(values[FX_DELAY_SYNC], 11);
+        assert_eq!(values[FX_DELAY_SYNC_RATE], 12);
     }
 
     #[test]
