@@ -4,9 +4,12 @@
 //! ポート名、または「ポートがちょうど1個だけ」の場合の自動選択のみを行う
 //! （タスクトレイ化後はstdinが使えなくなるため）。
 
+use std::sync::Arc;
+
 use midir::{MidiInput, MidiInputConnection};
 
 use crate::midi_source::{MidiSink, MidiSource};
+use crate::tempo_clock::TempoClock;
 
 pub struct MidirSource {
     port_name: String,
@@ -44,7 +47,10 @@ pub fn list_input_ports() -> Vec<String> {
 /// ポートが1個も無い場合、または複数あって自動選択できない場合は`None`を返す
 /// （[`crate::sources::pipe_src`]経由の入力だけで使う構成、複数ポートで設定未定の構成は
 /// どちらも正当にあり得るため、警告に留めpanicしない）。
-pub fn connect(sink: MidiSink, preferred_name: Option<&str>) -> Option<MidirSource> {
+///
+/// `tempo`はMIDI Clock（0xF8/0xFA/0xFB/0xFC）を検出するために渡す（[`crate::tempo_clock`]の
+/// モジュールdoc参照）。該当メッセージは`sink`へは積まず`tempo`へ通知するだけで処理を終える。
+pub fn connect(sink: MidiSink, preferred_name: Option<&str>, tempo: Arc<TempoClock>) -> Option<MidirSource> {
     let input = MidiInput::new("op505-standalone").ok()?;
     let ports = input.ports();
     if ports.is_empty() {
@@ -80,7 +86,14 @@ pub fn connect(sink: MidiSink, preferred_name: Option<&str>) -> Option<MidirSour
         .connect(
             &port,
             "op505-standalone-input",
-            move |_stamp, message, _| sink.push(message.to_vec()),
+            move |_stamp, message, _| {
+                match message.first() {
+                    Some(0xF8) => return tempo.on_clock_pulse(),
+                    Some(0xFA | 0xFB | 0xFC) => return tempo.on_transport_reset(),
+                    _ => {}
+                }
+                sink.push(message.to_vec());
+            },
             (),
         )
         .ok()?;

@@ -32,10 +32,11 @@
 use std::fs::File;
 use std::io::Read;
 use std::os::windows::io::FromRawHandle;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::editor::EditorHandle;
 use crate::midi_source::{MidiSink, MidiSource};
+use crate::tempo_clock::TempoClock;
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
 const PIPE_SDDL: &str = "S:(ML;;NW;;;LW)";
@@ -156,12 +157,14 @@ impl MidiSource for PipeSource {
 ///
 /// `editor`はOpenEditorフレーム（kind=3）受信時に`EditorHandle::show()`を呼ぶために持つ
 /// （`main`側で音色エディタスレッド起動後に渡される、モジュールdoc参照）。
-pub fn spawn(sink: MidiSink, editor: EditorHandle) -> PipeSource {
-    std::thread::spawn(move || accept_loop(sink, editor));
+/// `tempo`はMIDI Clock（0xF8/0xFA/0xFB/0xFC）を検出するために持つ（[`crate::tempo_clock`]の
+/// モジュールdoc参照）。gesture-appのタップテンポ等、このパイプ経由で届くクロックにも対応する。
+pub fn spawn(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) -> PipeSource {
+    std::thread::spawn(move || accept_loop(sink, editor, tempo));
     PipeSource
 }
 
-fn accept_loop(sink: MidiSink, editor: EditorHandle) {
+fn accept_loop(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     loop {
         let Some(handle) = create_pipe_instance() else {
             crate::log::log(&format!(
@@ -186,7 +189,8 @@ fn accept_loop(sink: MidiSink, editor: EditorHandle) {
 
         let sink_for_client = sink.clone();
         let editor_for_client = editor.clone();
-        std::thread::spawn(move || serve_client(file, sink_for_client, editor_for_client));
+        let tempo_for_client = tempo.clone();
+        std::thread::spawn(move || serve_client(file, sink_for_client, editor_for_client, tempo_for_client));
         // ループ先頭へ戻り、次のクライアント用に新しいインスタンスを作る
         // （複数のWinMMホストアプリが同時に接続してくる可能性があるため）。
     }
@@ -223,7 +227,7 @@ fn pipe_name_wide() -> Vec<u16> {
     OsStr::new(PIPE_PATH).encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle) {
+fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     let mut buf = [0u8; 4096];
     loop {
         match file.read(&mut buf) {
@@ -235,7 +239,11 @@ fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle) {
                     continue;
                 }
                 for message in decode_frame(raw) {
-                    sink.push(message);
+                    match message.first() {
+                        Some(0xF8) => tempo.on_clock_pulse(),
+                        Some(0xFA | 0xFB | 0xFC) => tempo.on_transport_reset(),
+                        _ => sink.push(message),
+                    }
                 }
             }
             Err(_) => break,
