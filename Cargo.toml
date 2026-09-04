@@ -2,6 +2,7 @@
 members = [
     "sound/core",
     "sound/fm",
+    "sound/midi",
     "ui/core",
     "ui/layout",
     "ui/codegen",

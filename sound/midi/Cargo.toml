@@ -1,0 +1,9 @@
+[package]
+name = "sound-midi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# GM2 Universal SysExパーサとMasterEffects適用関数（EffectControlTarget）のみを持つ、
+# op505に依存しない中立クレート。依存はsound-coreのみに絞る。
+sound-core = { path = "../core" }
