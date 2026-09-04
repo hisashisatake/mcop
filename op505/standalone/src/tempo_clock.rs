@@ -28,7 +28,12 @@ const MAX_BPM: f32 = 400.0;
 
 /// ログに出す前回のBPM値からこれ以上変化していなければログを出さない
 /// （毎パルス（48回/秒@120BPM）ログを出すと大量のI/Oになるため）。
-const LOG_CHANGE_THRESHOLD_BPM: f32 = 1.0;
+/// gesture-appのMIDI Clock送信（`thread::sleep`ベース、Windowsのタイマー分解能≒15.6msに
+/// 対しパルス間隔≒20.8ms@120BPMと近いため送信間隔が毎回ばらつく）を送信元とする場合、
+/// 移動平均後のBPM推定値自体が1BPMを超えて毎パルス揺れ動くため、1.0だと実質素通しになる。
+/// 5.0はDominoのような安定したマスタークロック相手ならテンポ変更を素早く検出しつつ、
+/// gesture-appタップテンポ相手のジッターはある程度吸収する折衷値。
+const LOG_CHANGE_THRESHOLD_BPM: f32 = 5.0;
 
 struct ClockState {
     last_pulse: Option<Instant>,
