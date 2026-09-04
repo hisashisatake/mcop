@@ -335,6 +335,14 @@ fn handle_midi_message(
             state.channels[chi].bend_cents = cents;
             engine.set_pitch_bend_group(chi, cents);
         }
+        // 0xF0: SysEx。GM2 Universal SysEx Master Volume（Domino等から送出される）のみ解釈する。
+        0xF0 => {
+            if let Some(sound_midi::UniversalSysEx::MasterVolume { value14, .. }) =
+                sound_midi::parse_universal_sysex(bytes)
+            {
+                master.output_mut().set_volume(sound_midi::value14_to_u8(value14));
+            }
+        }
         _ => {}
     }
 }
@@ -737,5 +745,57 @@ mod base_patch_for_tests {
 
         let resolved = state.base_patch_for(4, 60).expect("編集対象外chは従来のPC解決のまま");
         assert_eq!(resolved.channel.pitch_fg.depth, 10, "編集対象外chはedit_patchの影響を受けないはず");
+    }
+}
+
+#[cfg(test)]
+mod sysex_tests {
+    use super::*;
+
+    fn fresh_state() -> (Op505Engine, MasterSection, MidiState) {
+        let engine = Op505Engine::new(8000.0);
+        let master = MasterSection::new(8000.0, EFFECT_SLOT_COUNT);
+        let state = MidiState::new(Op505PresetBank::default(), Op505Patch::default());
+        (engine, master, state)
+    }
+
+    /// GM2 Universal SysEx Master Volume（0）を受信するとマスター出力が無音になる
+    /// （Domino→pipe_src→handle_midi_messageの経路をエンドツーエンドで確認する）。
+    #[test]
+    fn master_volume_sysex_zero_silences_output() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let sysex = vec![0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x00, 0x00, 0xF7];
+        handle_midi_message(&mut engine, &mut master, &mut state, &sysex);
+
+        let mixed = master
+            .render(2, 2, |slot_buf, stride| {
+                slot_buf[..stride].fill(1.0);
+            })
+            .to_vec();
+        assert_eq!(mixed, vec![0.0, 0.0], "マスターボリューム0なので無音になるはず");
+    }
+
+    /// フルスケール（16383）を受信すると既定値と同じ透過ゲイン(255)相当になる。
+    #[test]
+    fn master_volume_sysex_full_scale_is_transparent() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let sysex = vec![0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x7F, 0x7F, 0xF7];
+        handle_midi_message(&mut engine, &mut master, &mut state, &sysex);
+
+        let mixed = master
+            .render(2, 2, |slot_buf, stride| {
+                slot_buf[..stride].fill(0.5);
+            })
+            .to_vec();
+        assert_eq!(mixed, vec![0.5, 0.5], "フルスケールでは透過のはず");
+    }
+
+    /// GM2 Master Volume形式に一致しないSysExはパニックせず無視される。
+    #[test]
+    fn unrecognized_sysex_is_ignored_without_panic() {
+        let (mut engine, mut master, mut state) = fresh_state();
+        let unknown_sysex = vec![0xF0, 0x43, 0x10, 0x00, 0xF7]; // 他ベンダーのSysEx
+        handle_midi_message(&mut engine, &mut master, &mut state, &unknown_sysex);
+        // パニックしなければ成功。
     }
 }
