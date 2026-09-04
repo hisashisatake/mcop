@@ -60,7 +60,7 @@ impl Default for Style {
             // （KNOBSモードの1段カラムがはみ出さない高さ、Step6実機確認で175→245へ追い込み済み）。
             time_eg_editor_size: Size { w: 260.0, h: 245.0 },
             // ui_core::level_meter::LEVEL_METER_SIZEと一致させること。
-            level_meter_size: Size { w: 40.0, h: 66.0 },
+            level_meter_size: Size { w: 40.0, h: 77.0 },
         }
     }
 }
@@ -143,6 +143,11 @@ pub enum Widget {
     /// STAGES=0（無効化）とSTAGES=1（透過既定・ノコギリ等）の両方を表現できるようにする。
     TimeEgEditor { handle: String, mapping: String, tl: EgField, min_stages: u8, terminal_level_zero: bool },
     /// レベルメーター（`ui_core::level_meter`、`MeterHandle`実装への読み取り専用ハンドル）。
+    /// サイズは`gen_widget_stmt`に渡る`Size`（`<level-meter>`のwidth/height属性、省略時は
+    /// `style.level_meter_size`）をそのまま使う（`AlgorithmDiagram`等と同じパターン）。
+    /// 他のウィジェットと違い、ここではレイアウト計算だけでなく実際の描画サイズにも使われる
+    /// （`ui_core::level_meter::level_meter`へそのまま渡す。セグメント高さ×個数＋隙間から
+    /// 逆算した高さをheight属性で明示できるようにするための設計、詳細はlevel_meter.rsのdoc）。
     LevelMeter { label: String, handle: String },
     /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),

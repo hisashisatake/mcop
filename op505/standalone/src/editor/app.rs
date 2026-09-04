@@ -39,6 +39,9 @@ pub struct EditorApp {
     /// egui既定のイベント駆動更新ではメーターの値が動いても画面に反映されないため、
     /// `ui()`内で`request_repaint_after`を呼んで継続的な再描画を要求する。
     meter_fps: u32,
+    /// レベルメーターのセグメント間の隙間（px、`%APPDATA%\op505\ui.json`から起動時に1回読む）。
+    /// `ui()`内で毎フレーム`ui_core::level_meter::set_segment_gap_px`へ反映する。
+    level_meter_gap_px: f32,
     undo: Rc<RefCell<UndoStack>>,
     presets: EditorPresetState,
     keyboard: KeyboardState,
@@ -59,6 +62,7 @@ impl EditorApp {
     /// 組み立て直すのではなく、直前の状態を引き継ぐ。
     pub fn new(shared: Arc<SharedEditState>, midi_sink: MidiSink, initial_patch: Op505Patch) -> Self {
         let master_meter = shared.master_meter();
+        let ui_config = op505_core::ui_config::load();
         Self {
             shared,
             midi_sink,
@@ -67,7 +71,8 @@ impl EditorApp {
             master: Rc::new(RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
             master_meter,
-            meter_fps: op505_core::meter_fps(&op505_core::ui_config::load()),
+            meter_fps: op505_core::meter_fps(&ui_config),
+            level_meter_gap_px: op505_core::level_meter_gap_px(&ui_config),
             undo: Rc::new(RefCell::new(UndoStack::new())),
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
@@ -175,6 +180,7 @@ impl eframe::App for EditorApp {
         // `meter_fps`間隔での再描画を要求する（別スレッドのオーディオコールバックとは
         // 無関係なので音声合成への影響は無い）。
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32(1.0 / self.meter_fps as f32));
+        ui_core::level_meter::set_segment_gap_px(ui.ctx(), self.level_meter_gap_px);
 
         let previous_edit_channel = self.edit_channel;
 

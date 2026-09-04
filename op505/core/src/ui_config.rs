@@ -15,6 +15,10 @@ pub struct UiConfig {
     /// `DEFAULT_METER_FPS`にフォールバックする。
     #[serde(default)]
     pub meter_fps: Option<u32>,
+    /// レベルメーターのセグメント間の隙間（px）。`None`または読み込み失敗時は
+    /// `DEFAULT_LEVEL_METER_GAP_PX`にフォールバックする。`0.0`で隙間なし。
+    #[serde(default)]
+    pub level_meter_gap_px: Option<f32>,
 }
 
 /// 設定ファイルが読めない・壊れている・未設定のときの更新レート。
@@ -25,6 +29,9 @@ pub const DEFAULT_METER_FPS: u32 = 10;
 /// メーター更新レートの許容範囲（下限1fps・上限60fps）。
 const METER_FPS_MIN: u32 = 1;
 const METER_FPS_MAX: u32 = 60;
+
+/// 設定ファイルが読めない・壊れている・未設定のときのセグメント間の隙間（px）。
+pub const DEFAULT_LEVEL_METER_GAP_PX: f32 = 1.0;
 
 fn config_path() -> PathBuf {
     std::env::var("APPDATA")
@@ -51,6 +58,12 @@ fn load_from_path(path: &Path) -> UiConfig {
 /// 範囲外の値は`[1, 60]`へクランプする（0fps＝無限待ちや、極端に高い値でのCPU浪費を防ぐ）。
 pub fn meter_fps(cfg: &UiConfig) -> u32 {
     cfg.meter_fps.unwrap_or(DEFAULT_METER_FPS).clamp(METER_FPS_MIN, METER_FPS_MAX)
+}
+
+/// `cfg.level_meter_gap_px`から実際に使う隙間（px）を決定する。負値は0へクランプする
+/// （`0.0`は「隙間なし」という有効な設定のため許容する）。
+pub fn level_meter_gap_px(cfg: &UiConfig) -> f32 {
+    cfg.level_meter_gap_px.unwrap_or(DEFAULT_LEVEL_METER_GAP_PX).max(0.0)
 }
 
 #[cfg(test)]
@@ -97,25 +110,49 @@ mod tests {
 
     #[test]
     fn meter_fps_falls_back_when_unset() {
-        let cfg = UiConfig { meter_fps: None };
+        let cfg = UiConfig { meter_fps: None, ..Default::default() };
         assert_eq!(meter_fps(&cfg), DEFAULT_METER_FPS);
     }
 
     #[test]
     fn meter_fps_uses_configured_value_within_range() {
-        let cfg = UiConfig { meter_fps: Some(30) };
+        let cfg = UiConfig { meter_fps: Some(30), ..Default::default() };
         assert_eq!(meter_fps(&cfg), 30);
     }
 
     #[test]
     fn meter_fps_clamps_zero_to_minimum() {
-        let cfg = UiConfig { meter_fps: Some(0) };
+        let cfg = UiConfig { meter_fps: Some(0), ..Default::default() };
         assert_eq!(meter_fps(&cfg), METER_FPS_MIN);
     }
 
     #[test]
     fn meter_fps_clamps_excessive_value_to_maximum() {
-        let cfg = UiConfig { meter_fps: Some(1000) };
+        let cfg = UiConfig { meter_fps: Some(1000), ..Default::default() };
         assert_eq!(meter_fps(&cfg), METER_FPS_MAX);
+    }
+
+    #[test]
+    fn level_meter_gap_px_falls_back_when_unset() {
+        let cfg = UiConfig { level_meter_gap_px: None, ..Default::default() };
+        assert_eq!(level_meter_gap_px(&cfg), DEFAULT_LEVEL_METER_GAP_PX);
+    }
+
+    #[test]
+    fn level_meter_gap_px_allows_zero() {
+        let cfg = UiConfig { level_meter_gap_px: Some(0.0), ..Default::default() };
+        assert_eq!(level_meter_gap_px(&cfg), 0.0);
+    }
+
+    #[test]
+    fn level_meter_gap_px_clamps_negative_to_zero() {
+        let cfg = UiConfig { level_meter_gap_px: Some(-5.0), ..Default::default() };
+        assert_eq!(level_meter_gap_px(&cfg), 0.0);
+    }
+
+    #[test]
+    fn level_meter_gap_px_uses_configured_value() {
+        let cfg = UiConfig { level_meter_gap_px: Some(3.0), ..Default::default() };
+        assert_eq!(level_meter_gap_px(&cfg), 3.0);
     }
 }

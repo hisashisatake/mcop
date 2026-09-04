@@ -45,7 +45,16 @@
         </stack>
       </row>
     </panel>
-    <panel title="MASTER EFFECT" span="75%">
+    <panel title="MASTER VOLUME" span="20%">
+      <header>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <level-meter label="LEVEL" handle="master_meter"/>
+        <knob label="VOLUME" handle="master_volume"/>
+      </row>
+    </panel>
+    <panel title="MASTER EFFECT" span="55%">
       <header>
         <title/>
       </header>
@@ -53,8 +62,6 @@
         <enum label="REV TYPE" handle="reverb_type" names="REVERB_TYPE_NAMES" salt="4"/>
         <knob label="REV" handle="rev_send"/>
         <knob label="R.TIME" handle="reverb_time"/>
-        <knob label="M.VOL" handle="master_volume"/>
-        <level-meter label="LEVEL" handle="master_meter"/>
       </row>
       <row justify="start" gap="spacing">
         <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>

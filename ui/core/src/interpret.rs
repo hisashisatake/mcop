@@ -399,7 +399,7 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
         }
         Widget::LevelMeter { label, handle } => {
             let key = scoped(handle, idx);
-            level_meter(ui, store.meter(&key), label);
+            level_meter(ui, store.meter(&key), label, egui::vec2(leaf.size.w, leaf.size.h));
         }
         Widget::Raw(_) => draw_raw_placeholder(ui, egui::vec2(leaf.size.w, leaf.size.h)),
     }

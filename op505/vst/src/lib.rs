@@ -435,7 +435,9 @@ impl Plugin for Op505Plugin {
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         // エディタを開くたびの1回だけ読む（GUIスレッドかつ低頻度のためファイルI/Oを許容する）。
-        let meter_fps = op505_core::meter_fps(&op505_core::ui_config::load());
+        let ui_config = op505_core::ui_config::load();
+        let meter_fps = op505_core::meter_fps(&ui_config);
+        let level_meter_gap_px = op505_core::level_meter_gap_px(&ui_config);
         editor::create_editor(
             self.egui_state.clone(),
             self.params.clone(),
@@ -443,6 +445,7 @@ impl Plugin for Op505Plugin {
             self.preset_bank_dirty.clone(),
             self.master_meter.clone(),
             meter_fps,
+            level_meter_gap_px,
         )
     }
 

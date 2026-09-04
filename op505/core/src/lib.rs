@@ -21,7 +21,9 @@ pub mod ui_config;
 pub use operator::Op505OperatorParams;
 pub use preset::{op505_presets_dir, Op505Preset, Op505PresetBank, Op505PresetEntry, Op505PresetFile};
 pub use preset_registry::{build_op505_registry, current_open_dir, resolve_patch, Op505BankFile, Op505BankRegistry};
-pub use ui_config::{meter_fps, UiConfig, DEFAULT_METER_FPS};
+pub use ui_config::{
+    level_meter_gap_px, meter_fps, UiConfig, DEFAULT_LEVEL_METER_GAP_PX, DEFAULT_METER_FPS,
+};
 
 /// LFOレート値(0〜255)→Hz変換の再エクスポート。`op505-midi`のPitch/Gain/Cutoff FGフォールバック
 /// （CC76由来のレートをHzへ変換する）と、gesture-appの演奏系LFO（Step3で撤去予定）が使う。
