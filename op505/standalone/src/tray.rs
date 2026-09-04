@@ -12,11 +12,14 @@
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
 
+use std::sync::Arc;
+
 use crate::config;
 use crate::editor::EditorHandle;
 use crate::log;
 use crate::midi_source::MidiSink;
 use crate::sources::midir_src;
+use crate::tempo_clock::TempoClock;
 
 #[allow(non_snake_case, non_camel_case_types, dead_code)]
 mod winapi {
@@ -126,7 +129,7 @@ fn open_path_in_explorer(path: &std::path::Path) {
 /// [`EditorHandle::show`]される。ループを抜けた直後（＝終了処理に入った後）に
 /// [`EditorHandle::shutdown`]を呼び、エディタが開いていれば閉じ終わるまで待ってから戻る
 /// （`main`側の`stream`Dropより先にウィンドウを畳んでおくため）。
-pub fn run(sink: MidiSink, editor: EditorHandle) {
+pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     if !acquire_single_instance_lock() {
         log::log("既にop505-standaloneが起動中のため終了します。");
         return;
@@ -134,7 +137,7 @@ pub fn run(sink: MidiSink, editor: EditorHandle) {
 
     let cfg = config::load();
     let mut current_port_name = cfg.midi_in_port.clone();
-    let mut current_midir = midir_src::connect(sink.clone(), current_port_name.as_deref());
+    let mut current_midir = midir_src::connect(sink.clone(), current_port_name.as_deref(), tempo.clone());
     // 自動選択が実際に決まった場合、メニューのチェック初期状態をそれに合わせる
     // （設定未指定＋ポート1個のみで自動接続できたケース）。
     if current_port_name.is_none() {
@@ -193,6 +196,7 @@ pub fn run(sink: MidiSink, editor: EditorHandle) {
                 &sink,
                 &mut current_midir,
                 &editor,
+                &tempo,
             );
         }
     }
@@ -211,6 +215,7 @@ fn handle_menu_event(
     sink: &MidiSink,
     current_midir: &mut Option<midir_src::MidirSource>,
     editor: &EditorHandle,
+    tempo: &Arc<TempoClock>,
 ) {
     if &id == exit_id {
         unsafe { winapi::PostQuitMessage(0) };
@@ -240,7 +245,7 @@ fn handle_menu_event(
 
     // 現在のmidir接続を切ってから新しい設定で繋ぎ直す（Dropで既存ポートを解放）。
     *current_midir = None;
-    *current_midir = midir_src::connect(sink.clone(), chosen_name.as_deref());
+    *current_midir = midir_src::connect(sink.clone(), chosen_name.as_deref(), tempo.clone());
 
     config::save(&config::StandaloneConfig { midi_in_port: chosen_name });
 }

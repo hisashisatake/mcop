@@ -52,6 +52,7 @@ mod log;
 mod midi_source;
 mod shared;
 mod sources;
+mod tempo_clock;
 mod tray;
 
 use shared::SharedEditState;
@@ -148,6 +149,9 @@ fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
     let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
     let mut registry = midi_source::SourceRegistry::new();
+    // MIDI Clock（0xF8等）からBPMを算出する（Dominoのようなシーケンサーが送るクロックへの
+    // 追従、gesture-appのタップテンポもこの経路を使う想定。詳細はtempo_clock.rsのdoc参照）。
+    let tempo_clock = Arc::new(tempo_clock::TempoClock::new());
 
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
@@ -186,7 +190,7 @@ fn main() {
     // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
     // OpenEditorフレーム（kind=3、gesture-appのEキー押下）を受けたら`editor_handle`の
     // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
-    registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone())));
+    registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone(), tempo_clock.clone())));
 
     // レベルメーターのpublish区間中に累積するピーク値（取りこぼし防止、`main.rs`モジュールdoc
     // 「レベルメーターのpublish間隔」参照）。オーディオコールバックのクロージャが単独所有する。
@@ -195,10 +199,14 @@ fn main() {
     let mut meter_clipped = false;
     let mut frames_since_publish = 0usize;
 
+    let tempo_clock_for_audio = Arc::clone(&tempo_clock);
     let stream = device
         .build_output_stream::<f32, _, _>(
             &stream_config,
             move |output: &mut [f32], _| {
+                if let Some(bpm) = tempo_clock_for_audio.current_bpm() {
+                    engine.set_tempo(bpm);
+                }
                 sync_editor_state(&shared_edit_state, &mut engine, &mut master, &mut state, &mut active_ids);
                 drain_midi_queue(&midi_queue, &mut engine, &mut master, &mut state);
                 output.fill(0.0);
@@ -238,7 +246,7 @@ fn main() {
     stream.play().expect("failed to start audio stream");
 
     log::log("op505-standalone: 再生中。");
-    tray::run(sink, editor_handle);
+    tray::run(sink, editor_handle, tempo_clock);
 }
 
 /// `op505_presets_dir()`から全プリセットを読み込み、その先頭を起動時の既定パッチとして返す。
