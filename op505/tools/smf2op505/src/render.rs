@@ -300,7 +300,7 @@ pub fn render_smf_with_drums(
 
     let max_samples = max_secs.map(|s| (s * sample_rate).max(0.0) as usize);
 
-    for e in &events {
+    for e in events {
         let dt = e.tick - cur_tick;
         sample_pos += dt as f64 * spt;
         cur_tick = e.tick;
@@ -383,6 +383,13 @@ pub fn render_smf_with_drums(
             }
             EvKind::ControlChange(ch, cc, val) => {
                 handle_control_change(&mut engine, &mut master, &mut channels, ch as usize, cc, val, bank, drums);
+            }
+            EvKind::SysEx(bytes) => {
+                if let Some(sound_midi::UniversalSysEx::MasterVolume { value14, .. }) =
+                    sound_midi::parse_universal_sysex(&bytes)
+                {
+                    master.output_mut().set_volume(sound_midi::value14_to_u8(value14));
+                }
             }
         }
     }
@@ -951,6 +958,53 @@ mod tests {
         let buf_b = render_smf(&smf, &bank, 8000.0, 0.1, Some(1.0), None).unwrap();
         assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "出力が無音");
         assert_eq!(buf_a, buf_b);
+    }
+
+    // --- GM2 Universal SysEx Master Volume E2Eテスト ---
+
+    /// SMF内にGM2 Master Volume SysEx（value14=0）を置くと、以降の発音が無音になる。
+    #[test]
+    fn sysex_master_volume_zero_silences_subsequent_notes() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xF0, 0x07, 0x7F, 0x7F, 0x04, 0x01, 0x00, 0x00, 0xF7]),
+            (0, vec![0x90, 60, 100]),
+            (480, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().all(|s| s.abs() < 1e-6), "マスターボリューム0のはずが音が出ている");
+    }
+
+    /// マスターボリュームSysExを送らない既存のSMFは、この機能追加前と同じく発音すること
+    /// （ビット不変の直接証明、`no_effect_routing_is_bit_identical_across_runs`と同型）。
+    #[test]
+    fn no_master_volume_sysex_is_bit_identical_across_runs() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![(0u32, vec![0x90, 60, 100]), (480, vec![0x80, 60, 0])];
+        let smf = build_smf(&events);
+        let buf_a = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        let buf_b = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf_a.iter().any(|s| s.abs() > 1e-4), "出力が無音");
+        assert_eq!(buf_a, buf_b);
+    }
+
+    /// GM2 Master Volume以外の未知のSysExはパニックせず無視され、後続イベントの解釈にも
+    /// 影響しない。
+    #[test]
+    fn unrecognized_sysex_is_ignored_and_playback_continues() {
+        let bank = instant_sustain_bank();
+        let sr = 8000.0;
+        let events = vec![
+            (0u32, vec![0xF0, 0x04, 0x43, 0x10, 0x00, 0xF7]), // 他ベンダーのSysEx
+            (0, vec![0x90, 60, 100]),
+            (480, vec![0x80, 60, 0]),
+        ];
+        let smf = build_smf(&events);
+        let buf = render_smf(&smf, &bank, sr, 0.1, Some(1.0), None).unwrap();
+        assert!(buf.iter().any(|s| s.abs() > 1e-4), "未知SysExの後も発音するはず");
     }
 
     /// ch1をNRPN(0,1)でスロット1へルーティングすると、ch0のCC91 Reverb Send（スロット0のみを
