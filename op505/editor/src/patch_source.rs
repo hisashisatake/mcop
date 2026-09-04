@@ -13,12 +13,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use op505_core::{Op505OperatorParams, Op505Patch};
-use op505_ui::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use sound_core::TimeEgParams;
+use op505_ui::{BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
+use sound_core::{MeterBridge, Measurement, TimeEgParams};
 
-use crate::panel_source::PanelParamSource;
+use crate::panel_source::{MeterField, PanelParamSource};
 use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpInt, PatchInt};
 use crate::undo::UndoStack;
 
@@ -334,6 +335,25 @@ impl IntParamHandle for MasterEffectsIntHandle {
     }
 }
 
+/// マスター出力のレベルメーターへの読み取り専用ハンドル。`MeterBridge::read()`/`reset_clip()`は
+/// 内部で`Mutex`をロックするだけで、`Rc<RefCell<..>>`系の他ハンドルと違いUndo/dirty通知は不要
+/// （メーター自体はGUI操作の対象ではなく、オーディオスレッドが一方的に書く値のため）。
+struct MasterMeterHandle {
+    bridge: Arc<MeterBridge>,
+}
+
+impl MeterHandle for MasterMeterHandle {
+    fn snapshot(&self) -> Measurement {
+        self.bridge.read()
+    }
+    fn reset_clip(&self) {
+        self.bridge.reset_clip();
+    }
+    fn name(&self) -> String {
+        "Master Output".to_string()
+    }
+}
+
 /// [`PanelParamSource`]の`Rc<RefCell<Op505Patch>>`ベース実装。`Rc`のcloneで各ハンドルを
 /// 作るため戻り値は`'static`になり、`Box<dyn .. + '_>`（`PanelParamSource`が要求するのはこれより
 /// 弱い制約）へ問題なく収まる。
@@ -343,6 +363,8 @@ pub struct PatchPanelSource {
     pub master: Rc<RefCell<MasterEffectsState>>,
     pub master_dirty: Rc<Cell<bool>>,
     pub undo: Rc<RefCell<UndoStack>>,
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し、`sound_core::MasterOutput`が書く）。
+    pub master_meter: Arc<MeterBridge>,
 }
 
 impl PanelParamSource for PatchPanelSource {
@@ -369,5 +391,11 @@ impl PanelParamSource for PatchPanelSource {
 
     fn eg(&self, slot: EgSlot) -> Box<dyn TimeEgHandle + '_> {
         Box::new(PatchTimeEgHandle { patch: self.patch.clone(), dirty: self.patch_dirty.clone(), undo: self.undo.clone(), slot })
+    }
+
+    fn meter(&self, field: MeterField) -> Box<dyn MeterHandle + '_> {
+        match field {
+            MeterField::MasterOutput => Box::new(MasterMeterHandle { bridge: self.master_meter.clone() }),
+        }
     }
 }

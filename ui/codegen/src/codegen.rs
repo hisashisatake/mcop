@@ -129,6 +129,9 @@ fn gen_widget_stmt(w: &Widget, size: Size) -> String {
             fmt_num(size.h),
             eg_field_expr(tl),
         ),
+        Widget::LevelMeter { label, handle } => {
+            format!("level_meter(ui, &*{handle}, \"{label}\");")
+        }
         Widget::Raw(code) => code.clone(),
     }
 }

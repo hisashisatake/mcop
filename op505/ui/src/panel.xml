@@ -54,6 +54,7 @@
         <knob label="REV" handle="rev_send"/>
         <knob label="R.TIME" handle="reverb_time"/>
         <knob label="M.VOL" handle="master_volume"/>
+        <level-meter label="LEVEL" handle="master_meter"/>
       </row>
       <row justify="start" gap="spacing">
         <enum label="CHO TYPE" handle="chorus_type" names="CHORUS_TYPE_NAMES" salt="5"/>

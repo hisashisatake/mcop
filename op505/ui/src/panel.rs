@@ -1,7 +1,8 @@
 use crate::algorithm_diagram::algorithm_diagram;
 use crate::knob::{bool_checkbox, dual_knob, knob};
 use crate::layout::{self, leaf, row, stack, stack_centered, Justify};
-use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
+use crate::level_meter::level_meter;
+use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
 use crate::selector::{
     enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, REVERB_TYPE_NAMES,
     RETRIGGER_MODE_NAMES, TEXTURE_NAMES,
@@ -72,6 +73,8 @@ pub struct Op505PanelParams<'a> {
     pub chorus_send_to_reverb: Box<dyn IntParamHandle + 'a>,
     /// マスターボリューム（全エフェクトスロット合算後の最終段、`sound_core::MasterOutput`）。
     pub master_volume: Box<dyn IntParamHandle + 'a>,
+    /// マスター出力のレベルメーター（ピーク+クリップ検出、読み取り専用）。
+    pub master_meter: Box<dyn MeterHandle + 'a>,
     // OPERATORS
     pub operators: [Op505OperatorPanelParams<'a>; 4],
 }

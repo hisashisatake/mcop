@@ -14,6 +14,7 @@ use op505_editor::panel_source::build_panel_params;
 use op505_editor::patch_source::{MasterEffectsState, PatchPanelSource};
 use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, UndoApply, UndoStack};
+use sound_core::MeterBridge;
 
 use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
@@ -31,6 +32,9 @@ pub struct EditorApp {
     dirty: Rc<Cell<bool>>,
     master: Rc<RefCell<MasterEffectsState>>,
     master_dirty: Rc<Cell<bool>>,
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し、`SharedEditState::master_meter()`
+    /// から取得した`Arc`を共有する）。
+    master_meter: Arc<MeterBridge>,
     undo: Rc<RefCell<UndoStack>>,
     presets: EditorPresetState,
     keyboard: KeyboardState,
@@ -50,6 +54,7 @@ impl EditorApp {
     /// 前回このエディタで編集した値が残っていればそれ）。エディタを開くたびにゼロから
     /// 組み立て直すのではなく、直前の状態を引き継ぐ。
     pub fn new(shared: Arc<SharedEditState>, midi_sink: MidiSink, initial_patch: Op505Patch) -> Self {
+        let master_meter = shared.master_meter();
         Self {
             shared,
             midi_sink,
@@ -57,6 +62,7 @@ impl EditorApp {
             dirty: Rc::new(Cell::new(false)),
             master: Rc::new(RefCell::new(MasterEffectsState::default())),
             master_dirty: Rc::new(Cell::new(false)),
+            master_meter,
             undo: Rc::new(RefCell::new(UndoStack::new())),
             presets: EditorPresetState::new(),
             keyboard: KeyboardState::new(),
@@ -246,6 +252,7 @@ impl eframe::App for EditorApp {
                     master: self.master.clone(),
                     master_dirty: self.master_dirty.clone(),
                     undo: self.undo.clone(),
+                    master_meter: self.master_meter.clone(),
                 };
                 let panel = build_panel_params(&source);
                 op505_ui::draw_op505_panel(ui, &panel);

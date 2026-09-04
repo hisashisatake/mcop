@@ -131,6 +131,13 @@ fn parse_style(el: Node) -> Result<Style, String> {
                     style.tag_margin.insert("time-eg-editor".to_string(), parse_margin(v)?);
                 }
             }
+            "level-meter" => {
+                style.level_meter_size.w = attr_f32_or(c, "width", style.level_meter_size.w)?;
+                style.level_meter_size.h = attr_f32_or(c, "height", style.level_meter_size.h)?;
+                if let Some(v) = c.attribute("margin") {
+                    style.tag_margin.insert("level-meter".to_string(), parse_margin(v)?);
+                }
+            }
             tag @ ("knob" | "checkbox" | "waveform" | "enum" | "raw") => {
                 if let Some(v) = c.attribute("margin") {
                     style.tag_margin.insert(tag.to_string(), parse_margin(v)?);
@@ -344,6 +351,18 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
             let w = attr_f32_or(el, "width", style.algorithm_diagram_size.w)?;
             let h = attr_f32_or(el, "height", style.algorithm_diagram_size.h)?;
             (Widget::AlgorithmDiagram { handle }, "ALG".to_string(), "algorithm-diagram".to_string(), Size { w, h })
+        }
+        "level-meter" => {
+            let label = el.attribute("label").unwrap_or("LEVEL").to_string();
+            let handle = resolve_path(&req_attr(el, "handle")?, ctx);
+            let w = attr_f32_or(el, "width", style.level_meter_size.w)?;
+            let h = attr_f32_or(el, "height", style.level_meter_size.h)?;
+            (
+                Widget::LevelMeter { label: label.clone(), handle },
+                label,
+                "level-meter".to_string(),
+                Size { w, h },
+            )
         }
         "time-eg-editor" => {
             let handle = resolve_path(&req_attr(el, "handle")?, ctx);

@@ -1,9 +1,9 @@
 use nice_plug::prelude::*;
-use op505_editor::panel_source::PanelParamSource;
+use op505_editor::panel_source::{MeterField, PanelParamSource};
 use op505_editor::param_spec::{BoolField, EgSlot, FgSlot, IntField, OpIndex};
 use op505_editor::undo::UndoStack;
-use op505_ui::{BoolParamHandle, IntParamHandle, TimeEgHandle};
-use sound_core::TimeEgParams;
+use op505_ui::{BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
+use sound_core::{MeterBridge, Measurement, TimeEgParams};
 use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
@@ -173,6 +173,25 @@ pub(crate) struct VstPanelSource<'a> {
     pub(crate) params: &'a Op505VstParams,
     pub(crate) setter: &'a ParamSetter<'a>,
     pub(crate) undo: &'a RefCell<UndoStack>,
+    pub(crate) master_meter: &'a Arc<MeterBridge>,
+}
+
+/// マスター出力のレベルメーターへの読み取り専用ハンドル
+/// （`op505_editor::patch_source::MasterMeterHandle`のVST版、同じ理由でUndo/dirty通知は不要）。
+struct VstMeter<'a> {
+    bridge: &'a Arc<MeterBridge>,
+}
+
+impl MeterHandle for VstMeter<'_> {
+    fn snapshot(&self) -> Measurement {
+        self.bridge.read()
+    }
+    fn reset_clip(&self) {
+        self.bridge.reset_clip();
+    }
+    fn name(&self) -> String {
+        "Master Output".to_string()
+    }
 }
 
 impl PanelParamSource for VstPanelSource<'_> {
@@ -196,6 +215,12 @@ impl PanelParamSource for VstPanelSource<'_> {
             EgSlot::Fg(FgSlot::Pitch) => vt(egs, |b| b.pitch_fg, |b, v| b.pitch_fg = v, name, undo),
             EgSlot::Fg(FgSlot::Cutoff) => vt(egs, |b| b.cutoff_fg, |b, v| b.cutoff_fg = v, name, undo),
             EgSlot::Fg(FgSlot::Gain) => vt(egs, |b| b.gain_fg, |b, v| b.gain_fg = v, name, undo),
+        }
+    }
+
+    fn meter(&self, field: MeterField) -> Box<dyn MeterHandle + '_> {
+        match field {
+            MeterField::MasterOutput => Box::new(VstMeter { bridge: self.master_meter }),
         }
     }
 }

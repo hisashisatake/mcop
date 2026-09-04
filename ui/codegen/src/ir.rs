@@ -38,6 +38,9 @@ pub struct Style {
     pub algorithm_diagram_size: Size,
     /// `<time-eg-editor>`の既定サイズ（インスタンス側`width`/`height`属性で個別上書き可能）。
     pub time_eg_editor_size: Size,
+    /// `<level-meter>`の既定サイズ。`ui_core::level_meter::LEVEL_METER_SIZE`と一致させること
+    /// （ui-codegenはegui非依存であちらの定数を参照できないため手で同期する）。
+    pub level_meter_size: Size,
 }
 
 impl Default for Style {
@@ -56,6 +59,8 @@ impl Default for Style {
             // op505/ui/src/panel.xmlの<style><time-eg-editor>実測値と一致させること
             // （KNOBSモードの1段カラムがはみ出さない高さ、Step6実機確認で175→245へ追い込み済み）。
             time_eg_editor_size: Size { w: 260.0, h: 245.0 },
+            // ui_core::level_meter::LEVEL_METER_SIZEと一致させること。
+            level_meter_size: Size { w: 40.0, h: 66.0 },
         }
     }
 }
@@ -137,6 +142,8 @@ pub enum Widget {
     /// 着地させる。Pitch/Cutoff/Gain FGの3種は`min-stages="0" terminal-level="free"`を指定し、
     /// STAGES=0（無効化）とSTAGES=1（透過既定・ノコギリ等）の両方を表現できるようにする。
     TimeEgEditor { handle: String, mapping: String, tl: EgField, min_stages: u8, terminal_level_zero: bool },
+    /// レベルメーター（`ui_core::level_meter`、`MeterHandle`実装への読み取り専用ハンドル）。
+    LevelMeter { label: String, handle: String },
     /// 生Rustの最終手段（`panel.xml`本体では未使用、文法としてのみ温存）。
     Raw(String),
 }

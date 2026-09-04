@@ -17,7 +17,7 @@ use params::{
 use nice_plug::prelude::*;
 use nice_plug_egui::EguiState;
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
-use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, ReverbType, Vco};
+use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, MeterBridge, ReverbType, Vco};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -146,6 +146,11 @@ struct Op505Plugin {
 
     // GUIエディターのウィンドウサイズ状態（`editor()`で使い回す）。
     egui_state: Arc<EguiState>,
+
+    // マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し）。オーディオスレッドは
+    // `MasterSection::render()`後に`take_measurement()`でピークを読み、`publish()`する
+    // （`sound_core::MeterBridge`、`try_lock`のみを使いオーディオ側は待たない）。
+    master_meter: Arc<MeterBridge>,
 }
 
 impl Default for Op505Plugin {
@@ -184,6 +189,7 @@ impl Default for Op505Plugin {
             // 既定サイズもeditor_min_width()以上にしておく（下回るとエディタが開いた瞬間から
             // 横スクロールを要求する状態になり体験が悪いため）。
             egui_state: EguiState::from_size(op505_editor::layout::editor_min_width().ceil() as u32, 680),
+            master_meter: Arc::new(MeterBridge::new()),
         }
     }
 }
@@ -401,7 +407,13 @@ impl Plugin for Op505Plugin {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create_editor(self.egui_state.clone(), self.params.clone(), self.shared_preset_bank.clone(), self.preset_bank_dirty.clone())
+        editor::create_editor(
+            self.egui_state.clone(),
+            self.params.clone(),
+            self.shared_preset_bank.clone(),
+            self.preset_bank_dirty.clone(),
+            self.master_meter.clone(),
+        )
     }
 
     fn process(

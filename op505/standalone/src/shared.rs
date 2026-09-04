@@ -13,9 +13,10 @@
 //! egui/eframeに依存しない（`op505-core`型のみを扱う）。
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use op505_core::{Op505BankFile, Op505Patch, Op505PresetBank};
+use sound_core::MeterBridge;
 
 /// `edit_channel`の「編集対象なし」を表す番兵値。MIDIチャンネルは0〜15のため衝突しない。
 pub const NO_EDIT_CHANNEL: u8 = 0xFF;
@@ -63,6 +64,12 @@ pub struct SharedEditState {
     fx_values: [AtomicU8; FX_VALUE_COUNT],
     fx_slot: AtomicU8,
     fx_dirty: AtomicBool,
+
+    /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し）。`fx_values`等と違いdirty
+    /// フラグは使わない——`MeterBridge`自体が`try_lock`ベースの橋渡しを既に実装しているため
+    /// （`sound_core::MeterBridge`のdoc参照）。オーディオスレッド・GUIスレッド双方が
+    /// この同じ`Arc`を共有する。
+    master_meter: Arc<MeterBridge>,
 }
 
 impl SharedEditState {
@@ -78,7 +85,13 @@ impl SharedEditState {
             fx_values: std::array::from_fn(|_| AtomicU8::new(0)),
             fx_slot: AtomicU8::new(0),
             fx_dirty: AtomicBool::new(false),
+            master_meter: Arc::new(MeterBridge::new()),
         }
+    }
+
+    /// マスター出力の計測値ブリッジを取得する（オーディオスレッド・GUIスレッド双方が使う）。
+    pub fn master_meter(&self) -> Arc<MeterBridge> {
+        self.master_meter.clone()
     }
 
     // ---- GUIスレッド側API（ブロッキング可） ----

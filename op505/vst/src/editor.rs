@@ -9,6 +9,7 @@ use op505_editor::patch_source::{read_bool, read_eg, read_int, MasterEffectsStat
 use op505_editor::preset_panel::{draw_editor_top_bar, draw_presets_drawer, poll_presets_events, EditorPresetState, UndoUiState};
 use op505_editor::undo::{EditorSnapshot, SnapshotDiff, UndoApply, UndoStack};
 use op505_ui::draw_op505_panel;
+use sound_core::MeterBridge;
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
@@ -105,6 +106,7 @@ pub(crate) fn create_editor(
     params: Arc<Op505VstParams>,
     shared_preset_bank: Arc<RwLock<Op505PresetBank>>,
     preset_bank_dirty: Arc<AtomicBool>,
+    master_meter: Arc<MeterBridge>,
 ) -> Option<Box<dyn Editor>> {
     let resize_state = egui_state.clone();
     create_egui_editor(
@@ -152,7 +154,7 @@ pub(crate) fn create_editor(
 
                 // ---- 残りのパラメーター（縦スクロール、op505-uiの共有レイアウト） ----
                 let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let source = VstPanelSource { params: &params, setter, undo };
+                    let source = VstPanelSource { params: &params, setter, undo, master_meter: &master_meter };
                     let panel = build_panel_params(&source);
                     draw_op505_panel(ui, &panel);
                 });

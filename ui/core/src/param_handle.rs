@@ -98,6 +98,21 @@ pub trait BoolParamHandle {
     fn end_edit(&self);
 }
 
+/// レベルメーター等、オーディオスレッドが書きGUIが読むだけの計測値への読み取り専用ハンドル。
+/// `IntParamHandle`と違い書き込みメソッドを持たない（メーター自体はGUI操作の対象ではない）。
+///
+/// `snapshot()`が`sound_core::Measurement`を丸ごと返す設計は`TimeEgHandle::params()`と同じ
+/// パターン——フィールドを追加するだけで拡張でき（将来のオシロスコープ波形等）、
+/// トレイトのメソッド自体を増やさずに済む。
+pub trait MeterHandle {
+    /// 現在の計測値のスナップショット。
+    fn snapshot(&self) -> sound_core::Measurement;
+    /// クリップ検出フラグを手動でリセットする（クリップランプのクリック解除用）。
+    fn reset_clip(&self);
+    /// ツールチップ等に表示する名前。
+    fn name(&self) -> String;
+}
+
 /// `TimeEgParams`（N点Time/Level方式EG、OP505用）1本ぶんへのハンドル。
 /// 段×フィールドごとに`IntParamHandle`を280個(40値×7本)構築する代わりに、EG単位で1個
 /// 用意すれば済む（`time_eg_editor`が内部でこのハンドルから`IntParamHandle`を都度導出する）。

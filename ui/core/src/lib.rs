@@ -9,6 +9,7 @@ pub mod eg_preview;
 pub mod interpret; // フェーズB: panel.xmlのIRをランタイム解釈して実egui描画するプレビュー用インタープリタ。
 pub mod knob;
 pub mod layout;
+pub mod level_meter;
 pub mod mapping;
 pub mod param_handle;
 pub mod patchbay;
@@ -24,7 +25,7 @@ pub mod waveform;
 // でのみ公開し、crate root では公開しない。
 pub use eg_preview::EgAmplitudeMapping;
 pub use knob::{bool_checkbox, spin_control, Knob};
-pub use param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle, BIPOLAR_CENTER};
+pub use param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle, BIPOLAR_CENTER};
 pub use selector::{enum_selector, sync_rate_display, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, REVERB_TYPE_NAMES, SYNC_NOTE_NAMES};
 // time_eg_previewも同様の理由でモジュールパス越し（`ui_core::time_eg_preview::time_eg_preview`）
 // でのみ公開する。`TimeEgGeometry`/`time_eg_layout`は名前が衝突しないため再エクスポートする。
