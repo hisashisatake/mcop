@@ -541,6 +541,10 @@ impl Plugin for Op505Plugin {
             self.last_chorus_send_to_reverb = chorus_send_to_reverb;
         }
 
+        // マスターボリューム：NRPN/SysEx経由の上書き経路が無い（VSTは`SysExMessage = ()`）ため、
+        // 他のマスター単位パラメーターと違い差分検知は不要。毎ブロックDAW値をそのまま反映する。
+        self.master.output_mut().set_volume(self.params.master_volume.value() as u8);
+
         // 発音中チャンネルへDAWオートメーション・NRPN状態・表情CC/Soft Pedalの変更を反映する
         // （`Op505Engine::collect_active_channels`で発音中ボイスのみ列挙し、MIDIチャンネルごとの
         // 実効パッチを組み立てる。借用衝突（&self.active_ids と &mut self.engine）を避けるため
