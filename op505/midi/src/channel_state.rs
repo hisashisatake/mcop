@@ -48,20 +48,14 @@ pub enum DataEntryOutcome {
     Effect(u8, EffectControlTarget, u8),
 }
 
-/// エフェクト系NRPN（NRPN(0,2)〜(0,8)）。MasterEffectsはsound-core型のため本クレートの
-/// APIに出せず、[`DataEntryOutcome::Effect`]で呼び出し側へ通知する
+/// エフェクト系NRPN（NRPN(0,2)〜(0,8)）の適用先。`MasterEffects`はsound-core型のため
+/// 本クレートのAPIに出せず、[`DataEntryOutcome::Effect`]で呼び出し側へ通知する
 /// （`ControlTarget`の対応バリアントの部分集合）。適用先スロット番号は
 /// `DataEntryOutcome::Effect`の先頭要素（`u8`）が別途運ぶ。
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum EffectControlTarget {
-    ReverbType,
-    ChorusType,
-    ReverbTime,
-    ChorusModRate,
-    ChorusModDepth,
-    ChorusFeedback,
-    ChorusSendToReverb,
-}
+///
+/// 型定義自体は`sound-midi`にある（`apply_effect_control`と対で、MasterEffects適用の
+/// 3ホスト重複を解消する共有クレート）。ここでは再エクスポートのみ行う。
+pub use sound_midi::EffectControlTarget;
 
 /// 1つのMIDIチャンネルの解釈状態（CC/NRPN シャドウ）。16個で全チャンネルを管理する
 /// （`op505-vst`のプラグイングローバル・シャドウフィールドを**チャンネル別**に持ち直したもの）。

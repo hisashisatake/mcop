@@ -42,7 +42,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use op505_midi::{
     cc_byte_to_u7 as cc_to_u7, cc_byte_to_u8 as cc_to_u8, released_notes, ChannelState, DataEntryOutcome,
-    EffectControlTarget, MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
+    MonoNoteOff, MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
 };
 use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, ReverbType, Vco};
 
@@ -592,15 +592,7 @@ fn handle_control_change(
             }
             DataEntryOutcome::Effect(slot, target, value) => {
                 let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
-                match target {
-                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(value)),
-                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(value)),
-                    EffectControlTarget::ReverbTime => fx.set_reverb_time(value),
-                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(value),
-                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(value),
-                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(value),
-                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(value),
-                }
+                sound_midi::apply_effect_control(fx, target, value);
             }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。

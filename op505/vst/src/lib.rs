@@ -4,8 +4,8 @@ mod params;
 mod preset_host;
 
 use op505_midi::{
-    cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, EffectControlTarget, MonoNoteOff,
-    MonoNoteOn, ProgramSelection, RHYTHM_BANK_RANGE,
+    cc_to_u7, cc_to_u8, released_notes, ChannelState, DataEntryOutcome, MonoNoteOff, MonoNoteOn,
+    ProgramSelection, RHYTHM_BANK_RANGE,
 };
 /// エフェクトスロット数。`op505_midi::EFFECT_SLOT_COUNT`（クランプ境界の一元管理元）と揃える。
 const EFFECT_SLOT_COUNT: usize = op505_midi::EFFECT_SLOT_COUNT as usize;
@@ -325,15 +325,7 @@ impl Op505Plugin {
             DataEntryOutcome::StateChanged { voice_update: _ } => {}
             DataEntryOutcome::Effect(slot, target, v) => {
                 let fx = self.master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
-                match target {
-                    EffectControlTarget::ReverbType => fx.set_reverb_type(ReverbType::from_u8(v)),
-                    EffectControlTarget::ChorusType => fx.set_chorus_type(ChorusType::from_u8(v)),
-                    EffectControlTarget::ReverbTime => fx.set_reverb_time(v),
-                    EffectControlTarget::ChorusModRate => fx.set_chorus_mod_rate(v),
-                    EffectControlTarget::ChorusModDepth => fx.set_chorus_mod_depth(v),
-                    EffectControlTarget::ChorusFeedback => fx.set_chorus_feedback(v),
-                    EffectControlTarget::ChorusSendToReverb => fx.set_chorus_send_to_reverb(v),
-                }
+                sound_midi::apply_effect_control(fx, target, v);
             }
         }
     }

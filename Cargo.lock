@@ -3925,6 +3925,7 @@ version = "0.1.0"
 dependencies = [
  "op505-core",
  "sound-fm",
+ "sound-midi",
 ]
 
 [[package]]
@@ -3943,6 +3944,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sound-core",
+ "sound-midi",
  "tray-icon 0.24.2",
  "ui-core",
  "winit",
@@ -3982,6 +3984,7 @@ dependencies = [
  "serde",
  "sound-core",
  "sound-fm",
+ "sound-midi",
  "ui-core",
 ]
 
@@ -5118,6 +5121,7 @@ dependencies = [
  "op505-midi",
  "op505-tools",
  "sound-core",
+ "sound-midi",
 ]
 
 [[package]]
