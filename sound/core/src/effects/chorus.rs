@@ -77,6 +77,16 @@ const CHORUS_TUNINGS: [ChorusTuning; 8] = [
 /// バッファ長算出用の最大ディレイ時間（base_delay_ms + depth_scale×D_MAXの最大値より大きい値）。
 const MAX_DELAY_MS: f32 = 50.0;
 
+/// L/RでLFO位相をずらす量（周期に対する比率、0.25=90°）。
+/// 実測（`fx_quality_probe`診断、後で撤去済み）で、同一モノ入力に対するL/R出力の
+/// 最大差分が厳密に0.0（＝完全に同一）だったことを確認した。単一LFOで両チャンネルを
+/// 同位相駆動していたため、コーラスとして本来期待される「ステレオの広がり」が
+/// 一切生まれていなかった。実機・プラグインの一般的なステレオコーラスに倣い、
+/// Rチャンネルだけ位相を90°ずらす（180°の完全逆相はモノ合算時の位相打ち消しが
+/// 大きくなりすぎるため、より穏当な90°を選択）。Lは従来どおりの位相を使うため、
+/// モノラルとして片チャンネルだけ聴く場合の音自体は変化しない。
+const STEREO_PHASE_OFFSET: f32 = 0.25;
+
 // ---------------------------------------------------------------------------
 // Chorus
 // ---------------------------------------------------------------------------
@@ -133,22 +143,28 @@ impl Chorus {
 
         let rate_hz = mod_rate_to_hz(self.mod_rate) * tuning.rate_scale;
         self.lfo_phase = (self.lfo_phase + rate_hz / self.sample_rate).fract();
-        let lfo = (self.lfo_phase * TAU).sin();
+        let lfo_l = (self.lfo_phase * TAU).sin();
+        let phase_r = (self.lfo_phase + STEREO_PHASE_OFFSET).fract();
+        let lfo_r = (phase_r * TAU).sin();
 
         let depth_ms = mod_depth_to_ms(self.mod_depth) * tuning.depth_scale;
-        let delay_ms = tuning.base_delay_ms + lfo * depth_ms;
-        let delay_samples = (delay_ms / 1000.0 * self.sample_rate).max(0.0);
+        let delay_ms_l = tuning.base_delay_ms + lfo_l * depth_ms;
+        let delay_ms_r = tuning.base_delay_ms + lfo_r * depth_ms;
+        let delay_samples_l = (delay_ms_l / 1000.0 * self.sample_rate).max(0.0);
+        let delay_samples_r = (delay_ms_r / 1000.0 * self.sample_rate).max(0.0);
 
         let feedback = (tuning.feedback + self.feedback_param as f32 / 255.0 * 0.5).min(0.95);
 
         let len = self.buffer_l.len();
-        let read_pos = (self.write_pos as f32 - delay_samples).rem_euclid(len as f32);
-        let idx0 = read_pos as usize % len;
-        let idx1 = (idx0 + 1) % len;
-        let frac = read_pos - read_pos.floor();
-
-        let out_l = self.buffer_l[idx0] * (1.0 - frac) + self.buffer_l[idx1] * frac;
-        let out_r = self.buffer_r[idx0] * (1.0 - frac) + self.buffer_r[idx1] * frac;
+        let read_tap = |write_pos: usize, delay_samples: f32, buffer: &[f32]| -> f32 {
+            let read_pos = (write_pos as f32 - delay_samples).rem_euclid(len as f32);
+            let idx0 = read_pos as usize % len;
+            let idx1 = (idx0 + 1) % len;
+            let frac = read_pos - read_pos.floor();
+            buffer[idx0] * (1.0 - frac) + buffer[idx1] * frac
+        };
+        let out_l = read_tap(self.write_pos, delay_samples_l, &self.buffer_l);
+        let out_r = read_tap(self.write_pos, delay_samples_r, &self.buffer_r);
 
         self.buffer_l[self.write_pos] = in_l + out_l * feedback;
         self.buffer_r[self.write_pos] = in_r + out_r * feedback;
@@ -177,6 +193,24 @@ mod tests {
         assert_eq!(ChorusType::from_u8(4), ChorusType::FeedbackChorus);
         assert_eq!(ChorusType::from_u8(7), ChorusType::ShortDelayFb);
         assert_eq!(ChorusType::from_u8(255), ChorusType::ShortDelayFb);
+    }
+
+    /// ステレオ幅追加の回帰テスト。位相ずらし前は同一モノ入力に対しL/Rが常に
+    /// 厳密に同一（差分0）だった（`fx_quality_probe`診断で確認済み）。
+    #[test]
+    fn stereo_phase_offset_makes_lr_differ() {
+        let mut chorus = Chorus::new(44100.0);
+        chorus.set_type(ChorusType::Chorus1);
+        chorus.set_mod_rate(128);
+        chorus.set_mod_depth(255);
+
+        let mut max_diff = 0.0f32;
+        for _ in 0..8820 {
+            // 0.2秒分、LFO周期を跨ぐのに十分な長さ
+            let (l, r) = chorus.process(1.0, 1.0); // 同一モノ入力
+            max_diff = max_diff.max((l - r).abs());
+        }
+        assert!(max_diff > 1e-4, "L/R位相ずらしにより出力が変わるはず: max_diff={max_diff}");
     }
 
     #[test]

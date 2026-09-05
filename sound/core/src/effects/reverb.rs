@@ -292,6 +292,18 @@ fn time_to_feedback(time: u8) -> f32 {
     DELAY_FEEDBACK_MIN + (time as f32 / 255.0) * (DELAY_FEEDBACK_MAX - DELAY_FEEDBACK_MIN)
 }
 
+/// フィードバック経路のダンピング量（ワンポールローパス係数、`FdnReverb::damping`と同じ式）。
+/// 実測（`fx_quality_probe`/`analyze_fx2.py`診断、後で撤去済み）で確認した通り、
+/// 従来はフィードバック信号に一切のフィルタが無く、エコーが何回巡回しても波形が
+/// 変化しない（連続エコーの振幅比が終始厳密に一定）ことが判明していた。実機の
+/// テープ/BBDディレイは繰り返すごとに高域が落ちるのが普通で、これが無いと
+/// 高フィードバック時に全帯域のエコーが積み重なって濁って聴こえる一因になる
+/// （ユーザー報告「短いループでディレイが積み重なって濁る」に対応）。
+/// FDNのRoom1(0.50)〜Plate(0.10)の中間程度の値を固定で使う（空間タイプの概念を
+/// 持たないDelay/PanningDelayに対し、ユーザー調整可能なパラメーターを新設するほどの
+/// 柔軟性は不要と判断）。
+const DELAY_DAMPING: f32 = 0.35;
+
 /// ディレイ長切り替え中のクロスフェード状態（`from`→`to`、0.0〜1.0で進行）。
 struct DelayFade {
     from_samples: usize,
@@ -326,6 +338,13 @@ struct DelayReverb {
     /// バンド外に出た候補とその継続秒数（`None`なら候補なし＝安定）。
     locked_seconds: f32,
     pending: Option<(f32, f32)>,
+
+    /// フィードバックダンピング（`DELAY_DAMPING`）用のワンポールローパス状態。
+    /// 読み出し値そのもの（`out_l`/`out_r`、今回の出力）ではなく、次の周回へ
+    /// 書き戻す信号にのみ掛ける（＝今聴こえているエコーの音質はそのまま、
+    /// 次に返ってくるエコーから徐々に暗くなる）。
+    damping_state_l: f32,
+    damping_state_r: f32,
 }
 
 impl DelayReverb {
@@ -347,6 +366,8 @@ impl DelayReverb {
             fade: None,
             locked_seconds: 0.0,
             pending: None,
+            damping_state_l: 0.0,
+            damping_state_r: 0.0,
         };
         let target = reverb.raw_target_seconds();
         reverb.locked_seconds = target;
@@ -501,13 +522,18 @@ impl DelayReverb {
             }
         };
 
+        // フィードバックへ戻す信号だけをワンポールローパスへ通す（`FdnReverb`のダンピングと
+        // 同じ式）。`out_l`/`out_r`＝今回返す出力そのものは素通しのまま変えない。
+        self.damping_state_l = out_l * (1.0 - DELAY_DAMPING) + self.damping_state_l * DELAY_DAMPING;
+        self.damping_state_r = out_r * (1.0 - DELAY_DAMPING) + self.damping_state_r * DELAY_DAMPING;
+
         if self.panning {
             // L入力の遅延出力をRchへ、R入力の遅延出力をLchへ書き戻す（ピンポン）。
-            self.buffer_r[self.write_pos] = in_l + out_l * self.feedback;
-            self.buffer_l[self.write_pos] = in_r + out_r * self.feedback;
+            self.buffer_r[self.write_pos] = in_l + self.damping_state_l * self.feedback;
+            self.buffer_l[self.write_pos] = in_r + self.damping_state_r * self.feedback;
         } else {
-            self.buffer_l[self.write_pos] = in_l + out_l * self.feedback;
-            self.buffer_r[self.write_pos] = in_r + out_r * self.feedback;
+            self.buffer_l[self.write_pos] = in_l + self.damping_state_l * self.feedback;
+            self.buffer_r[self.write_pos] = in_r + self.damping_state_r * self.feedback;
         }
 
         self.write_pos = (self.write_pos + 1) % capacity;
@@ -699,6 +725,45 @@ mod tests {
                 assert!(l.abs() < 100.0 && r.abs() < 100.0, "{t:?}: 発散している: {l}, {r}");
             }
         }
+    }
+
+    /// フィードバックダンピング追加の回帰テスト。ダンピングが無ければ単発インパルスの
+    /// エコーは常に「厳密に1サンプルだけ非ゼロ」のはずだが、ワンポールローパスを
+    /// フィードバック経路に挟むと2回目以降のエコーは指数減衰の裾を引いて
+    /// 後続サンプルへ滲み出す（実機テープ/BBDディレイの高域減衰と同じ挙動）。
+    #[test]
+    fn feedback_damping_smears_second_echo() {
+        let mut reverb = Reverb::new(44100.0);
+        reverb.set_type(ReverbType::Delay);
+        reverb.set_time(255); // 最大フィードバック(0.85)でダンピングの効果を目立たせる
+
+        reverb.process(1.0, 1.0);
+        let delay_samples = (DELAY_TIME_MAX_MS / 1000.0 * 44100.0) as usize + 1;
+
+        let mut samples = vec![0.0f32; 2 * delay_samples + 20];
+        for s in samples.iter_mut() {
+            *s = reverb.process(0.0, 0.0).0;
+        }
+
+        // 1回目のエコー: ダンピング適用前の生の値をそのまま読むだけなので、
+        // 前後1サンプルは厳密に0のまま（滲みは無い）。
+        let e1 = delay_samples - 1;
+        assert_eq!(samples[e1 - 1], 0.0, "1回目のエコーの直前は無音のはず");
+        assert!(samples[e1].abs() > 1e-3, "1回目のエコーが検出できない: {}", samples[e1]);
+        assert_eq!(samples[e1 + 1], 0.0, "1回目のエコー自体はダンピング前の生値なので滲まないはず");
+
+        // 2回目のエコー: フィードバック経由でダンピングを1回通過済みなので、
+        // ちょうどその位置の直後（未来側、ローパスの因果的な減衰方向）に
+        // 無視できない大きさの裾が残るはず。タイミングは1回目と同じ周期の倍数
+        // （ダンピングは振幅・スペクトルのみに効き、遅延位置自体はズラさない）。
+        let e2 = 2 * delay_samples - 1;
+        let peak = samples[e2].abs();
+        assert!(peak > 1e-3, "2回目のエコーが検出できない: {}", peak);
+        let tail_energy: f32 = samples[e2 + 1..e2 + 6].iter().map(|v| v.abs()).sum();
+        assert!(
+            tail_energy > peak * 0.01,
+            "2回目のエコー後方に減衰の裾が無い（ダンピングが効いていない）: peak={peak}, tail_energy={tail_energy}"
+        );
     }
 
     #[test]
