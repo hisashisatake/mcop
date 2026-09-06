@@ -26,6 +26,20 @@
       width: 64px;
     }
 
+    /* 左上: 画面切り替えタブ */
+    #screen-tabs {
+      position: fixed; top: 14px; left: 18px;
+      display: flex; gap: 6px;
+    }
+    #screen-tabs button {
+      background: #1a1a1a; color: #666; border: 1px solid #333;
+      font-family: monospace; font-size: 12px; padding: 6px 14px; cursor: pointer;
+      letter-spacing: 1px;
+    }
+    #screen-tabs button.active {
+      background: #2a4a3a; color: #dfd; border-color: #3a6a4a;
+    }
+
     /* 右上: ヒント */
     #hint {
       position: fixed; top: 14px; right: 18px;
@@ -119,6 +133,12 @@
 <body>
   <canvas id="canvas"></canvas>
 
+  <div id="screen-tabs">
+    <button type="button" id="tab-chord">CHORD</button>
+    <button type="button" id="tab-rhythm">RHYTHM</button>
+    <button type="button" id="tab-melody">MELODY</button>
+  </div>
+
   <div id="program-panel">
     <div class="program-row">
       <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
@@ -132,17 +152,24 @@
       <button id="tap-tempo-btn" type="button">TAP</button>
       <span id="tempo-display">120 BPM</span>
     </div>
-    <div class="program-row">
-      Key <select id="key-tonic"></select>
-      <select id="key-mode">
-        <option value="major">Major</option>
-        <option value="minor">Minor</option>
-      </select>
-      Cols <input type="number" id="grid-cols" value="19" min="3" max="25" step="2">
+    <div id="chord-controls">
+      <div class="program-row">
+        Key <select id="key-tonic"></select>
+        <select id="key-mode">
+          <option value="major">Major</option>
+          <option value="minor">Minor</option>
+        </select>
+        Cols <input type="number" id="grid-cols" value="19" min="3" max="25" step="2">
+      </div>
+      <div class="program-row">
+        <label><input type="checkbox" id="show-chord-names"> コード名表示</label>
+        <label><input type="checkbox" id="chord-assist-toggle" checked> コード補助</label>
+      </div>
     </div>
-    <div class="program-row">
-      <label><input type="checkbox" id="show-chord-names"> コード名表示</label>
-      <label><input type="checkbox" id="chord-assist-toggle" checked> コード補助</label>
+    <div id="rhythm-controls" hidden>
+      <div class="program-row">
+        <label><input type="checkbox" id="metronome-toggle"> メトロノーム</label>
+      </div>
     </div>
   </div>
 

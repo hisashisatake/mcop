@@ -18,6 +18,7 @@ import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { ROWS, DEFAULT_COLS, DEFAULT_TONIC_MIDI, NOTE_NAMES, chordAt, chordTypeAt, velocityFromCellY, homeRowIndex } from './chords.js';
 import { classifyProgression, pivotKeysFor, confirmsModulation } from './theory.js';
+import { isActive, onScreenChange } from './screens.js';
 
 const GRID_LINE = '#3a3a3a'; // 点線（黒よりの灰色）
 const CENTER_LINE = '#5a5a5a'; // ホームセルの目印
@@ -154,11 +155,12 @@ async function playCell(cell) {
 
 export function setupChordScreen(canvas, { onChordChange } = {}) {
   canvas.addEventListener('mousemove', (e) => {
+    if (!isActive('chord')) return;
     hoverCell = cellFromPoint(canvas, e.clientX, e.clientY);
   });
 
   canvas.addEventListener('mousedown', async (e) => {
-    if (e.button !== 0) return;
+    if (!isActive('chord') || e.button !== 0) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
     pointerHeld = true;
@@ -181,8 +183,13 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
   };
   canvas.addEventListener('mouseup', release);
   canvas.addEventListener('mouseleave', release);
+  // 他の画面へ切り替えたときも、鳴りっぱなしを残さず止める（画面を跨いだ音の取りこぼし対策）
+  onScreenChange((next) => {
+    if (next !== 'chord') release();
+  });
 
   window.addEventListener('keydown', (e) => {
+    if (!isActive('chord')) return;
     if (e.key === 'Shift') {
       shiftHeld = true;
       invalidateCandidates();
@@ -198,6 +205,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     }
   });
   window.addEventListener('keyup', (e) => {
+    if (!isActive('chord')) return;
     if (e.key === 'Shift') {
       shiftHeld = false;
       invalidateCandidates();
@@ -213,7 +221,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     invalidateCandidates();
   });
 
-  return { draw: (ctx) => draw(ctx, canvas) };
+  return { draw: (ctx) => isActive('chord') && draw(ctx, canvas) };
 }
 
 /** 調・列数・コードネーム表示・コード補助を切り替えるUIを配線する。 */

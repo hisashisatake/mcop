@@ -179,6 +179,13 @@ fn tap_tempo(bpm: f32) {
     midi_out::set_clock_bpm(bpm);
 }
 
+/// リズム画面のメトロノームON/OFF。刻み自体は`midi_out::clock_loop`（タップテンポと同じ
+/// MIDI Clockスレッド）が担うため、ここではフラグを立てるだけ。
+#[tauri::command]
+fn set_metronome_enabled(enabled: bool) {
+    midi_out::set_metronome_enabled(enabled);
+}
+
 fn main() {
     // presets_dir()の読み込みは起動時にここで1回だけ行う（%APPDATA%\op505\presets）。
     // gesture-appはエンジンを持たない読み取り専用のBank/Program解決用途にのみこれを使う
@@ -189,6 +196,10 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(op505_bank))
         .manage(Mutex::new(op505_registry))
+        .setup(|app| {
+            midi_out::set_app_handle(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,
@@ -199,6 +210,7 @@ fn main() {
             op505_reload_presets,
             op505_open_editor,
             tap_tempo,
+            set_metronome_enabled,
             op505_presets::op505_list_bank_entries,
             op505_presets::op505_get_bank_file_name,
             op505_presets::op505_get_bank_program,

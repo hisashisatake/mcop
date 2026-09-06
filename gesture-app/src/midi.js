@@ -5,6 +5,7 @@ import { pushLog } from './midi-log.js';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外ではMIDIは飛ばない）
 const invoke = window.__TAURI__?.core?.invoke ?? (async (_cmd, _args) => 0);
+const tauriEvent = window.__TAURI__?.event;
 
 /** コード発音チャンネル。src-tauri側の`CHORD_CHANNEL`と一致させること。 */
 export const CHORD_CHANNEL = 0;
@@ -39,4 +40,17 @@ export function tapTempo(bpm) {
 
 export function openEditor() {
   return invoke('op505_open_editor');
+}
+
+export function setMetronomeEnabled(enabled) {
+  pushLog(`metronome ${enabled ? 'on' : 'off'}`);
+  return invoke('set_metronome_enabled', { enabled });
+}
+
+/** Rust側`clock_loop`が拍の頭ごとに送る`sequencer-tick`（payload=小節内の拍番号、0-indexed）を
+ * 購読する。刻み自体はRust側が持ち、JSは受け取った拍番号で再生カーソルを描くだけ
+ * （JSタイマーは数十msの誤差が出るため刻みには使わない）。Tauri外では何もしない。 */
+export function onSequencerTick(callback) {
+  if (!tauriEvent?.listen) return;
+  tauriEvent.listen('sequencer-tick', (event) => callback(event.payload));
 }

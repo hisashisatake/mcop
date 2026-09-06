@@ -84,6 +84,16 @@ def make_noise_drum(*, fixed_note: int, tl: int, ar: int, rr: int, color: int,
     return make_drum_patch(waveform=noise_waveform(color), fixed_note=fixed_note, tl=tl, ar=ar, rr=rr, d1r=d1r, d1l=d1l)
 
 
+# 矩形波（waveform 16 = 50%デューティの対称矩形、`sound_fm::waveform::gen_square_family`）。
+# KORG風のデジタルビープ音を狙ったメトロノーム用（note 33/34、下記STANDARD_KIT参照）。
+SQUARE_WAVEFORM = 16
+
+
+def make_square_drum(*, fixed_note: int, tl: int, ar: int, rr: int, mul: int = 1,
+                      d1r: int = 0, d1l: int = 255) -> dict:
+    return make_drum_patch(waveform=SQUARE_WAVEFORM, fixed_note=fixed_note, tl=tl, ar=ar, rr=rr, mul=mul, d1r=d1r, d1l=d1l)
+
+
 # ── Standard Kit（GM2ノート番号 → (名前, 生成関数, kwargs)）────────────────────
 # ar=255（瞬時アタック、クリック回避のため0ではなくフルレート）。rrがそのままテール長。
 STANDARD_KIT: dict[int, tuple[str, str, dict]] = {
@@ -102,13 +112,25 @@ STANDARD_KIT: dict[int, tuple[str, str, dict]] = {
     41: ("Low_Tom", "tonal", dict(fixed_note=41, tl=230, ar=255, rr=100)),
     45: ("Mid_Tom", "tonal", dict(fixed_note=45, tl=225, ar=255, rr=105)),
     48: ("High_Tom", "tonal", dict(fixed_note=48, tl=220, ar=255, rr=110)),
+    # GM2標準のメトロノーム2音色（gesture-appのリズム画面/シーケンサーが使う、
+    # CLAUDE.md spec-app.md フェーズ3参照）。Bellは1拍目、Clickはそれ以外の拍。
+    # 矩形波なのでfixed_noteがそのまま音高を決める（ノイズ系と違いピッチで区別できる）。
+    33: ("Metronome_Click", "square", dict(fixed_note=84, tl=190, ar=255, rr=220)),  # C6
+    34: ("Metronome_Bell", "square", dict(fixed_note=96, tl=180, ar=255, rr=200)),   # C7、Clickより1オクターブ高い
+}
+
+
+DRUM_MAKERS = {
+    "tonal": make_tonal_drum,
+    "noise": make_noise_drum,
+    "square": make_square_drum,
 }
 
 
 def build_presets() -> list[dict]:
     presets = []
     for note, (name, kind, kwargs) in sorted(STANDARD_KIT.items()):
-        patch = make_tonal_drum(**kwargs) if kind == "tonal" else make_noise_drum(**kwargs)
+        patch = DRUM_MAKERS[kind](**kwargs)
         presets.append({"program": note, "name": name, "patch": patch})
     return presets
 

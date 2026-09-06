@@ -4,6 +4,9 @@ import { setProgram, tapTempo, openEditor } from './midi.js';
 import { setupMidiLog } from './midi-log.js';
 import { setupPerformanceLfo, drawLfoIndicator } from './performance-lfo.js';
 import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
+import { setupRhythmScreen, bindRhythmScreenControls } from './rhythm-screen.js';
+import { setupMelodyScreen } from './melody-screen.js';
+import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
 
 setupMidiLog(document.getElementById('midi-log'));
 
@@ -158,7 +161,7 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 })();
 
 // ─────────────────────────────────────────────
-// 画面と演奏系モジュレーション
+// 画面切り替え（コード/リズム/メロディの3画面。フェーズ3）
 // ─────────────────────────────────────────────
 const chordScreen = setupChordScreen(canvas, {
   onChordChange: (name) => {
@@ -174,6 +177,31 @@ bindChordScreenControls({
   assistToggle: document.getElementById('chord-assist-toggle'),
 });
 
+const rhythmScreen = setupRhythmScreen(canvas);
+bindRhythmScreenControls({ metronomeToggle: document.getElementById('metronome-toggle') });
+
+const melodyScreen = setupMelodyScreen(canvas);
+
+bindScreenTabs({
+  chord: document.getElementById('tab-chord'),
+  rhythm: document.getElementById('tab-rhythm'),
+  melody: document.getElementById('tab-melody'),
+});
+
+// 画面ごとのコントロールパネル・キーボードヒントの出し分け
+const chordControlsEl = document.getElementById('chord-controls');
+const rhythmControlsEl = document.getElementById('rhythm-controls');
+const hintEl = document.getElementById('hint');
+const CHORD_HINT = hintEl.innerHTML;
+const RHYTHM_HINT = 'メトロノームON/OFFは左下のチェックボックスから<br>E: 音色エディタ';
+const MELODY_HINT = 'メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
+
+onScreenChange((next) => {
+  chordControlsEl.hidden = next !== 'chord';
+  rhythmControlsEl.hidden = next !== 'rhythm';
+  hintEl.innerHTML = next === 'chord' ? CHORD_HINT : next === 'rhythm' ? RHYTHM_HINT : MELODY_HINT;
+});
+
 setupPerformanceLfo(canvas, activeChannels);
 
 window.addEventListener('keydown', async (e) => {
@@ -186,7 +214,10 @@ window.addEventListener('keydown', async (e) => {
 // アニメーションループ
 // ─────────────────────────────────────────────
 function tick() {
-  chordScreen.draw(ctx);
+  const screen = activeScreen();
+  if (screen === 'rhythm') rhythmScreen.draw(ctx);
+  else if (screen === 'melody') melodyScreen.draw(ctx);
+  else chordScreen.draw(ctx);
   drawLfoIndicator(ctx);
   requestAnimationFrame(tick);
 }

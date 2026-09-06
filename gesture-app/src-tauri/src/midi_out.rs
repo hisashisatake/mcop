@@ -8,10 +8,11 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
 const CHANNEL_CAPACITY: usize = 256;
@@ -162,16 +163,41 @@ pub fn open_editor() {
 }
 
 // ─────────────────────────────────────────────
-// MIDI Clock送信（タップテンポ）
+// MIDI Clock送信（タップテンポ）+ ステップシーケンサー土台（フェーズ3）
 // gesture-appがマスターとなり24 PPQNのクロックパルス(0xF8)をstandaloneへ送り続ける。
 // standalone側の`TempoClock`（`op505/standalone/src/tempo_clock.rs`）がパルス間隔から
 // BPMを算出しTimeEgのテンポ同期(sync_enabled)へ反映する。
+// 同じループ内で拍を数え、メトロノーム（GM2 note33=Click/34=Bell、ch9=リズムチャンネル）と
+// 再生位置のフロントエンド通知（Tauriイベント`sequencer-tick`）を行う。JS側のリズム画面
+// （フェーズ4）はこのイベントを購読して再生カーソルを描くだけで、刻み自体はRust側が持つ
+// （JSタイマーは数十msの誤差が出るため）。
 // ─────────────────────────────────────────────
 const CLOCK_PPQN: u32 = 24;
+const BEATS_PER_BAR: u32 = 4;
+
+/// GM2リズムチャンネル（standalone側の`op505-midi::rhythm`がch10＝0-indexed 9をGM2リズムと
+/// 解釈する、CLAUDE.md「GM2リズムチャンネル」節参照）。
+const RHYTHM_CHANNEL: u8 = 9;
+const METRONOME_CLICK_NOTE: u8 = 33;
+const METRONOME_BELL_NOTE: u8 = 34;
+const METRONOME_VELOCITY: u8 = 100;
 
 /// f32::to_bits()で格納。0は「未タップ（クロック未送出）」を表す番兵。
 static CLOCK_BPM_BITS: AtomicU32 = AtomicU32::new(0);
 static CLOCK_THREAD_INIT: Once = Once::new();
+static METRONOME_ENABLED: AtomicBool = AtomicBool::new(false);
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// `sequencer-tick`イベントの送信先。`main.rs`の`setup`から一度だけ渡す。
+pub fn set_app_handle(handle: AppHandle) {
+    let _ = APP_HANDLE.set(handle);
+}
+
+/// メトロノームのON/OFF。ドラムパッチはauto_release=1（GM2リズムキット共通仕様）のため
+/// note_offのタイミングは音の長さに影響しない。
+pub fn set_metronome_enabled(enabled: bool) {
+    METRONOME_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 /// タップテンポで確定したBPMを設定する。初回呼び出し時にクロック送信スレッドを起動する。
 pub fn set_clock_bpm(bpm: f32) {
@@ -188,7 +214,10 @@ fn ensure_clock_thread() {
 /// BPM未設定の間は100ms間隔で設定の有無だけポーリングし、設定後は24 PPQN間隔で
 /// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
 /// 移動平均で吸収される想定のため、高精度タイマーは使わない。
+/// 拍の頭（24クロックに1回）でメトロノームのNote On/Offと`sequencer-tick`イベント送出を行う。
 fn clock_loop() {
+    let mut clock_count: u32 = 0;
+    let mut beat_in_bar: u32 = 0;
     loop {
         let bits = CLOCK_BPM_BITS.load(Ordering::Relaxed);
         if bits == 0 {
@@ -196,8 +225,26 @@ fn clock_loop() {
             continue;
         }
         let bpm = f32::from_bits(bits);
+
+        if clock_count == 0 {
+            if METRONOME_ENABLED.load(Ordering::Relaxed) {
+                let note = if beat_in_bar == 0 { METRONOME_BELL_NOTE } else { METRONOME_CLICK_NOTE };
+                note_on(RHYTHM_CHANNEL, note, METRONOME_VELOCITY);
+                note_off(RHYTHM_CHANNEL, note);
+            }
+            if let Some(handle) = APP_HANDLE.get() {
+                let _ = handle.emit("sequencer-tick", beat_in_bar);
+            }
+        }
+
         send_short(&[0xF8]);
         let interval = Duration::from_secs_f32(60.0 / bpm / CLOCK_PPQN as f32);
         std::thread::sleep(interval);
+
+        clock_count += 1;
+        if clock_count >= CLOCK_PPQN {
+            clock_count = 0;
+            beat_in_bar = (beat_in_bar + 1) % BEATS_PER_BAR;
+        }
     }
 }
