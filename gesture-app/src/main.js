@@ -193,7 +193,7 @@ const chordControlsEl = document.getElementById('chord-controls');
 const rhythmControlsEl = document.getElementById('rhythm-controls');
 const hintEl = document.getElementById('hint');
 const CHORD_HINT = hintEl.innerHTML;
-const RHYTHM_HINT = 'メトロノームON/OFFは左下のチェックボックスから<br>E: 音色エディタ';
+const RHYTHM_HINT = 'クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>メトロノームON/OFFは左下のチェックボックスから<br>E: 音色エディタ';
 const MELODY_HINT = 'メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
 
 onScreenChange((next) => {

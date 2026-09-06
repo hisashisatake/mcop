@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Once, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -174,6 +174,7 @@ pub fn open_editor() {
 // ─────────────────────────────────────────────
 const CLOCK_PPQN: u32 = 24;
 const BEATS_PER_BAR: u32 = 4;
+const CLOCKS_PER_BAR: u32 = CLOCK_PPQN * BEATS_PER_BAR;
 
 /// GM2リズムチャンネル（standalone側の`op505-midi::rhythm`がch10＝0-indexed 9をGM2リズムと
 /// 解釈する、CLAUDE.md「GM2リズムチャンネル」節参照）。
@@ -187,6 +188,43 @@ static CLOCK_BPM_BITS: AtomicU32 = AtomicU32::new(0);
 static CLOCK_THREAD_INIT: Once = Once::new();
 static METRONOME_ENABLED: AtomicBool = AtomicBool::new(false);
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+// ─────────────────────────────────────────────
+// ステップシーケンサー（フェーズ4：リズム画面本体）
+// 1小節=16ステップ固定。行はop505/tools/patchlab/python/gm2_drum_kit.pyの
+// STANDARD_KIT（メトロノーム用note33/34を除く12音色）と対応させる。パターンの
+// 編集はJS側（rhythm-screen.js）が発生源で、`set_rhythm_step`経由でここへミラーする
+// だけ（読み出しはこのクロックスレッドのみ）。発音の判定・送信自体は必ずこのスレッドが
+// 行う（JS側のrequestAnimationFrameは数十msの誤差が出るため刻みに使わない）。
+// ─────────────────────────────────────────────
+const RHYTHM_STEPS: usize = 16;
+const RHYTHM_ROWS: usize = 12;
+const CLOCKS_PER_STEP: u32 = CLOCKS_PER_BAR / RHYTHM_STEPS as u32;
+
+/// 行→GM2ノート番号。gm2_drum_kit.pyのSTANDARD_KITと一致させること
+/// （Crash/Ride/OpenHH/ClosedHH/Clap/RimShot/Snare/E.Snare/HiTom/MidTom/LoTom/Kickの並び）。
+const DRUM_NOTES: [u8; RHYTHM_ROWS] = [49, 51, 46, 42, 39, 37, 38, 40, 48, 45, 41, 36];
+
+const RHYTHM_VELOCITY_NORMAL: u8 = 95;
+const RHYTHM_VELOCITY_ACCENT: u8 = 127;
+const RHYTHM_VELOCITY_WEAK: u8 = 55;
+
+/// [row][step] = 0(消音)/1(通常)/2(アクセント)/3(弱)。
+static RHYTHM_PATTERN: OnceLock<Mutex<[[u8; RHYTHM_STEPS]; RHYTHM_ROWS]>> = OnceLock::new();
+
+fn rhythm_pattern() -> &'static Mutex<[[u8; RHYTHM_STEPS]; RHYTHM_ROWS]> {
+    RHYTHM_PATTERN.get_or_init(|| Mutex::new([[0; RHYTHM_STEPS]; RHYTHM_ROWS]))
+}
+
+/// リズム画面のグリッドクリックで呼ばれる。`level`は0〜3（4以上は3にクランプ）。
+/// パターンはテンポが未設定（クロック未送出）でも保持され、`tap_tempo`後に反映される。
+pub fn set_rhythm_step(row: u8, step: u8, level: u8) {
+    let (row, step) = (row as usize, step as usize);
+    if row >= RHYTHM_ROWS || step >= RHYTHM_STEPS {
+        return;
+    }
+    rhythm_pattern().lock().unwrap()[row][step] = level.min(3);
+}
 
 /// `sequencer-tick`イベントの送信先。`main.rs`の`setup`から一度だけ渡す。
 pub fn set_app_handle(handle: AppHandle) {
@@ -214,10 +252,11 @@ fn ensure_clock_thread() {
 /// BPM未設定の間は100ms間隔で設定の有無だけポーリングし、設定後は24 PPQN間隔で
 /// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
 /// 移動平均で吸収される想定のため、高精度タイマーは使わない。
-/// 拍の頭（24クロックに1回）でメトロノームのNote On/Offと`sequencer-tick`イベント送出を行う。
+/// 小節内位置は1本の`clock_in_bar`（0〜95）で管理し、拍の頭（24クロックごと）で
+/// メトロノームのNote On/Offと`sequencer-tick`、ステップの頭（6クロックごと＝
+/// 16分音符単位）でリズムパターンの発音と`rhythm-step`イベント送出を行う。
 fn clock_loop() {
-    let mut clock_count: u32 = 0;
-    let mut beat_in_bar: u32 = 0;
+    let mut clock_in_bar: u32 = 0;
     loop {
         let bits = CLOCK_BPM_BITS.load(Ordering::Relaxed);
         if bits == 0 {
@@ -226,7 +265,8 @@ fn clock_loop() {
         }
         let bpm = f32::from_bits(bits);
 
-        if clock_count == 0 {
+        if clock_in_bar % CLOCK_PPQN == 0 {
+            let beat_in_bar = clock_in_bar / CLOCK_PPQN;
             if METRONOME_ENABLED.load(Ordering::Relaxed) {
                 let note = if beat_in_bar == 0 { METRONOME_BELL_NOTE } else { METRONOME_CLICK_NOTE };
                 note_on(RHYTHM_CHANNEL, note, METRONOME_VELOCITY);
@@ -237,14 +277,33 @@ fn clock_loop() {
             }
         }
 
+        if clock_in_bar % CLOCKS_PER_STEP == 0 {
+            let step = (clock_in_bar / CLOCKS_PER_STEP) as usize;
+            {
+                let pattern = rhythm_pattern().lock().unwrap();
+                for row in 0..RHYTHM_ROWS {
+                    let level = pattern[row][step];
+                    if level == 0 {
+                        continue;
+                    }
+                    let velocity = match level {
+                        2 => RHYTHM_VELOCITY_ACCENT,
+                        3 => RHYTHM_VELOCITY_WEAK,
+                        _ => RHYTHM_VELOCITY_NORMAL,
+                    };
+                    note_on(RHYTHM_CHANNEL, DRUM_NOTES[row], velocity);
+                    note_off(RHYTHM_CHANNEL, DRUM_NOTES[row]);
+                }
+            }
+            if let Some(handle) = APP_HANDLE.get() {
+                let _ = handle.emit("rhythm-step", step);
+            }
+        }
+
         send_short(&[0xF8]);
         let interval = Duration::from_secs_f32(60.0 / bpm / CLOCK_PPQN as f32);
         std::thread::sleep(interval);
 
-        clock_count += 1;
-        if clock_count >= CLOCK_PPQN {
-            clock_count = 0;
-            beat_in_bar = (beat_in_bar + 1) % BEATS_PER_BAR;
-        }
+        clock_in_bar = (clock_in_bar + 1) % CLOCKS_PER_BAR;
     }
 }

@@ -186,6 +186,14 @@ fn set_metronome_enabled(enabled: bool) {
     midi_out::set_metronome_enabled(enabled);
 }
 
+/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`level`は0(消音)〜
+/// 3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、ここでは
+/// 共有パターンへ書き込むだけ。
+#[tauri::command]
+fn set_rhythm_step(row: u8, step: u8, level: u8) {
+    midi_out::set_rhythm_step(row, step, level);
+}
+
 fn main() {
     // presets_dir()の読み込みは起動時にここで1回だけ行う（%APPDATA%\op505\presets）。
     // gesture-appはエンジンを持たない読み取り専用のBank/Program解決用途にのみこれを使う
@@ -211,6 +219,7 @@ fn main() {
             op505_open_editor,
             tap_tempo,
             set_metronome_enabled,
+            set_rhythm_step,
             op505_presets::op505_list_bank_entries,
             op505_presets::op505_get_bank_file_name,
             op505_presets::op505_get_bank_program,
