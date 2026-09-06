@@ -172,9 +172,8 @@ const chordScreen = setupChordScreen(canvas, {
 bindChordScreenControls({
   tonicSelect: document.getElementById('key-tonic'),
   modeSelect: document.getElementById('key-mode'),
-  colsInput: document.getElementById('grid-cols'),
-  namesToggle: document.getElementById('show-chord-names'),
-  assistToggle: document.getElementById('chord-assist-toggle'),
+  rowsInput: document.getElementById('candidate-rows'),
+  colsInput: document.getElementById('candidate-cols'),
 });
 
 const rhythmScreen = setupRhythmScreen(canvas);

@@ -159,11 +159,10 @@
           <option value="major">Major</option>
           <option value="minor">Minor</option>
         </select>
-        Cols <input type="number" id="grid-cols" value="19" min="3" max="25" step="2">
       </div>
       <div class="program-row">
-        <label><input type="checkbox" id="show-chord-names"> コード名表示</label>
-        <label><input type="checkbox" id="chord-assist-toggle" checked> コード補助</label>
+        候補 行数 <input type="number" id="candidate-rows" value="5" min="3" max="12">
+        列数 <input type="number" id="candidate-cols" value="3" min="1" max="3">
       </div>
     </div>
     <div id="rhythm-controls" hidden>
@@ -178,8 +177,10 @@
   </div>
 
   <div id="hint">
-    クリック: 発音（セル上側ほど強く） &nbsp;|&nbsp; Shift: 4和音 &nbsp;|&nbsp; Ctrl: sus/付加音 &nbsp;|&nbsp; Ctrl+Shift: aug/オルタード<br>
-    Esc: 転調を取り消す<br>
+    候補クリック: 発音して選択（セル上側ほど強く） &nbsp;|&nbsp; 過去コードクリック: そこへ戻る<br>
+    Ctrl+Z: 1つ戻す &nbsp;|&nbsp; Ctrl+Y: やり直す<br>
+    Shift: 4和音 &nbsp;|&nbsp; Ctrl: sus/付加音 &nbsp;|&nbsp; Ctrl+Shift: aug/オルタード<br>
+    ↑/↓: 候補行数 &nbsp;|&nbsp; ←/→: 候補列数<br>
     ホイール: LFO Depth &nbsp;|&nbsp; V: Vibrato/Tremolo切替<br>
     C/B: LFO Rate down/up &nbsp;|&nbsp; E: 音色エディタ
   </div>

@@ -92,7 +92,7 @@ export function isDiatonic(chord, key) {
   return nf != null && allowed.includes(nf);
 }
 
-function isDiatonicInOppositeMode(chord, key) {
+export function isDiatonicInOppositeMode(chord, key) {
   const opposite = { tonicPc: key.tonicPc, mode: key.mode === 'major' ? 'minor' : 'major' };
   return isDiatonic(chord, opposite);
 }
@@ -232,6 +232,34 @@ export function classifyProgression(fromChord, toChord, key) {
 
   if (score < MIN_SCORE) category = null;
 
+  return { score, category };
+}
+
+/** 直前コードが無い1手目用の度数重要度（トニック＞属＞下属＞…）。GREENの並び順に使う。 */
+const INITIAL_DEGREE_SCORE = {
+  major: { 0: 1.0, 7: 0.9, 5: 0.85, 9: 0.6, 2: 0.55, 4: 0.5, 11: 0.4 },
+  minor: { 0: 1.0, 7: 0.9, 5: 0.85, 3: 0.6, 8: 0.55, 10: 0.5, 2: 0.45, 11: 0.4 },
+};
+const INITIAL_DEFAULT_SCORE = 0.5;
+const INITIAL_BORROW_SCORE = 0.5;
+
+/**
+ * 直前に鳴らしたコードが無い1手目用の採点。classifyProgressionと違い遷移元が無いため、
+ * ダイアトニックなら度数の重要度で、同主調からの借用ならYELLOW固定スコアで評価する。
+ * @returns {{score: number, category: 'GREEN' | 'YELLOW' | null}}
+ */
+export function classifyInitial(chord, key) {
+  const degree = mod12(chord.rootPc - key.tonicPc);
+  let category = null;
+  let score = INITIAL_DEFAULT_SCORE;
+  if (isDiatonic(chord, key)) {
+    category = 'GREEN';
+    score = INITIAL_DEGREE_SCORE[key.mode][degree] ?? INITIAL_DEFAULT_SCORE;
+  } else if (isDiatonicInOppositeMode(chord, key)) {
+    category = 'YELLOW';
+    score = INITIAL_BORROW_SCORE;
+  }
+  score -= dissonancePenalty(chord);
   return { score, category };
 }
 

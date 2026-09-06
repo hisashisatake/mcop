@@ -1,16 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chordAt, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from './chords.js';
+import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from './chords.js';
 import { classifyProgression, isDiatonic, normalizeFamily, pivotKeysFor, confirmsModulation, dissonancePenalty } from './theory.js';
 
 const TONIC_MIDI = 60; // C4
-const COLS = 19;
-const CENTER_COL = Math.floor(COLS / 2); // 9
 
-/** Cを基準にした半音オフセットと行インデックスから、実際のchordAt()と同じコード構築経路でコードを作る。 */
+/** Cを基準にした半音オフセットと行インデックスから、実際のchordFromSemitone()と同じコード構築経路でコードを作る。 */
 function chordFor(semitoneFromC, rowIndex, mods = {}) {
-  return chordAt(CENTER_COL + semitoneFromC, rowIndex, {
-    cols: COLS,
+  return chordFromSemitone(semitoneFromC, rowIndex, {
     tonicMidi: TONIC_MIDI,
     shiftHeld: !!mods.shift,
     ctrlHeld: !!mods.ctrl,

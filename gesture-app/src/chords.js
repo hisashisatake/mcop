@@ -1,9 +1,8 @@
-// コード画面のグリッドに割り当てるコード定義と、音楽的な計算。
+// コード画面（フロー方式）に割り当てるコード定義と、音楽的な計算。
 //
-// グリッドの軸:
-//   横（列）= 現在の調のトニックを中心とした半音単位の音程。右へ行くほど高い。
-//   縦（行）= コードの種類。中心行から外側へ行くほど緊張が強い。
-//              上方向がメジャー系→ドミナント系、下方向がマイナー系→ディミニッシュ系。
+// 行（縦）= コードの種類。中心行から外側へ行くほど緊張が強い。
+//            上方向がメジャー系→ドミナント系、下方向がマイナー系→ディミニッシュ系。
+// 半音オフセット（chordFromSemitone引数）= トニックからの音程。負値は下方向。
 //
 // 修飾キーで4レイヤーを切り替える:
 //   なし        … トライアド中心（上=ドミナント系テンション、下=ディミニッシュ系）
@@ -69,16 +68,8 @@ export const CTRL_SHIFT_LAYER = [
 
 export const ROWS = NORMAL_LAYER.length; // 9
 
-/** 既定の列数（±9半音）。列幅を縦長にするため13から拡張した。可変にするためこれは初期値でしかない。 */
-export const DEFAULT_COLS = 19;
-
-/** 中心列（col=中央）のルート音（MIDIノート番号）。調を変えるとこの値が動く。 */
+/** 起点となるルート音（MIDIノート番号）。調を変えるとこの値が動く。 */
 export const DEFAULT_TONIC_MIDI = 60;
-
-/** メジャーキーでのホーム行（トライアド／maj7の行）の配列インデックス。 */
-const HOME_ROW_INDEX_MAJOR = 4;
-/** マイナーキーでのホーム行（m／m7の行）の配列インデックス。 */
-const HOME_ROW_INDEX_MINOR = 5;
 
 /** 修飾キーの状態からレイヤー配列を選ぶ。 */
 export function layerFor(mods) {
@@ -99,20 +90,12 @@ export function chordTypeAt(rowIndex, mods) {
 }
 
 /**
- * 列インデックス（0=最左）から、中心を0とする半音オフセットへ変換する。
- * 列数が奇数のときは中心が単一に決まるため、左寄りの列を中心とみなす。
- */
-export function colToSemitone(colIndex, cols) {
-  return colIndex - Math.floor(cols / 2);
-}
-
-/**
- * セル（列・行）からコードを組み立てる。
+ * トニックからの半音オフセットと行インデックスからコードを組み立てる。
  * @returns {{name: string, rootMidi: number, rootPc: number, family: string, intervals: number[], notes: number[]}}
  */
-export function chordAt(colIndex, rowIndex, { cols, tonicMidi, shiftHeld, ctrlHeld }) {
+export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ctrlHeld }) {
   const type = chordTypeAt(rowIndex, { shiftHeld, ctrlHeld });
-  const rootMidi = tonicMidi + colToSemitone(colIndex, cols);
+  const rootMidi = tonicMidi + semitone;
   const rootPc = ((rootMidi % 12) + 12) % 12;
   const rootName = NOTE_NAMES[rootPc];
   return {
@@ -123,11 +106,6 @@ export function chordAt(colIndex, rowIndex, { cols, tonicMidi, shiftHeld, ctrlHe
     intervals: type.intervals,
     notes: type.intervals.map((i) => rootMidi + i),
   };
-}
-
-/** 現在の調のモードから、ホームセル（主和音）の行インデックスを返す。 */
-export function homeRowIndex(mode) {
-  return mode === 'minor' ? HOME_ROW_INDEX_MINOR : HOME_ROW_INDEX_MAJOR;
 }
 
 /**
