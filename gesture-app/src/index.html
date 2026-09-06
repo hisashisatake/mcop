@@ -19,14 +19,34 @@
       text-shadow: 0 0 40px rgba(120,200,255,0.4);
       letter-spacing: -2px;
     }
-    #chord-type-hint {
-      font-size: 15px; color: #666; margin-top: 8px; letter-spacing: 2px;
+    #program-panel select#key-tonic {
+      width: 56px;
     }
 
     /* 右上: ヒント */
     #hint {
       position: fixed; top: 14px; right: 18px;
       font-size: 12px; color: #444; text-align: right; line-height: 2;
+    }
+
+    /* 右上ヒントの下: 直近のMIDI送信ログ（実機確認用のデバッグ表示） */
+    #midi-log-panel {
+      position: fixed; top: 92px; right: 18px;
+      width: 300px; max-height: 240px;
+      font-size: 10px; color: #5a7; letter-spacing: 0;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid #2a2a2a;
+      padding: 6px 8px;
+      overflow-y: auto;
+      pointer-events: none;
+    }
+    #midi-log-panel .midi-log-title {
+      color: #666; font-size: 10px; letter-spacing: 2px; margin-bottom: 4px;
+    }
+    #midi-log {
+      white-space: pre-wrap;
+      margin: 0;
+      line-height: 1.5;
     }
 
     /* 右下: 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI） */
@@ -109,21 +129,32 @@
       <button id="tap-tempo-btn" type="button">TAP</button>
       <span id="tempo-display">120 BPM</span>
     </div>
+    <div class="program-row">
+      Key <select id="key-tonic"></select>
+      Cols <input type="number" id="grid-cols" value="13" min="3" max="25" step="2">
+    </div>
+    <div class="program-row">
+      <label><input type="checkbox" id="show-chord-names"> コード名表示</label>
+    </div>
   </div>
 
   <div id="hud">
     <div id="chord-display">—</div>
-    <div id="chord-type-hint"></div>
   </div>
 
   <div id="hint">
-    ドラッグ: 発音 &nbsp;|&nbsp; R: 再キャリブレーション<br>
+    クリック: 発音（セル上側ほど強く） &nbsp;|&nbsp; Shift: 4和音レイヤー<br>
     ホイール: LFO Depth &nbsp;|&nbsp; V: Vibrato/Tremolo切替<br>
-    C/B: LFO Rate down/up
+    C/B: LFO Rate down/up &nbsp;|&nbsp; E: 音色エディタ
+  </div>
+
+  <div id="midi-log-panel">
+    <div class="midi-log-title">MIDI LOG</div>
+    <pre id="midi-log"></pre>
   </div>
 
   <div id="resize-grip" title="ドラッグで幅・高さをリサイズ（横だけ/縦だけの移動でその方向のみ変更）"></div>
 
-  <script src="main.js"></script>
+  <script type="module" src="main.js"></script>
 </body>
 </html>

@@ -6,11 +6,11 @@ mod op505_presets;
 use op505_core::{build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505Patch, Op505PresetBank};
 use std::sync::Mutex;
 
-/// 発音に使うMIDIチャンネル（声部スロット0〜3）。コード最大4音（7th/maj7）に合わせた固定範囲。
-/// `op505_set_program`はこの全チャンネルへBank Select+Program Changeを送る
-/// （standalone側は自分が受け取ったチャンネルの`ChannelState`だけを更新するため、
-/// 未使用チャンネルへ送っても実害はない）。
-const VOICE_CHANNELS: std::ops::Range<u8> = 0..4;
+/// コード発音に使うMIDIチャンネル。1チャンネルへ最大8声を重ねて鳴らす。
+/// 旧「声部ごとに固定チャンネル0〜3」方式は、C13など5音以上のテンションコードを
+/// 鳴らせない上限が問題になったため廃止した（押し直し時の同音チョークは、同一
+/// チャンネル内での同ノート再発音としてstandalone側が処理する）。
+const CHORD_CHANNEL: u8 = 0;
 
 /// マスターエフェクト系NRPN/CCの送信先チャンネル。`NRPN(0,1) Channel Effect Route`を
 /// 誰も送らなければ全チャンネルの`effect_route_slot`は既定0のままなので、チャンネル0で
@@ -47,26 +47,25 @@ fn scale_to_7bit(value: u8) -> u8 {
     ((value as u16 * 127 + 127) / 255) as u8
 }
 
-/// 発音中の声部（MIDIチャンネル0〜3）が最後にnote_onしたノート番号。note_offで
-/// どのノートをNote Offすべきか引くために使う（MIDIのNote Offはノート番号が必要なため、
-/// `note_off(channel)`だけを渡すフロントエンドとの橋渡し）。
-type LastNotes = Mutex<[Option<u8>; 16]>;
-
-/// 指定チャンネル(声部スロット)へノートオンを送る。`channel`は`note_off`と対にする
-/// 安定したスロット番号（フロントエンド側の`activeChannels`参照）。
+/// 指定チャンネルへノートオンを送る。1チャンネルに複数音を重ねられるため、
+/// 止める側（`note_off`）はノート番号を明示的に受け取る（標準MIDIと同じ責任分担で、
+/// 「今どの音を鳴らしているか」はフロントエンドが持つ）。
 #[tauri::command]
-fn note_on(channel: u8, note: u8, velocity: u8, last_notes: tauri::State<'_, LastNotes>) {
-    let idx = (channel as usize).min(15);
-    last_notes.lock().unwrap()[idx] = Some(note);
+fn note_on(channel: u8, note: u8, velocity: u8) {
     midi_out::note_on(channel, note, velocity);
 }
 
+/// 指定チャンネルの指定ノートを止める。
 #[tauri::command]
-fn note_off(channel: u8, last_notes: tauri::State<'_, LastNotes>) {
-    let idx = (channel as usize).min(15);
-    if let Some(note) = last_notes.lock().unwrap()[idx].take() {
-        midi_out::note_off(channel, note);
-    }
+fn note_off(channel: u8, note: u8) {
+    midi_out::note_off(channel, note);
+}
+
+/// 指定チャンネルの発音を全て止める（CC123 All Notes Off）。画面切り替え時や、
+/// note_offを取りこぼしたときのパニック用。
+#[tauri::command]
+fn all_notes_off(channel: u8) {
+    midi_out::control_change(channel, 123, 0);
 }
 
 /// OP505の演奏系モジュレーション（Vキーのビブラート⇔トレモロ切替）をMIDIで送る。
@@ -133,7 +132,7 @@ fn set_master_effects(
     midi_out::nrpn_data_entry(EFFECTS_CHANNEL, 0, 8, scale_to_7bit(chorus_send_to_reverb));
 }
 
-/// (bank, program)に対応する`.op505`プリセットが見つかれば、発音用の全チャンネルへ
+/// (bank, program)に対応する`.op505`プリセットが見つかれば、コード発音チャンネルへ
 /// Bank Select + Program Changeを送る（次のnote-onから適用。standalone側のProgram Change
 /// 解決は`op505_presets_dir()`側のファイルを見るため、ローカルの`registry`/`bank_state`は
 /// 「見つかったかどうか」の表示用チェックのみに使う）。
@@ -147,10 +146,8 @@ fn op505_set_program(
     program: u8,
 ) -> Option<Op505Patch> {
     let patch = op505_core::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
-    for ch in VOICE_CHANNELS {
-        midi_out::bank_select(ch, bank);
-        midi_out::program_change(ch, program);
-    }
+    midi_out::bank_select(CHORD_CHANNEL, bank);
+    midi_out::program_change(CHORD_CHANNEL, program);
     Some(patch)
 }
 
@@ -192,10 +189,10 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(op505_bank))
         .manage(Mutex::new(op505_registry))
-        .manage(Mutex::new([None::<u8>; 16]))
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,
+            all_notes_off,
             set_master_effects,
             op505_set_performance_lfo,
             op505_set_program,
