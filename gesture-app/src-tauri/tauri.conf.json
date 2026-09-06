@@ -10,10 +10,11 @@
     "windows": [
       {
         "title": "OP505 作曲支援",
-        "width": 1800,
+        "width": 1200,
         "height": 800,
-        "minWidth": 1560,
-        "minHeight": 600
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
       }
     ],
     "security": {
