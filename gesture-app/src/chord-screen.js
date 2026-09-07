@@ -39,13 +39,36 @@ import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY } from './chords.js';
 import { pivotKeysFor, confirmsModulation } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
+import { computePastSlotGeoms } from './chord-layout.js';
 import { isActive, onScreenChange } from './screens.js';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
 const MAX_SCORE_FOR_SHADING = 1.3; // だいたいの上限。alpha計算のクランプ用
 const SLIDE_DURATION_MS = 220;
-const MAX_HISTORY_SLOTS = 4; // 過去・未来共通の最大表示数（対称レイアウト）
+const RIGHT_MARGIN = 24; // 候補ブロックと画面右端の余白（候補ブロックは右端寄せにして過去領域を広げる）
+const CURRENT_SIZE = 96; // 現在コードスロットの一辺
+
+// 未来列（記録済みの続き）は従来どおり固定サイズ・固定個数。過去列だけ遠近法的に縮小する
+// （[[project_gesture_app_3screen_minidaw_redesign]]参照、進む先は長くならないため対称性より実態を優先）。
+const MAX_FUTURE_SLOTS = 4;
+const FUTURE_SLOT_SIZE = 84;
+const FUTURE_SLOT_GAP = 70;
+
+// 過去列: 遠いほどサイズ・間隔とも指数的に縮む（chord-layout.jsのcomputePastSlotGeoms）
+const PAST_BASE_SIZE = 64;
+const PAST_MIN_SIZE = 20; // タスクトレイアイコン相当（最も古いスロットの下限サイズ）
+const PAST_SHRINK = 0.8;
+const PAST_GAP_RATIO = 0.125;
+const PAST_LEFT_MARGIN = 16;
+const PAST_HIT_MIN_SIZE = 28; // 当たり判定の下限（見た目より少し広く取り極小スロットもクリックできるようにする）
+const PAST_ALPHA_MIN = 0.3;
+const PAST_ALPHA_BASE = 0.8;
+const PAST_ALPHA_DECAY = 0.93;
+const PAST_LABEL_FULL_SIZE = 44; // これ以上のサイズならフル名（Cmaj9）
+const PAST_LABEL_ROOT_SIZE = 28; // これ以上ならルート音のみ（C）。それ未満は文字なし
+const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの拡大サイズ（Dock風）
+const HOVER_EXPAND_MS = 120;
 
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;
@@ -62,7 +85,7 @@ let assistCols = DEFAULT_COLS;
 let shiftHeld = false;
 let ctrlHeld = false;
 let hoverCandidate = null; // {col, row, yRatio}
-let hoverSlot = null; // { kind: 'past'|'future', index, yRatio }（過去・未来のホバー共通）
+let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用）
 let sounding = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
 
@@ -133,23 +156,24 @@ function cellFromPoint(canvas, px, py) {
   }
 
   // 過去コード列（現在スロットより左）。draw()と同じ並び: i=0が現在の直前(cursor-1)。
+  // pastGeomsはサイズがスロットごとに違うため、矩形（縦横とも）で判定する。当たり判定は
+  // PAST_HIT_MIN_SIZEを下限にして、極小スロットでもクリックできるようにする。
   if (x < layout.currentX) {
-    const pastCount = Math.min(MAX_HISTORY_SLOTS, history.cursor);
-    for (let i = 0; i < pastCount; i++) {
-      const slotX = layout.currentX - layout.slotGap * (i + 1);
-      if (x >= slotX - layout.slotW / 2 && x < slotX + layout.slotW / 2) {
-        return { kind: 'past', index: history.cursor - 1 - i, yRatio: 0.5 };
+    for (const g of layout.pastGeoms) {
+      const hitSize = Math.max(PAST_HIT_MIN_SIZE, g.size);
+      if (px >= g.x - hitSize / 2 && px < g.x + hitSize / 2 && py >= g.y - hitSize / 2 && py < g.y + hitSize / 2) {
+        return { kind: 'past', index: history.cursor - 1 - g.index, yRatio: 0.5 };
       }
     }
     return null;
   }
 
-  // 未来コード列（現在スロットより右、候補ブロックより左）。過去と対称の並び:
-  // i=0が記録済みの直後(cursor+1)。まだ選択していない先には何も無い（自然に0件になる）。
-  const futureCount = Math.min(MAX_HISTORY_SLOTS, history.entries.length - 1 - history.cursor);
+  // 未来コード列（現在スロットより右、候補ブロックより左）。固定サイズ・固定間隔のまま
+  // （過去列と違い縮小しない）。i=0が記録済みの直後(cursor+1)。
+  const futureCount = Math.min(MAX_FUTURE_SLOTS, history.entries.length - 1 - history.cursor);
   for (let i = 0; i < futureCount; i++) {
-    const slotX = layout.currentX + layout.slotGap * (i + 1);
-    if (x >= slotX - layout.slotW / 2 && x < slotX + layout.slotW / 2) {
+    const slotX = layout.currentX + FUTURE_SLOT_GAP * (i + 1);
+    if (x >= slotX - FUTURE_SLOT_SIZE / 2 && x < slotX + FUTURE_SLOT_SIZE / 2) {
       return { kind: 'future', index: history.cursor + 1 + i, yRatio: 0.5 };
     }
   }
@@ -162,20 +186,31 @@ function computeLayout(canvas) {
   // 過去/現在/未来スロットと候補ブロックは、ハンバーガーメニュー化で常時表示のUIが
   // canvas上から無くなったため、同じ縦領域（TOP_MARGIN〜H-BOTTOM_MARGIN）を共有する。
   const bodyH = Math.max(1, H - TOP_MARGIN - BOTTOM_MARGIN);
-  const currentX = W * 0.3;
-  const slotGap = Math.min(110, currentX / (MAX_HISTORY_SLOTS + 1));
-  const slotW = Math.min(84, slotGap - 8);
-  // 未来スロットの表示幅は過去（0〜currentX）と対称にする。過去にさかのぼる操作と、
-  // 記録済みの続きへクリックで進む操作が同じ見た目の「再生位置の移動」になるように
-  const candidateX = currentX * 2;
   // 候補セルは正方形（横長だとセル内上下の位置＝ベロシティの変化が実感しにくいため）。
-  // 縦方向（行数から決まる高さ）と横方向（列数から決まる幅、はみ出し防止）の両方で頭打ちにする。
-  const cellSize = Math.min(84, bodyH / assistRows, (W - candidateX - 16) / assistCols);
+  // 行数から決まる高さと、画面右端に収まる幅の両方で頭打ちにする（候補ブロックは右端寄せ）。
+  const cellSize = Math.min(84, bodyH / assistRows, (W - RIGHT_MARGIN) / assistCols);
   const cellW = cellSize;
   const cellH = cellSize;
+  const candidateX = W - assistCols * cellSize - RIGHT_MARGIN;
+  // 現在スロットは、候補ブロックの左に未来スロット最大MAX_FUTURE_SLOTS個分の領域を
+  // 確保した位置に置く。過去領域（0〜currentX）はウィンドウ幅に応じて自然に増減し、
+  // 狭ければ過去スロットが入るだけ表示される（個数の固定上限は持たない）。
+  const currentX = candidateX - (CURRENT_SIZE / 2 + MAX_FUTURE_SLOTS * FUTURE_SLOT_GAP + 16);
   // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
   const candidateOriginY = TOP_MARGIN + (bodyH - assistRows * cellH) / 2;
-  return { W, H, bodyH, currentX, candidateX, cellW, cellH, slotGap, slotW, candidateOriginY };
+  const slotY = TOP_MARGIN + bodyH / 2;
+  const pastGeoms = computePastSlotGeoms({
+    currentX,
+    currentSize: CURRENT_SIZE,
+    slotY,
+    baseSize: PAST_BASE_SIZE,
+    count: history.cursor,
+    minSize: PAST_MIN_SIZE,
+    shrink: PAST_SHRINK,
+    gapRatio: PAST_GAP_RATIO,
+    leftMargin: PAST_LEFT_MARGIN,
+  });
+  return { W, H, bodyH, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms };
 }
 
 async function stopChord() {
@@ -266,7 +301,14 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     if (!isActive('chord')) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     hoverCandidate = cell?.kind === 'candidate' ? cell : null;
-    hoverSlot = cell?.kind === 'past' || cell?.kind === 'future' ? cell : null;
+    const nextHoverSlot = cell?.kind === 'past' || cell?.kind === 'future' ? cell : null;
+    // 同じスロットに留まっている間はstartTimeを保持する（Dock風拡大アニメーションの起点。
+    // 毎フレームリセットすると拡大が始まらない）。別スロットへ移ったときだけ計り直す。
+    if (nextHoverSlot?.kind !== hoverSlot?.kind || nextHoverSlot?.index !== hoverSlot?.index) {
+      hoverSlot = nextHoverSlot ? { ...nextHoverSlot, startTime: performance.now() } : null;
+    } else if (nextHoverSlot) {
+      hoverSlot = { ...hoverSlot, yRatio: nextHoverSlot.yRatio };
+    }
   });
 
   canvas.addEventListener('mousedown', async (e) => {
@@ -460,77 +502,110 @@ function computeCandidates() {
 
 /**
  * 選択/Undo/Redoの直後だけ発生する演出用の状態を返す。
- * offsetPx: 過去コード＋現在スロットの一時的な水平オフセット（0へ収束）。
+ * offsetPx: 未来コード列だけの一時的な水平オフセット（0へ収束、従来どおり平行移動で演出）。
  *   選択（前進）なら+1スロット分右から、Undo（後退）なら-1スロット分左から現在位置へ戻る。
+ * pastT: 過去コード列の位置・サイズ補間係数（0→1、draw()側でスロットごとにlerpする）。
  * candidateAlpha: 候補ブロックのフェードイン係数（0→1）。
  */
-function currentSlideState(layout) {
-  if (slideDirection === 0) return { offsetPx: 0, candidateAlpha: 1 };
+function currentSlideState() {
+  if (slideDirection === 0) return { offsetPx: 0, pastT: 1, candidateAlpha: 1 };
   const elapsed = performance.now() - slideStart;
   const t = Math.min(1, elapsed / SLIDE_DURATION_MS);
   const eased = 1 - (1 - t) ** 2; // ease-out
-  const startOffset = slideDirection > 0 ? layout.slotGap : -layout.slotGap;
+  const startOffset = slideDirection > 0 ? FUTURE_SLOT_GAP : -FUTURE_SLOT_GAP;
   const offsetPx = startOffset * (1 - eased);
   if (t >= 1) slideDirection = 0;
-  return { offsetPx, candidateAlpha: eased };
+  return { offsetPx, pastT: eased, candidateAlpha: eased };
 }
 
-/** 過去/未来スロット1個分の描画（対称デザインなので共通化）。 */
-function drawHistorySlot(ctx, chordName, slotX, slotY, slotW, alpha, isHover) {
-  ctx.fillStyle = isHover ? `rgba(150,190,255,${alpha + 0.15})` : `rgba(200,200,200,${alpha * 0.15})`;
-  ctx.fillRect(slotX - slotW / 2, slotY - slotW / 2, slotW, slotW);
+/** Dock風ホバー拡大の補間係数（0→1、ease-out）。過去スロットのホバー中のみ意味を持つ。 */
+function hoverExpandT() {
+  if (!hoverSlot || hoverSlot.kind !== 'past') return 0;
+  const elapsed = performance.now() - hoverSlot.startTime;
+  const t = Math.min(1, elapsed / HOVER_EXPAND_MS);
+  return 1 - (1 - t) ** 2;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+/**
+ * 過去/未来スロット1個分の描画（対称デザインなので共通化）。sizeが可変（過去列は遠いほど
+ * 縮小する）ため、ラベルはサイズに応じてフル名／ルート音のみ／非表示を切り替える。
+ */
+function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover) {
+  ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
+  ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
-  ctx.strokeRect(slotX - slotW / 2 + 0.5, slotY - slotW / 2 + 0.5, slotW, slotW);
-  ctx.fillStyle = `rgba(220,220,220,${alpha})`;
-  ctx.font = '16px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(chordName, slotX, slotY);
+  ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
+
+  const label = size >= PAST_LABEL_FULL_SIZE ? chord.name : size >= PAST_LABEL_ROOT_SIZE ? NOTE_NAMES[chord.rootPc] : null;
+  if (label) {
+    ctx.fillStyle = `rgba(220,220,220,${alpha})`;
+    ctx.font = `${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, slotX, slotY);
+  }
 }
 
 function draw(ctx, canvas) {
   const layout = computeLayout(canvas);
-  const { W, H, bodyH, currentX, candidateX, cellW, cellH, slotGap, slotW, candidateOriginY } = layout;
+  const { W, H, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms } = layout;
 
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
 
-  const { offsetPx, candidateAlpha } = currentSlideState(layout);
+  const { offsetPx, pastT, candidateAlpha } = currentSlideState();
   const entry = currentEntry(history);
-  const slotY = TOP_MARGIN + bodyH / 2;
 
-  ctx.save();
-  if (offsetPx !== 0) ctx.translate(offsetPx, 0);
-
-  // 過去コード（現在スロットの左）。cursor-1, cursor-2, ... と遡る
-  const pastCount = Math.min(MAX_HISTORY_SLOTS, history.cursor);
-  for (let i = 0; i < pastCount; i++) {
-    const idx = history.cursor - 1 - i;
+  // 過去コード（現在スロットの左）。pastGeoms[i].indexが大きいほど遠い過去（cursor-1-index）。
+  // 選択/Undo直後だけ、1つ現在寄りのスロット（i=0の開始点は現在スロットそのもの）から
+  // pastTで位置・サイズを補間して飛んでくる。ホバー中のスロットはDock風拡大を後段で描くため、
+  // ここでは描かずスキップする。
+  for (let i = 0; i < pastGeoms.length; i++) {
+    const g = pastGeoms[i];
+    const idx = history.cursor - 1 - g.index;
     const past = history.entries[idx];
     if (!past) continue;
-    const slotX = currentX - slotGap * (i + 1);
-    const alpha = 0.75 - i * 0.18;
-    const isHover = hoverSlot?.kind === 'past' && hoverSlot.index === idx;
-    drawHistorySlot(ctx, past.chord.name, slotX, slotY, slotW, alpha, isHover);
+    if (hoverSlot?.kind === 'past' && hoverSlot.index === idx) continue;
+    const startGeom =
+      slideDirection > 0
+        ? i === 0
+          ? { x: currentX, y: slotY, size: CURRENT_SIZE }
+          : pastGeoms[i - 1]
+        : slideDirection < 0
+          ? (pastGeoms[i + 1] ?? null)
+          : null;
+    const x = startGeom ? lerp(startGeom.x, g.x, pastT) : g.x;
+    const y = startGeom ? lerp(startGeom.y, g.y, pastT) : g.y;
+    const size = startGeom ? lerp(startGeom.size, g.size, pastT) : g.size;
+    const targetAlpha = Math.max(PAST_ALPHA_MIN, PAST_ALPHA_BASE * PAST_ALPHA_DECAY ** g.index);
+    const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
+    drawHistorySlot(ctx, past.chord, x, y, size, alpha, false);
   }
 
-  // 未来コード（現在スロットの右）。過去と対称。cursor+1, cursor+2, ... と記録済みの続きを辿る
-  const futureCount = Math.min(MAX_HISTORY_SLOTS, history.entries.length - 1 - history.cursor);
+  // 未来コード（現在スロットの右）。固定サイズ・固定間隔のまま、平行移動のみで演出する
+  ctx.save();
+  if (offsetPx !== 0) ctx.translate(offsetPx, 0);
+  const futureCount = Math.min(MAX_FUTURE_SLOTS, history.entries.length - 1 - history.cursor);
   for (let i = 0; i < futureCount; i++) {
     const idx = history.cursor + 1 + i;
     const future = history.entries[idx];
     if (!future) continue;
-    const slotX = currentX + slotGap * (i + 1);
+    const slotX = currentX + FUTURE_SLOT_GAP * (i + 1);
     const alpha = 0.75 - i * 0.18;
     const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
-    drawHistorySlot(ctx, future.chord.name, slotX, slotY, slotW, alpha, isHover);
+    drawHistorySlot(ctx, future.chord, slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover);
   }
+  ctx.restore();
 
-  // 現在コードのスロット
+  // 現在コードのスロット（固定位置）
   {
-    const size = 96;
+    const size = CURRENT_SIZE;
     const x = currentX;
-    const y = TOP_MARGIN + bodyH / 2;
+    const y = slotY;
     ctx.fillStyle = sounding.length > 0 ? 'rgba(120,200,255,0.12)' : 'rgba(255,255,255,0.04)';
     ctx.fillRect(x - size / 2, y - size / 2, size, size);
     ctx.strokeStyle = '#eee';
@@ -544,7 +619,17 @@ function draw(ctx, canvas) {
     ctx.lineWidth = 1;
   }
 
-  ctx.restore();
+  // ホバー中の過去スロットをDock風に拡大して手前へ再描画する（半透明オーバーレイと同じ理由で、
+  // 通常描画より後に描く必要がある。[[project_gesture_app_3screen_minidaw_redesign]]で踏んだ
+  // 「半透明オーバーレイは対象要素より後に描く」教訓の応用）。
+  if (hoverSlot?.kind === 'past') {
+    const hoverGeom = pastGeoms.find((g) => history.cursor - 1 - g.index === hoverSlot.index);
+    const hoverEntry = history.entries[hoverSlot.index];
+    if (hoverGeom && hoverEntry) {
+      const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
+      drawHistorySlot(ctx, hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true);
+    }
+  }
 
   // 候補ブロック（現在スロットの右）。過去コード＋現在スロットの移動には追従させず、
   // 新しい状態へのフェードインだけを演出する。
