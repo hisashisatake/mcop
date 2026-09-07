@@ -1,7 +1,6 @@
 ---
 paths:
   - "sound/**"
-  - "ym38x6/core/**"
   - "op505/core/**"
   - "op505/midi/**"
   - "op505/tools/**"
