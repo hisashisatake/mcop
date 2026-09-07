@@ -26,36 +26,69 @@
       width: 64px;
     }
 
-    /* 左上: 画面切り替えタブ */
-    #screen-tabs {
+    /* 左上: ハンバーガーメニュー（常時表示、これ以外の操作UI・ログ・設定は全てドロワーの中） */
+    #menu-toggle {
       position: fixed; top: 14px; left: 18px;
-      display: flex; gap: 6px;
+      width: 36px; height: 36px;
+      background: #1a1a1a; color: #ccc; border: 1px solid #333;
+      font-size: 16px; line-height: 1; cursor: pointer;
+      z-index: 30;
     }
-    #screen-tabs button {
+    #menu-toggle:hover { background: #2a2a2a; }
+
+    /* ドロワー本体。左端からスライドして開く。画面タブ・ヒント・MIDIログ・音源/演奏設定を
+       ここへ集約し、閉じている間はcanvas上に何も重ならないようにする
+       （以前は#hintが透明な当たり判定を持ち、候補セルのクリックを奪うことがあった）。 */
+    #drawer {
+      position: fixed; top: 0; left: 0; bottom: 0;
+      width: 320px; max-width: 88vw;
+      background: rgba(15, 15, 15, 0.97);
+      border-right: 1px solid #333;
+      transform: translateX(-100%);
+      transition: transform 0.18s ease-out;
+      z-index: 25;
+      overflow-y: auto;
+      padding: 62px 18px 18px;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+    #drawer.open { transform: translateX(0); }
+
+    .drawer-section-title {
+      color: #666; font-size: 10px; letter-spacing: 2px; margin-bottom: 8px;
+    }
+
+    /* 画面切り替えタブ（ドロワー内） */
+    #drawer-tabs { display: flex; gap: 6px; }
+    #drawer-tabs button {
+      flex: 1;
       background: #1a1a1a; color: #666; border: 1px solid #333;
-      font-family: monospace; font-size: 12px; padding: 6px 14px; cursor: pointer;
+      font-family: monospace; font-size: 12px; padding: 8px 4px; cursor: pointer;
       letter-spacing: 1px;
     }
-    #screen-tabs button.active {
+    #drawer-tabs button.active {
       background: #2a4a3a; color: #dfd; border-color: #3a6a4a;
     }
 
-    /* 右上: ヒント */
+    /* LFO/Rateインジケーター（旧: canvas描画。ドロワー内のDOM表示へ変更） */
+    .lfo-row { font-size: 13px; color: #666; }
+    .lfo-bar-track {
+      width: 100%; height: 6px; border: 1px solid #444; margin: 4px 0 10px;
+    }
+    .lfo-bar-fill { height: 100%; background: #4af; width: 0%; }
+
+    /* ヒント */
     #hint {
-      position: fixed; top: 14px; right: 18px;
-      font-size: 12px; color: #444; text-align: right; line-height: 2;
+      font-size: 12px; color: #888; line-height: 1.8;
     }
 
-    /* 右上ヒントの下: 直近のMIDI送信ログ（実機確認用のデバッグ表示） */
+    /* MIDIログ（実機確認用のデバッグ表示） */
     #midi-log-panel {
-      position: fixed; top: 92px; right: 18px;
-      width: 300px; max-height: 240px;
       font-size: 10px; color: #5a7; letter-spacing: 0;
       background: rgba(0, 0, 0, 0.35);
       border: 1px solid #2a2a2a;
       padding: 6px 8px;
+      max-height: 200px;
       overflow-y: auto;
-      pointer-events: none;
     }
     #midi-log-panel .midi-log-title {
       color: #666; font-size: 10px; letter-spacing: 2px; margin-bottom: 4px;
@@ -66,9 +99,8 @@
       line-height: 1.5;
     }
 
-    /* 右下: 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI） */
+    /* 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI） */
     #program-panel {
-      position: fixed; bottom: 16px; right: 16px;
       font-size: 12px; color: #888;
       display: flex; flex-direction: column; gap: 6px;
     }
@@ -133,61 +165,75 @@
 <body>
   <canvas id="canvas"></canvas>
 
-  <div id="screen-tabs">
-    <button type="button" id="tab-chord">CHORD</button>
-    <button type="button" id="tab-rhythm">RHYTHM</button>
-    <button type="button" id="tab-melody">MELODY</button>
-  </div>
+  <button type="button" id="menu-toggle" title="メニュー">☰</button>
 
-  <div id="program-panel">
-    <div class="program-row">
-      <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
-      <span id="program-label"></span>
+  <div id="drawer">
+    <div id="drawer-tabs">
+      <button type="button" id="tab-chord">CHORD</button>
+      <button type="button" id="tab-rhythm">RHYTHM</button>
+      <button type="button" id="tab-melody">MELODY</button>
     </div>
-    <div class="program-row">
-      Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
-      Program <input type="number" id="program-num" value="0" min="0" max="127">
+
+    <div id="lfo-section">
+      <div class="drawer-section-title">PERFORMANCE LFO</div>
+      <div class="lfo-row" id="lfo-label">LFO: Vibrato (Pitch FG) (V)</div>
+      <div class="lfo-bar-track"><div class="lfo-bar-fill" id="lfo-depth-bar"></div></div>
+      <div class="lfo-row" id="lfo-rate-label">Rate: 140 (C/B)</div>
+      <div class="lfo-bar-track"><div class="lfo-bar-fill" id="lfo-rate-bar"></div></div>
     </div>
-    <div class="program-row">
-      <button id="tap-tempo-btn" type="button">TAP</button>
-      <span id="tempo-display">120 BPM</span>
-    </div>
-    <div id="chord-controls">
+
+    <div id="program-panel">
+      <div class="drawer-section-title">音源 / プリセット</div>
       <div class="program-row">
-        Key <select id="key-tonic"></select>
-        <select id="key-mode">
-          <option value="major">Major</option>
-          <option value="minor">Minor</option>
-        </select>
+        <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
+        <span id="program-label"></span>
       </div>
       <div class="program-row">
-        候補 行数 <input type="number" id="candidate-rows" value="5" min="3" max="12">
-        列数 <input type="number" id="candidate-cols" value="3" min="1" max="3">
+        Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
+        Program <input type="number" id="program-num" value="0" min="0" max="127">
+      </div>
+      <div class="program-row">
+        <button id="tap-tempo-btn" type="button">TAP</button>
+        <span id="tempo-display">120 BPM</span>
+      </div>
+      <div id="chord-controls">
+        <div class="program-row">
+          Key <select id="key-tonic"></select>
+          <select id="key-mode">
+            <option value="major">Major</option>
+            <option value="minor">Minor</option>
+          </select>
+        </div>
+        <div class="program-row">
+          候補 行数 <input type="number" id="candidate-rows" value="5" min="3" max="12">
+          列数 <input type="number" id="candidate-cols" value="3" min="1" max="3">
+        </div>
+      </div>
+      <div id="rhythm-controls" hidden>
+        <div class="program-row">
+          <label><input type="checkbox" id="metronome-toggle"> メトロノーム</label>
+        </div>
       </div>
     </div>
-    <div id="rhythm-controls" hidden>
-      <div class="program-row">
-        <label><input type="checkbox" id="metronome-toggle"> メトロノーム</label>
-      </div>
+
+    <div id="hint">
+      <div class="drawer-section-title">操作</div>
+      候補クリック: 発音して選択（セル上側ほど強く） <br>過去コードクリック: そこへ戻る<br>
+      Ctrl+Z: 1つ戻す &nbsp;|&nbsp; Ctrl+Y: やり直す<br>
+      Shift: 4和音 &nbsp;|&nbsp; Ctrl: sus/付加音 &nbsp;|&nbsp; Ctrl+Shift: aug/オルタード<br>
+      ↑/↓: 候補行数 &nbsp;|&nbsp; ←/→: 候補列数<br>
+      ホイール: LFO Depth &nbsp;|&nbsp; V: Vibrato/Tremolo切替<br>
+      C/B: LFO Rate down/up &nbsp;|&nbsp; E: 音色エディタ
+    </div>
+
+    <div id="midi-log-panel">
+      <div class="midi-log-title">MIDI LOG</div>
+      <pre id="midi-log"></pre>
     </div>
   </div>
 
   <div id="hud">
     <div id="chord-display">—</div>
-  </div>
-
-  <div id="hint">
-    候補クリック: 発音して選択（セル上側ほど強く） &nbsp;|&nbsp; 過去コードクリック: そこへ戻る<br>
-    Ctrl+Z: 1つ戻す &nbsp;|&nbsp; Ctrl+Y: やり直す<br>
-    Shift: 4和音 &nbsp;|&nbsp; Ctrl: sus/付加音 &nbsp;|&nbsp; Ctrl+Shift: aug/オルタード<br>
-    ↑/↓: 候補行数 &nbsp;|&nbsp; ←/→: 候補列数<br>
-    ホイール: LFO Depth &nbsp;|&nbsp; V: Vibrato/Tremolo切替<br>
-    C/B: LFO Rate down/up &nbsp;|&nbsp; E: 音色エディタ
-  </div>
-
-  <div id="midi-log-panel">
-    <div class="midi-log-title">MIDI LOG</div>
-    <pre id="midi-log"></pre>
   </div>
 
   <div id="resize-grip" title="ドラッグで幅・高さをリサイズ（横だけ/縦だけの移動でその方向のみ変更）"></div>

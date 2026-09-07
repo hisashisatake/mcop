@@ -18,6 +18,7 @@ const CC77_BASE = 0; // Depthベース値は0固定。深さはマウスホイ�
 let modWheel = 0; // CC1相当。0〜255
 let lfoDestination = LFO_DEST_PITCH;
 let lfoRate = LFO_RATE_DEFAULT;
+let indicatorEls = null; // { label, depthBar, rateLabel, rateBar }（ドロワー内のDOM要素）
 
 /** 指定チャンネルへ現在のLFO設定を送る。発音直前に呼ぶ。 */
 export function applyTo(channel) {
@@ -49,6 +50,7 @@ export function setupPerformanceLfo(target, activeChannels) {
     async (e) => {
       e.preventDefault();
       modWheel = Math.max(0, Math.min(255, modWheel - Math.sign(e.deltaY) * 8));
+      updateIndicator();
       await applyToActive();
     },
     { passive: false },
@@ -58,39 +60,36 @@ export function setupPerformanceLfo(target, activeChannels) {
     const key = e.key.toLowerCase();
     if (key === 'v') {
       lfoDestination = lfoDestination === LFO_DEST_PITCH ? LFO_DEST_VOLUME : LFO_DEST_PITCH;
+      updateIndicator();
       await applyToActive();
     } else if (key === 'c') {
       lfoRate = Math.max(0, lfoRate - LFO_RATE_STEP);
+      updateIndicator();
       await applyToActive();
     } else if (key === 'b') {
       lfoRate = Math.min(255, lfoRate + LFO_RATE_STEP);
+      updateIndicator();
       await applyToActive();
     }
   });
 }
 
-/** 画面左上のインジケーターを描く。 */
-export function drawLfoIndicator(ctx) {
+/**
+ * ドロワー内のLFO状態表示（DOM）を配線する。以前はcanvasへ毎フレーム描画していたが、
+ * 常時表示の操作UIをドロワーへ集約する仕様変更に伴いDOM表示へ切り替えた。
+ * @param {{label: HTMLElement, depthBar: HTMLElement, rateLabel: HTMLElement, rateBar: HTMLElement}} els
+ */
+export function bindLfoIndicator(els) {
+  indicatorEls = els;
+  updateIndicator();
+}
+
+function updateIndicator() {
+  if (!indicatorEls) return;
   const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Gain FG)' : 'Vibrato (Pitch FG)';
-  const x = 16;
-  const barW = 100;
-  const barH = 6;
-
-  ctx.textAlign = 'left';
-  ctx.font = '13px monospace';
-  ctx.fillStyle = modWheel > 0 ? '#4af' : '#444';
-  ctx.fillText(`LFO: ${label} (V)`, x, 28);
-
-  ctx.strokeStyle = '#444';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x, 38, barW, barH);
-  ctx.fillStyle = '#4af';
-  ctx.fillRect(x, 38, barW * (modWheel / 255), barH);
-
-  ctx.fillStyle = '#666';
-  ctx.fillText(`Rate: ${lfoRate} (C/B)`, x, 64);
-  ctx.strokeStyle = '#444';
-  ctx.strokeRect(x, 70, barW, barH);
-  ctx.fillStyle = '#888';
-  ctx.fillRect(x, 70, barW * (lfoRate / 255), barH);
+  indicatorEls.label.textContent = `LFO: ${label} (V)`;
+  indicatorEls.label.style.color = modWheel > 0 ? '#4af' : '#666';
+  indicatorEls.depthBar.style.width = `${(modWheel / 255) * 100}%`;
+  indicatorEls.rateLabel.textContent = `Rate: ${lfoRate} (C/B)`;
+  indicatorEls.rateBar.style.width = `${(lfoRate / 255) * 100}%`;
 }

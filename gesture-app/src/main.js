@@ -2,7 +2,7 @@
 
 import { setProgram, tapTempo, openEditor } from './midi.js';
 import { setupMidiLog } from './midi-log.js';
-import { setupPerformanceLfo, drawLfoIndicator } from './performance-lfo.js';
+import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.js';
 import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
 import { setupRhythmScreen, bindRhythmScreenControls } from './rhythm-screen.js';
 import { setupMelodyScreen } from './melody-screen.js';
@@ -187,13 +187,20 @@ bindScreenTabs({
   melody: document.getElementById('tab-melody'),
 });
 
+// ハンバーガーメニュー: 画面タブ・ヒント・MIDIログ・音源/演奏設定を収めたドロワーの開閉。
+// 画面を切り替えたら、選んだ画面がすぐ見えるようドロワーを自動で閉じる。
+const menuToggleEl = document.getElementById('menu-toggle');
+const drawerEl = document.getElementById('drawer');
+menuToggleEl.addEventListener('click', () => drawerEl.classList.toggle('open'));
+onScreenChange(() => drawerEl.classList.remove('open'));
+
 // 画面ごとのコントロールパネル・キーボードヒントの出し分け
 const chordControlsEl = document.getElementById('chord-controls');
 const rhythmControlsEl = document.getElementById('rhythm-controls');
 const hintEl = document.getElementById('hint');
 const CHORD_HINT = hintEl.innerHTML;
-const RHYTHM_HINT = 'クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>メトロノームON/OFFは左下のチェックボックスから<br>E: 音色エディタ';
-const MELODY_HINT = 'メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
+const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>メトロノームON/OFFは下の音源パネルのチェックボックスから<br>E: 音色エディタ';
+const MELODY_HINT = '<div class="drawer-section-title">操作</div>メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
 
 onScreenChange((next) => {
   chordControlsEl.hidden = next !== 'chord';
@@ -202,6 +209,12 @@ onScreenChange((next) => {
 });
 
 setupPerformanceLfo(canvas, activeChannels);
+bindLfoIndicator({
+  label: document.getElementById('lfo-label'),
+  depthBar: document.getElementById('lfo-depth-bar'),
+  rateLabel: document.getElementById('lfo-rate-label'),
+  rateBar: document.getElementById('lfo-rate-bar'),
+});
 
 window.addEventListener('keydown', async (e) => {
   if (e.key.toLowerCase() === 'e') {
@@ -217,7 +230,6 @@ function tick() {
   if (screen === 'rhythm') rhythmScreen.draw(ctx);
   else if (screen === 'melody') melodyScreen.draw(ctx);
   else chordScreen.draw(ctx);
-  drawLfoIndicator(ctx);
   requestAnimationFrame(tick);
 }
 

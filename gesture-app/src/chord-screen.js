@@ -41,9 +41,8 @@ import { pivotKeysFor, confirmsModulation } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { isActive, onScreenChange } from './screens.js';
 
-const TOP_MARGIN = 74; // 左上の画面切り替えタブと重ならないよう本体を下げる（rhythm-screen.jsと同じ手当）
-const BOTTOM_MARGIN = 190; // 右下固定の#program-panel（chord-controls表示時の高さ）と候補ブロックが重ならないための余白
-const CANDIDATE_TOP_MARGIN = 340; // 右上固定の#midi-log-panel（top:92px,max-height:240px）+#hintと候補ブロックが重ならないための開始位置。過去/現在スロットは画面左寄りで重ならないためTOP_MARGINのまま
+const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
+const BOTTOM_MARGIN = 130; // 左下固定の#hud（コード名の大きな表示）と過去/現在/未来スロットが重ならないための余白
 const MAX_SCORE_FOR_SHADING = 1.3; // だいたいの上限。alpha計算のクランプ用
 const SLIDE_DURATION_MS = 220;
 const MAX_HISTORY_SLOTS = 4; // 過去・未来共通の最大表示数（対称レイアウト）
@@ -160,20 +159,22 @@ function cellFromPoint(canvas, px, py) {
 function computeLayout(canvas) {
   const W = canvas.width;
   const H = canvas.height;
+  // 過去/現在/未来スロットと候補ブロックは、ハンバーガーメニュー化で常時表示のUIが
+  // canvas上から無くなったため、同じ縦領域（TOP_MARGIN〜H-BOTTOM_MARGIN）を共有する。
   const bodyH = Math.max(1, H - TOP_MARGIN - BOTTOM_MARGIN);
-  // 候補ブロックは右上のMIDIログパネルと重なるため、過去/現在スロットとは別の（より下から始まる）
-  // 縦領域を使う。過去/現在スロットは画面左寄りでパネルと重ならないためbodyHのままでよい。
-  const candidateBodyH = Math.max(1, H - CANDIDATE_TOP_MARGIN - BOTTOM_MARGIN);
   const currentX = W * 0.3;
   const slotGap = Math.min(110, currentX / (MAX_HISTORY_SLOTS + 1));
   const slotW = Math.min(84, slotGap - 8);
   // 未来スロットの表示幅は過去（0〜currentX）と対称にする。過去にさかのぼる操作と、
   // 記録済みの続きへクリックで進む操作が同じ見た目の「再生位置の移動」になるように
   const candidateX = currentX * 2;
-  const cellW = (W - candidateX - 16) / assistCols;
-  const cellH = Math.min(84, candidateBodyH / assistRows);
+  // 候補セルは正方形（横長だとセル内上下の位置＝ベロシティの変化が実感しにくいため）。
+  // 縦方向（行数から決まる高さ）と横方向（列数から決まる幅、はみ出し防止）の両方で頭打ちにする。
+  const cellSize = Math.min(84, bodyH / assistRows, (W - candidateX - 16) / assistCols);
+  const cellW = cellSize;
+  const cellH = cellSize;
   // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
-  const candidateOriginY = CANDIDATE_TOP_MARGIN + (candidateBodyH - assistRows * cellH) / 2;
+  const candidateOriginY = TOP_MARGIN + (bodyH - assistRows * cellH) / 2;
   return { W, H, bodyH, currentX, candidateX, cellW, cellH, slotGap, slotW, candidateOriginY };
 }
 
@@ -557,7 +558,7 @@ function draw(ctx, canvas) {
     const alpha = 0.15 + clampedScore * 0.45;
     ctx.fillStyle =
       cell.category === 'GREEN'
-        ? `hsla(140, 65%, 45%, ${alpha})`
+        ? `hsla(120, 100%, 50%, ${alpha})` // 00FF00（最も明るい緑）と同じhue/sat/lightness
         : cell.category === 'YELLOW'
           ? `hsla(48, 75%, 50%, ${alpha})`
           : `hsla(0, 0%, 50%, ${alpha * 0.6})`;

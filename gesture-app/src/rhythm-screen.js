@@ -17,7 +17,7 @@ const ROWS = 12;
 const STEPS = 16;
 const STEP_GROUP = 4; // 4ステップ（1拍）ごとに区切り線を太くする
 const LABEL_WIDTH = 74;
-const TOP_MARGIN = 74; // 左上の画面切り替えタブと重ならないよう先頭行を下げる
+const TOP_MARGIN = 40; // 上部の余白（画面タブ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 
 // Rust側`DRUM_NOTES`（midi_out.rs）と行の並びを一致させること。JSは行番号だけを
 // やり取りし、実際のGM2ノート番号はRust側が持つ。
