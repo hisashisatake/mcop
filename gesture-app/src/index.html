@@ -19,11 +19,20 @@
       text-shadow: 0 0 40px rgba(120,200,255,0.4);
       letter-spacing: -2px;
     }
-    #program-panel select#key-tonic {
+    #status-panel select#key-tonic {
       width: 56px;
     }
-    #program-panel select#key-mode {
+    #status-panel select#key-mode {
       width: 64px;
+    }
+
+    /* 右下: 常時表示のステータス（プリセット名・調・テンポ）。演奏中も見えている必要があるため
+       ドロワーの外に置く。コード画面がcanvasへ描くレイヤーラベル（右下、bottom:H-22）と
+       重ならないよう下に余白を空ける。 */
+    #status-panel {
+      position: fixed; right: 16px; bottom: 46px;
+      font-size: 12px; color: #888;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     }
 
     /* 左上: ハンバーガーメニュー（常時表示、これ以外の操作UI・ログ・設定は全てドロワーの中） */
@@ -99,29 +108,34 @@
       line-height: 1.5;
     }
 
-    /* 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI） */
-    #program-panel {
+    /* 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI）。
+       波形メモリ・Key・TAPは常時表示の#status-panelへ抜き出したため、同じ見た目のルールを
+       #program-panel（ドロワー内、Bank/Program手動指定・候補行数列数・メトロノーム）と
+       #status-panelの両方へ適用する。 */
+    #program-panel, #status-panel {
       font-size: 12px; color: #888;
+    }
+    #program-panel {
       display: flex; flex-direction: column; gap: 6px;
     }
-    #program-panel .program-row {
+    #program-panel .program-row, #status-panel .program-row {
       display: flex; align-items: center; gap: 6px;
     }
     #program-panel .program-row:first-child {
       justify-content: space-between;
     }
-    #program-panel input[type="number"] {
+    #program-panel input[type="number"], #status-panel input[type="number"] {
       width: 64px; background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 4px;
     }
     #program-panel input[type="number"]:disabled {
       opacity: 0.4;
     }
-    #program-panel select {
+    #program-panel select, #status-panel select {
       background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 4px;
     }
-    #program-panel label {
+    #program-panel label, #status-panel label {
       display: flex; align-items: center; gap: 4px; cursor: pointer;
     }
     #program-label {
@@ -130,11 +144,11 @@
     #tempo-display {
       color: #aaa;
     }
-    #program-panel button {
+    #program-panel button, #status-panel button {
       background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 8px; cursor: pointer;
     }
-    #program-panel button:active {
+    #program-panel button:active, #status-panel button:active {
       background: #3a5; color: #fff; border-color: #3a5;
     }
 
@@ -183,27 +197,8 @@
     </div>
 
     <div id="program-panel">
-      <div class="drawer-section-title">音源 / プリセット</div>
-      <div class="program-row">
-        <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
-        <span id="program-label"></span>
-      </div>
-      <div class="program-row">
-        Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
-        Program <input type="number" id="program-num" value="0" min="0" max="127">
-      </div>
-      <div class="program-row">
-        <button id="tap-tempo-btn" type="button">TAP</button>
-        <span id="tempo-display">120 BPM</span>
-      </div>
+      <div class="drawer-section-title">詳細設定</div>
       <div id="chord-controls">
-        <div class="program-row">
-          Key <select id="key-tonic"></select>
-          <select id="key-mode">
-            <option value="major">Major</option>
-            <option value="minor">Minor</option>
-          </select>
-        </div>
         <div class="program-row">
           候補 行数 <input type="number" id="candidate-rows" value="5" min="3" max="12">
           列数 <input type="number" id="candidate-cols" value="3" min="1" max="3">
@@ -229,6 +224,30 @@
     <div id="midi-log-panel">
       <div class="midi-log-title">MIDI LOG</div>
       <pre id="midi-log"></pre>
+    </div>
+  </div>
+
+  <div id="status-panel">
+    <div class="program-row">
+      <label><input type="checkbox" id="waveform-memory-toggle"> 波形メモリ</label>
+      <span id="program-label"></span>
+    </div>
+    <div class="program-row">
+      Bank <input type="number" id="program-bank" value="0" min="0" max="16383">
+      Program <input type="number" id="program-num" value="0" min="0" max="127">
+    </div>
+    <div id="status-key-row">
+      <div class="program-row">
+        Key <select id="key-tonic"></select>
+        <select id="key-mode">
+          <option value="major">Major</option>
+          <option value="minor">Minor</option>
+        </select>
+      </div>
+    </div>
+    <div class="program-row">
+      <button id="tap-tempo-btn" type="button">TAP</button>
+      <span id="tempo-display">120 BPM</span>
     </div>
   </div>
 

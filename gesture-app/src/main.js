@@ -197,6 +197,7 @@ onScreenChange(() => drawerEl.classList.remove('open'));
 // 画面ごとのコントロールパネル・キーボードヒントの出し分け
 const chordControlsEl = document.getElementById('chord-controls');
 const rhythmControlsEl = document.getElementById('rhythm-controls');
+const statusKeyRowEl = document.getElementById('status-key-row'); // 常時表示の#status-panel内、Key選択はコード画面専用
 const hintEl = document.getElementById('hint');
 const CHORD_HINT = hintEl.innerHTML;
 const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>メトロノームON/OFFは下の音源パネルのチェックボックスから<br>E: 音色エディタ';
@@ -205,6 +206,7 @@ const MELODY_HINT = '<div class="drawer-section-title">操作</div>メロディ�
 onScreenChange((next) => {
   chordControlsEl.hidden = next !== 'chord';
   rhythmControlsEl.hidden = next !== 'rhythm';
+  statusKeyRowEl.hidden = next !== 'chord';
   hintEl.innerHTML = next === 'chord' ? CHORD_HINT : next === 'rhythm' ? RHYTHM_HINT : MELODY_HINT;
 });
 

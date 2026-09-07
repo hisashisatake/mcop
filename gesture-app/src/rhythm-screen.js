@@ -18,6 +18,7 @@ const STEPS = 16;
 const STEP_GROUP = 4; // 4ステップ（1拍）ごとに区切り線を太くする
 const LABEL_WIDTH = 74;
 const TOP_MARGIN = 40; // 上部の余白（画面タブ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
+const BOTTOM_MARGIN = 180; // 右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と最下段の行が重ならないための余白
 
 // Rust側`DRUM_NOTES`（midi_out.rs）と行の並びを一致させること。JSは行番号だけを
 // やり取りし、実際のGM2ノート番号はRust側が持つ。
@@ -60,7 +61,7 @@ export function bindRhythmScreenControls({ metronomeToggle }) {
 
 function gridMetrics(canvas) {
   const cw = (canvas.width - LABEL_WIDTH) / STEPS;
-  const ch = (canvas.height - TOP_MARGIN) / ROWS;
+  const ch = (canvas.height - TOP_MARGIN - BOTTOM_MARGIN) / ROWS;
   return { cw, ch };
 }
 
@@ -80,6 +81,7 @@ function draw(ctx, canvas) {
   const W = canvas.width;
   const H = canvas.height;
   const { cw, ch } = gridMetrics(canvas);
+  const gridBottom = TOP_MARGIN + ROWS * ch;
 
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
@@ -96,7 +98,7 @@ function draw(ctx, canvas) {
   // 描かないと、不透明なセルの塗りで上書きされて見えなくなる。
   if (currentStep >= 0) {
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(LABEL_WIDTH + currentStep * cw, TOP_MARGIN, cw, H - TOP_MARGIN);
+    ctx.fillRect(LABEL_WIDTH + currentStep * cw, TOP_MARGIN, cw, gridBottom - TOP_MARGIN);
   }
 
   // 行ラベル
@@ -116,7 +118,7 @@ function draw(ctx, canvas) {
   for (let step = 0; step <= STEPS; step++) {
     const x = Math.round(LABEL_WIDTH + step * cw) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
-    ctx.lineTo(x, H);
+    ctx.lineTo(x, gridBottom);
   }
   for (let row = 0; row <= ROWS; row++) {
     const y = Math.round(TOP_MARGIN + row * ch) + 0.5;
@@ -130,7 +132,7 @@ function draw(ctx, canvas) {
   for (let step = 0; step <= STEPS; step += STEP_GROUP) {
     const x = Math.round(LABEL_WIDTH + step * cw) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
-    ctx.lineTo(x, H);
+    ctx.lineTo(x, gridBottom);
   }
   ctx.stroke();
 }

@@ -42,7 +42,7 @@ import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotA
 import { isActive, onScreenChange } from './screens.js';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
-const BOTTOM_MARGIN = 130; // 左下固定の#hud（コード名の大きな表示）と過去/現在/未来スロットが重ならないための余白
+const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
 const MAX_SCORE_FOR_SHADING = 1.3; // だいたいの上限。alpha計算のクランプ用
 const SLIDE_DURATION_MS = 220;
 const MAX_HISTORY_SLOTS = 4; // 過去・未来共通の最大表示数（対称レイアウト）
