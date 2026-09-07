@@ -1,9 +1,13 @@
-// コード画面（フロー方式）：現在のコードを中心に、左へ過去コードの履歴、右へ次の候補を並べる。
+// コード画面（フロー方式）：現在のコードを中心に、左へ過去コードの履歴、右へ「記録済みの続き
+// （未来）」と「次の候補」を並べる。過去・未来は対称なレイアウトで、どちらもクリックで
+// その地点へ「再生位置」を移動する操作として扱う（undo/redoではなく、位置移動という設計）。
 //
 // 操作:
 //   候補セルをクリック … 押している間だけ発音し、離しても選択は確定して現在コードになる
-//                        （セル内上下でベロシティ、上側ほど強い）
-//   過去コードをクリック … 押している間だけ発音し、その地点まで巻き戻す
+//                        （セル内上下でベロシティ、上側ほど強い）。cursorより先の履歴が
+//                        あれば、この時点で破棄される（分岐は保持しない設計判断）
+//   過去/未来コードをクリック … 押している間だけ発音し、その地点まで再生位置を移動する
+//                        （過去=戻る、未来=記録済みの続きへ進む。どちらも即座に確定）
 //   Ctrl+Z             … 1つ戻す（発音はしない）
 //   Ctrl+Y/Ctrl+Shift+Z … 1つ進める（発音はしない）
 //   Shift               … 4和音中心のレイヤーへ切替（II-V-Iが縦2行以内に収まる）
@@ -18,7 +22,8 @@
 //   ピボットコード（近親調との共通コード）には青を混ぜ、それを押した次に転調先固有のコードを
 //   押すと調が確定する。
 //
-// 履歴は線形（cursor+entries配列）。戻ってから新しいコードを選ぶと、その先の履歴は破棄される
+// 履歴は線形（cursor+entries配列）。過去/未来への移動はentriesを一切変更しないが、戻った
+// 状態で新しいコードを選ぶと、その先の履歴（未来スロットに見えていた続き）は破棄される
 // （分岐は保持しない設計判断。詳細はplan「gesture-app コード画面をグリッド方式からフロー方式へ刷新」）。
 
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
@@ -33,7 +38,7 @@ const BOTTOM_MARGIN = 190; // 右下固定の#program-panel（chord-controls表�
 const CANDIDATE_TOP_MARGIN = 340; // 右上固定の#midi-log-panel（top:92px,max-height:240px）+#hintと候補ブロックが重ならないための開始位置。過去/現在スロットは画面左寄りで重ならないためTOP_MARGINのまま
 const MAX_SCORE_FOR_SHADING = 1.3; // だいたいの上限。alpha計算のクランプ用
 const SLIDE_DURATION_MS = 220;
-const MAX_PAST_SLOTS = 4;
+const MAX_HISTORY_SLOTS = 4; // 過去・未来共通の最大表示数（対称レイアウト）
 
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;
@@ -50,7 +55,7 @@ let assistCols = DEFAULT_COLS;
 let shiftHeld = false;
 let ctrlHeld = false;
 let hoverCandidate = null; // {col, row, yRatio}
-let hoverPast = null; // { index, yRatio }
+let hoverSlot = null; // { kind: 'past'|'future', index, yRatio }（過去・未来のホバー共通）
 let sounding = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
 
@@ -114,16 +119,25 @@ function cellFromPoint(canvas, px, py) {
 
   // 過去コード列（現在スロットより左）。draw()と同じ並び: i=0が現在の直前(cursor-1)。
   if (x < layout.currentX) {
-    const pastCount = Math.min(MAX_PAST_SLOTS, history.cursor);
+    const pastCount = Math.min(MAX_HISTORY_SLOTS, history.cursor);
     for (let i = 0; i < pastCount; i++) {
-      const slotX = layout.currentX - layout.pastGap * (i + 1);
-      if (x >= slotX - layout.pastW / 2 && x < slotX + layout.pastW / 2) {
+      const slotX = layout.currentX - layout.slotGap * (i + 1);
+      if (x >= slotX - layout.slotW / 2 && x < slotX + layout.slotW / 2) {
         return { kind: 'past', index: history.cursor - 1 - i, yRatio: 0.5 };
       }
     }
     return null;
   }
 
+  // 未来コード列（現在スロットより右、候補ブロックより左）。過去と対称の並び:
+  // i=0が記録済みの直後(cursor+1)。まだ選択していない先には何も無い（自然に0件になる）。
+  const futureCount = Math.min(MAX_HISTORY_SLOTS, history.entries.length - 1 - history.cursor);
+  for (let i = 0; i < futureCount; i++) {
+    const slotX = layout.currentX + layout.slotGap * (i + 1);
+    if (x >= slotX - layout.slotW / 2 && x < slotX + layout.slotW / 2) {
+      return { kind: 'future', index: history.cursor + 1 + i, yRatio: 0.5 };
+    }
+  }
   return null;
 }
 
@@ -135,14 +149,16 @@ function computeLayout(canvas) {
   // 縦領域を使う。過去/現在スロットは画面左寄りでパネルと重ならないためbodyHのままでよい。
   const candidateBodyH = Math.max(1, H - CANDIDATE_TOP_MARGIN - BOTTOM_MARGIN);
   const currentX = W * 0.3;
-  const candidateX = W * 0.52;
+  const slotGap = Math.min(110, currentX / (MAX_HISTORY_SLOTS + 1));
+  const slotW = Math.min(84, slotGap - 8);
+  // 未来スロットの表示幅は過去（0〜currentX）と対称にする。過去にさかのぼる操作と、
+  // 記録済みの続きへクリックで進む操作が同じ見た目の「再生位置の移動」になるように
+  const candidateX = currentX * 2;
   const cellW = (W - candidateX - 16) / assistCols;
   const cellH = Math.min(84, candidateBodyH / assistRows);
-  const pastGap = Math.min(110, currentX / (MAX_PAST_SLOTS + 1));
-  const pastW = Math.min(84, pastGap - 8);
   // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
   const candidateOriginY = CANDIDATE_TOP_MARGIN + (candidateBodyH - assistRows * cellH) / 2;
-  return { W, H, bodyH, currentX, candidateX, cellW, cellH, pastGap, pastW, candidateOriginY };
+  return { W, H, bodyH, currentX, candidateX, cellW, cellH, slotGap, slotW, candidateOriginY };
 }
 
 async function stopChord() {
@@ -185,7 +201,7 @@ function commitSelection(chord) {
   startSlide(1);
 }
 
-/** 過去コードの地点へ即座に巻き戻す（発音は呼び出し側が行う）。 */
+/** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。 */
 function jumpToIndex(index) {
   const direction = index < history.cursor ? -1 : 1;
   history = jumpTo(history, index);
@@ -208,7 +224,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     if (!isActive('chord')) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     hoverCandidate = cell?.kind === 'candidate' ? cell : null;
-    hoverPast = cell?.kind === 'past' ? cell : null;
+    hoverSlot = cell?.kind === 'past' || cell?.kind === 'future' ? cell : null;
   });
 
   canvas.addEventListener('mousedown', async (e) => {
@@ -227,7 +243,8 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       // 選択は保持時間に関わらず確定する（離しても現在コードとして残る）
       commitSelection(found.chord);
       await playChord(found.chord, velocityFromCellY(cell.yRatio));
-    } else if (cell.kind === 'past') {
+    } else if (cell.kind === 'past' || cell.kind === 'future') {
+      // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う
       jumpToIndex(cell.index);
       const entry = currentEntry(history);
       if (!entry) {
@@ -416,43 +433,61 @@ function currentSlideState(layout) {
   const elapsed = performance.now() - slideStart;
   const t = Math.min(1, elapsed / SLIDE_DURATION_MS);
   const eased = 1 - (1 - t) ** 2; // ease-out
-  const startOffset = slideDirection > 0 ? layout.pastGap : -layout.pastGap;
+  const startOffset = slideDirection > 0 ? layout.slotGap : -layout.slotGap;
   const offsetPx = startOffset * (1 - eased);
   if (t >= 1) slideDirection = 0;
   return { offsetPx, candidateAlpha: eased };
 }
 
+/** 過去/未来スロット1個分の描画（対称デザインなので共通化）。 */
+function drawHistorySlot(ctx, chordName, slotX, slotY, slotW, alpha, isHover) {
+  ctx.fillStyle = isHover ? `rgba(150,190,255,${alpha + 0.15})` : `rgba(200,200,200,${alpha * 0.15})`;
+  ctx.fillRect(slotX - slotW / 2, slotY - slotW / 2, slotW, slotW);
+  ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
+  ctx.strokeRect(slotX - slotW / 2 + 0.5, slotY - slotW / 2 + 0.5, slotW, slotW);
+  ctx.fillStyle = `rgba(220,220,220,${alpha})`;
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(chordName, slotX, slotY);
+}
+
 function draw(ctx, canvas) {
   const layout = computeLayout(canvas);
-  const { W, H, bodyH, currentX, candidateX, cellW, cellH, pastGap, pastW, candidateOriginY } = layout;
+  const { W, H, bodyH, currentX, candidateX, cellW, cellH, slotGap, slotW, candidateOriginY } = layout;
 
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
 
   const { offsetPx, candidateAlpha } = currentSlideState(layout);
   const entry = currentEntry(history);
+  const slotY = TOP_MARGIN + bodyH / 2;
 
   ctx.save();
   if (offsetPx !== 0) ctx.translate(offsetPx, 0);
 
   // 過去コード（現在スロットの左）。cursor-1, cursor-2, ... と遡る
-  const pastCount = Math.min(MAX_PAST_SLOTS, history.cursor);
+  const pastCount = Math.min(MAX_HISTORY_SLOTS, history.cursor);
   for (let i = 0; i < pastCount; i++) {
     const idx = history.cursor - 1 - i;
     const past = history.entries[idx];
     if (!past) continue;
-    const slotX = currentX - pastGap * (i + 1);
+    const slotX = currentX - slotGap * (i + 1);
     const alpha = 0.75 - i * 0.18;
-    const isHover = hoverPast?.index === idx;
-    ctx.fillStyle = isHover ? `rgba(150,190,255,${alpha + 0.15})` : `rgba(200,200,200,${alpha * 0.15})`;
-    ctx.fillRect(slotX - pastW / 2, TOP_MARGIN + bodyH / 2 - pastW / 2, pastW, pastW);
-    ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
-    ctx.strokeRect(slotX - pastW / 2 + 0.5, TOP_MARGIN + bodyH / 2 - pastW / 2 + 0.5, pastW, pastW);
-    ctx.fillStyle = `rgba(220,220,220,${alpha})`;
-    ctx.font = '16px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(past.chord.name, slotX, TOP_MARGIN + bodyH / 2);
+    const isHover = hoverSlot?.kind === 'past' && hoverSlot.index === idx;
+    drawHistorySlot(ctx, past.chord.name, slotX, slotY, slotW, alpha, isHover);
+  }
+
+  // 未来コード（現在スロットの右）。過去と対称。cursor+1, cursor+2, ... と記録済みの続きを辿る
+  const futureCount = Math.min(MAX_HISTORY_SLOTS, history.entries.length - 1 - history.cursor);
+  for (let i = 0; i < futureCount; i++) {
+    const idx = history.cursor + 1 + i;
+    const future = history.entries[idx];
+    if (!future) continue;
+    const slotX = currentX + slotGap * (i + 1);
+    const alpha = 0.75 - i * 0.18;
+    const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
+    drawHistorySlot(ctx, future.chord.name, slotX, slotY, slotW, alpha, isHover);
   }
 
   // 現在コードのスロット
