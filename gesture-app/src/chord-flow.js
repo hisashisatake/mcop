@@ -97,7 +97,7 @@ export function pendingPivotAt(state) {
 
 /**
  * 新しいコードを選択する。cursorより先の履歴（redo可能だった分）は破棄する。
- * @param {{chord, key: {tonicMidi, mode}, pendingPivot: object|null}} entry
+ * @param {{chord, key: {tonicMidi, mode}, pendingPivot: object|null, velocity: number}} entry
  */
 export function selectChord(state, entry) {
   const entries = state.entries.slice(0, state.cursor + 1);

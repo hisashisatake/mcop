@@ -108,13 +108,16 @@ export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ct
   };
 }
 
+// velocityFromCellYが返しうる範囲。過去/未来スロットのベロシティバー表示（chord-screen.js）が
+// 同じ範囲で正規化するため、ここでエクスポートして共有する。
+export const VELOCITY_MIN = 40;
+export const VELOCITY_MAX = 127;
+
 /**
  * セル内縦位置（0=上端, 1=下端）をベロシティへ変換する。
  * 上下いっぱいにすると無音になってしまうため上限を設ける。
  */
 export function velocityFromCellY(ratio) {
-  const MIN = 40;
-  const MAX = 127;
   const t = 1 - Math.max(0, Math.min(1, ratio));
-  return Math.round(MIN + (MAX - MIN) * t);
+  return Math.round(VELOCITY_MIN + (VELOCITY_MAX - VELOCITY_MIN) * t);
 }

@@ -36,7 +36,7 @@
 
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
-import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY } from './chords.js';
+import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX } from './chords.js';
 import { pivotKeysFor, confirmsModulation } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { computePastSlotGeoms } from './chord-layout.js';
@@ -70,6 +70,13 @@ const PAST_LABEL_ROOT_SIZE = 28; // これ以上ならルート音のみ（C）�
 const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの拡大サイズ（Dock風）
 const HOVER_EXPAND_MS = 120;
 
+// 選択時のベロシティをスロット下端からの紺色バーで可視化する（過去・未来・現在の全スロット共通）。
+// 再選択（過去/未来クリックでの再生位置移動）ではこの値を書き換えない — entryは選択時に確定した
+// ベロシティを保持したまま、発音だけは常に一定のベロシティで行う（cellFromPointが過去/未来に
+// yRatio=0.5固定を返すため自然にそうなる）。
+const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
+const VELOCITY_BAR_ALPHA_SCALE = 0.55; // ラベル文字の可読性を保つため、スロットのalphaより少し抑える
+
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;
 const MIN_COLS = 1;
@@ -89,7 +96,9 @@ let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（�
 let sounding = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
 
-// { entries: [{chord, key:{tonicMidi,mode}, pendingPivot}], cursor, initialKey }
+// { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity}], cursor, initialKey }
+// velocityは選択時のセル内クリック位置から一度だけ決まり、以後は変化しない（表示用のベロシティ
+// バーに使う。過去/未来クリックでの再訪や発音そのものには使わない）。
 let history = createHistory({ tonicMidi, mode });
 let candidateCache = null; // { cacheKey, grid: [...] }
 
@@ -247,12 +256,13 @@ function applyKey(newKey) {
 /**
  * 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。
  * 編集操作なのでundoStackへ直前のhistoryを積み、redoStackは破棄する（一般的なUndo/Redoの規約）。
+ * velocityは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
  */
-function commitSelection(chord) {
+function commitSelection(chord, velocity) {
   const { key, pendingPivot } = evaluateTheoryTransition(chord);
   undoStack.push(history);
   redoStack = [];
-  history = selectChord(history, { chord, key, pendingPivot });
+  history = selectChord(history, { chord, key, pendingPivot, velocity });
   applyKey(key);
   invalidateCandidates();
   startSlide(1);
@@ -325,8 +335,9 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
         return;
       }
       // 選択は保持時間に関わらず確定する（離しても現在コードとして残る）
-      commitSelection(found.chord);
-      await playChord(found.chord, velocityFromCellY(cell.yRatio));
+      const velocity = velocityFromCellY(cell.yRatio);
+      commitSelection(found.chord, velocity);
+      await playChord(found.chord, velocity);
     } else if (cell.kind === 'past' || cell.kind === 'future') {
       // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う
       jumpToIndex(cell.index);
@@ -531,12 +542,26 @@ function lerp(a, b, t) {
 }
 
 /**
+ * 選択時のベロシティを、スロット下端からの紺色の縦バーとして描く（0=バーなし、127=満タン）。
+ * velocityがnull/undefinedなら何も描かない（entryが無い＝未選択の枠にバーを付けないため）。
+ */
+function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
+  if (velocity == null) return;
+  const ratio = Math.max(0, Math.min(1, (velocity - VELOCITY_MIN) / (VELOCITY_MAX - VELOCITY_MIN)));
+  if (ratio <= 0) return;
+  const barH = size * ratio;
+  ctx.fillStyle = `rgba(${VELOCITY_BAR_COLOR}, ${alpha})`;
+  ctx.fillRect(slotX - size / 2, slotY + size / 2 - barH, size, barH);
+}
+
+/**
  * 過去/未来スロット1個分の描画（対称デザインなので共通化）。sizeが可変（過去列は遠いほど
  * 縮小する）ため、ラベルはサイズに応じてフル名／ルート音のみ／非表示を切り替える。
  */
-function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover) {
+function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover, velocity) {
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
+  drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
@@ -583,7 +608,7 @@ function draw(ctx, canvas) {
     const size = startGeom ? lerp(startGeom.size, g.size, pastT) : g.size;
     const targetAlpha = Math.max(PAST_ALPHA_MIN, PAST_ALPHA_BASE * PAST_ALPHA_DECAY ** g.index);
     const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
-    drawHistorySlot(ctx, past.chord, x, y, size, alpha, false);
+    drawHistorySlot(ctx, past.chord, x, y, size, alpha, false, past.velocity);
   }
 
   // 未来コード（現在スロットの右）。固定サイズ・固定間隔のまま、平行移動のみで演出する
@@ -597,7 +622,7 @@ function draw(ctx, canvas) {
     const slotX = currentX + FUTURE_SLOT_GAP * (i + 1);
     const alpha = 0.75 - i * 0.18;
     const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
-    drawHistorySlot(ctx, future.chord, slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover);
+    drawHistorySlot(ctx, future.chord, slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover, future.velocity);
   }
   ctx.restore();
 
@@ -608,6 +633,7 @@ function draw(ctx, canvas) {
     const y = slotY;
     ctx.fillStyle = sounding.length > 0 ? 'rgba(120,200,255,0.12)' : 'rgba(255,255,255,0.04)';
     ctx.fillRect(x - size / 2, y - size / 2, size, size);
+    drawVelocityBar(ctx, x, y, size, entry?.velocity, VELOCITY_BAR_ALPHA_SCALE);
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 2;
     ctx.strokeRect(x - size / 2 + 1, y - size / 2 + 1, size - 2, size - 2);
@@ -627,7 +653,7 @@ function draw(ctx, canvas) {
     const hoverEntry = history.entries[hoverSlot.index];
     if (hoverGeom && hoverEntry) {
       const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
-      drawHistorySlot(ctx, hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true);
+      drawHistorySlot(ctx, hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true, hoverEntry.velocity);
     }
   }
 
