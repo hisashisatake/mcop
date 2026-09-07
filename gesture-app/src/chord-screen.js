@@ -1,15 +1,23 @@
 // コード画面（フロー方式）：現在のコードを中心に、左へ過去コードの履歴、右へ「記録済みの続き
-// （未来）」と「次の候補」を並べる。過去・未来は対称なレイアウトで、どちらもクリックで
-// その地点へ「再生位置」を移動する操作として扱う（undo/redoではなく、位置移動という設計）。
+// （未来）」と「次の候補」を並べる。
+//
+// 過去/未来のナビゲーションと、Ctrl+Z/Ctrl+Yの取り消しは別の概念として扱う:
+//   - 過去/未来コードのクリックは「再生位置の移動」（cursorを動かすだけ、entriesは不変）
+//   - Ctrl+Z/Ctrl+Yは「新しいコードを選択した」という編集操作そのものの一般的なUndo/Redo
+//     （過去へ戻ってから新しいコードを選んで先の履歴を上書きした場合、Ctrl+Zはその上書き
+//     操作自体を取り消し、上書き前のentries全体（上書きされる前に見えていた続きも含む）へ
+//     丸ごと復元する。例: A-B-C-Dと選んでからBまで戻りEを選ぶとA-B-Eになるが、Ctrl+Zを押すと
+//     A-B-C-D（カーソルはB）に戻る）。編集操作でないただのカーソル移動（過去/未来クリックや
+//     Ctrl+Z/Y自体）はこのUndo/Redoスタックに積まない
 //
 // 操作:
 //   候補セルをクリック … 押している間だけ発音し、離しても選択は確定して現在コードになる
 //                        （セル内上下でベロシティ、上側ほど強い）。cursorより先の履歴が
-//                        あれば、この時点で破棄される（分岐は保持しない設計判断）
+//                        あれば、この時点で破棄される（Ctrl+Zで丸ごと復元可能）
 //   過去/未来コードをクリック … 押している間だけ発音し、その地点まで再生位置を移動する
 //                        （過去=戻る、未来=記録済みの続きへ進む。どちらも即座に確定）
-//   Ctrl+Z             … 1つ戻す（発音はしない）
-//   Ctrl+Y/Ctrl+Shift+Z … 1つ進める（発音はしない）
+//   Ctrl+Z             … 直前のコード選択（上書きを含む）を取り消す（発音はしない）
+//   Ctrl+Y/Ctrl+Shift+Z … Ctrl+Zで取り消した選択をやり直す（発音はしない）
 //   Shift               … 4和音中心のレイヤーへ切替（II-V-Iが縦2行以内に収まる）
 //   Ctrl                … sus・付加音系のレイヤーへ切替
 //   Ctrl+Shift          … aug・オルタード系のレイヤーへ切替
@@ -30,7 +38,7 @@ import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY } from './chords.js';
 import { pivotKeysFor, confirmsModulation } from './theory.js';
-import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, undo, redo, jumpTo } from './chord-flow.js';
+import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { isActive, onScreenChange } from './screens.js';
 
 const TOP_MARGIN = 74; // 左上の画面切り替えタブと重ならないよう本体を下げる（rhythm-screen.jsと同じ手当）
@@ -63,6 +71,12 @@ let pointerHeld = false; // マウスボタンを押している最中か（awai
 let history = createHistory({ tonicMidi, mode });
 let candidateCache = null; // { cacheKey, grid: [...] }
 
+// Ctrl+Z/Ctrl+Yの編集Undo/Redo用スタック（Mementoパターン）。要素はcommitSelection直前のhistory
+// スナップショットそのもの（historyは常に新しいオブジェクトを返す設計のため、参照を保持するだけで
+// 安全に巻き戻せる）。過去/未来クリックによるcursor移動はここへ積まない（編集操作ではないため）。
+let undoStack = [];
+let redoStack = [];
+
 let tonicSelectEl = null;
 let modeSelectEl = null;
 
@@ -92,6 +106,8 @@ function syncControlsFromState() {
 
 function resetHistory() {
   history = createHistory({ tonicMidi, mode });
+  undoStack = [];
+  redoStack = [];
   invalidateCandidates();
   syncControlsFromState();
 }
@@ -192,22 +208,47 @@ function applyKey(newKey) {
   syncControlsFromState();
 }
 
-/** 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。 */
+/**
+ * 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。
+ * 編集操作なのでundoStackへ直前のhistoryを積み、redoStackは破棄する（一般的なUndo/Redoの規約）。
+ */
 function commitSelection(chord) {
   const { key, pendingPivot } = evaluateTheoryTransition(chord);
+  undoStack.push(history);
+  redoStack = [];
   history = selectChord(history, { chord, key, pendingPivot });
   applyKey(key);
   invalidateCandidates();
   startSlide(1);
 }
 
-/** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。 */
+/** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。編集操作ではないためundo/redoスタックには積まない。 */
 function jumpToIndex(index) {
   const direction = index < history.cursor ? -1 : 1;
   history = jumpTo(history, index);
   applyKey(keyAt(history));
   invalidateCandidates();
   startSlide(direction);
+}
+
+/** 直前のコード選択（過去へ戻った上での上書きも含む）を取り消し、その操作の直前のhistoryへ丸ごと復元する。 */
+function undoEdit() {
+  if (undoStack.length === 0) return;
+  redoStack.push(history);
+  history = undoStack.pop();
+  applyKey(keyAt(history));
+  invalidateCandidates();
+  startSlide(-1);
+}
+
+/** undoEditで取り消したコード選択をやり直す。 */
+function redoEdit() {
+  if (redoStack.length === 0) return;
+  undoStack.push(history);
+  history = redoStack.pop();
+  applyKey(keyAt(history));
+  invalidateCandidates();
+  startSlide(1);
 }
 
 async function playChord(chord, velocity) {
@@ -283,18 +324,12 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       invalidateCandidates();
     } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      const direction = e.shiftKey ? 1 : -1;
-      history = e.shiftKey ? redo(history) : undo(history);
-      applyKey(keyAt(history));
-      invalidateCandidates();
-      startSlide(direction);
+      if (e.shiftKey) redoEdit();
+      else undoEdit();
       onChordChange?.(currentEntry(history)?.chord.name ?? null);
     } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      history = redo(history);
-      applyKey(keyAt(history));
-      invalidateCandidates();
-      startSlide(1);
+      redoEdit();
       onChordChange?.(currentEntry(history)?.chord.name ?? null);
     } else if (e.key === 'ArrowDown') {
       assistRows = Math.max(MIN_ROWS, assistRows - 1);

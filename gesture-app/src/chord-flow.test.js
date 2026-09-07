@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, undo, redo, jumpTo } from './chord-flow.js';
+import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { chordFromSemitone, NORMAL_LAYER } from './chords.js';
 
 const TONIC_MIDI = 60; // C4
@@ -144,33 +144,12 @@ test('history: selectChordで積み上がりcursorが進む', () => {
   assert.equal(currentEntry(h).chord.name, 'F');
 });
 
-test('history: undo/redoでcursorが前後する', () => {
-  let h = createHistory(INITIAL_KEY);
-  h = selectChord(h, entryFor('C'));
-  h = selectChord(h, entryFor('F'));
-  h = undo(h);
-  assert.equal(currentEntry(h).chord.name, 'C');
-  h = redo(h);
-  assert.equal(currentEntry(h).chord.name, 'F');
-});
-
-test('history: undoは先頭で止まり、redoは末尾で止まる', () => {
-  let h = createHistory(INITIAL_KEY);
-  h = selectChord(h, entryFor('C'));
-  h = undo(h);
-  h = undo(h); // 既に先頭
-  assert.equal(h.cursor, -1);
-  h = redo(h);
-  h = redo(h); // 既に末尾
-  assert.equal(h.cursor, 0);
-});
-
 test('history: 戻ってから新しいコードを選ぶと、その先の履歴は破棄される（上書き）', () => {
   let h = createHistory(INITIAL_KEY);
   h = selectChord(h, entryFor('C'));
   h = selectChord(h, entryFor('F'));
   h = selectChord(h, entryFor('G'));
-  h = undo(h); // cursor=1 (F)
+  h = jumpTo(h, 1); // cursor=1 (F)
   h = selectChord(h, entryFor('Am')); // Gの先を破棄してAmを積む
   assert.equal(h.entries.length, 3);
   assert.deepEqual(h.entries.map((e) => e.chord.name), ['C', 'F', 'Am']);

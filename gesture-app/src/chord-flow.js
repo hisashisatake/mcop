@@ -10,8 +10,14 @@
 // 履歴モデル:
 //   entries配列＋cursorで線形履歴を表す。selectChordはcursor以降を切り捨てて追加する
 //   （分岐は保持せず上書き。ユーザーの明示的な決定）。各entryは選択後のキー状態と
-//   pendingPivot（ピボット転調の予告）を丸ごと保持するため、undo/redo/jumpToで
-//   コード選択と転調の両方をまとめて巻き戻せる。
+//   pendingPivot（ピボット転調の予告）を丸ごと保持するため、jumpToでコード選択と
+//   転調の両方をまとめて移動できる。
+//
+//   このcursorは「現在どこを見ているか（過去/未来クリックでの再生位置）」だけを表し、
+//   「新しいコードを選ぶ」という編集操作そのもののUndo/Redo（Ctrl+Z/Ctrl+Y）は、
+//   chord-screen.js側でこのstate自体をスナップショットとして積む別スタックで実現する
+//   （このモジュールはselectChord/jumpToという状態遷移の定義のみを持ち、
+//   「取り消し操作の履歴」という概念は持たない）。
 
 import { ROWS, chordFromSemitone } from './chords.js';
 import { classifyProgression, classifyInitial, pivotKeysFor } from './theory.js';
@@ -99,19 +105,7 @@ export function selectChord(state, entry) {
   return { ...state, entries, cursor: entries.length - 1 };
 }
 
-/** 1つ戻す（Ctrl+Z）。既に先頭ならそのまま。 */
-export function undo(state) {
-  if (state.cursor < 0) return state;
-  return { ...state, cursor: state.cursor - 1 };
-}
-
-/** 1つ進める（Ctrl+Y / Ctrl+Shift+Z）。既に末尾ならそのまま。 */
-export function redo(state) {
-  if (state.cursor >= state.entries.length - 1) return state;
-  return { ...state, cursor: state.cursor + 1 };
-}
-
-/** 過去コードのクリック用。indexは0-indexed（-1=初期状態）。範囲外なら変化なし。 */
+/** 過去/未来コードのクリック用。indexは0-indexed（-1=初期状態）。範囲外なら変化なし。 */
 export function jumpTo(state, index) {
   if (index < -1 || index > state.entries.length - 1) return state;
   return { ...state, cursor: index };
