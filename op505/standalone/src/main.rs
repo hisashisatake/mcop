@@ -50,6 +50,7 @@ mod config;
 mod editor;
 mod log;
 mod midi_source;
+mod query_server;
 mod shared;
 mod sources;
 mod tempo_clock;
@@ -192,6 +193,11 @@ fn main() {
     // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
     registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone(), tempo_clock.clone())));
 
+    // gesture-appの音色名クエリ用パイプ（`\\.\pipe\op505.query.v1`）。MIDI転送用のpipe_src.rsとは
+    // 別チャネルで、リクエスト/レスポンスをその場で返すだけ（監視スレッド・差分検知は持たない、
+    // 詳細はquery_server.rsのモジュールdoc参照）。
+    query_server::spawn(Arc::clone(&shared_edit_state));
+
     // レベルメーターのpublish区間中に累積するピーク値（取りこぼし防止、`main.rs`モジュールdoc
     // 「レベルメーターのpublish間隔」参照）。オーディオコールバックのクロージャが単独所有する。
     let mut meter_peak_l = 0.0f32;
@@ -214,6 +220,9 @@ fn main() {
 
                 let interleaved_len = output.len();
                 let channel_slot: [u8; 16] = std::array::from_fn(|i| state.channels[i].effect_route_slot);
+                // gesture-appの音色名クエリ（query_server.rs）向けの一方向の橋。
+                shared_edit_state
+                    .publish_program_selections(std::array::from_fn(|i| state.channels[i].program_state.selection()));
                 let engine_ref = &mut engine;
                 let mixed = master.render(interleaved_len, num_channels, |slot_buf, stride| {
                     engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);

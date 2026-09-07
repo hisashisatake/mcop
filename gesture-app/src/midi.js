@@ -30,6 +30,18 @@ export function setProgram(bank, program) {
   return invoke('op505_set_program', { bank, program });
 }
 
+/** standaloneへ問い合わせて、指定チャンネルの現在の音色名を取得する。
+ * `status`は"resolved"/"not_found"/"rhythm"/"editing"/"disconnected"のいずれか
+ * （Rust側`ProgramInfoDto`参照）。Tauri外（フォールバックのinvoke）では
+ * `{status: "disconnected"}`相当を返す。 */
+export async function queryProgramName(channel) {
+  const result = await invoke('op505_query_program_name', { channel });
+  if (!result || typeof result !== 'object') {
+    return { bank: 0, program: 0, name: '', status: 'disconnected' };
+  }
+  return result;
+}
+
 export function setPerformanceLfo(args) {
   return invoke('op505_set_performance_lfo', args);
 }

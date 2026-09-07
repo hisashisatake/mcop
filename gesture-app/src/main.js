@@ -1,6 +1,6 @@
 // エントリポイント。画面（現状はコード画面のみ）の起動と、画面共通のパネル類を配線する。
 
-import { setProgram, tapTempo, openEditor } from './midi.js';
+import { setProgram, tapTempo, openEditor, queryProgramName, CHORD_CHANNEL } from './midi.js';
 import { setupMidiLog } from './midi-log.js';
 import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.js';
 import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
@@ -10,20 +10,14 @@ import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
 
 setupMidiLog(document.getElementById('midi-log'));
 
-// Bank=0（GM2 Bank0）で手動チューニング済みのProgram名（preset.rsのgm2_bank0_patch参照）。
-// 未掲載のProgramはplaceholder_patchへフォールバックする。
-const FM_PROGRAM_NAMES = { 0: 'Acoustic Grand Piano', 4: 'Electric Piano 1', 80: 'Lead 1 (Square)' };
-
 // 波形メモリ音色専用のBank Select番号（凍結済みym38x6-coreのWAVEFORM_MEMORY_BANKと一致させていた
 // 値）。op505向けの音色は2026-08-25に移植済み: op505-coreにはこのBankを特別扱いする
 // フォールバックコードは無く（op505は実行時コード生成パターン自体を廃止済み）、代わりに
 // `op505/tools/patchlab/python/waveform_memory_bank.py`が生成した実体の.op505ファイルを
 // 通常のプリセットバンクとして%USERPROFILE%\Documents\op505\presets\へ配置してある。
-// Program 0〜31=op505ビルトイン波形32種(波形=program)+ピアノ風ADSR、32〜63=同波形+リード風ADSR。
+// 音色名自体はstandaloneへの問い合わせ（queryProgramName）で得るため、ここでは
+// Bank欄の固定にのみ使う。
 const WAVEFORM_MEMORY_BANK = 16383;
-
-// リード風ADSRが始まるProgram番号。waveform_memory_bank.pyのLEAD_RANGE_STARTと一致必須。
-const WAVEFORM_MEMORY_LEAD_START = 32;
 
 // ─────────────────────────────────────────────
 // Canvas
@@ -69,13 +63,29 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
   let savedFmProgram = parseInt(numEl.value, 10) || 0;
   let savedWmProgram = 0;
 
-  function programName(bank, program) {
-    if (bank === WAVEFORM_MEMORY_BANK) {
-      const style = program < WAVEFORM_MEMORY_LEAD_START ? 'piano' : 'lead';
-      return `Waveform ${program % 32} (${style})`;
+  // standaloneへの問い合わせ結果（Rust側`ProgramInfoDto`のstatus）を表示文字列へ変換する。
+  // 音色名の正解はstandaloneが持つ`.op505`プリセットのみであり、ここでは名前を推測しない
+  // （memory `project_gesture_app_program_name_standalone_query.md`参照）。
+  function formatProgramInfo(info) {
+    switch (info.status) {
+      case 'disconnected':
+        return 'standalone未接続';
+      case 'resolved':
+        return info.name;
+      case 'not_found':
+        return `Bank ${info.bank} / Program ${info.program}（.op505未登録）`;
+      case 'rhythm':
+        return `Rhythm Kit ${info.program}`;
+      case 'editing':
+        return '音色エディタ編集中';
+      default:
+        return `Bank ${info.bank} / Program ${info.program}`;
     }
-    if (bank === 0) return FM_PROGRAM_NAMES[program] ?? `FM #${program}（placeholder）`;
-    return `Bank ${bank} / Program ${program}`;
+  }
+
+  async function refreshProgramLabel() {
+    const info = await queryProgramName(CHORD_CHANNEL);
+    labelEl.textContent = formatProgramInfo(info);
   }
 
   function syncBankField() {
@@ -100,12 +110,9 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
     const program = Math.max(0, Math.min(127, parseInt(numEl.value, 10) || 0));
 
-    // op505_presets_dir()から読み込んだ.op505プリセットをBank/Programで直接引く
-    // （フォールバックなし。見つからなければ現在の音色を維持し、その旨をラベルへ表示する）。
-    const patch = await setProgram(bank, program);
-    labelEl.textContent = patch
-      ? programName(bank, program)
-      : `${programName(bank, program)}（.op505未登録）`;
+    // Bank Select + Program Changeを送るだけ（見つかるかどうかの判断はstandalone任せ）。
+    await setProgram(bank, program);
+    await refreshProgramLabel();
   }
 
   wmToggle.addEventListener('change', () => {
@@ -117,6 +124,14 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 
   syncBankField();
   applyProgram(); // 起動時に既定の音色（OP505 Bank0/Program0）を反映
+
+  // ウィンドウフォーカス復帰時に再問い合わせる。Eキー押下でstandaloneのトレイ起動音色
+  // エディタを開いて閉じた場合も、standaloneのタスクトレイメニューから開いて閉じた場合も、
+  // Domino等で別音色を鳴らしてから戻ってきた場合も、このイベント1つで表示が追随する
+  // （エディタは別ウィンドウのため、閉じれば必ずgesture-appへフォーカスが戻る）。
+  window.__TAURI__?.window?.getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+    if (focused) refreshProgramLabel();
+  });
 })();
 
 // ─────────────────────────────────────────────
