@@ -10,7 +10,7 @@
 //! （PipeSource等の「常時有効で切り替え不要な供給元」だけがSourceRegistry行き）。
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
 
 use std::sync::Arc;
 
@@ -125,9 +125,11 @@ fn open_path_in_explorer(path: &std::path::Path) {
 /// ブロッキングで回す。呼び出し元（`main`）はこの関数から戻った後、`stream`等の
 /// ローカル変数のDropに任せて後片付けする。
 ///
-/// `editor`（トレイ起動音色エディタ、Step 1）は「音色エディタ」メニュー項目から
-/// [`EditorHandle::show`]される。ループを抜けた直後（＝終了処理に入った後）に
-/// [`EditorHandle::shutdown`]を呼び、エディタが開いていれば閉じ終わるまで待ってから戻る
+/// `editor`（トレイ起動音色エディタ、Step 1）は「音色エディタ」メニュー項目、または
+/// タスクトレイアイコン自体のダブルクリックから[`EditorHandle::show`]される
+/// （`TrayIconEvent::DoubleClick`はWindows専用イベントだが、本アプリはWindows専用のため
+/// 問題ない）。ループを抜けた直後（＝終了処理に入った後）に[`EditorHandle::shutdown`]を呼び、
+/// エディタが開いていれば閉じ終わるまで待ってから戻る
 /// （`main`側の`stream`Dropより先にウィンドウを畳んでおくため）。
 pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     if !acquire_single_instance_lock() {
@@ -165,10 +167,16 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
         .with_menu(Box::new(menu))
         .with_tooltip("op505-standalone")
         .with_icon(build_icon())
+        // 既定(true)だと左クリック単発でもメニューが開き、TrackPopupMenuのモーダルループが
+        // ダブルクリック2回目の入力を飲み込んでしまう（WM_LBUTTONDBLCLKが発生しなくなる）。
+        // メニューは右クリック（既定通りmenu_on_right_click=true）のみで開く一般的なWindows
+        // トレイアイコンの慣習に合わせ、左ボタンをダブルクリック用に空ける。
+        .with_menu_on_left_click(false)
         .build()
         .expect("failed to build tray icon");
 
     let menu_channel = MenuEvent::receiver();
+    let tray_channel = TrayIconEvent::receiver();
 
     loop {
         let mut msg: winapi::MSG = unsafe { std::mem::zeroed() };
@@ -198,6 +206,15 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
                 &editor,
                 &tempo,
             );
+        }
+
+        while let Ok(event) = tray_channel.try_recv() {
+            // 左ボタンのダブルクリックのみ拾う（右ダブルクリックはコンテキストメニューの
+            // 誤操作の延長になりやすいため対象外）。単発クリックでは何もしない
+            // （メニューを開くOS標準の挙動のみで足りる）。
+            if matches!(event, TrayIconEvent::DoubleClick { button: MouseButton::Left, .. }) {
+                editor.show();
+            }
         }
     }
 
