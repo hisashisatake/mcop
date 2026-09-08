@@ -208,12 +208,15 @@ function computeLayout(canvas) {
   // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
   const candidateOriginY = TOP_MARGIN + (bodyH - assistRows * cellH) / 2;
   const slotY = TOP_MARGIN + bodyH / 2;
+  // count=cursor+1で、選択済みの過去コードに加えて「初期状態（"—"、まだ何も選んでいない状態）」
+  // へ戻るスロットを1つ多く確保する（history.cursor - 1 - g.index が -1 になる末尾のスロットが
+  // それに当たる。ユーザー要望: 一番最初のコードへは戻れるが、その手前の"—"状態にも戻れるように）
   const pastGeoms = computePastSlotGeoms({
     currentX,
     currentSize: CURRENT_SIZE,
     slotY,
     baseSize: PAST_BASE_SIZE,
-    count: history.cursor,
+    count: history.cursor + 1,
     minSize: PAST_MIN_SIZE,
     shrink: PAST_SHRINK,
     gapRatio: PAST_GAP_RATIO,
@@ -339,14 +342,16 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       commitSelection(found.chord, velocity);
       await playChord(found.chord, velocity);
     } else if (cell.kind === 'past' || cell.kind === 'future') {
-      // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う
+      // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う。
+      // 過去の最奥（"—"＝まだ何も選んでいない初期状態）へ移動した場合はentryが無いため
+      // 発音しない（returnはしない — stopChord/onChordChangeの共通処理へは進む必要がある）
       jumpToIndex(cell.index);
       const entry = currentEntry(history);
-      if (!entry) {
+      if (entry) {
+        await playChord(entry.chord, velocityFromCellY(cell.yRatio));
+      } else {
         pointerHeld = false;
-        return;
       }
-      await playChord(entry.chord, velocityFromCellY(cell.yRatio));
     }
 
     if (!pointerHeld) {
@@ -557,6 +562,7 @@ function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
 /**
  * 過去/未来スロット1個分の描画（対称デザインなので共通化）。sizeが可変（過去列は遠いほど
  * 縮小する）ため、ラベルはサイズに応じてフル名／ルート音のみ／非表示を切り替える。
+ * chord=nullは「まだ何も選んでいない"—"状態」へ戻るスロット（極小時は非表示、それ以外は"—"）。
  */
 function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover, velocity) {
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
@@ -565,7 +571,7 @@ function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover, velocit
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
-  const label = size >= PAST_LABEL_FULL_SIZE ? chord.name : size >= PAST_LABEL_ROOT_SIZE ? NOTE_NAMES[chord.rootPc] : null;
+  const label = !chord ? (size >= PAST_LABEL_ROOT_SIZE ? '—' : null) : size >= PAST_LABEL_FULL_SIZE ? chord.name : size >= PAST_LABEL_ROOT_SIZE ? NOTE_NAMES[chord.rootPc] : null;
   if (label) {
     ctx.fillStyle = `rgba(220,220,220,${alpha})`;
     ctx.font = `${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
@@ -592,8 +598,9 @@ function draw(ctx, canvas) {
   for (let i = 0; i < pastGeoms.length; i++) {
     const g = pastGeoms[i];
     const idx = history.cursor - 1 - g.index;
-    const past = history.entries[idx];
-    if (!past) continue;
+    const isInitial = idx === -1; // 「まだ何も選んでいない"—"状態」へ戻るスロット（末尾に1つだけ存在する）
+    const past = isInitial ? null : history.entries[idx];
+    if (!isInitial && !past) continue;
     if (hoverSlot?.kind === 'past' && hoverSlot.index === idx) continue;
     const startGeom =
       slideDirection > 0
@@ -608,7 +615,7 @@ function draw(ctx, canvas) {
     const size = startGeom ? lerp(startGeom.size, g.size, pastT) : g.size;
     const targetAlpha = Math.max(PAST_ALPHA_MIN, PAST_ALPHA_BASE * PAST_ALPHA_DECAY ** g.index);
     const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
-    drawHistorySlot(ctx, past.chord, x, y, size, alpha, false, past.velocity);
+    drawHistorySlot(ctx, isInitial ? null : past.chord, x, y, size, alpha, false, isInitial ? null : past.velocity);
   }
 
   // 未来コード（現在スロットの右）。固定サイズ・固定間隔のまま、平行移動のみで演出する
@@ -650,10 +657,11 @@ function draw(ctx, canvas) {
   // 「半透明オーバーレイは対象要素より後に描く」教訓の応用）。
   if (hoverSlot?.kind === 'past') {
     const hoverGeom = pastGeoms.find((g) => history.cursor - 1 - g.index === hoverSlot.index);
-    const hoverEntry = history.entries[hoverSlot.index];
-    if (hoverGeom && hoverEntry) {
+    const isInitial = hoverSlot.index === -1;
+    const hoverEntry = isInitial ? null : history.entries[hoverSlot.index];
+    if (hoverGeom && (isInitial || hoverEntry)) {
       const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
-      drawHistorySlot(ctx, hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true, hoverEntry.velocity);
+      drawHistorySlot(ctx, isInitial ? null : hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true, isInitial ? null : hoverEntry.velocity);
     }
   }
 
