@@ -104,6 +104,82 @@ test('computeCandidateGrid: コード名は重複しない', () => {
   assert.equal(new Set(names).size, names.length);
 });
 
+test('computeCandidateGrid: progressionMatchesのターゲットがグリッド外でも末尾と入れ替えて必ず表示される', () => {
+  const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
+  // 度数6(F#)・halfdim(m7b5)はCから見て理論スコアが低く(0.45程度)、
+  // cols=1,rows=3の3枠には通常入らないgray候補になる
+  const progressionMatches = [{ id: 'test-progression', name: 'テスト進行', position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } }];
+  const grid = computeCandidateGrid({
+    lastChord: c,
+    key: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 1,
+    rows: 3,
+    progressionMatches,
+  });
+  assert.equal(grid.length, 3);
+  const hinted = grid.find((cell) => cell.progressionHints.some((h) => h.id === 'test-progression'));
+  assert.ok(hinted, 'ターゲットが強制的にグリッドへ割り込んでいるはず');
+  const degree = (((hinted.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
+  assert.equal(degree, 6);
+  assert.equal(hinted.row, 2, '末尾（最もスコアの低いセル）と入れ替わっているはず');
+});
+
+test('computeCandidateGrid: 割り込み数の上限はfloor(cols*rows/2)', () => {
+  const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
+  // グリッド外に落ちる3件のターゲットを渡すが、cols*rows=4なら上限floor(4/2)=2件までしか割り込まない
+  const progressionMatches = [
+    { id: 'p1', name: 'p1', position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } },
+    { id: 'p2', name: 'p2', position: 1, total: 2, next: { degree: 1, families: ['halfdim'] } },
+    { id: 'p3', name: 'p3', position: 1, total: 2, next: { degree: 11, families: ['halfdim'] } },
+  ];
+  const grid = computeCandidateGrid({
+    lastChord: c,
+    key: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 2,
+    rows: 2,
+    progressionMatches,
+  });
+  const hintedCells = grid.filter((cell) => cell.progressionHints.length > 0);
+  assert.ok(hintedCells.length <= Math.floor((2 * 2) / 2), '割り込み数はcols*rows/2以下のはず');
+});
+
+test('computeCandidateGrid: progressionKeyがkeyと異なる場合、next.degreeはprogressionKey基準で解決される', () => {
+  // ピボット転調が確定した直後を模したケース: 表示上のkeyはAマイナー(転調後)だが、
+  // progressionMatches自体は転調前のCメジャーを基準に度数計算されている前提
+  // （chord-screen.jsのprogressionAnchorKey()参照）。次の一手(degree9:min)はCメジャー基準なら
+  // 絶対ピッチクラス9(A)を指すはずで、もしkey(Aマイナー)基準のまま解決すると別の音
+  // (絶対ピッチクラス6=F#)を指してしまう。IV→IIIaugで実際に踏んだ回帰。
+  const lastChord = chordFor(4, rowIndexOf(NORMAL_LAYER, '')); // 便宜上の直前コード(スコアリングに影響するのみ)
+  const A_MINOR_KEY = { tonicPc: 9, mode: 'minor' };
+  // familiesではなくsuffixes指定にして、4レイヤー横断探索が'm6'/'mMaj7'等の別layer専用
+  // バリエーションを最高スコアとして選んでしまう可能性を排除し、NORMAL_LAYERの'm'に固定する
+  // （このテストの主眼はprogressionKey basisの検証であり、レイヤー横断選択自体は別テストの範囲）
+  const progressionMatches = [{ id: 'test-anchor', name: 'テスト', position: 1, total: 2, next: { degree: 9, suffixes: ['m'] } }];
+  const grid = computeCandidateGrid({
+    lastChord,
+    key: A_MINOR_KEY,
+    progressionKey: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 1,
+    rows: 3,
+    progressionMatches,
+  });
+  const hinted = grid.find((cell) => cell.progressionHints.some((h) => h.id === 'test-anchor'));
+  assert.ok(hinted, 'ターゲットが見つかるはず');
+  const degreeFromAnchor = (((hinted.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
+  assert.equal(degreeFromAnchor, 9, 'progressionKey(Cメジャー)基準で度数9(A)に解決されるはず');
+  const degreeFromDisplayKey = (((hinted.chord.rootPc - A_MINOR_KEY.tonicPc) % 12) + 12) % 12;
+  assert.notEqual(degreeFromDisplayKey, 9, '表示key(Aマイナー)基準の度数9(F#)ではないはず');
+});
+
 test('computeCandidateGrid: 直前コードが無い1手目でも候補が出る', () => {
   const grid = computeCandidateGrid({
     lastChord: null,

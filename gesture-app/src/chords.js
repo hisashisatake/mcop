@@ -89,6 +89,19 @@ export function chordTypeAt(rowIndex, mods) {
   return layer[Math.max(0, Math.min(layer.length - 1, rowIndex))];
 }
 
+const LAYERS_BY_NAME = { normal: NORMAL_LAYER, shift: SHIFT_LAYER, ctrl: CTRL_LAYER, ctrlShift: CTRL_SHIFT_LAYER };
+
+/**
+ * suffixからそれを含むレイヤー名の一覧を逆引きする（layerFor/chordTypeAtは順方向のみのため新設）。
+ * 進行テンプレートの「次の一手」が現在のレイヤーに無いとき、ヒント文へ切り替え先を示すのに使う。
+ * @returns {Array<'normal' | 'shift' | 'ctrl' | 'ctrlShift'>}
+ */
+export function layersContainingSuffix(suffix) {
+  return Object.entries(LAYERS_BY_NAME)
+    .filter(([, layer]) => layer.some((e) => e.suffix === suffix))
+    .map(([name]) => name);
+}
+
 /**
  * トニックからの半音オフセットと行インデックスからコードを組み立てる。
  * 実際に鳴らすMIDIノート配列（ボイシング）はここでは持たない。voicing.jsのvoiceChord()/

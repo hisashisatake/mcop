@@ -36,10 +36,20 @@
 
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
-import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX } from './chords.js';
+import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.js';
 import { voiceChord, rawVoicing } from './voicing.js';
-import { pivotKeysFor, confirmsModulation, degreeName, chordFunction, isStrongResolution } from './theory.js';
-import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
+import { pivotKeysFor, confirmsModulation, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.js';
+import {
+  computeCandidateGrid,
+  computeProgressionLegend,
+  createHistory,
+  keyAt,
+  currentEntry,
+  pendingPivotAt,
+  selectChord,
+  jumpTo,
+} from './chord-flow.js';
+import { matchProgressions } from './progressions.js';
 import { computePastSlotGeoms } from './chord-layout.js';
 import { isActive, onScreenChange } from './screens.js';
 
@@ -77,6 +87,10 @@ const HOVER_EXPAND_MS = 120;
 // yRatio=0.5固定を返すため自然にそうなる）。
 const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
 const VELOCITY_BAR_ALPHA_SCALE = 0.55; // ラベル文字の可読性を保つため、スロットのalphaより少し抑える
+
+const MAX_RECENT_HISTORY = 12; // 進行テンプレート照合に使う直近手数の上限（最長テンプレート=12小節ブルースに合わせる）
+const PROGRESSION_BADGE_COLOR = '#ffcc00';
+const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）
 
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;
@@ -586,10 +600,50 @@ export function bindChordScreenControls({
   }
 }
 
+/**
+ * 進行テンプレート照合で使う基準キー＝「直近MAX_RECENT_HISTORY手の窓の先頭が選ばれた
+ * 時点で有効だったキー」で固定する（窓の中の個々の手ごとに毎回キーを引き直さない）。
+ *
+ * 理由: ピボットコード機構は「直前のコードが近親調との共通コードとして転調を予告し、
+ * 次のコードがその転調先で意味を持てば確定する」という設計。このとき確定させた
+ * コード自身は転調前のキー基準の度数（王道進行やJust the Two of Usのようなテンプレートの
+ * 一部）として選ばれているが、その直後から表示上のキー（currentKeyObj()）は転調後の
+ * 新キーに切り替わる。基準キーを「直前の1手が選ばれた時点のキー」のように毎回引き直すと、
+ * 転調を確定させた手自身は正しく扱えても、*その次*の手を評価する番になった瞬間に
+ * 参照点がずれてまた履歴が切れてしまう（実例: IV→IIIaug→ImMaj7で、IIIaug選択後は
+ * Just the Two of Us進行の継続が見えていたのに、ImMaj7を選んだ直後にまた消えた）。
+ * 窓の先頭1点だけを基準に固定すれば、窓の中で何度ピボットが確定してもキー計算がぶれない。
+ */
+function progressionAnchorKey() {
+  if (history.cursor < 0) return toKeyObj(history.initialKey);
+  const oldestIndex = Math.max(0, history.cursor - MAX_RECENT_HISTORY + 1);
+  return oldestIndex === 0 ? toKeyObj(history.initialKey) : toKeyObj(history.entries[oldestIndex - 1].key);
+}
+
+/**
+ * cursorから遡って直近MAX_RECENT_HISTORY手を、anchorKey基準の{degree, normFamily, suffix}の
+ * 配列（古い順）へ変換する。進行テンプレート照合専用（anchorKeyの定義はprogressionAnchorKey()参照。
+ * 窓の中で転調が確定していても、窓全体を一貫してanchorKey基準で解釈する）。
+ */
+function recentHistoryForProgressionMatch(anchorKey) {
+  const recent = [];
+  for (let i = history.cursor; i >= 0 && recent.length < MAX_RECENT_HISTORY; i--) {
+    const entry = history.entries[i];
+    recent.unshift({
+      degree: ((entry.chord.rootPc - anchorKey.tonicPc) % 12 + 12) % 12,
+      normFamily: normalizeFamily(entry.chord, anchorKey),
+      suffix: entry.chord.suffix,
+    });
+  }
+  return recent;
+}
+
 /** 候補グリッドを、状態が変わったときだけ再計算してキャッシュする。 */
 function computeCandidates() {
   const key = currentKeyObj();
+  const progressionKey = progressionAnchorKey();
   const entry = currentEntry(history);
+  const recent = recentHistoryForProgressionMatch(progressionKey);
   const cacheKey = JSON.stringify({
     from: entry ? { rootPc: entry.chord.rootPc, family: entry.chord.family } : null,
     key,
@@ -597,20 +651,38 @@ function computeCandidates() {
     ctrlHeld,
     rows: assistRows,
     cols: assistCols,
+    recent,
   });
   if (candidateCache && candidateCache.cacheKey === cacheKey) return candidateCache.grid;
 
+  const progressionMatches = matchProgressions(recent, progressionKey.mode);
   const grid = computeCandidateGrid({
     lastChord: entry?.chord ?? null,
     key,
+    progressionKey,
     tonicMidi,
     shiftHeld,
     ctrlHeld,
     cols: assistCols,
     rows: assistRows,
+    progressionMatches,
   });
-  candidateCache = { cacheKey, grid };
+  const legend = computeProgressionLegend({
+    lastChord: entry?.chord ?? null,
+    key,
+    progressionKey,
+    tonicMidi,
+    shiftHeld,
+    ctrlHeld,
+    progressionMatches,
+  });
+  candidateCache = { cacheKey, grid, legend };
   return grid;
+}
+
+/** computeCandidates()と同じキャッシュを共有する進行テンプレート凡例。必ずcomputeCandidates()の後に呼ぶ。 */
+function currentLegend() {
+  return candidateCache?.legend ?? [];
 }
 
 /**
@@ -858,6 +930,34 @@ function draw(ctx, canvas) {
     ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, cellW, cellH);
   }
 
+  // 進行テンプレートの目印（セル右上の番号付き三角マーク）。同じセルに複数該当する場合は
+  // 右から左へ並べる。枠線より後・テキストより前に描く（重なり順は枠線→バッジ→テキスト）。
+  {
+    const badgeSize = Math.max(11, Math.min(16, Math.floor(cellW / 6)));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const cell of grid) {
+      if (!cell.progressionHints || cell.progressionHints.length === 0) continue;
+      const x = candidateX + cell.col * cellW;
+      const y = candidateOriginY + cell.row * cellH;
+      cell.progressionHints.forEach((hint, i) => {
+        const bx = x + cellW - 1 - badgeSize * (i + 1);
+        const by = y + 1;
+        ctx.fillStyle = PROGRESSION_BADGE_COLOR;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + badgeSize, by);
+        ctx.lineTo(bx + badgeSize, by + badgeSize);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.font = `bold ${Math.max(8, badgeSize - 5)}px monospace`;
+        ctx.fillText(String(hint.badgeIndex), bx + badgeSize * 0.6, by + badgeSize * 0.4);
+      });
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // ホバー中の候補セル。塗りの濃さがそのままベロシティの目安になる（候補セル本体より後に描く）
   if (hoverCandidate) {
     const velocity = velocityFromCellY(hoverCandidate.yRatio);
@@ -893,6 +993,28 @@ function draw(ctx, canvas) {
   ctx.restore(); // globalAlphaを戻す
 
   drawLayerHint(ctx, W, H);
+  drawProgressionLegend(ctx, W, candidateOriginY);
+}
+
+const LAYER_HINT_LABEL = { normal: '', shift: '(Shift)', ctrl: '(Ctrl)', ctrlShift: '(Ctrl+Shift)' };
+
+/**
+ * 進行テンプレートの凡例（候補グリッドのすぐ上、右揃え）。例: "① カノン進行 3/8　② 王道進行 2/4"。
+ * 次の一手が現在のレイヤーに無い場合は、切り替え先のレイヤー名を添える（例: "(Shift)"）。
+ */
+function drawProgressionLegend(ctx, W, candidateOriginY) {
+  const legend = currentLegend();
+  if (legend.length === 0) return;
+  const parts = legend.map((item) => {
+    const layers = layersContainingSuffix(item.targetSuffix);
+    const needsSwitch = layers.length > 0 && !layers.includes(item.currentLayerName);
+    const layerNote = needsSwitch ? ` ${LAYER_HINT_LABEL[layers[0]] || ''}` : '';
+    return `${BADGE_NUMERALS[item.badgeIndex] ?? item.badgeIndex} ${item.name} ${item.position}/${item.total}${layerNote}`;
+  });
+  ctx.textAlign = 'right';
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#dcc84a';
+  ctx.fillText(parts.join('　'), W - 18, candidateOriginY - 10);
 }
 
 function drawLayerHint(ctx, W, H) {
