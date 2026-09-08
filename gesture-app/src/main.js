@@ -193,6 +193,8 @@ bindChordScreenControls({
   modeSelect: document.getElementById('key-mode'),
   rowsInput: document.getElementById('candidate-rows'),
   colsInput: document.getElementById('candidate-cols'),
+  autoVoicingToggle: document.getElementById('auto-voicing-toggle'),
+  baseOctaveInput: document.getElementById('base-octave'),
 });
 
 const rhythmScreen = setupRhythmScreen(canvas);

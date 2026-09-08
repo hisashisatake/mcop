@@ -37,6 +37,7 @@
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX } from './chords.js';
+import { voiceChord, rawVoicing } from './voicing.js';
 import { pivotKeysFor, confirmsModulation, degreeName, chordFunction } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { computePastSlotGeoms } from './chord-layout.js';
@@ -83,12 +84,16 @@ const MAX_ROWS = 12;
 const MIN_COLS = 1;
 const MAX_COLS = 3;
 const DEFAULT_ROWS = 5;
+const MIN_BASE_OCTAVE = -2;
+const MAX_BASE_OCTAVE = 2;
 const DEFAULT_COLS = 3;
 
 let tonicMidi = DEFAULT_TONIC_MIDI;
 let mode = 'major'; // 'major' | 'minor'
 let assistRows = DEFAULT_ROWS;
 let assistCols = DEFAULT_COLS;
+let autoVoicing = true; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
+let baseOctave = 0; // 基準オクターブの手動±調整
 
 let shiftHeld = false;
 let ctrlHeld = false;
@@ -97,9 +102,12 @@ let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（�
 let sounding = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
 
-// { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity}], cursor, initialKey }
+// { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity, voicing}], cursor, initialKey }
 // velocityは選択時のセル内クリック位置から一度だけ決まり、以後は変化しない（表示用のベロシティ
 // バーに使う。過去/未来クリックでの再訪や発音そのものには使わない）。
+// voicingは選択時に直前エントリのvoicingを踏まえて一度だけ計算し焼き付ける（実際に鳴らすMIDI
+// ノート配列。過去/未来クリックでの再訪では保存済みの値をそのまま鳴らし、毎回同じ響きにする）。
+// 自動転回ON/OFF・基準オクターブ設定が変わったときだけ、revoiceHistory()で履歴全体を計算し直す。
 let history = createHistory({ tonicMidi, mode });
 let candidateCache = null; // { cacheKey, grid: [...] }
 
@@ -285,19 +293,46 @@ function applyKey(newKey) {
   syncControlsFromState();
 }
 
+/** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
+function voicingFor(chord) {
+  const prevEntry = currentEntry(history);
+  const previousNotes = prevEntry ? prevEntry.voicing : [];
+  const centerMidi = 60 + 12 * baseOctave;
+  return autoVoicing ? voiceChord(chord, { previousNotes, centerMidi }) : rawVoicing(chord, baseOctave);
+}
+
 /**
  * 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。
  * 編集操作なのでundoStackへ直前のhistoryを積み、redoStackは破棄する（一般的なUndo/Redoの規約）。
- * velocityは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
+ * velocity・voicingは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
  */
 function commitSelection(chord, velocity) {
   const { key, pendingPivot } = evaluateTheoryTransition(chord);
+  const voicing = voicingFor(chord);
   undoStack.push(history);
   redoStack = [];
-  history = selectChord(history, { chord, key, pendingPivot, velocity });
+  history = selectChord(history, { chord, key, pendingPivot, velocity, voicing });
   applyKey(key);
   invalidateCandidates();
   startSlide(1);
+}
+
+/**
+ * 自動転回ON/OFF・基準オクターブ設定を反映して、履歴全体のvoicingを先頭から計算し直す
+ * （各entryは新規オブジェクトとして作り直す。undoStackが古いentry参照を保持しているため、
+ * 既存entryを書き換えるとUndoスナップショットまで巻き込んで壊れる）。
+ */
+function revoiceHistory() {
+  const centerMidi = 60 + 12 * baseOctave;
+  let previousNotes = [];
+  const entries = history.entries.map((entry) => {
+    const voicing = autoVoicing
+      ? voiceChord(entry.chord, { previousNotes, centerMidi })
+      : rawVoicing(entry.chord, baseOctave);
+    previousNotes = voicing;
+    return { ...entry, voicing };
+  });
+  history = { ...history, entries };
 }
 
 /** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。編集操作ではないためundo/redoスタックには積まない。 */
@@ -314,6 +349,7 @@ function undoEdit() {
   if (undoStack.length === 0) return;
   redoStack.push(history);
   history = undoStack.pop();
+  revoiceHistory(); // 現在の自動転回/基準オクターブ設定を常に反映させる
   applyKey(keyAt(history));
   invalidateCandidates();
   startSlide(-1);
@@ -324,18 +360,19 @@ function redoEdit() {
   if (redoStack.length === 0) return;
   undoStack.push(history);
   history = redoStack.pop();
+  revoiceHistory();
   applyKey(keyAt(history));
   invalidateCandidates();
   startSlide(1);
 }
 
-async function playChord(chord, velocity) {
+async function playChord(notes, velocity) {
   await stopChord();
   await applyLfoTo(CHORD_CHANNEL);
-  for (const note of chord.notes) {
+  for (const note of notes) {
     await noteOn(CHORD_CHANNEL, note, velocity);
   }
-  sounding = chord.notes.slice();
+  sounding = notes.slice();
 }
 
 export function setupChordScreen(canvas, { onChordChange } = {}) {
@@ -369,7 +406,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       // 選択は保持時間に関わらず確定する（離しても現在コードとして残る）
       const velocity = velocityFromCellY(cell.yRatio);
       commitSelection(found.chord, velocity);
-      await playChord(found.chord, velocity);
+      await playChord(currentEntry(history).voicing, velocity);
     } else if (cell.kind === 'past' || cell.kind === 'future') {
       // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う。
       // 過去の最奥（"—"＝まだ何も選んでいない初期状態）へ移動した場合はentryが無いため
@@ -377,7 +414,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       jumpToIndex(cell.index);
       const entry = currentEntry(history);
       if (entry) {
-        await playChord(entry.chord, velocityFromCellY(cell.yRatio));
+        await playChord(entry.voicing, velocityFromCellY(cell.yRatio));
       } else {
         pointerHeld = false;
       }
@@ -464,8 +501,15 @@ function syncRowsCols() {
   if (colsInputEl) colsInputEl.value = String(assistCols);
 }
 
-/** 調・候補の行数/列数を切り替えるUIを配線する。 */
-export function bindChordScreenControls({ tonicSelect, modeSelect, rowsInput, colsInput }) {
+/** 調・候補の行数/列数・自動転回/基準オクターブを切り替えるUIを配線する。 */
+export function bindChordScreenControls({
+  tonicSelect,
+  modeSelect,
+  rowsInput,
+  colsInput,
+  autoVoicingToggle,
+  baseOctaveInput,
+} = {}) {
   tonicSelectEl = tonicSelect ?? null;
   modeSelectEl = modeSelect ?? null;
   rowsInputEl = rowsInput ?? null;
@@ -514,6 +558,23 @@ export function bindChordScreenControls({ tonicSelect, modeSelect, rowsInput, co
       const raw = parseInt(colsInput.value, 10) || DEFAULT_COLS;
       assistCols = Math.max(MIN_COLS, Math.min(MAX_COLS, raw));
       invalidateCandidates();
+    });
+  }
+
+  if (autoVoicingToggle) {
+    autoVoicingToggle.checked = autoVoicing;
+    autoVoicingToggle.addEventListener('change', () => {
+      autoVoicing = autoVoicingToggle.checked;
+      revoiceHistory();
+    });
+  }
+
+  if (baseOctaveInput) {
+    baseOctaveInput.value = String(baseOctave);
+    baseOctaveInput.addEventListener('input', () => {
+      const raw = parseInt(baseOctaveInput.value, 10);
+      baseOctave = Number.isFinite(raw) ? Math.max(MIN_BASE_OCTAVE, Math.min(MAX_BASE_OCTAVE, raw)) : 0;
+      revoiceHistory();
     });
   }
 }

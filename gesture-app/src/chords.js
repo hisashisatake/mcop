@@ -91,7 +91,9 @@ export function chordTypeAt(rowIndex, mods) {
 
 /**
  * トニックからの半音オフセットと行インデックスからコードを組み立てる。
- * @returns {{name: string, suffix: string, rootMidi: number, rootPc: number, family: string, intervals: number[], notes: number[]}}
+ * 実際に鳴らすMIDIノート配列（ボイシング）はここでは持たない。voicing.jsのvoiceChord()/
+ * rawVoicing()が、直前のボイシングや基準オクターブ設定を踏まえて別途計算する。
+ * @returns {{name: string, suffix: string, rootMidi: number, rootPc: number, family: string, intervals: number[]}}
  */
 export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ctrlHeld }) {
   const type = chordTypeAt(rowIndex, { shiftHeld, ctrlHeld });
@@ -105,7 +107,6 @@ export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ct
     rootPc,
     family: type.family,
     intervals: type.intervals,
-    notes: type.intervals.map((i) => rootMidi + i),
   };
 }
 
