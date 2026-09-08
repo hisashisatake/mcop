@@ -88,6 +88,8 @@ const HOVER_EXPAND_MS = 120;
 const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
 const VELOCITY_BAR_ALPHA_SCALE = 0.55; // ラベル文字の可読性を保つため、スロットのalphaより少し抑える
 
+const CANDIDATE_FILL_SIZE_MIN = 0.4; // 候補セルの塗り矩形の最小サイズ比率（暗い＝スコア最低の候補がこの比率まで縮む）
+
 const MAX_RECENT_HISTORY = 12; // 進行テンプレート照合に使う直近手数の上限（最長テンプレート=12小節ブルースに合わせる）
 const PROGRESSION_BADGE_COLOR = '#ffcc00';
 const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）
@@ -912,22 +914,29 @@ function draw(ctx, canvas) {
     const y = candidateOriginY + cell.row * cellH;
     const categoryMax = maxByCategory[cell.category];
     const clampedScore = categoryMax > 0 ? Math.max(0, Math.min(1, cell.score / categoryMax)) : 0;
-    // 原色感を出すため下限を引き上げる（0.15だと薄すぎて緑/黄に見えない）。
-    // 上限は1.0（そのカテゴリ内の最良候補は背景が透けない完全不透明の#00FF00/#FFFF00になる）。
-    const alpha = 0.4 + clampedScore * 0.6;
+    // 色はカテゴリごとの固定色（原色）のまま変化させない。スコアの強弱は面積のみで表現する
+    // （色のグラデーションと面積を両方スコアに連動させると、候補群の点差が僅かな場面で
+    // 色の変化がほぼ見えず「明るいのに小さい/大きいのに暗い」という食い違って見える組み合わせが
+    // 出やすかったため、単一の指標（面積）に一本化した）。
+    // 暗い（スコアの低い）候補ほどセル中央基準で矩形を縮小する。最良候補（clampedScore=1）は
+    // セルいっぱいに描く（CANDIDATE_FILL_SIZE_MINが縮小の下限比率）。
+    const sizeRatio = CANDIDATE_FILL_SIZE_MIN + clampedScore * (1 - CANDIDATE_FILL_SIZE_MIN);
+    const fillW = (cellW - 2) * sizeRatio;
+    const fillH = (cellH - 2) * sizeRatio;
+    const fillX = x + cellW / 2 - fillW / 2;
+    const fillY = y + cellH / 2 - fillH / 2;
     ctx.fillStyle =
-      cell.category === 'GREEN'
-        ? `rgba(0, 255, 0, ${alpha})`
-        : cell.category === 'YELLOW'
-          ? `rgba(255, 255, 0, ${alpha})`
-          : `hsla(0, 0%, 50%, ${alpha * 0.6})`;
-    ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+      cell.category === 'GREEN' ? 'rgb(0, 255, 0)' : cell.category === 'YELLOW' ? 'rgb(255, 255, 0)' : 'hsl(0, 0%, 50%)';
+    ctx.fillRect(fillX, fillY, fillW, fillH);
+    // ピボットコード（近親調との共通コード）は色を混ぜず、塗り矩形（面積で縮小された本体）の
+    // 周りを囲む太い青枠で示す（色のオーバーレイだとセル本体の固定原色という原則が崩れるため、
+    // 枠線に分離した。セルグリッド全体でなく塗り矩形に合わせることで、縮小にも追従する）。
     if (cell.isPivot) {
-      ctx.fillStyle = `hsla(210, 90%, 60%, ${0.18 + clampedScore * 0.12})`;
-      ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+      ctx.strokeStyle = 'hsl(210, 90%, 60%)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(fillX + 1.5, fillY + 1.5, fillW - 3, fillH - 3);
+      ctx.lineWidth = 1;
     }
-    ctx.strokeStyle = '#3a3a3a';
-    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, cellW, cellH);
   }
 
   // 進行テンプレートの目印（セル右上の番号付き三角マーク）。同じセルに複数該当する場合は

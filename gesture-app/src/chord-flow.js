@@ -40,7 +40,10 @@ function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld }) {
       const { score, category } = lastChord
         ? classifyProgression(lastChord, chord, key)
         : classifyInitial(chord, key);
-      const isPivot = pivotKeysFor(chord, key).length > 0;
+      // 直前のコードが無い1手目は「転調予告」という概念自体が成立しない
+      // （ダイアトニックコードのほとんどが何らかの近親調のピボットになりうるため、
+      // 1手目でも立てるとほぼ全セルが青枠になり情報として機能しない）。
+      const isPivot = lastChord ? pivotKeysFor(chord, key).length > 0 : false;
       const entry = { chord, score, category, isPivot };
       const existing = byName.get(chord.name);
       if (!existing || entry.score > existing.score) byName.set(chord.name, entry);
