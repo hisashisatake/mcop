@@ -156,6 +156,21 @@ export function dissonancePenalty(chord) {
 }
 
 /**
+ * fromChord→toChordがドミナント→トニックの強進行（V7→I等）かどうか。
+ * voicing.jsの自動転回は移動量最小化しか見ておらず、この種の強進行でもバスが根音へ
+ * 着地しない（例: G7→Cがバスg のままの第二転回形になる）ことがあるため、該当時は
+ * 呼び出し側（chord-screen.js）でrequireRootInBassを立てて着地を強制する。
+ */
+export function isStrongResolution(fromChord, toChord, key) {
+  const fromDegree = mod12(fromChord.rootPc - key.tonicPc);
+  const toDegree = mod12(toChord.rootPc - key.tonicPc);
+  const fnLookup = FUNCTION_LOOKUP[key.mode];
+  const fromFn = fnLookup[fromDegree] ?? null;
+  const toFn = fnLookup[toDegree] ?? null;
+  return fromFn === 'D' && toFn === 'T';
+}
+
+/**
  * fromChord→toChordの進行を採点し、緑/黄/消灯を判定する。
  * @returns {{score: number, category: 'GREEN' | 'YELLOW' | null}}
  */

@@ -97,6 +97,18 @@ test('rawVoicingのbaseOctaveは12半音単位でシフトする', () => {
   assert.deepEqual(down, base.map((n) => n - 12));
 });
 
+test('requireRootInBass: 移動量最小化だけだとバスが根音に着地しないケースで根音着地を強制する', () => {
+  const g7 = chordFor(7, '7'); // G7
+  const c = chordFor(0, ''); // C
+
+  const g7Voicing = voiceChord(g7, { previousNotes: [], centerMidi: 60 });
+  const cVoicingFree = voiceChord(c, { previousNotes: g7Voicing, centerMidi: 60 });
+  assert.notEqual(cVoicingFree[0] % 12, c.rootPc, '前提: 自由選択だと第二転回形（バス=G）になる');
+
+  const cVoicingForced = voiceChord(c, { previousNotes: g7Voicing, centerMidi: 60, requireRootInBass: true });
+  assert.equal(((cVoicingForced[0] % 12) + 12) % 12, c.rootPc, 'requireRootInBass指定時はバスが根音になるべき');
+});
+
 test('voiceChordはMIDI範囲[0,127]を超えるボイシングを選ばない', () => {
   const chord = chordFor(0, '13');
   const notes = voiceChord(chord, { previousNotes: [], centerMidi: 60 });

@@ -38,14 +38,13 @@ import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX } from './chords.js';
 import { voiceChord, rawVoicing } from './voicing.js';
-import { pivotKeysFor, confirmsModulation, degreeName, chordFunction } from './theory.js';
+import { pivotKeysFor, confirmsModulation, degreeName, chordFunction, isStrongResolution } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { computePastSlotGeoms } from './chord-layout.js';
 import { isActive, onScreenChange } from './screens.js';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
-const MAX_SCORE_FOR_SHADING = 1.3; // だいたいの上限。alpha計算のクランプ用
 const SLIDE_DURATION_MS = 220;
 const RIGHT_MARGIN = 24; // 候補ブロックと画面右端の余白（候補ブロックは右端寄せにして過去領域を広げる）
 const CURRENT_SIZE = 96; // 現在コードスロットの一辺
@@ -298,7 +297,10 @@ function voicingFor(chord) {
   const prevEntry = currentEntry(history);
   const previousNotes = prevEntry ? prevEntry.voicing : [];
   const centerMidi = 60 + 12 * baseOctave;
-  return autoVoicing ? voiceChord(chord, { previousNotes, centerMidi }) : rawVoicing(chord, baseOctave);
+  const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, currentKeyObj()) : false;
+  return autoVoicing
+    ? voiceChord(chord, { previousNotes, centerMidi, requireRootInBass })
+    : rawVoicing(chord, baseOctave);
 }
 
 /**
@@ -325,11 +327,16 @@ function commitSelection(chord, velocity) {
 function revoiceHistory() {
   const centerMidi = 60 + 12 * baseOctave;
   let previousNotes = [];
+  let previousChord = null;
+  let previousKey = toKeyObj(history.initialKey);
   const entries = history.entries.map((entry) => {
+    const requireRootInBass = previousChord ? isStrongResolution(previousChord, entry.chord, previousKey) : false;
     const voicing = autoVoicing
-      ? voiceChord(entry.chord, { previousNotes, centerMidi })
+      ? voiceChord(entry.chord, { previousNotes, centerMidi, requireRootInBass })
       : rawVoicing(entry.chord, baseOctave);
     previousNotes = voicing;
+    previousChord = entry.chord;
+    previousKey = toKeyObj(entry.key);
     return { ...entry, voicing };
   });
   history = { ...history, entries };
@@ -823,12 +830,19 @@ function draw(ctx, canvas) {
   ctx.save();
   ctx.globalAlpha = candidateAlpha;
   const grid = computeCandidates();
+  // カテゴリごとに今回のグリッド内での最高スコアを基準にする（固定の上限値だと理論上の
+  // 最高点が実際にはほぼ出ず、「一番明るい緑」がいつまでも半透明のまま純色の#00FF00に
+  // 届かなかったため、常にその場の最良候補が上限に届くよう相対化した）。
+  const categoryMaxScore = (category) => Math.max(0, ...grid.filter((c) => c.category === category).map((c) => c.score));
+  const maxByCategory = { GREEN: categoryMaxScore('GREEN'), YELLOW: categoryMaxScore('YELLOW'), null: categoryMaxScore(null) };
   for (const cell of grid) {
     const x = candidateX + cell.col * cellW;
     const y = candidateOriginY + cell.row * cellH;
-    const clampedScore = Math.max(0, Math.min(1, cell.score / MAX_SCORE_FOR_SHADING));
-    // 原色感を出すため下限を引き上げる（0.15だと薄すぎて緑/黄に見えない）
-    const alpha = 0.4 + clampedScore * 0.5;
+    const categoryMax = maxByCategory[cell.category];
+    const clampedScore = categoryMax > 0 ? Math.max(0, Math.min(1, cell.score / categoryMax)) : 0;
+    // 原色感を出すため下限を引き上げる（0.15だと薄すぎて緑/黄に見えない）。
+    // 上限は1.0（そのカテゴリ内の最良候補は背景が透けない完全不透明の#00FF00/#FFFF00になる）。
+    const alpha = 0.4 + clampedScore * 0.6;
     ctx.fillStyle =
       cell.category === 'GREEN'
         ? `rgba(0, 255, 0, ${alpha})`

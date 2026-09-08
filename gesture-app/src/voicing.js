@@ -36,19 +36,23 @@ function centroid(notes) {
 /**
  * コードの構成音を、直前のボイシングに一番近い転回形・オクターブで実際に鳴らすMIDIノート配列へ変換する。
  * @param {{rootPc: number, intervals: number[]}} chord
- * @param {{previousNotes?: number[], centerMidi?: number}} [opts]
+ * @param {{previousNotes?: number[], centerMidi?: number, requireRootInBass?: boolean}} [opts]
  *   previousNotes: 直前に鳴らしたボイシング（無ければ音域アンカーのみで決まる）
  *   centerMidi: 音域アンカー（基準オクターブ設定から算出、既定は中央ド=60）
+ *   requireRootInBass: trueなら転回（k>0）を候補から外し、根音だけをバスへ強制する
+ *     （ドミナント→トニック等の強進行で、移動量最小化のあまりバスが根音へ着地しない
+ *     のを防ぐ。theory.jsのisStrongResolution参照）
  * @returns {number[]} 昇順ソート済みのMIDIノート番号配列
  */
-export function voiceChord(chord, { previousNotes = [], centerMidi = 60 } = {}) {
+export function voiceChord(chord, { previousNotes = [], centerMidi = 60, requireRootInBass = false } = {}) {
   const core = chord.intervals.filter((i) => i < 12);
   const tensions = chord.intervals.filter((i) => i >= 12);
 
   let bestNotes = null;
   let bestCost = Infinity;
 
-  for (let k = 0; k < core.length; k++) {
+  const maxK = requireRootInBass ? 1 : core.length;
+  for (let k = 0; k < maxK; k++) {
     // 先頭からk個（=音程が低い側からk個）を1オクターブ上げる＝k回目の転回形
     const rotatedCore = core.map((c, idx) => (idx < k ? c + 12 : c));
     for (let octave = MIN_OCTAVE; octave <= MAX_OCTAVE; octave++) {

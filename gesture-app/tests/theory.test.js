@@ -10,6 +10,7 @@ import {
   dissonancePenalty,
   degreeName,
   chordFunction,
+  isStrongResolution,
 } from '../src/theory.js';
 
 const TONIC_MIDI = 60; // C4
@@ -120,6 +121,20 @@ test('濁り検出: 半音衝突・非許容の短9度は減点され、ドミ�
 
   const g7sus4b9 = chordFor(G, rowIndexOf(CTRL_LAYER, '7sus4b9'), { ctrl: true });
   assert.equal(dissonancePenalty(g7sus4b9), 0, 'sus上のb9も例外扱い');
+});
+
+test('isStrongResolution: G7→C・vii゜→Cはドミナント→トニックの強進行、G7→Fや非ダイアトニック進行はfalse', () => {
+  const g7 = chordFor(G, rowIndexOf(NORMAL_LAYER, '7'));
+  const bdim = chordFor(B, rowIndexOf(SHIFT_LAYER, 'm7b5'), { shift: true }); // vii゜7相当
+  const c = chordFor(C, rowIndexOf(NORMAL_LAYER, ''));
+  const f = chordFor(F, rowIndexOf(NORMAL_LAYER, ''));
+  const am = chordFor(A, rowIndexOf(NORMAL_LAYER, 'm')); // 偽終止先（Tのまま）
+
+  assert.equal(isStrongResolution(g7, c, C_MAJOR), true);
+  assert.equal(isStrongResolution(bdim, c, C_MAJOR), true);
+  assert.equal(isStrongResolution(g7, am, C_MAJOR), true, '偽終止先もT機能なのでtrue');
+  assert.equal(isStrongResolution(g7, f, C_MAJOR), false, 'D→Sは強進行ではない');
+  assert.equal(isStrongResolution(c, g7, C_MAJOR), false, 'T→Dは対象外（fromがDである必要がある）');
 });
 
 test('ピボット: Cメジャーで Am は G メジャーへのピボットとして返る／G は返らない', () => {
