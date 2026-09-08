@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computePastSlotGeoms } from './chord-layout.js';
+import { computePastSlotGeoms } from '../src/chord-layout.js';
 
 const BASE_ARGS = {
   currentX: 556,

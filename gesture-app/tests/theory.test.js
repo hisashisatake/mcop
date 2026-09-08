@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from './chords.js';
+import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from '../src/chords.js';
 import {
   classifyProgression,
   isDiatonic,
@@ -10,7 +10,7 @@ import {
   dissonancePenalty,
   degreeName,
   chordFunction,
-} from './theory.js';
+} from '../src/theory.js';
 
 const TONIC_MIDI = 60; // C4
 

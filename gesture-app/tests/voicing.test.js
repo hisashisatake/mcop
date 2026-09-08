@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chordFromSemitone, NORMAL_LAYER } from './chords.js';
-import { voiceChord, rawVoicing, MIN_MIDI, MAX_MIDI } from './voicing.js';
+import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.js';
+import { voiceChord, rawVoicing, MIN_MIDI, MAX_MIDI } from '../src/voicing.js';
 
 const TONIC_MIDI = 60; // C4
 

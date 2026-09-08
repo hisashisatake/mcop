@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
-import { chordFromSemitone, NORMAL_LAYER } from './chords.js';
+import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from '../src/chord-flow.js';
+import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.js';
 
 const TONIC_MIDI = 60; // C4
 const C_MAJOR_KEY = { tonicPc: 0, mode: 'major' };
