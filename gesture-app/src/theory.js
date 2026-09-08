@@ -300,3 +300,52 @@ export function pivotKeysFor(chord, currentKey) {
 export function confirmsModulation(nextChord, candidateKey, currentKey) {
   return isDiatonic(nextChord, candidateKey) && !isDiatonic(nextChord, currentKey);
 }
+
+// ─────────────────────────────────────────────
+// ディグリーネーム（ローマ数字度数）とコード機能の表示用ラベル
+// ─────────────────────────────────────────────
+
+/** トニックからの半音距離ベースの度数名。メジャー/マイナーどちらのキーでも同じテーブルを使う
+ * （マイナーキーの自然的短音階は I bIII IV V bVI bVII と表示される）。 */
+const DEGREE_NAMES = ['I', 'bII', 'II', 'bIII', 'III', 'IV', '#IV', 'V', 'bVI', 'VI', 'bVII', 'VII'];
+
+/** chordの度数名（'I' | 'bII' | ... | 'VII'）。 */
+export function degreeName(chord, key) {
+  return DEGREE_NAMES[mod12(chord.rootPc - key.tonicPc)];
+}
+
+/**
+ * コード機能。{ kind: 'T'|'SD'|'D'|null, resolvesTo: 度数名|null }
+ * resolvesToはkind==='D'のときだけ非nullになりうる（表示側で 'D→II' 等を組み立てる）。
+ *
+ * 判定順（コード単体で決まる必要があるため、直前コードに依存するclassifyProgressionの
+ * isReachableDegreeとは別ロジック）:
+ *   1. normalizeFamily===dom なら常にD。解決先は次の2通りで探す:
+ *      a. 完全4度上がダイアトニック根音なら、そこへ解決（本来のV7・セカンダリードミナント）
+ *      b. そうでなくトライトーン先（+6）がダイアトニックのV度数（7）と一致するなら、
+ *         V7本来の解決先（I）へ向かう裏コードとして扱う（例: Db7→I、G7の裏）
+ *      どちらにも当たらなければresolvesTo=null（例: Eb7 — 半音下のD自体はダイアトニックだが、
+ *      Eb7はV7の裏でもセカンダリードミナントでもなく、単体では明確な解決先を持たない）
+ *   2. 現在のキーのFUNCTION_LOOKUPで度数から引く（ダイアトニックコード）
+ *   3. 同主調（メジャー⇔マイナー）のFUNCTION_LOOKUPで同じ度数を引く（借用和音）
+ *   4. 該当なしはkind=null
+ */
+export function chordFunction(chord, key) {
+  const degree = mod12(chord.rootPc - key.tonicPc);
+
+  if (normalizeFamily(chord, key) === 'dom') {
+    const rootDegrees = diatonicRootDegrees(key);
+    const V_DEGREE = 7;
+    const fourthUpTarget = mod12(degree + 5);
+    let resolvesTo = null;
+    if (rootDegrees.includes(fourthUpTarget)) {
+      resolvesTo = DEGREE_NAMES[fourthUpTarget];
+    } else if (mod12(degree + 6) === V_DEGREE) {
+      resolvesTo = DEGREE_NAMES[mod12(V_DEGREE + 5)];
+    }
+    return { kind: 'D', resolvesTo };
+  }
+
+  const fn = FUNCTION_LOOKUP[key.mode][degree] ?? FUNCTION_LOOKUP[key.mode === 'major' ? 'minor' : 'major'][degree];
+  return { kind: fn ? (fn === 'S' ? 'SD' : fn) : null, resolvesTo: null };
+}

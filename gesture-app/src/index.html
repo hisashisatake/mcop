@@ -14,10 +14,21 @@
       position: fixed; bottom: 28px; left: 32px;
       pointer-events: none;
     }
+    #chord-display-row {
+      position: relative; display: inline-block;
+    }
     #chord-display {
       font-size: 80px; font-weight: bold; color: #fff; line-height: 1;
       text-shadow: 0 0 40px rgba(120,200,255,0.4);
       letter-spacing: -2px;
+    }
+    /* 実コード名（音名）はディグリーネームの右上に小さく併記する */
+    #chord-note-name {
+      position: absolute; top: 4px; right: -8px; transform: translateX(100%);
+      font-size: 16px; color: rgba(215,220,230,0.85);
+    }
+    #chord-sub {
+      font-size: 18px; color: rgba(140,210,255,0.95); font-weight: bold; margin-top: 4px;
     }
     #status-panel select#key-tonic {
       width: 56px;
@@ -252,7 +263,11 @@
   </div>
 
   <div id="hud">
-    <div id="chord-display">—</div>
+    <div id="chord-display-row">
+      <div id="chord-display">—</div>
+      <span id="chord-note-name"></span>
+    </div>
+    <div id="chord-sub"><span id="chord-function"></span></div>
   </div>
 
   <div id="resize-grip" title="ドラッグで幅・高さをリサイズ（横だけ/縦だけの移動でその方向のみ変更）"></div>

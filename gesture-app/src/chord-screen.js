@@ -37,7 +37,7 @@
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX } from './chords.js';
-import { pivotKeysFor, confirmsModulation } from './theory.js';
+import { pivotKeysFor, confirmsModulation, degreeName, chordFunction } from './theory.js';
 import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from './chord-flow.js';
 import { computePastSlotGeoms } from './chord-layout.js';
 import { isActive, onScreenChange } from './screens.js';
@@ -65,8 +65,9 @@ const PAST_HIT_MIN_SIZE = 28; // 当たり判定の下限（見た目より少�
 const PAST_ALPHA_MIN = 0.3;
 const PAST_ALPHA_BASE = 0.8;
 const PAST_ALPHA_DECAY = 0.93;
-const PAST_LABEL_FULL_SIZE = 44; // これ以上のサイズならフル名（Cmaj9）
-const PAST_LABEL_ROOT_SIZE = 28; // これ以上ならルート音のみ（C）。それ未満は文字なし
+const PAST_LABEL_DEGREE_FUNC_SIZE = 56; // これ以上のサイズなら度数ラベル+機能の2行
+const PAST_LABEL_FULL_SIZE = 44; // これ以上なら度数ラベル（IIm7）のみ1行
+const PAST_LABEL_ROOT_SIZE = 28; // これ以上なら度数のみ（品質を除く、II）。それ未満は文字なし
 const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの拡大サイズ（Dock風）
 const HOVER_EXPAND_MS = 120;
 
@@ -120,9 +121,37 @@ export function activeChannels() {
   return sounding.length > 0 ? [CHORD_CHANNEL] : [];
 }
 
+/** {tonicMidi, mode}形式のキー（historyのentry.key等）をtheory.jsが期待する{tonicPc, mode}へ変換する。 */
+function toKeyObj(key) {
+  return { tonicPc: ((key.tonicMidi % 12) + 12) % 12, mode: key.mode };
+}
+
 function currentKeyObj() {
-  const k = keyAt(history);
-  return { tonicPc: ((k.tonicMidi % 12) + 12) % 12, mode: k.mode };
+  return toKeyObj(keyAt(history));
+}
+
+/** ディグリーネーム（度数＋品質サフィックス、スペースなし）。例: 'IIm7' / 'V7' / 'I'。 */
+function degreeLabelOf(chord, key) {
+  return degreeName(chord, key) + chord.suffix;
+}
+
+/** コード機能の表示文言。'D'は解決先があれば'D→II'の形にする。該当なしは空文字。 */
+function functionLabelOf(chord, key) {
+  const fn = chordFunction(chord, key);
+  if (!fn.kind) return '';
+  if (fn.kind === 'D') return fn.resolvesTo ? `D→${fn.resolvesTo}` : 'D';
+  return fn.kind;
+}
+
+/** 現在スロット・HUD向けの表示3点セット（度数ラベル・機能・従来の音名）。entryが無ければnull。 */
+function chordDisplayInfo(entry) {
+  if (!entry) return null;
+  const keyObj = toKeyObj(entry.key);
+  return {
+    degreeLabel: degreeLabelOf(entry.chord, keyObj),
+    func: functionLabelOf(entry.chord, keyObj),
+    noteName: entry.chord.name,
+  };
 }
 
 function invalidateCandidates() {
@@ -357,14 +386,14 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     if (!pointerHeld) {
       await stopChord();
     }
-    onChordChange?.(currentEntry(history)?.chord.name ?? null);
+    onChordChange?.(chordDisplayInfo(currentEntry(history)));
   });
 
   const release = async () => {
     pointerHeld = false;
     if (sounding.length === 0) return;
     await stopChord();
-    onChordChange?.(currentEntry(history)?.chord.name ?? null);
+    onChordChange?.(chordDisplayInfo(currentEntry(history)));
   };
   canvas.addEventListener('mouseup', release);
   canvas.addEventListener('mouseleave', release);
@@ -385,11 +414,11 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       e.preventDefault();
       if (e.shiftKey) redoEdit();
       else undoEdit();
-      onChordChange?.(currentEntry(history)?.chord.name ?? null);
+      onChordChange?.(chordDisplayInfo(currentEntry(history)));
     } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       redoEdit();
-      onChordChange?.(currentEntry(history)?.chord.name ?? null);
+      onChordChange?.(chordDisplayInfo(currentEntry(history)));
     } else if (e.key === 'ArrowDown') {
       assistRows = Math.max(MIN_ROWS, assistRows - 1);
       invalidateCandidates();
@@ -559,25 +588,48 @@ function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
   ctx.fillRect(slotX - size / 2, slotY + size / 2 - barH, size, barH);
 }
 
+/** スロット内テキスト1行の描画（フォント指定込み）。呼び出し側でtextAlign/Baselineは揃っている前提。 */
+function drawSlotText(ctx, text, x, y, size, alpha, color, bold) {
+  ctx.fillStyle = color;
+  ctx.font = `${bold ? 'bold ' : ''}${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
+  ctx.fillText(text, x, y);
+}
+
 /**
  * 過去/未来スロット1個分の描画（対称デザインなので共通化）。sizeが可変（過去列は遠いほど
- * 縮小する）ため、ラベルはサイズに応じてフル名／ルート音のみ／非表示を切り替える。
+ * 縮小する）ため、ラベルはサイズに応じて「度数+機能の2行」→「度数ラベルのみ」→
+ * 「度数のみ（品質を除く）」→「非表示」の4段階を切り替える。
  * chord=nullは「まだ何も選んでいない"—"状態」へ戻るスロット（極小時は非表示、それ以外は"—"）。
+ * keyはchordがある場合のみ必須（{tonicPc, mode}形式、呼び出し側でtoKeyObj()済みのものを渡す）。
  */
-function drawHistorySlot(ctx, chord, slotX, slotY, size, alpha, isHover, velocity) {
+function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, velocity) {
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
-  const label = !chord ? (size >= PAST_LABEL_ROOT_SIZE ? '—' : null) : size >= PAST_LABEL_FULL_SIZE ? chord.name : size >= PAST_LABEL_ROOT_SIZE ? NOTE_NAMES[chord.rootPc] : null;
-  if (label) {
-    ctx.fillStyle = `rgba(220,220,220,${alpha})`;
-    ctx.font = `${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, slotX, slotY);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textColor = `rgba(220,220,220,${alpha})`;
+
+  if (!chord) {
+    if (size >= PAST_LABEL_ROOT_SIZE) drawSlotText(ctx, '—', slotX, slotY, size, alpha, textColor, false);
+    return;
+  }
+
+  if (size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
+    drawSlotText(ctx, degreeLabelOf(chord, key), slotX, slotY - size * 0.15, size, alpha, textColor, true);
+    const func = functionLabelOf(chord, key);
+    if (func) {
+      ctx.font = `bold ${Math.max(8, Math.min(12, Math.floor(size / 7)))}px monospace`;
+      ctx.fillStyle = `rgba(140,210,255,${alpha})`;
+      ctx.fillText(func, slotX, slotY + size * 0.24);
+    }
+  } else if (size >= PAST_LABEL_FULL_SIZE) {
+    drawSlotText(ctx, degreeLabelOf(chord, key), slotX, slotY, size, alpha, textColor, false);
+  } else if (size >= PAST_LABEL_ROOT_SIZE) {
+    drawSlotText(ctx, degreeName(chord, key), slotX, slotY, size, alpha, textColor, false);
   }
 }
 
@@ -615,7 +667,17 @@ function draw(ctx, canvas) {
     const size = startGeom ? lerp(startGeom.size, g.size, pastT) : g.size;
     const targetAlpha = Math.max(PAST_ALPHA_MIN, PAST_ALPHA_BASE * PAST_ALPHA_DECAY ** g.index);
     const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
-    drawHistorySlot(ctx, isInitial ? null : past.chord, x, y, size, alpha, false, isInitial ? null : past.velocity);
+    drawHistorySlot(
+      ctx,
+      isInitial ? null : past.chord,
+      isInitial ? null : toKeyObj(past.key),
+      x,
+      y,
+      size,
+      alpha,
+      false,
+      isInitial ? null : past.velocity,
+    );
   }
 
   // 未来コード（現在スロットの右）。固定サイズ・固定間隔のまま、平行移動のみで演出する
@@ -629,7 +691,7 @@ function draw(ctx, canvas) {
     const slotX = currentX + FUTURE_SLOT_GAP * (i + 1);
     const alpha = 0.75 - i * 0.18;
     const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
-    drawHistorySlot(ctx, future.chord, slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover, future.velocity);
+    drawHistorySlot(ctx, future.chord, toKeyObj(future.key), slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover, future.velocity);
   }
   ctx.restore();
 
@@ -644,11 +706,31 @@ function draw(ctx, canvas) {
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 2;
     ctx.strokeRect(x - size / 2 + 1, y - size / 2 + 1, size - 2, size - 2);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 22px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(entry ? entry.chord.name : '—', x, y);
+    const info = chordDisplayInfo(entry);
+    if (info) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText(info.degreeLabel, x, y - 6);
+      if (info.func) {
+        ctx.fillStyle = 'rgba(140,210,255,0.95)';
+        ctx.font = 'bold 13px monospace';
+        ctx.fillText(info.func, x, y + 18);
+      }
+      // 実コード名（音名）は右上に小さく併記（実際に楽器で確かめる場面への保険）
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = 'rgba(215,220,230,0.8)';
+      ctx.font = '11px monospace';
+      ctx.fillText(info.noteName, x + size / 2 - 6, y - size / 2 + 6);
+    } else {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('—', x, y);
+    }
     ctx.lineWidth = 1;
   }
 
@@ -661,7 +743,17 @@ function draw(ctx, canvas) {
     const hoverEntry = isInitial ? null : history.entries[hoverSlot.index];
     if (hoverGeom && (isInitial || hoverEntry)) {
       const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
-      drawHistorySlot(ctx, isInitial ? null : hoverEntry.chord, hoverGeom.x, hoverGeom.y, size, 1, true, isInitial ? null : hoverEntry.velocity);
+      drawHistorySlot(
+        ctx,
+        isInitial ? null : hoverEntry.chord,
+        isInitial ? null : toKeyObj(hoverEntry.key),
+        hoverGeom.x,
+        hoverGeom.y,
+        size,
+        1,
+        true,
+        isInitial ? null : hoverEntry.velocity,
+      );
     }
   }
 
@@ -674,12 +766,13 @@ function draw(ctx, canvas) {
     const x = candidateX + cell.col * cellW;
     const y = candidateOriginY + cell.row * cellH;
     const clampedScore = Math.max(0, Math.min(1, cell.score / MAX_SCORE_FOR_SHADING));
-    const alpha = 0.15 + clampedScore * 0.45;
+    // 原色感を出すため下限を引き上げる（0.15だと薄すぎて緑/黄に見えない）
+    const alpha = 0.4 + clampedScore * 0.5;
     ctx.fillStyle =
       cell.category === 'GREEN'
-        ? `hsla(120, 100%, 50%, ${alpha})` // 00FF00（最も明るい緑）と同じhue/sat/lightness
+        ? `rgba(0, 255, 0, ${alpha})`
         : cell.category === 'YELLOW'
-          ? `hsla(48, 75%, 50%, ${alpha})`
+          ? `rgba(255, 255, 0, ${alpha})`
           : `hsla(0, 0%, 50%, ${alpha * 0.6})`;
     ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
     if (cell.isPivot) {
@@ -700,17 +793,28 @@ function draw(ctx, canvas) {
     ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
   }
 
-  // 候補セル名
-  ctx.font = `${Math.max(9, Math.min(14, Math.floor(cellW / 6)))}px monospace`;
-  ctx.fillStyle = '#ddd';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  for (const cell of grid) {
-    const x = candidateX + cell.col * cellW + cellW / 2;
-    const y = candidateOriginY + cell.row * cellH + cellH / 2;
-    ctx.fillText(cell.chord.name, x, y);
+  // 候補セル名（度数ラベル＋機能の2行）
+  {
+    const keyObj = currentKeyObj();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const cell of grid) {
+      const x = candidateX + cell.col * cellW + cellW / 2;
+      const y = candidateOriginY + cell.row * cellH + cellH / 2;
+      // 緑/黄の原色背景は明るいため黒系文字、灰セルは暗い背景のままなので白系文字にする
+      const isColored = cell.category === 'GREEN' || cell.category === 'YELLOW';
+      ctx.font = `${Math.max(9, Math.min(14, Math.floor(cellW / 6)))}px monospace`;
+      ctx.fillStyle = isColored ? '#111' : '#ddd';
+      ctx.fillText(degreeLabelOf(cell.chord, keyObj), x, y - cellH * 0.16);
+      const func = functionLabelOf(cell.chord, keyObj);
+      if (func) {
+        ctx.font = `bold ${Math.max(7, Math.min(11, Math.floor(cellW / 8)))}px monospace`;
+        ctx.fillStyle = isColored ? 'rgba(20,20,60,0.8)' : '#aaa';
+        ctx.fillText(func, x, y + cellH * 0.24);
+      }
+    }
+    ctx.textBaseline = 'alphabetic';
   }
-  ctx.textBaseline = 'alphabetic';
   ctx.restore(); // globalAlphaを戻す
 
   drawLayerHint(ctx, W, H);

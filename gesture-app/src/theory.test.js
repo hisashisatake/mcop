@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from './chords.js';
-import { classifyProgression, isDiatonic, normalizeFamily, pivotKeysFor, confirmsModulation, dissonancePenalty } from './theory.js';
+import {
+  classifyProgression,
+  isDiatonic,
+  normalizeFamily,
+  pivotKeysFor,
+  confirmsModulation,
+  dissonancePenalty,
+  degreeName,
+  chordFunction,
+} from './theory.js';
 
 const TONIC_MIDI = 60; // C4
 
@@ -25,7 +34,7 @@ const A_MINOR = { tonicPc: 9, mode: 'minor' };
 
 // ダイアトニック度数のショートカット（Cメジャー基準の半音オフセット）
 const C = 0, D = 2, E = 4, F = 5, G = 7, A = 9, B = 11;
-const Db = 1, Eb = 3, Ab = 8;
+const Db = 1, Eb = 3, Fs = 6, Ab = 8, Bb = 10;
 
 test('II-V-I: Dm7 → G7 は GREEN、G7 → C は最高スコア帯', () => {
   const dm7 = chordFor(D, rowIndexOf(NORMAL_LAYER, 'm7'));
@@ -156,4 +165,69 @@ test('isDiatonic: Shiftレイヤーのmaj7/m7もダイアトニック判定で�
   const bm7b5 = chordFor(B, rowIndexOf(SHIFT_LAYER, 'm7b5'), { shift: true });
   assert.equal(isDiatonic(cmaj7, C_MAJOR), true);
   assert.equal(isDiatonic(bm7b5, C_MAJOR), true);
+});
+
+// ─────────────────────────────────────────────
+// ディグリーネーム・コード機能
+// ─────────────────────────────────────────────
+
+test('degreeName: Cメジャーで半音距離どおりの度数名が返る', () => {
+  assert.equal(degreeName(chordFor(C, rowIndexOf(NORMAL_LAYER, '')), C_MAJOR), 'I');
+  assert.equal(degreeName(chordFor(F, rowIndexOf(NORMAL_LAYER, '')), C_MAJOR), 'IV');
+  assert.equal(degreeName(chordFor(Bb, rowIndexOf(NORMAL_LAYER, '')), C_MAJOR), 'bVII');
+  assert.equal(degreeName(chordFor(Fs, rowIndexOf(NORMAL_LAYER, '')), C_MAJOR), '#IV');
+  assert.equal(degreeName(chordFor(Db, rowIndexOf(NORMAL_LAYER, '')), C_MAJOR), 'bII');
+});
+
+test('degreeName: Aマイナーでも同じ半音距離基準（自然的短音階はbIII/bVI）', () => {
+  assert.equal(degreeName(chordFor(C, rowIndexOf(NORMAL_LAYER, '')), A_MINOR), 'bIII');
+  assert.equal(degreeName(chordFor(F, rowIndexOf(NORMAL_LAYER, '')), A_MINOR), 'bVI');
+});
+
+test('chordFunction: ダイアトニックコードはFUNCTION_LOOKUPどおりの機能（Amはトニック代理）', () => {
+  const am = chordFor(A, rowIndexOf(NORMAL_LAYER, 'm'));
+  assert.equal(chordFunction(am, C_MAJOR).kind, 'T');
+});
+
+test('chordFunction: A7はセカンダリードミナントとしてD、度数だけのAmとは区別される', () => {
+  const a7 = chordFor(A, rowIndexOf(NORMAL_LAYER, '7'));
+  const result = chordFunction(a7, C_MAJOR);
+  assert.equal(result.kind, 'D');
+  assert.equal(result.resolvesTo, 'II');
+});
+
+test('chordFunction: Abは同主調（Cマイナー）フォールバックでSD', () => {
+  const ab = chordFor(Ab, rowIndexOf(NORMAL_LAYER, ''));
+  assert.equal(chordFunction(ab, C_MAJOR).kind, 'SD');
+});
+
+test('chordFunction: C#mはどの段階にも当てはまらずkind=null', () => {
+  const csharpm = chordFor(Db, rowIndexOf(NORMAL_LAYER, 'm'));
+  assert.equal(chordFunction(csharpm, C_MAJOR).kind, null);
+});
+
+test('chordFunction: G7は本来のV7としてD→I', () => {
+  const g7 = chordFor(G, rowIndexOf(NORMAL_LAYER, '7'));
+  const result = chordFunction(g7, C_MAJOR);
+  assert.equal(result.kind, 'D');
+  assert.equal(result.resolvesTo, 'I');
+});
+
+test('chordFunction: Db7はG7の裏コードとして同じ解決先(I)を持つ', () => {
+  const db7 = chordFor(Db, rowIndexOf(NORMAL_LAYER, '7'));
+  const result = chordFunction(db7, C_MAJOR);
+  assert.equal(result.kind, 'D');
+  assert.equal(result.resolvesTo, 'I');
+});
+
+test('chordFunction: Eb7はV7の裏でもセカンダリードミナントでもなく解決先を持たない', () => {
+  const eb7 = chordFor(Eb, rowIndexOf(NORMAL_LAYER, '7'));
+  const result = chordFunction(eb7, C_MAJOR);
+  assert.equal(result.kind, 'D');
+  assert.equal(result.resolvesTo, null);
+});
+
+test('chordFunction: G7sus4もnormalizeFamily経由でdomへ正規化されD判定になる', () => {
+  const g7sus4 = chordFor(G, rowIndexOf(CTRL_LAYER, '7sus4'), { ctrl: true });
+  assert.equal(chordFunction(g7sus4, C_MAJOR).kind, 'D');
 });

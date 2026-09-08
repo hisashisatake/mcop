@@ -91,7 +91,7 @@ export function chordTypeAt(rowIndex, mods) {
 
 /**
  * トニックからの半音オフセットと行インデックスからコードを組み立てる。
- * @returns {{name: string, rootMidi: number, rootPc: number, family: string, intervals: number[], notes: number[]}}
+ * @returns {{name: string, suffix: string, rootMidi: number, rootPc: number, family: string, intervals: number[], notes: number[]}}
  */
 export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ctrlHeld }) {
   const type = chordTypeAt(rowIndex, { shiftHeld, ctrlHeld });
@@ -100,6 +100,7 @@ export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ct
   const rootName = NOTE_NAMES[rootPc];
   return {
     name: rootName + type.suffix,
+    suffix: type.suffix,
     rootMidi,
     rootPc,
     family: type.family,

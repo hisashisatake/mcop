@@ -25,6 +25,8 @@ const WAVEFORM_MEMORY_BANK = 16383;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const chordEl = document.getElementById('chord-display');
+const chordFunctionEl = document.getElementById('chord-function');
+const chordNoteNameEl = document.getElementById('chord-note-name');
 
 function resize() {
   canvas.width = window.innerWidth;
@@ -179,8 +181,10 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 // 画面切り替え（コード/リズム/メロディの3画面。フェーズ3）
 // ─────────────────────────────────────────────
 const chordScreen = setupChordScreen(canvas, {
-  onChordChange: (name) => {
-    chordEl.textContent = name ?? '—';
+  onChordChange: (info) => {
+    chordEl.textContent = info?.degreeLabel ?? '—';
+    chordFunctionEl.textContent = info?.func ?? '';
+    chordNoteNameEl.textContent = info?.noteName ?? '';
   },
 });
 
