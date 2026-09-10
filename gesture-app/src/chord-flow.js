@@ -20,7 +20,7 @@
 //   「取り消し操作の履歴」という概念は持たない）。
 
 import { ROWS, chordFromSemitone } from './chords.js';
-import { classifyProgression, classifyInitial, pivotKeysFor, normalizeFamily } from './theory.js';
+import { classifyProgression, classifyInitial, pivotKeysFor, confirmsModulation, normalizeFamily } from './theory.js';
 
 const MIN_SEMITONE = -6;
 const MAX_SEMITONE = 5;
@@ -32,7 +32,7 @@ const mod12 = (n) => ((n % 12) + 12) % 12;
  * GREEN/YELLOW/無印（灰）のスコア降順リストへ分ける。
  * @returns {{green: Array, yellow: Array, gray: Array}}
  */
-function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld }) {
+function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot }) {
   const byName = new Map();
   for (let semitone = MIN_SEMITONE; semitone <= MAX_SEMITONE; semitone++) {
     for (let row = 0; row < ROWS; row++) {
@@ -44,7 +44,11 @@ function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld }) {
       // （ダイアトニックコードのほとんどが何らかの近親調のピボットになりうるため、
       // 1手目でも立てるとほぼ全セルが青枠になり情報として機能しない）。
       const isPivot = lastChord ? pivotKeysFor(chord, key).length > 0 : false;
-      const entry = { chord, score, category, isPivot };
+      // pendingPivot（直前までの手でセカンダリードミナント等により絞り込まれた候補調）が
+      // あるとき、そのトニックそのものに一致するセルだけを「ここを弾けば転調確定」として
+      // 区別する（isPivotの青枠＝まだ確定していない将来の可能性とは別軸）。
+      const confirmsPivot = pendingPivot ? pendingPivot.keys.some((k) => confirmsModulation(chord, k)) : false;
+      const entry = { chord, score, category, isPivot, confirmsPivot };
       const existing = byName.get(chord.name);
       if (!existing || entry.score > existing.score) byName.set(chord.name, entry);
     }
@@ -130,10 +134,21 @@ function findBestCellForStep(cells, step, key) {
  * 直後、next.degreeはCメジャー基準のままなのにkeyがAマイナーになり、ターゲットセルの
  * 取り違えが起きたバグの修正）。候補セル自体のスコアリング(classifyAllCells/classifyAllLayers)は
  * 表示上のkeyのままでよい（転調後の実際の響きを正しく採点するため）。
- * @returns {Array<{col: number, row: number, chord, score, category, isPivot, progressionHints: Array}>}
+ * @returns {Array<{col: number, row: number, chord, score, category, isPivot, confirmsPivot, progressionHints: Array}>}
  */
-export function computeCandidateGrid({ lastChord, key, progressionKey = key, tonicMidi, shiftHeld, ctrlHeld, cols, rows, progressionMatches }) {
-  const { green, yellow, gray } = classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld });
+export function computeCandidateGrid({
+  lastChord,
+  key,
+  progressionKey = key,
+  tonicMidi,
+  shiftHeld,
+  ctrlHeld,
+  cols,
+  rows,
+  progressionMatches,
+  pendingPivot,
+}) {
+  const { green, yellow, gray } = classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot });
   const allCells = [...green, ...yellow, ...gray];
   const sequence = allCells.slice(0, cols * rows);
 

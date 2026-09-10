@@ -655,6 +655,7 @@ function computeCandidates() {
   const progressionKey = progressionAnchorKey();
   const entry = currentEntry(history);
   const recent = recentHistoryForProgressionMatch(progressionKey);
+  const pendingPivot = pendingPivotAt(history);
   const cacheKey = JSON.stringify({
     from: entry ? { rootPc: entry.chord.rootPc, family: entry.chord.family } : null,
     key,
@@ -663,6 +664,7 @@ function computeCandidates() {
     rows: assistRows,
     cols: assistCols,
     recent,
+    pendingPivot,
   });
   if (candidateCache && candidateCache.cacheKey === cacheKey) return candidateCache.grid;
 
@@ -677,6 +679,7 @@ function computeCandidates() {
     cols: assistCols,
     rows: assistRows,
     progressionMatches,
+    pendingPivot,
   });
   const legend = computeProgressionLegend({
     lastChord: entry?.chord ?? null,
@@ -944,6 +947,17 @@ function draw(ctx, canvas) {
       ctx.strokeStyle = 'hsl(210, 90%, 60%)';
       ctx.lineWidth = 3;
       ctx.strokeRect(fillX + 1.5, fillY + 1.5, fillW - 3, fillH - 3);
+      ctx.lineWidth = 1;
+    }
+    // 直前までの手で絞り込まれた転調候補（pendingPivot）のトニックそのものに一致するセルは、
+    // 「ここを弾けば転調が確定する」ことを示す黄枠で囲む（isPivotの青枠＝まだ確定していない
+    // 将来の可能性とは別軸なので、両方trueなら両方描く＝二重枠になる）。
+    if (cell.confirmsPivot) {
+      ctx.strokeStyle = 'hsl(50, 100%, 55%)';
+      ctx.lineWidth = 3;
+      const inset = cell.isPivot ? 6 : 1.5; // 青枠と重なる場合は内側にずらして両方見えるようにする
+      const shrink = inset * 2;
+      ctx.strokeRect(fillX + inset, fillY + inset, fillW - shrink, fillH - shrink);
       ctx.lineWidth = 1;
     }
   }
