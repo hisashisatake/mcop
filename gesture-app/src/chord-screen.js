@@ -38,7 +38,7 @@ import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.js';
 import { voiceChord, rawVoicing } from './voicing.js';
-import { pivotKeysFor, confirmsModulation, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.js';
+import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.js';
 import {
   computeCandidateGrid,
   computeProgressionLegend,
@@ -285,20 +285,29 @@ async function stopChord() {
   }
 }
 
-/** ピボット経由の転調が確定したかを判定し、新しいkey/pendingPivotを返す（historyへは反映しない）。 */
+/**
+ * ピボット経由の転調が確定したかを判定し、新しいkey/pendingPivotを返す（historyへは反映しない）。
+ * 転調の確定は「候補調のトニック（I/i）そのものが鳴った瞬間」に限る（confirmsModulation）。
+ * セカンダリードミナント等で候補調に接近しただけ（approachesKey）ではまだ確定させず、
+ * その候補調へpendingPivotを絞り込んで持ち越す。無関係なコードを弾けば自然に外れる。
+ */
 function evaluateTheoryTransition(chord) {
   const key = currentKeyObj();
   const prevPivot = pendingPivotAt(history);
   let newKey = { tonicMidi, mode };
+  let carriedPivotKeys = null;
   if (prevPivot) {
-    const confirmed = prevPivot.keys.find((k) => confirmsModulation(chord, k, key));
+    const confirmed = prevPivot.keys.find((k) => confirmsModulation(chord, k));
     if (confirmed) {
       newKey = { tonicMidi: 60 + confirmed.tonicPc, mode: confirmed.mode };
+    } else {
+      const approaching = prevPivot.keys.filter((k) => approachesKey(chord, k, key));
+      if (approaching.length > 0) carriedPivotKeys = approaching;
     }
   }
   const newKeyObj = { tonicPc: ((newKey.tonicMidi % 12) + 12) % 12, mode: newKey.mode };
   const pivots = pivotKeysFor(chord, newKeyObj);
-  const newPendingPivot = pivots.length > 0 ? { keys: pivots } : null;
+  const newPendingPivot = pivots.length > 0 ? { keys: pivots } : carriedPivotKeys ? { keys: carriedPivotKeys } : null;
   return { key: newKey, pendingPivot: newPendingPivot };
 }
 

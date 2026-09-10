@@ -317,8 +317,23 @@ export function pivotKeysFor(chord, currentKey) {
   });
 }
 
-/** nextChordがcandidateKeyへの転調を確定させるか（現在の調には無く候補調にはあるダイアトニックコード）。 */
-export function confirmsModulation(nextChord, candidateKey, currentKey) {
+/**
+ * chordがkeyのトニック（I/i）そのものかどうか。ピボット転調を「確定」させる基準にする
+ * （セカンダリードミナント経由で候補調に接近しただけでは転調とみなさず、新しい調の
+ * トニックコードが実際に鳴った瞬間を転調確定とする、古典的な調性分析の定義に合わせた）。
+ */
+export function confirmsModulation(chord, key) {
+  if (chord.rootPc !== key.tonicPc) return false;
+  return normalizeFamily(chord, key) === (key.mode === 'major' ? 'maj' : 'min');
+}
+
+/**
+ * nextChordがcandidateKeyへ「接近」しているか（現在の調には無く候補調にはあるダイアトニックコード）。
+ * confirmsModulationとは別軸: こちらはトニックそのものでなくても、セカンダリードミナント等で
+ * 候補調の方向へ向かっていることを示す。転調はまだ確定しないが、pendingPivotを
+ * 持ち越す（候補調を維持する）条件として使う。
+ */
+export function approachesKey(nextChord, candidateKey, currentKey) {
   return isDiatonic(nextChord, candidateKey) && !isDiatonic(nextChord, currentKey);
 }
 

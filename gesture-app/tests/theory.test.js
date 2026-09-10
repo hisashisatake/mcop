@@ -7,6 +7,7 @@ import {
   normalizeFamily,
   pivotKeysFor,
   confirmsModulation,
+  approachesKey,
   dissonancePenalty,
   degreeName,
   chordFunction,
@@ -153,13 +154,19 @@ test('ピボット: Cメジャーで Am は G メジャーへのピボットと�
   );
 });
 
-test('転調確定: D7はGメジャーへの転調を確定させるが、G自体はさせない', () => {
+test('接近: D7はGメジャーへ接近するが確定はしない／Gそのものが鳴って初めて確定する', () => {
   const d7 = chordFor(D, rowIndexOf(NORMAL_LAYER, '7'));
   const gMajorKey = { tonicPc: 7, mode: 'major' };
-  assert.equal(confirmsModulation(d7, gMajorKey, C_MAJOR), true);
 
+  // D7(=V7/V)はGメジャーへ接近している(approachesKey)が、まだ転調を確定させない
+  assert.equal(approachesKey(d7, gMajorKey, C_MAJOR), true);
+  assert.equal(confirmsModulation(d7, gMajorKey), false);
+
+  // Gメジャーのトニックそのもの(G)が鳴った瞬間に確定する
   const g = chordFor(G, rowIndexOf(NORMAL_LAYER, ''));
-  assert.equal(confirmsModulation(g, gMajorKey, C_MAJOR), false);
+  assert.equal(confirmsModulation(g, gMajorKey), true);
+  // トニックそのものはもう「接近」ではない(pivotKeysForの除外条件と同じ理屈)
+  assert.equal(approachesKey(g, gMajorKey, C_MAJOR), false);
 });
 
 test('マイナーキー: Aマイナーで E7 → Am が最高スコア帯', () => {
