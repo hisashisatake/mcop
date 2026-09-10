@@ -341,15 +341,33 @@ function effectiveAutoVoicing() {
   return altHeld ? !autoVoicing : autoVoicing;
 }
 
-/** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
-function voicingFor(chord) {
-  const prevEntry = currentEntry(history);
+/** prevEntry（直前のコード、無ければnull）とkey（isStrongResolution判定用）を踏まえて、chordのボイシングを計算する。 */
+function computeVoicing(chord, prevEntry, key) {
   const previousNotes = prevEntry ? prevEntry.voicing : [];
   const centerMidi = 60 + 12 * baseOctave;
-  const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, currentKeyObj()) : false;
+  const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, key) : false;
   return effectiveAutoVoicing()
     ? voiceChord(chord, { previousNotes, centerMidi, requireRootInBass })
     : rawVoicing(chord, baseOctave);
+}
+
+/** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
+function voicingFor(chord) {
+  return computeVoicing(chord, currentEntry(history), currentKeyObj());
+}
+
+/**
+ * 過去/未来コードをクリックして聞き直す際の再生用ボイシング。通常は選択時に焼き付けた
+ * entry.voicingをそのまま鳴らす（毎回同じ響きにする、というjumpToIndexの方針を維持）。
+ * ALT押下中だけは例外として、その場でcomputeVoicingにより実効の自動転回設定で
+ * 再計算する（保存済みのentry.voicing自体は書き換えない。ALTを離せば元の響きに戻る）。
+ */
+function voicingForPlayback(index) {
+  const entry = history.entries[index];
+  if (!altHeld) return entry.voicing;
+  const prevEntry = index > 0 ? history.entries[index - 1] : null;
+  const prevKey = toKeyObj(prevEntry ? prevEntry.key : history.initialKey);
+  return computeVoicing(entry.chord, prevEntry, prevKey);
 }
 
 /**
@@ -470,7 +488,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       jumpToIndex(cell.index);
       const entry = currentEntry(history);
       if (entry) {
-        await playChord(entry.voicing, velocityFromCellY(cell.yRatio));
+        await playChord(voicingForPlayback(cell.index), velocityFromCellY(cell.yRatio));
       } else {
         pointerHeld = false;
       }
