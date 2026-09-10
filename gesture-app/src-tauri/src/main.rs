@@ -1,21 +1,26 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod midi_out;
-mod op505_presets;
+mod query_client;
 
-use op505_core::{build_op505_registry, op505_presets_dir, Op505BankRegistry, Op505Patch, Op505PresetBank};
-use std::sync::Mutex;
-
-/// 発音に使うMIDIチャンネル（声部スロット0〜3）。コード最大4音（7th/maj7）に合わせた固定範囲。
-/// `op505_set_program`はこの全チャンネルへBank Select+Program Changeを送る
-/// （standalone側は自分が受け取ったチャンネルの`ChannelState`だけを更新するため、
-/// 未使用チャンネルへ送っても実害はない）。
-const VOICE_CHANNELS: std::ops::Range<u8> = 0..4;
+/// コード発音に使うMIDIチャンネル。1チャンネルへ最大8声を重ねて鳴らす。
+/// 旧「声部ごとに固定チャンネル0〜3」方式は、C13など5音以上のテンションコードを
+/// 鳴らせない上限が問題になったため廃止した（押し直し時の同音チョークは、同一
+/// チャンネル内での同ノート再発音としてstandalone側が処理する）。
+const CHORD_CHANNEL: u8 = 0;
 
 /// マスターエフェクト系NRPN/CCの送信先チャンネル。`NRPN(0,1) Channel Effect Route`を
 /// 誰も送らなければ全チャンネルの`effect_route_slot`は既定0のままなので、チャンネル0で
 /// 送れば全チャンネルが使う共有MasterEffects（スロット0）に反映される。
 const EFFECTS_CHANNEL: u8 = 0;
+
+/// GM2のリズムバンク判定に使うBank Select MSBの特別な2値から導いた範囲・合図
+/// （`op505-midi::rhythm::{RHYTHM_BANK_MSB, MELODIC_BANK_MSB}`と同じ値。gesture-appは
+/// エンジンを持たずop505-midiへ依存しない方針のため、ここでは値だけを複製する）。
+/// MSB=120（15360〜15487）はリズムバンク、MSB=121（15488〜）は「明示的な旋律復帰」の合図。
+const RHYTHM_BANK_RANGE: std::ops::RangeInclusive<u16> = 15360..=15487;
+/// 旋律復帰の合図として送るダミーBank（MSB=121, LSB=0）。
+const MELODIC_ESCAPE_BANK: u16 = 15488;
 
 /// Destination（`0`〜`4`、NRPN(0,0)の生値と同じ並び）。旧`sound_fm::FmLfoDestination`は
 /// 質感LFO退役に伴い削除済みのため、gesture-app内だけで使う最小限の解釈をここに持つ
@@ -47,26 +52,25 @@ fn scale_to_7bit(value: u8) -> u8 {
     ((value as u16 * 127 + 127) / 255) as u8
 }
 
-/// 発音中の声部（MIDIチャンネル0〜3）が最後にnote_onしたノート番号。note_offで
-/// どのノートをNote Offすべきか引くために使う（MIDIのNote Offはノート番号が必要なため、
-/// `note_off(channel)`だけを渡すフロントエンドとの橋渡し）。
-type LastNotes = Mutex<[Option<u8>; 16]>;
-
-/// 指定チャンネル(声部スロット)へノートオンを送る。`channel`は`note_off`と対にする
-/// 安定したスロット番号（フロントエンド側の`activeChannels`参照）。
+/// 指定チャンネルへノートオンを送る。1チャンネルに複数音を重ねられるため、
+/// 止める側（`note_off`）はノート番号を明示的に受け取る（標準MIDIと同じ責任分担で、
+/// 「今どの音を鳴らしているか」はフロントエンドが持つ）。
 #[tauri::command]
-fn note_on(channel: u8, note: u8, velocity: u8, last_notes: tauri::State<'_, LastNotes>) {
-    let idx = (channel as usize).min(15);
-    last_notes.lock().unwrap()[idx] = Some(note);
+fn note_on(channel: u8, note: u8, velocity: u8) {
     midi_out::note_on(channel, note, velocity);
 }
 
+/// 指定チャンネルの指定ノートを止める。
 #[tauri::command]
-fn note_off(channel: u8, last_notes: tauri::State<'_, LastNotes>) {
-    let idx = (channel as usize).min(15);
-    if let Some(note) = last_notes.lock().unwrap()[idx].take() {
-        midi_out::note_off(channel, note);
-    }
+fn note_off(channel: u8, note: u8) {
+    midi_out::note_off(channel, note);
+}
+
+/// 指定チャンネルの発音を全て止める（CC123 All Notes Off）。画面切り替え時や、
+/// note_offを取りこぼしたときのパニック用。
+#[tauri::command]
+fn all_notes_off(channel: u8) {
+    midi_out::control_change(channel, 123, 0);
 }
 
 /// OP505の演奏系モジュレーション（Vキーのビブラート⇔トレモロ切替）をMIDIで送る。
@@ -133,39 +137,56 @@ fn set_master_effects(
     midi_out::nrpn_data_entry(EFFECTS_CHANNEL, 0, 8, scale_to_7bit(chorus_send_to_reverb));
 }
 
-/// (bank, program)に対応する`.op505`プリセットが見つかれば、発音用の全チャンネルへ
-/// Bank Select + Program Changeを送る（次のnote-onから適用。standalone側のProgram Change
-/// 解決は`op505_presets_dir()`側のファイルを見るため、ローカルの`registry`/`bank_state`は
-/// 「見つかったかどうか」の表示用チェックのみに使う）。
-/// 見つからなければMIDIは送らずNoneを返す（`Op505Patch::default()`はtl=0で無音のため、
-/// 黙って無音へ切り替えるより「見つからない」を呼び出し側に伝えて現在の音を維持するほうが安全）。
+/// コード発音チャンネルへBank Select + Program Changeを送る（次のnote-onから適用）。
+/// 実際の音色解決はstandalone側が単独で行う（gesture-appはエンジンを持たないため、
+/// 音色の有無を判断する材料自体を持たない。見つかったかどうかの表示は
+/// `op505_query_program_name`で別途問い合わせる）。
+///
+/// standalone側のProgram Change解決には、GM1互換のため「一度リズムバンク(MSB=120)へ
+/// 入ったチャンネルは、Bank Select MSB=121（旋律復帰の合図）が明示的に来ない限り
+/// リズムのまま」という粘りルールがある（実機GM2準拠、`op505-midi::rhythm`参照）。
+/// gesture-appのBank欄は生の数値をそのままMSB/LSBへ分解して送るだけのため、この粘りに
+/// 引っかかると「Bank欄を0に戻してもリズムキット番号が変わるだけ」になってしまう。
+/// 旋律バンクを選ぶときは、先に旋律復帰の合図を明示的に送ってから本来のBank/Programを
+/// 送ることで、現在の状態に関わらず必ず狙った音色へ届くようにする
+/// （ダミーのProgram Changeは次のnote-onより前に本物のProgram Changeで上書きされるため
+/// 発音への影響は無い）。
 #[tauri::command]
-fn op505_set_program(
-    registry: tauri::State<'_, Mutex<Op505BankRegistry>>,
-    bank_state: tauri::State<'_, Mutex<Op505PresetBank>>,
-    bank: u16,
-    program: u8,
-) -> Option<Op505Patch> {
-    let patch = op505_core::resolve_patch(&registry.lock().unwrap(), &bank_state.lock().unwrap(), bank, program)?;
-    for ch in VOICE_CHANNELS {
-        midi_out::bank_select(ch, bank);
-        midi_out::program_change(ch, program);
+fn op505_set_program(bank: u16, program: u8) {
+    if !RHYTHM_BANK_RANGE.contains(&bank) {
+        midi_out::bank_select(CHORD_CHANNEL, MELODIC_ESCAPE_BANK);
+        midi_out::program_change(CHORD_CHANNEL, 0);
     }
-    Some(patch)
+    midi_out::bank_select(CHORD_CHANNEL, bank);
+    midi_out::program_change(CHORD_CHANNEL, program);
 }
 
-/// `op505_presets_dir()`から`.op505`プリセットを読み直し、読み込んだプリセット総数を返す。
-/// アプリ起動中に外部（op505_probe/opz2op505等の変換ツールや手編集）でプリセットファイルが
-/// 追加・更新された場合に、再起動せず反映するためのコマンド。`Op505PresetBank`（フォールバック用）
-/// と`Op505BankRegistry`（表示用の担当ファイル管理）の両方を作り直す。
+/// standaloneへ問い合わせて、指定チャンネルの現在の音色名を取得する。`status`は
+/// `"resolved"`（名前解決済み）/`"not_found"`（standalone側がdefault_patchへフォールバック中）/
+/// `"rhythm"`（リズムチャンネル、`program`にキット番号）/`"editing"`（トレイ起動音色エディタが
+/// このチャンネルを編集中）/`"disconnected"`（standalone未接続・応答なし）のいずれか。
+#[derive(serde::Serialize)]
+struct ProgramInfoDto {
+    bank: u16,
+    program: u8,
+    name: String,
+    status: &'static str,
+}
+
 #[tauri::command]
-fn op505_reload_presets(bank_state: tauri::State<'_, Mutex<Op505PresetBank>>, registry: tauri::State<'_, Mutex<Op505BankRegistry>>) -> usize {
-    let dir = op505_presets_dir();
-    let reloaded = Op505PresetBank::load_from_dir(&dir);
-    let count = reloaded.sorted_entries().len();
-    *bank_state.lock().unwrap() = reloaded;
-    *registry.lock().unwrap() = build_op505_registry(&dir);
-    count
+fn op505_query_program_name(channel: u8) -> ProgramInfoDto {
+    match query_client::query_program(channel) {
+        Some(info) => {
+            let status = match info.status {
+                query_client::ProgramStatus::Resolved => "resolved",
+                query_client::ProgramStatus::NotFound => "not_found",
+                query_client::ProgramStatus::Rhythm => "rhythm",
+                query_client::ProgramStatus::Editing => "editing",
+            };
+            ProgramInfoDto { bank: info.bank, program: info.program, name: info.name, status }
+        }
+        None => ProgramInfoDto { bank: 0, program: 0, name: String::new(), status: "disconnected" },
+    }
 }
 
 /// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスする）。
@@ -182,29 +203,39 @@ fn tap_tempo(bpm: f32) {
     midi_out::set_clock_bpm(bpm);
 }
 
-fn main() {
-    // presets_dir()の読み込みは起動時にここで1回だけ行う（%APPDATA%\op505\presets）。
-    // gesture-appはエンジンを持たない読み取り専用のBank/Program解決用途にのみこれを使う
-    // （実際の音色解決はstandalone側が自分のpresets_dir()から独立に行う）。
-    let op505_bank = Op505PresetBank::load_from_dir(&op505_presets_dir());
-    let op505_registry = build_op505_registry(&op505_presets_dir());
+/// リズム画面のメトロノームON/OFF。刻み自体は`midi_out::clock_loop`（タップテンポと同じ
+/// MIDI Clockスレッド）が担うため、ここではフラグを立てるだけ。
+#[tauri::command]
+fn set_metronome_enabled(enabled: bool) {
+    midi_out::set_metronome_enabled(enabled);
+}
 
+/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`level`は0(消音)〜
+/// 3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、ここでは
+/// 共有パターンへ書き込むだけ。
+#[tauri::command]
+fn set_rhythm_step(row: u8, step: u8, level: u8) {
+    midi_out::set_rhythm_step(row, step, level);
+}
+
+fn main() {
     tauri::Builder::default()
-        .manage(Mutex::new(op505_bank))
-        .manage(Mutex::new(op505_registry))
-        .manage(Mutex::new([None::<u8>; 16]))
+        .setup(|app| {
+            midi_out::set_app_handle(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             note_on,
             note_off,
+            all_notes_off,
             set_master_effects,
             op505_set_performance_lfo,
             op505_set_program,
-            op505_reload_presets,
+            op505_query_program_name,
             op505_open_editor,
             tap_tempo,
-            op505_presets::op505_list_bank_entries,
-            op505_presets::op505_get_bank_file_name,
-            op505_presets::op505_get_bank_program,
+            set_metronome_enabled,
+            set_rhythm_step,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

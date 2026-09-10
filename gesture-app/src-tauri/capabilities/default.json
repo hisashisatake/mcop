@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability",
   "windows": ["main"],
-  "permissions": ["core:window:allow-start-resize-dragging"]
+  "permissions": ["core:window:allow-start-resize-dragging", "core:event:default"]
 }

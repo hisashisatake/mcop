@@ -8,5 +8,4 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-op505-core = { path = "../../op505/core" }
 serde = { version = "1", features = ["derive"] }

@@ -12,10 +12,11 @@
 //!
 //! egui/eframeに依存しない（`op505-core`型のみを扱う）。
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 
 use op505_core::{Op505BankFile, Op505Patch, Op505PresetBank};
+use op505_midi::ProgramSelection;
 use sound_core::MeterBridge;
 
 /// `edit_channel`の「編集対象なし」を表す番兵値。MIDIチャンネルは0〜15のため衝突しない。
@@ -74,6 +75,54 @@ pub struct SharedEditState {
     /// （`sound_core::MeterBridge`のdoc参照）。オーディオスレッド・GUIスレッド双方が
     /// この同じ`Arc`を共有する。
     master_meter: Arc<MeterBridge>,
+
+    /// 各MIDIチャンネルの現在のProgram Change選択（`encode_program_selection`でu32へ詰めた
+    /// もの）。gesture-appの音色名クエリ（`query_server`）向けの一方向の橋で、`master_meter`と
+    /// 同じ理由でdirtyフラグは使わない——オーディオスレッドが毎ブロック`store(Relaxed)`する
+    /// だけで、クエリスレッドは常に「その時点の最新値」を`load(Relaxed)`で読めば十分
+    /// （1ブロック分古い値を読んでも実害が無い）。
+    program_selections: [AtomicU32; 16],
+}
+
+/// [`SharedEditState::program_selections`]の1要素の符号化。タグビット(31)で
+/// `Melodic`/`Rhythm`を区別する。bank(14bit)・program(7bit)・kit(7bit)はいずれも
+/// 32bitに収まるサイズのため、下位ビットへそのまま詰める。
+fn encode_program_selection(selection: ProgramSelection) -> u32 {
+    match selection {
+        ProgramSelection::Melodic { bank, program } => ((bank as u32) << 8) | program as u32,
+        ProgramSelection::Rhythm { kit } => (1u32 << 31) | kit as u32,
+    }
+}
+
+fn decode_program_selection(bits: u32) -> ProgramSelection {
+    if bits & (1 << 31) != 0 {
+        ProgramSelection::Rhythm { kit: (bits & 0x7f) as u8 }
+    } else {
+        ProgramSelection::Melodic { bank: ((bits >> 8) & 0x3fff) as u16, program: (bits & 0xff) as u8 }
+    }
+}
+
+/// [`SharedEditState::resolve_program_name`]が返す、1チャンネル分の音色名解決結果。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProgramInfo {
+    pub bank: u16,
+    pub program: u8,
+    pub name: String,
+    pub status: ProgramStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramStatus {
+    /// `presets`から名前が見つかった。
+    Resolved,
+    /// 旋律チャンネルで該当(bank, program)が`presets`に無く、`default_patch`へフォールバックする
+    /// （`MidiState::base_patch_for`と同じ意味論）。
+    NotFound,
+    /// リズムチャンネル（kit番号は`program`に入る）。
+    Rhythm,
+    /// このチャンネルはトレイ起動音色エディタが編集中で、Program Change選択とは無関係に
+    /// `edit_patch`が鳴っている（`MidiState::base_patch_for`の`edit_channel`分岐と対応）。
+    Editing,
 }
 
 impl SharedEditState {
@@ -90,6 +139,7 @@ impl SharedEditState {
             fx_slot: AtomicU8::new(0),
             fx_dirty: AtomicBool::new(false),
             master_meter: Arc::new(MeterBridge::new()),
+            program_selections: std::array::from_fn(|_| AtomicU32::new(0)),
         }
     }
 
@@ -188,6 +238,52 @@ impl SharedEditState {
         let values = std::array::from_fn(|i| self.fx_values[i].load(Ordering::Relaxed));
         Some((slot, values))
     }
+
+    // ---- オーディオスレッド→クエリスレッドの橋（`master_meter`と同型、dirty不要） ----
+
+    /// 16チャンネル分のProgram Change選択を公開する。`sync_editor_state`/`drain_midi_queue`より
+    /// 後、オーディオコールバックの各ブロックで呼ぶ（PC未送信の初期状態も含め、常に最新の
+    /// `state.channels[..].program_state`を反映させるため。呼び出し頻度が高くても
+    /// `store(Relaxed)`16回はコストとして無視できる）。
+    pub fn publish_program_selections(&self, selections: [ProgramSelection; 16]) {
+        for (cell, sel) in self.program_selections.iter().zip(selections.iter()) {
+            cell.store(encode_program_selection(*sel), Ordering::Relaxed);
+        }
+    }
+
+    // ---- クエリスレッド側API（query_server.rsから呼ぶ。ブロックしてよい） ----
+
+    /// 指定チャンネルの現在のProgram Change選択と、それが指す音色名を解決する。
+    /// `presets`は`take_presets_if_dirty`と違いconsumeしない読み取りのため、GUIスレッドの
+    /// `publish_bank_file`と競合してもこちらはブロックするだけで実害は無い
+    /// （クエリスレッドはリアルタイム制約が無い）。
+    pub fn resolve_program_name(&self, channel: usize) -> ProgramInfo {
+        let bits = self.program_selections[channel.min(15)].load(Ordering::Relaxed);
+        let selection = decode_program_selection(bits);
+
+        if self.edit_channel() == Some(channel) {
+            let (bank, program) = match selection {
+                ProgramSelection::Melodic { bank, program } => (bank, program),
+                ProgramSelection::Rhythm { kit } => (0, kit),
+            };
+            return ProgramInfo { bank, program, name: String::new(), status: ProgramStatus::Editing };
+        }
+
+        match selection {
+            ProgramSelection::Melodic { bank, program } => {
+                let presets = self.presets.read().unwrap();
+                match presets.get(bank, program) {
+                    Some(preset) => {
+                        ProgramInfo { bank, program, name: preset.name.clone(), status: ProgramStatus::Resolved }
+                    }
+                    None => ProgramInfo { bank, program, name: String::new(), status: ProgramStatus::NotFound },
+                }
+            }
+            ProgramSelection::Rhythm { kit } => {
+                ProgramInfo { bank: 0, program: kit, name: String::new(), status: ProgramStatus::Rhythm }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +372,65 @@ mod tests {
         let presets = shared.take_presets_if_dirty().expect("dirty after publish");
         assert!(presets.get(5, 2).is_some(), "マージされたエントリーが取り出せるはず");
         assert!(shared.take_presets_if_dirty().is_none());
+    }
+
+    #[test]
+    fn program_selection_encoding_round_trips() {
+        let melodic = ProgramSelection::Melodic { bank: 16383, program: 127 };
+        assert_eq!(decode_program_selection(encode_program_selection(melodic)), melodic);
+
+        let melodic_zero = ProgramSelection::Melodic { bank: 0, program: 0 };
+        assert_eq!(decode_program_selection(encode_program_selection(melodic_zero)), melodic_zero);
+
+        let rhythm = ProgramSelection::Rhythm { kit: 5 };
+        assert_eq!(decode_program_selection(encode_program_selection(rhythm)), rhythm);
+    }
+
+    #[test]
+    fn resolve_program_name_reflects_published_selection() {
+        use op505_core::{Op505PresetEntry, Op505PresetFile};
+        use std::path::PathBuf;
+
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let file = Op505PresetFile::Presets {
+            bank: 3,
+            presets: vec![Op505PresetEntry { program: 7, name: "TestPatch".to_string(), patch: Op505Patch::default() }],
+        };
+        let bank_file = Op505BankFile::from_loaded(PathBuf::from("dummy.op505"), file, 3);
+        shared.publish_bank_file(&bank_file);
+        shared.take_presets_if_dirty(); // main.rsのsync_editor_stateと同じく取り込んでおく
+
+        let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
+        selections[2] = ProgramSelection::Melodic { bank: 3, program: 7 };
+        shared.publish_program_selections(selections);
+
+        let info = shared.resolve_program_name(2);
+        assert_eq!(info.status, ProgramStatus::Resolved);
+        assert_eq!(info.name, "TestPatch");
+        assert_eq!((info.bank, info.program), (3, 7));
+    }
+
+    #[test]
+    fn resolve_program_name_not_found_when_preset_missing() {
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
+        selections[0] = ProgramSelection::Melodic { bank: 99, program: 1 };
+        shared.publish_program_selections(selections);
+
+        let info = shared.resolve_program_name(0);
+        assert_eq!(info.status, ProgramStatus::NotFound);
+    }
+
+    #[test]
+    fn resolve_program_name_editing_overrides_selection() {
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        shared.set_edit_channel(Some(4));
+        let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
+        selections[4] = ProgramSelection::Melodic { bank: 1, program: 2 };
+        shared.publish_program_selections(selections);
+
+        let info = shared.resolve_program_name(4);
+        assert_eq!(info.status, ProgramStatus::Editing);
     }
 
     #[test]

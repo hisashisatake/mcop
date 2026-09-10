@@ -1,0 +1,1213 @@
+// コード画面（フロー方式）：現在のコードを中心に、左へ過去コードの履歴、右へ「記録済みの続き
+// （未来）」と「次の候補」を並べる。
+//
+// 過去/未来のナビゲーションと、Ctrl+Z/Ctrl+Yの取り消しは別の概念として扱う:
+//   - 過去/未来コードのクリックは「再生位置の移動」（cursorを動かすだけ、entriesは不変）
+//   - Ctrl+Z/Ctrl+Yは「新しいコードを選択した」という編集操作そのものの一般的なUndo/Redo
+//     （過去へ戻ってから新しいコードを選んで先の履歴を上書きした場合、Ctrl+Zはその上書き
+//     操作自体を取り消し、上書き前のentries全体（上書きされる前に見えていた続きも含む）へ
+//     丸ごと復元する。例: A-B-C-Dと選んでからBまで戻りEを選ぶとA-B-Eになるが、Ctrl+Zを押すと
+//     A-B-C-D（カーソルはB）に戻る）。編集操作でないただのカーソル移動（過去/未来クリックや
+//     Ctrl+Z/Y自体）はこのUndo/Redoスタックに積まない
+//
+// 操作:
+//   候補セルをクリック … 押している間だけ発音し、離しても選択は確定して現在コードになる
+//                        （セル内上下でベロシティ、上側ほど強い）。cursorより先の履歴が
+//                        あれば、この時点で破棄される（Ctrl+Zで丸ごと復元可能）
+//   過去/未来コードをクリック … 押している間だけ発音し、その地点まで再生位置を移動する
+//                        （過去=戻る、未来=記録済みの続きへ進む。どちらも即座に確定）
+//   Ctrl+Z             … 直前のコード選択（上書きを含む）を取り消す（発音はしない）
+//   Ctrl+Y/Ctrl+Shift+Z … Ctrl+Zで取り消した選択をやり直す（発音はしない）
+//   Shift               … 4和音中心のレイヤーへ切替（II-V-Iが縦2行以内に収まる）
+//   Ctrl                … sus・付加音系のレイヤーへ切替
+//   Ctrl+Shift          … aug・オルタード系のレイヤーへ切替
+//   ↓/↑                … 候補の行数（3〜12）を増減
+//   ←/→                … 候補の列数（1〜3）を増減
+//
+// コード補助機能:
+//   直前に鳴らしたコードを起点に、次に相性の良いコードを緑（定番）/黄（用例は少ないが理論的
+//   裏付けあり）/灰（理論スコア低めの自由枠）の3列で提示する（chord-flow.js/theory.js参照）。
+//   ピボットコード（近親調との共通コード）には青を混ぜ、それを押した次に転調先固有のコードを
+//   押すと調が確定する。
+//
+// 履歴は線形（cursor+entries配列）。過去/未来への移動はentriesを一切変更しないが、戻った
+// 状態で新しいコードを選ぶと、その先の履歴（未来スロットに見えていた続き）は破棄される
+// （分岐は保持しない設計判断。詳細はplan「gesture-app コード画面をグリッド方式からフロー方式へ刷新」）。
+
+import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
+import { applyTo as applyLfoTo } from './performance-lfo.js';
+import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.js';
+import { voiceChord, rawVoicing } from './voicing.js';
+import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.js';
+import {
+  computeCandidateGrid,
+  computeProgressionLegend,
+  createHistory,
+  keyAt,
+  currentEntry,
+  pendingPivotAt,
+  selectChord,
+  jumpTo,
+  updateVelocity,
+} from './chord-flow.js';
+import { matchProgressions } from './progressions.js';
+import { computePastSlotGeoms } from './chord-layout.js';
+import { isActive, onScreenChange } from './screens.js';
+
+const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
+const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
+const SLIDE_DURATION_MS = 220;
+const RIGHT_MARGIN = 24; // 候補ブロックと画面右端の余白（候補ブロックは右端寄せにして過去領域を広げる）
+const CURRENT_SIZE = 96; // 現在コードスロットの一辺
+
+// 未来列（記録済みの続き）は従来どおり固定サイズ・固定個数。過去列だけ遠近法的に縮小する
+// （[[project_gesture_app_3screen_minidaw_redesign]]参照、進む先は長くならないため対称性より実態を優先）。
+const MAX_FUTURE_SLOTS = 4;
+const FUTURE_SLOT_SIZE = 84;
+const FUTURE_SLOT_GAP = 70;
+
+// 過去列: 遠いほどサイズ・間隔とも指数的に縮む（chord-layout.jsのcomputePastSlotGeoms）
+const PAST_BASE_SIZE = 64;
+const PAST_MIN_SIZE = 20; // タスクトレイアイコン相当（最も古いスロットの下限サイズ）
+const PAST_SHRINK = 0.8;
+const PAST_GAP_RATIO = 0.125;
+const PAST_LEFT_MARGIN = 16;
+const PAST_HIT_MIN_SIZE = 28; // 当たり判定の下限（見た目より少し広く取り極小スロットもクリックできるようにする）
+const PAST_ALPHA_MIN = 0.3;
+const PAST_ALPHA_BASE = 0.8;
+const PAST_ALPHA_DECAY = 0.93;
+const PAST_LABEL_DEGREE_FUNC_SIZE = 56; // これ以上のサイズなら度数ラベル+機能の2行
+const PAST_LABEL_FULL_SIZE = 44; // これ以上なら度数ラベル（IIm7）のみ1行
+const PAST_LABEL_ROOT_SIZE = 28; // これ以上なら度数のみ（品質を除く、II）。それ未満は文字なし
+const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの拡大サイズ（Dock風）
+const HOVER_EXPAND_MS = 120;
+
+// 選択時のベロシティをスロット下端からの紺色バーで可視化する（過去・未来・現在の全スロット共通、
+// 現在スロットの中央列幅＝スロット全体の1/3に合わせて描く）。
+// 過去/未来クリックは「その地点へ移動するだけ」で発音・ベロシティとも変更しない。ベロシティを
+// 実際に書き換えられる（＝再調整できる）のは現在コードスロットの中央列クリックのみ。
+const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
+const VELOCITY_BAR_ALPHA_SCALE = 0.55; // ラベル文字の可読性を保つため、スロットのalphaより少し抑える
+
+const CANDIDATE_FILL_SIZE_MIN = 0.4; // 候補セルの塗り矩形の最小サイズ比率（暗い＝スコア最低の候補がこの比率まで縮む）
+
+const MAX_RECENT_HISTORY = 12; // 進行テンプレート照合に使う直近手数の上限（最長テンプレート=12小節ブルースに合わせる）
+const PROGRESSION_BADGE_COLOR = '#ffcc00';
+const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③', 4: '④', 5: '⑤' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）。6件目以降は半角数字にフォールバック
+
+const MIN_ROWS = 3;
+const MAX_ROWS = 12;
+const MIN_COLS = 1;
+const MAX_COLS = 3;
+const DEFAULT_ROWS = 7;
+const MIN_BASE_OCTAVE = -2;
+const MAX_BASE_OCTAVE = 2;
+const DEFAULT_COLS = 3;
+
+let tonicMidi = DEFAULT_TONIC_MIDI;
+let mode = 'major'; // 'major' | 'minor'
+let assistRows = DEFAULT_ROWS;
+let assistCols = DEFAULT_COLS;
+let autoVoicing = false; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
+let baseOctave = 0; // 基準オクターブの手動±調整
+
+let shiftHeld = false;
+let ctrlHeld = false;
+let altHeld = false; // 押している間だけ自動転回ON/OFFを反転する一時トグル
+let hoverCandidate = null; // {col, row, yRatio}
+let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用）
+let sounding = []; // 発音中のノート番号
+let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
+
+// { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity, voicing}], cursor, initialKey }
+// velocityは選択時のセル内クリック位置から一度だけ決まり、以後は変化しない（表示用のベロシティ
+// バーに使う。過去/未来クリックでの再訪や発音そのものには使わない）。
+// voicingは選択時に直前エントリのvoicingを踏まえて一度だけ計算し焼き付ける（実際に鳴らすMIDI
+// ノート配列。過去/未来クリックでの再訪では保存済みの値をそのまま鳴らし、毎回同じ響きにする）。
+// 自動転回ON/OFF・基準オクターブ設定が変わったときだけ、revoiceHistory()で履歴全体を計算し直す。
+let history = createHistory({ tonicMidi, mode });
+let candidateCache = null; // { cacheKey, grid: [...] }
+
+// Ctrl+Z/Ctrl+Yの編集Undo/Redo用スタック（Mementoパターン）。要素はcommitSelection直前のhistory
+// スナップショットそのもの（historyは常に新しいオブジェクトを返す設計のため、参照を保持するだけで
+// 安全に巻き戻せる）。過去/未来クリックによるcursor移動はここへ積まない（編集操作ではないため）。
+let undoStack = [];
+let redoStack = [];
+
+let tonicSelectEl = null;
+let modeSelectEl = null;
+
+// 選択・Undo/Redo時の横スライド演出用（純粋に見た目だけの補間。ロジック上は瞬時に切り替わる）
+let slideDirection = 0; // +1 = 前進（右→左へ流れる）, -1 = 後退
+let slideStart = 0;
+
+/** 発音中チャンネル（performance-lfoが即時反映に使う）。 */
+export function activeChannels() {
+  return sounding.length > 0 ? [CHORD_CHANNEL] : [];
+}
+
+/** {tonicMidi, mode}形式のキー（historyのentry.key等）をtheory.jsが期待する{tonicPc, mode}へ変換する。 */
+function toKeyObj(key) {
+  return { tonicPc: ((key.tonicMidi % 12) + 12) % 12, mode: key.mode };
+}
+
+function currentKeyObj() {
+  return toKeyObj(keyAt(history));
+}
+
+/** ディグリーネーム（度数＋品質サフィックス、スペースなし）。例: 'IIm7' / 'V7' / 'I'。 */
+function degreeLabelOf(chord, key) {
+  return degreeName(chord, key) + chord.suffix;
+}
+
+/** キー名の表示文言。例: 'C' / 'Am'。 */
+function keyNameOf(key) {
+  return NOTE_NAMES[key.tonicPc] + (key.mode === 'minor' ? 'm' : '');
+}
+
+/**
+ * history.entries[index]の左上にキー名を表示すべきか。最初のコード（index===0）と、
+ * 直前のエントリからキーが変わった（＝転調が確定した）コードだけを対象にする
+ * （毎スロットに出すと転調の節目が埋もれるため）。indexが範囲外（初期"—"状態）はfalse。
+ */
+function isKeyLabelSlot(index) {
+  if (index < 0 || index >= history.entries.length) return false;
+  if (index === 0) return true;
+  const prevKey = toKeyObj(history.entries[index - 1].key);
+  const curKey = toKeyObj(history.entries[index].key);
+  return prevKey.tonicPc !== curKey.tonicPc || prevKey.mode !== curKey.mode;
+}
+
+/** コード機能の表示文言。'D'/'P'は解決先があれば'D→II'/'P→II'の形にする。該当なしは空文字。 */
+function functionLabelOf(chord, key) {
+  const fn = chordFunction(chord, key);
+  if (!fn.kind) return '';
+  if (fn.kind === 'D' || fn.kind === 'P') return fn.resolvesTo ? `${fn.kind}→${fn.resolvesTo}` : fn.kind;
+  return fn.kind;
+}
+
+/** 現在スロット・HUD向けの表示3点セット（度数ラベル・機能・従来の音名）。entryが無ければnull。 */
+function chordDisplayInfo(entry) {
+  if (!entry) return null;
+  const keyObj = toKeyObj(entry.key);
+  return {
+    degreeLabel: degreeLabelOf(entry.chord, keyObj),
+    func: functionLabelOf(entry.chord, keyObj),
+    noteName: entry.chord.name,
+  };
+}
+
+function invalidateCandidates() {
+  candidateCache = null;
+}
+
+function syncControlsFromState() {
+  const k = keyAt(history);
+  if (tonicSelectEl) tonicSelectEl.value = String(((k.tonicMidi % 12) + 12) % 12);
+  if (modeSelectEl) modeSelectEl.value = k.mode;
+}
+
+function resetHistory() {
+  history = createHistory({ tonicMidi, mode });
+  undoStack = [];
+  redoStack = [];
+  invalidateCandidates();
+  syncControlsFromState();
+}
+
+function startSlide(direction) {
+  slideDirection = direction;
+  slideStart = performance.now();
+}
+
+function cellFromPoint(canvas, px, py) {
+  const layout = computeLayout(canvas);
+  const x = px;
+  const y = py - TOP_MARGIN;
+  if (y < 0) return null;
+
+  // 候補ブロック（縦方向は中央揃えなので、y=0(TOP_MARGIN)ではなくcandidateOriginYを基準にする）
+  if (x >= layout.candidateX) {
+    const localX = x - layout.candidateX;
+    const localY = py - layout.candidateOriginY;
+    const col = Math.floor(localX / layout.cellW);
+    const row = Math.floor(localY / layout.cellH);
+    if (col < 0 || col >= assistCols || row < 0 || row >= assistRows) return null;
+    return { kind: 'candidate', col, row, yRatio: (localY - row * layout.cellH) / layout.cellH };
+  }
+
+  // 現在コードスロット（過去/未来判定より先に見る必要がある。currentX位置は
+  // 「x < layout.currentX」が偽になる境界で、そのままだと未来列のfor loopにも
+  // 当たらず素通りしてしまうため、専用の判定をここに挟む）。3列（left/center/right）に
+  // 均等分割し、列によって用途を変える（mousedownハンドラ側: 左右=発音、中央=音量再調整）。
+  {
+    const half = CURRENT_SIZE / 2;
+    if (px >= layout.currentX - half && px < layout.currentX + half && py >= layout.slotY - half && py < layout.slotY + half) {
+      const localX = px - (layout.currentX - half);
+      const col = localX < CURRENT_SIZE / 3 ? 'left' : localX < (CURRENT_SIZE * 2) / 3 ? 'center' : 'right';
+      return { kind: 'current', col, yRatio: (py - (layout.slotY - half)) / CURRENT_SIZE };
+    }
+  }
+
+  // 過去コード列（現在スロットより左）。draw()と同じ並び: i=0が現在の直前(cursor-1)。
+  // pastGeomsはサイズがスロットごとに違うため、矩形（縦横とも）で判定する。当たり判定は
+  // PAST_HIT_MIN_SIZEを下限にして、極小スロットでもクリックできるようにする。
+  if (x < layout.currentX) {
+    for (const g of layout.pastGeoms) {
+      const hitSize = Math.max(PAST_HIT_MIN_SIZE, g.size);
+      if (px >= g.x - hitSize / 2 && px < g.x + hitSize / 2 && py >= g.y - hitSize / 2 && py < g.y + hitSize / 2) {
+        return { kind: 'past', index: history.cursor - 1 - g.index, yRatio: 0.5 };
+      }
+    }
+    return null;
+  }
+
+  // 未来コード列（現在スロットより右、候補ブロックより左）。固定サイズ・固定間隔のまま
+  // （過去列と違い縮小しない）。i=0が記録済みの直後(cursor+1)。
+  const futureCount = Math.min(MAX_FUTURE_SLOTS, history.entries.length - 1 - history.cursor);
+  for (let i = 0; i < futureCount; i++) {
+    const slotX = layout.currentX + FUTURE_SLOT_GAP * (i + 1);
+    if (x >= slotX - FUTURE_SLOT_SIZE / 2 && x < slotX + FUTURE_SLOT_SIZE / 2) {
+      return { kind: 'future', index: history.cursor + 1 + i, yRatio: 0.5 };
+    }
+  }
+  return null;
+}
+
+function computeLayout(canvas) {
+  const W = canvas.width;
+  const H = canvas.height;
+  // 過去/現在/未来スロットと候補ブロックは、ハンバーガーメニュー化で常時表示のUIが
+  // canvas上から無くなったため、同じ縦領域（TOP_MARGIN〜H-BOTTOM_MARGIN）を共有する。
+  const bodyH = Math.max(1, H - TOP_MARGIN - BOTTOM_MARGIN);
+  // 候補セルは正方形（横長だとセル内上下の位置＝ベロシティの変化が実感しにくいため）。
+  // 行数から決まる高さと、画面右端に収まる幅の両方で頭打ちにする（候補ブロックは右端寄せ）。
+  const cellSize = Math.min(84, bodyH / assistRows, (W - RIGHT_MARGIN) / assistCols);
+  const cellW = cellSize;
+  const cellH = cellSize;
+  const candidateX = W - assistCols * cellSize - RIGHT_MARGIN;
+  // 現在スロットは、候補ブロックの左に未来スロット最大MAX_FUTURE_SLOTS個分の領域を
+  // 確保した位置に置く。過去領域（0〜currentX）はウィンドウ幅に応じて自然に増減し、
+  // 狭ければ過去スロットが入るだけ表示される（個数の固定上限は持たない）。
+  const currentX = candidateX - (CURRENT_SIZE / 2 + MAX_FUTURE_SLOTS * FUTURE_SLOT_GAP + 16);
+  // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
+  const candidateOriginY = TOP_MARGIN + (bodyH - assistRows * cellH) / 2;
+  const slotY = TOP_MARGIN + bodyH / 2;
+  // count=cursor+1で、選択済みの過去コードに加えて「初期状態（"—"、まだ何も選んでいない状態）」
+  // へ戻るスロットを1つ多く確保する（history.cursor - 1 - g.index が -1 になる末尾のスロットが
+  // それに当たる。ユーザー要望: 一番最初のコードへは戻れるが、その手前の"—"状態にも戻れるように）
+  const pastGeoms = computePastSlotGeoms({
+    currentX,
+    currentSize: CURRENT_SIZE,
+    slotY,
+    baseSize: PAST_BASE_SIZE,
+    count: history.cursor + 1,
+    minSize: PAST_MIN_SIZE,
+    shrink: PAST_SHRINK,
+    gapRatio: PAST_GAP_RATIO,
+    leftMargin: PAST_LEFT_MARGIN,
+  });
+  return { W, H, bodyH, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms };
+}
+
+async function stopChord() {
+  const notes = sounding;
+  sounding = [];
+  for (const note of notes) {
+    await noteOff(CHORD_CHANNEL, note);
+  }
+}
+
+/**
+ * ピボット経由の転調が確定したかを判定し、新しいkey/pendingPivotを返す（historyへは反映しない）。
+ * 転調の確定は「候補調のトニック（I/i）そのものが鳴った瞬間」に限る（confirmsModulation）。
+ * セカンダリードミナント等で候補調に接近しただけ（approachesKey）ではまだ確定させず、
+ * その候補調へpendingPivotを絞り込んで持ち越す。無関係なコードを弾けば自然に外れる。
+ */
+function evaluateTheoryTransition(chord) {
+  const key = currentKeyObj();
+  const prevPivot = pendingPivotAt(history);
+  let newKey = { tonicMidi, mode };
+  let carriedPivotKeys = null;
+  if (prevPivot) {
+    const confirmed = prevPivot.keys.find((k) => confirmsModulation(chord, k));
+    if (confirmed) {
+      newKey = { tonicMidi: 60 + confirmed.tonicPc, mode: confirmed.mode };
+    } else {
+      const approaching = prevPivot.keys.filter((k) => approachesKey(chord, k, key));
+      if (approaching.length > 0) carriedPivotKeys = approaching;
+    }
+  }
+  const newKeyObj = { tonicPc: ((newKey.tonicMidi % 12) + 12) % 12, mode: newKey.mode };
+  const pivots = pivotKeysFor(chord, newKeyObj);
+  const newPendingPivot = pivots.length > 0 ? { keys: pivots } : carriedPivotKeys ? { keys: carriedPivotKeys } : null;
+  return { key: newKey, pendingPivot: newPendingPivot };
+}
+
+function applyKey(newKey) {
+  tonicMidi = newKey.tonicMidi;
+  mode = newKey.mode;
+  syncControlsFromState();
+}
+
+/** ALTキーを押している間だけ自動転回ON/OFFを反転した、実際に使う値。 */
+function effectiveAutoVoicing() {
+  return altHeld ? !autoVoicing : autoVoicing;
+}
+
+/** prevEntry（直前のコード、無ければnull）とkey（isStrongResolution判定用）を踏まえて、chordのボイシングを計算する。 */
+function computeVoicing(chord, prevEntry, key) {
+  const previousNotes = prevEntry ? prevEntry.voicing : [];
+  const centerMidi = 60 + 12 * baseOctave;
+  const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, key) : false;
+  return effectiveAutoVoicing()
+    ? voiceChord(chord, { previousNotes, centerMidi, requireRootInBass })
+    : rawVoicing(chord, baseOctave);
+}
+
+/** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
+function voicingFor(chord) {
+  return computeVoicing(chord, currentEntry(history), currentKeyObj());
+}
+
+/**
+ * 過去/未来コードをクリックして聞き直す際の再生用ボイシング。通常は選択時に焼き付けた
+ * entry.voicingをそのまま鳴らす（毎回同じ響きにする、というjumpToIndexの方針を維持）。
+ * ALT押下中だけは例外として、その場でcomputeVoicingにより実効の自動転回設定で
+ * 再計算する（保存済みのentry.voicing自体は書き換えない。ALTを離せば元の響きに戻る）。
+ */
+function voicingForPlayback(index) {
+  const entry = history.entries[index];
+  if (!altHeld) return entry.voicing;
+  const prevEntry = index > 0 ? history.entries[index - 1] : null;
+  const prevKey = toKeyObj(prevEntry ? prevEntry.key : history.initialKey);
+  return computeVoicing(entry.chord, prevEntry, prevKey);
+}
+
+/**
+ * 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。
+ * 編集操作なのでundoStackへ直前のhistoryを積み、redoStackは破棄する（一般的なUndo/Redoの規約）。
+ * velocity・voicingは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
+ */
+function commitSelection(chord, velocity) {
+  const { key, pendingPivot } = evaluateTheoryTransition(chord);
+  const voicing = voicingFor(chord);
+  undoStack.push(history);
+  redoStack = [];
+  history = selectChord(history, { chord, key, pendingPivot, velocity, voicing });
+  applyKey(key);
+  invalidateCandidates();
+  startSlide(1);
+}
+
+/**
+ * 自動転回ON/OFF・基準オクターブ設定を反映して、履歴全体のvoicingを先頭から計算し直す
+ * （各entryは新規オブジェクトとして作り直す。undoStackが古いentry参照を保持しているため、
+ * 既存entryを書き換えるとUndoスナップショットまで巻き込んで壊れる）。
+ */
+function revoiceHistory() {
+  const centerMidi = 60 + 12 * baseOctave;
+  let previousNotes = [];
+  let previousChord = null;
+  let previousKey = toKeyObj(history.initialKey);
+  const entries = history.entries.map((entry) => {
+    const requireRootInBass = previousChord ? isStrongResolution(previousChord, entry.chord, previousKey) : false;
+    const voicing = autoVoicing
+      ? voiceChord(entry.chord, { previousNotes, centerMidi, requireRootInBass })
+      : rawVoicing(entry.chord, baseOctave);
+    previousNotes = voicing;
+    previousChord = entry.chord;
+    previousKey = toKeyObj(entry.key);
+    return { ...entry, voicing };
+  });
+  history = { ...history, entries };
+}
+
+/** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。編集操作ではないためundo/redoスタックには積まない。 */
+function jumpToIndex(index) {
+  const direction = index < history.cursor ? -1 : 1;
+  history = jumpTo(history, index);
+  applyKey(keyAt(history));
+  invalidateCandidates();
+  startSlide(direction);
+}
+
+/** 直前のコード選択（過去へ戻った上での上書きも含む）を取り消し、その操作の直前のhistoryへ丸ごと復元する。 */
+function undoEdit() {
+  if (undoStack.length === 0) return;
+  redoStack.push(history);
+  history = undoStack.pop();
+  revoiceHistory(); // 現在の自動転回/基準オクターブ設定を常に反映させる
+  applyKey(keyAt(history));
+  invalidateCandidates();
+  startSlide(-1);
+}
+
+/** undoEditで取り消したコード選択をやり直す。 */
+function redoEdit() {
+  if (redoStack.length === 0) return;
+  undoStack.push(history);
+  history = redoStack.pop();
+  revoiceHistory();
+  applyKey(keyAt(history));
+  invalidateCandidates();
+  startSlide(1);
+}
+
+async function playChord(notes, velocity) {
+  await stopChord();
+  await applyLfoTo(CHORD_CHANNEL);
+  for (const note of notes) {
+    await noteOn(CHORD_CHANNEL, note, velocity);
+  }
+  sounding = notes.slice();
+}
+
+export function setupChordScreen(canvas, { onChordChange } = {}) {
+  canvas.addEventListener('mousemove', (e) => {
+    if (!isActive('chord')) return;
+    const cell = cellFromPoint(canvas, e.clientX, e.clientY);
+    hoverCandidate = cell?.kind === 'candidate' ? cell : null;
+    const nextHoverSlot = cell?.kind === 'past' || cell?.kind === 'future' ? cell : null;
+    // 同じスロットに留まっている間はstartTimeを保持する（Dock風拡大アニメーションの起点。
+    // 毎フレームリセットすると拡大が始まらない）。別スロットへ移ったときだけ計り直す。
+    if (nextHoverSlot?.kind !== hoverSlot?.kind || nextHoverSlot?.index !== hoverSlot?.index) {
+      hoverSlot = nextHoverSlot ? { ...nextHoverSlot, startTime: performance.now() } : null;
+    } else if (nextHoverSlot) {
+      hoverSlot = { ...hoverSlot, yRatio: nextHoverSlot.yRatio };
+    }
+  });
+
+  canvas.addEventListener('mousedown', async (e) => {
+    if (!isActive('chord') || e.button !== 0) return;
+    const cell = cellFromPoint(canvas, e.clientX, e.clientY);
+    if (!cell) return;
+    pointerHeld = true;
+
+    if (cell.kind === 'candidate') {
+      const grid = computeCandidates();
+      const found = grid.find((c) => c.col === cell.col && c.row === cell.row);
+      if (!found) {
+        pointerHeld = false;
+        return;
+      }
+      // 選択は保持時間に関わらず確定する（離しても現在コードとして残る）
+      const velocity = velocityFromCellY(cell.yRatio);
+      commitSelection(found.chord, velocity);
+      await playChord(currentEntry(history).voicing, velocity);
+    } else if (cell.kind === 'past' || cell.kind === 'future') {
+      // 過去・未来どちらも「その地点へ再生位置を移動するだけ」の操作にする。発音は
+      // 現在コードスロットのクリックでのみ行う（過去/未来クリックのたびに発音されると
+      // 「聞き直す」のか「移動するだけ」なのか区別できなかったため、役割を分離した）。
+      jumpToIndex(cell.index);
+      pointerHeld = false;
+    } else if (cell.kind === 'current') {
+      // 現在コードスロットは3列（左/中央/右）。中央列は「クリック位置に応じてベロシティを
+      // 再調整する」役割（移動なし）。左列は発音のみ（移動なし）。右列は発音した上で、
+      // 記録済みの未来（過去へ戻った際に残っている先のコード）があればそこへ再生位置を進める。
+      const entry = currentEntry(history);
+      if (!entry) {
+        pointerHeld = false;
+      } else if (cell.col === 'center') {
+        const velocity = velocityFromCellY(cell.yRatio);
+        undoStack.push(history);
+        redoStack = [];
+        history = updateVelocity(history, history.cursor, velocity);
+        await playChord(voicingForPlayback(history.cursor), velocity);
+      } else if (cell.col === 'right') {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        if (history.cursor < history.entries.length - 1) {
+          jumpToIndex(history.cursor + 1);
+        }
+      } else {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
+      }
+    }
+
+    if (!pointerHeld) {
+      await stopChord();
+    }
+    onChordChange?.(chordDisplayInfo(currentEntry(history)));
+  });
+
+  const release = async () => {
+    pointerHeld = false;
+    if (sounding.length === 0) return;
+    await stopChord();
+    onChordChange?.(chordDisplayInfo(currentEntry(history)));
+  };
+  canvas.addEventListener('mouseup', release);
+  canvas.addEventListener('mouseleave', release);
+  // 他の画面へ切り替えたときも、鳴りっぱなしを残さず止める（画面を跨いだ音の取りこぼし対策）
+  onScreenChange((next) => {
+    if (next !== 'chord') release();
+  });
+
+  window.addEventListener('keydown', async (e) => {
+    if (!isActive('chord')) return;
+    if (e.code === 'Space') {
+      // 現在コードスロットの左クリックに相当（移動なし）。押しっぱなしでの再トリガーは
+      // 抑止し、キーを離すまで音を保持する（stopは下のkeyupで行う。マウスホールドと同じ挙動）。
+      e.preventDefault();
+      if (e.repeat) return;
+      const entry = currentEntry(history);
+      if (entry) {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key.toLowerCase() === 'a' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 過去スロットクリックと同じ「移動のみ」（発音しない）
+      if (history.cursor > -1) {
+        jumpToIndex(history.cursor - 1);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key.toLowerCase() === 'd' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 未来スロットクリックと同じ「移動のみ」（発音しない）
+      if (history.cursor < history.entries.length - 1) {
+        jumpToIndex(history.cursor + 1);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key === 'Shift') {
+      shiftHeld = true;
+      invalidateCandidates();
+    } else if (e.key === 'Control') {
+      ctrlHeld = true;
+      invalidateCandidates();
+    } else if (e.key === 'Alt') {
+      // ブラウザ既定のAltキー副作用（メニューバーへのフォーカス移動等）を止める
+      e.preventDefault();
+      altHeld = true;
+      syncAutoVoicingToggleDisplay();
+    } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (e.shiftKey) redoEdit();
+      else undoEdit();
+      onChordChange?.(chordDisplayInfo(currentEntry(history)));
+    } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      redoEdit();
+      onChordChange?.(chordDisplayInfo(currentEntry(history)));
+    } else if (e.key === 'ArrowDown') {
+      assistRows = Math.max(MIN_ROWS, assistRows - 1);
+      invalidateCandidates();
+      syncRowsCols();
+    } else if (e.key === 'ArrowUp') {
+      assistRows = Math.min(MAX_ROWS, assistRows + 1);
+      invalidateCandidates();
+      syncRowsCols();
+    } else if (e.key === 'ArrowLeft') {
+      assistCols = Math.max(MIN_COLS, assistCols - 1);
+      invalidateCandidates();
+      syncRowsCols();
+    } else if (e.key === 'ArrowRight') {
+      assistCols = Math.min(MAX_COLS, assistCols + 1);
+      invalidateCandidates();
+      syncRowsCols();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (!isActive('chord')) return;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      release();
+    } else if (e.key === 'Shift') {
+      shiftHeld = false;
+      invalidateCandidates();
+    } else if (e.key === 'Control') {
+      ctrlHeld = false;
+      invalidateCandidates();
+    } else if (e.key === 'Alt') {
+      e.preventDefault();
+      altHeld = false;
+      syncAutoVoicingToggleDisplay();
+    }
+  });
+  // ウィンドウがフォーカスを失うとkeyupを取りこぼすため、押しっぱなし状態を解除する
+  window.addEventListener('blur', () => {
+    altHeld = false;
+    syncAutoVoicingToggleDisplay();
+    shiftHeld = false;
+    ctrlHeld = false;
+    invalidateCandidates();
+    release(); // Spaceキー押しっぱなし中のフォーカスロストで音が鳴りっぱなしになるのを防ぐ
+  });
+
+  return { draw: (ctx) => isActive('chord') && draw(ctx, canvas) };
+}
+
+let rowsInputEl = null;
+let colsInputEl = null;
+let autoVoicingToggleEl = null;
+function syncRowsCols() {
+  if (rowsInputEl) rowsInputEl.value = String(assistRows);
+  if (colsInputEl) colsInputEl.value = String(assistCols);
+}
+
+/** ALTキーの押下/解放時、自動転回チェックボックスの見た目だけ実効値に合わせる（autoVoicing本体は変えない）。 */
+function syncAutoVoicingToggleDisplay() {
+  if (autoVoicingToggleEl) autoVoicingToggleEl.checked = effectiveAutoVoicing();
+}
+
+/** 調・候補の行数/列数・自動転回/基準オクターブを切り替えるUIを配線する。 */
+export function bindChordScreenControls({
+  tonicSelect,
+  modeSelect,
+  rowsInput,
+  colsInput,
+  autoVoicingToggle,
+  baseOctaveInput,
+} = {}) {
+  tonicSelectEl = tonicSelect ?? null;
+  modeSelectEl = modeSelect ?? null;
+  rowsInputEl = rowsInput ?? null;
+  colsInputEl = colsInput ?? null;
+  autoVoicingToggleEl = autoVoicingToggle ?? null;
+
+  if (tonicSelect) {
+    NOTE_NAMES.forEach((name, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = name;
+      tonicSelect.appendChild(opt);
+    });
+    tonicSelect.value = String(DEFAULT_TONIC_MIDI % 12);
+    tonicSelect.addEventListener('change', async () => {
+      // 調が変わると同じ候補が別のコードを指すため、鳴りっぱなしを避けて止める
+      await stopChord();
+      await allNotesOff(CHORD_CHANNEL);
+      const pitchClass = parseInt(tonicSelect.value, 10) || 0;
+      tonicMidi = 60 + pitchClass;
+      resetHistory();
+    });
+  }
+
+  if (modeSelect) {
+    modeSelect.value = mode;
+    modeSelect.addEventListener('change', async () => {
+      await stopChord();
+      await allNotesOff(CHORD_CHANNEL);
+      mode = modeSelect.value === 'minor' ? 'minor' : 'major';
+      resetHistory();
+    });
+  }
+
+  if (rowsInput) {
+    rowsInput.value = String(assistRows);
+    rowsInput.addEventListener('input', () => {
+      const raw = parseInt(rowsInput.value, 10) || DEFAULT_ROWS;
+      assistRows = Math.max(MIN_ROWS, Math.min(MAX_ROWS, raw));
+      invalidateCandidates();
+    });
+  }
+
+  if (colsInput) {
+    colsInput.value = String(assistCols);
+    colsInput.addEventListener('input', () => {
+      const raw = parseInt(colsInput.value, 10) || DEFAULT_COLS;
+      assistCols = Math.max(MIN_COLS, Math.min(MAX_COLS, raw));
+      invalidateCandidates();
+    });
+  }
+
+  if (autoVoicingToggle) {
+    autoVoicingToggle.checked = autoVoicing;
+    autoVoicingToggle.addEventListener('change', () => {
+      autoVoicing = autoVoicingToggle.checked;
+      revoiceHistory();
+    });
+  }
+
+  if (baseOctaveInput) {
+    baseOctaveInput.value = String(baseOctave);
+    baseOctaveInput.addEventListener('input', () => {
+      const raw = parseInt(baseOctaveInput.value, 10);
+      baseOctave = Number.isFinite(raw) ? Math.max(MIN_BASE_OCTAVE, Math.min(MAX_BASE_OCTAVE, raw)) : 0;
+      revoiceHistory();
+    });
+  }
+}
+
+/**
+ * 進行テンプレート照合で使う基準キー＝「直近MAX_RECENT_HISTORY手の窓の先頭が選ばれた
+ * 時点で有効だったキー」で固定する（窓の中の個々の手ごとに毎回キーを引き直さない）。
+ *
+ * 理由: ピボットコード機構は「直前のコードが近親調との共通コードとして転調を予告し、
+ * 次のコードがその転調先で意味を持てば確定する」という設計。このとき確定させた
+ * コード自身は転調前のキー基準の度数（王道進行やJust the Two of Usのようなテンプレートの
+ * 一部）として選ばれているが、その直後から表示上のキー（currentKeyObj()）は転調後の
+ * 新キーに切り替わる。基準キーを「直前の1手が選ばれた時点のキー」のように毎回引き直すと、
+ * 転調を確定させた手自身は正しく扱えても、*その次*の手を評価する番になった瞬間に
+ * 参照点がずれてまた履歴が切れてしまう（実例: IV→IIIaug→ImMaj7で、IIIaug選択後は
+ * Just the Two of Us進行の継続が見えていたのに、ImMaj7を選んだ直後にまた消えた）。
+ * 窓の先頭1点だけを基準に固定すれば、窓の中で何度ピボットが確定してもキー計算がぶれない。
+ */
+function progressionAnchorKey() {
+  if (history.cursor < 0) return toKeyObj(history.initialKey);
+  const oldestIndex = Math.max(0, history.cursor - MAX_RECENT_HISTORY + 1);
+  return oldestIndex === 0 ? toKeyObj(history.initialKey) : toKeyObj(history.entries[oldestIndex - 1].key);
+}
+
+/**
+ * cursorから遡って直近MAX_RECENT_HISTORY手を、anchorKey基準の{degree, normFamily, suffix}の
+ * 配列（古い順）へ変換する。進行テンプレート照合専用（anchorKeyの定義はprogressionAnchorKey()参照。
+ * 窓の中で転調が確定していても、窓全体を一貫してanchorKey基準で解釈する）。
+ */
+function recentHistoryForProgressionMatch(anchorKey) {
+  const recent = [];
+  for (let i = history.cursor; i >= 0 && recent.length < MAX_RECENT_HISTORY; i--) {
+    const entry = history.entries[i];
+    recent.unshift({
+      degree: ((entry.chord.rootPc - anchorKey.tonicPc) % 12 + 12) % 12,
+      normFamily: normalizeFamily(entry.chord, anchorKey),
+      suffix: entry.chord.suffix,
+    });
+  }
+  return recent;
+}
+
+/** 候補グリッドを、状態が変わったときだけ再計算してキャッシュする。 */
+function computeCandidates() {
+  const key = currentKeyObj();
+  const progressionKey = progressionAnchorKey();
+  const entry = currentEntry(history);
+  const recent = recentHistoryForProgressionMatch(progressionKey);
+  const pendingPivot = pendingPivotAt(history);
+  const cacheKey = JSON.stringify({
+    from: entry ? { rootPc: entry.chord.rootPc, family: entry.chord.family } : null,
+    key,
+    shiftHeld,
+    ctrlHeld,
+    rows: assistRows,
+    cols: assistCols,
+    recent,
+    pendingPivot,
+  });
+  if (candidateCache && candidateCache.cacheKey === cacheKey) return candidateCache.grid;
+
+  const progressionMatches = matchProgressions(recent, progressionKey.mode);
+  const grid = computeCandidateGrid({
+    lastChord: entry?.chord ?? null,
+    key,
+    progressionKey,
+    tonicMidi,
+    shiftHeld,
+    ctrlHeld,
+    cols: assistCols,
+    rows: assistRows,
+    progressionMatches,
+    pendingPivot,
+  });
+  const legend = computeProgressionLegend({
+    lastChord: entry?.chord ?? null,
+    key,
+    progressionKey,
+    tonicMidi,
+    shiftHeld,
+    ctrlHeld,
+    progressionMatches,
+  });
+  candidateCache = { cacheKey, grid, legend };
+  return grid;
+}
+
+/** computeCandidates()と同じキャッシュを共有する進行テンプレート凡例。必ずcomputeCandidates()の後に呼ぶ。 */
+function currentLegend() {
+  return candidateCache?.legend ?? [];
+}
+
+/**
+ * 選択/Undo/Redoの直後だけ発生する演出用の状態を返す。
+ * offsetPx: 未来コード列だけの一時的な水平オフセット（0へ収束、従来どおり平行移動で演出）。
+ *   選択（前進）なら+1スロット分右から、Undo（後退）なら-1スロット分左から現在位置へ戻る。
+ * pastT: 過去コード列の位置・サイズ補間係数（0→1、draw()側でスロットごとにlerpする）。
+ * candidateAlpha: 候補ブロックのフェードイン係数（0→1）。
+ */
+function currentSlideState() {
+  if (slideDirection === 0) return { offsetPx: 0, pastT: 1, candidateAlpha: 1 };
+  const elapsed = performance.now() - slideStart;
+  const t = Math.min(1, elapsed / SLIDE_DURATION_MS);
+  const eased = 1 - (1 - t) ** 2; // ease-out
+  const startOffset = slideDirection > 0 ? FUTURE_SLOT_GAP : -FUTURE_SLOT_GAP;
+  const offsetPx = startOffset * (1 - eased);
+  if (t >= 1) slideDirection = 0;
+  return { offsetPx, pastT: eased, candidateAlpha: eased };
+}
+
+/** Dock風ホバー拡大の補間係数（0→1、ease-out）。過去スロットのホバー中のみ意味を持つ。 */
+function hoverExpandT() {
+  if (!hoverSlot || hoverSlot.kind !== 'past') return 0;
+  const elapsed = performance.now() - hoverSlot.startTime;
+  const t = Math.min(1, elapsed / HOVER_EXPAND_MS);
+  return 1 - (1 - t) ** 2;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+/**
+ * 選択時のベロシティを、スロット下端からの紺色の縦バーとして描く（0=バーなし、127=満タン）。
+ * velocityがnull/undefinedなら何も描かない（entryが無い＝未選択の枠にバーを付けないため）。
+ * バーの幅はスロットを均等3分割した中央列の幅（現在コードスロットの中央列＝音量表示・調整、
+ * 左右列＝発音／移動、という役割分担に合わせている。区切り線は表示しない）。
+ */
+function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
+  if (velocity == null) return;
+  const ratio = Math.max(0, Math.min(1, (velocity - VELOCITY_MIN) / (VELOCITY_MAX - VELOCITY_MIN)));
+  if (ratio <= 0) return;
+  const barW = size / 3;
+  const barH = size * ratio;
+  ctx.fillStyle = `rgba(${VELOCITY_BAR_COLOR}, ${alpha})`;
+  ctx.fillRect(slotX - barW / 2, slotY + size / 2 - barH, barW, barH);
+}
+
+/** スロット内テキスト1行の描画（フォント指定込み）。呼び出し側でtextAlign/Baselineは揃っている前提。 */
+function drawSlotText(ctx, text, x, y, size, alpha, color, bold) {
+  ctx.fillStyle = color;
+  ctx.font = `${bold ? 'bold ' : ''}${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
+  ctx.fillText(text, x, y);
+}
+
+/**
+ * 過去/未来スロット1個分の描画（対称デザインなので共通化）。sizeが可変（過去列は遠いほど
+ * 縮小する）ため、ラベルはサイズに応じて「度数+機能の2行」→「度数ラベルのみ」→
+ * 「度数のみ（品質を除く）」→「非表示」の4段階を切り替える。
+ * chord=nullは「まだ何も選んでいない"—"状態」へ戻るスロット（極小時は非表示、それ以外は"—"）。
+ * keyはchordがある場合のみ必須（{tonicPc, mode}形式、呼び出し側でtoKeyObj()済みのものを渡す）。
+ * showKeyLabelは、最初のコード／転調が確定したコードにだけ左上へキー名を添える（isKeyLabelSlot参照）。
+ */
+function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, velocity, showKeyLabel) {
+  ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
+  ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
+  drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
+  ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
+  ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
+
+  if (chord && showKeyLabel && size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = `rgba(215,220,230,${alpha * 0.8})`;
+    ctx.font = '11px monospace';
+    ctx.fillText(keyNameOf(key), slotX - size / 2 + 6, slotY - size / 2 + 6);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textColor = `rgba(220,220,220,${alpha})`;
+
+  if (!chord) {
+    if (size >= PAST_LABEL_ROOT_SIZE) drawSlotText(ctx, '—', slotX, slotY, size, alpha, textColor, false);
+    return;
+  }
+
+  if (size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
+    drawSlotText(ctx, degreeLabelOf(chord, key), slotX, slotY - size * 0.15, size, alpha, textColor, true);
+    const func = functionLabelOf(chord, key);
+    if (func) {
+      ctx.font = `bold ${Math.max(8, Math.min(12, Math.floor(size / 7)))}px monospace`;
+      ctx.fillStyle = `rgba(140,210,255,${alpha})`;
+      ctx.fillText(func, slotX, slotY + size * 0.24);
+    }
+  } else if (size >= PAST_LABEL_FULL_SIZE) {
+    drawSlotText(ctx, degreeLabelOf(chord, key), slotX, slotY, size, alpha, textColor, false);
+  } else if (size >= PAST_LABEL_ROOT_SIZE) {
+    drawSlotText(ctx, degreeName(chord, key), slotX, slotY, size, alpha, textColor, false);
+  }
+}
+
+function draw(ctx, canvas) {
+  const layout = computeLayout(canvas);
+  const { W, H, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms } = layout;
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  const { offsetPx, pastT, candidateAlpha } = currentSlideState();
+  const entry = currentEntry(history);
+
+  // 過去コード（現在スロットの左）。pastGeoms[i].indexが大きいほど遠い過去（cursor-1-index）。
+  // 選択/Undo直後だけ、1つ現在寄りのスロット（i=0の開始点は現在スロットそのもの）から
+  // pastTで位置・サイズを補間して飛んでくる。ホバー中のスロットはDock風拡大を後段で描くため、
+  // ここでは描かずスキップする。
+  for (let i = 0; i < pastGeoms.length; i++) {
+    const g = pastGeoms[i];
+    const idx = history.cursor - 1 - g.index;
+    const isInitial = idx === -1; // 「まだ何も選んでいない"—"状態」へ戻るスロット（末尾に1つだけ存在する）
+    const past = isInitial ? null : history.entries[idx];
+    if (!isInitial && !past) continue;
+    if (hoverSlot?.kind === 'past' && hoverSlot.index === idx) continue;
+    const startGeom =
+      slideDirection > 0
+        ? i === 0
+          ? { x: currentX, y: slotY, size: CURRENT_SIZE }
+          : pastGeoms[i - 1]
+        : slideDirection < 0
+          ? (pastGeoms[i + 1] ?? null)
+          : null;
+    const x = startGeom ? lerp(startGeom.x, g.x, pastT) : g.x;
+    const y = startGeom ? lerp(startGeom.y, g.y, pastT) : g.y;
+    const size = startGeom ? lerp(startGeom.size, g.size, pastT) : g.size;
+    const targetAlpha = Math.max(PAST_ALPHA_MIN, PAST_ALPHA_BASE * PAST_ALPHA_DECAY ** g.index);
+    const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
+    drawHistorySlot(
+      ctx,
+      isInitial ? null : past.chord,
+      isInitial ? null : toKeyObj(past.key),
+      x,
+      y,
+      size,
+      alpha,
+      false,
+      isInitial ? null : past.velocity,
+      isInitial ? false : isKeyLabelSlot(idx),
+    );
+  }
+
+  // 未来コード（現在スロットの右）。固定サイズ・固定間隔のまま、平行移動のみで演出する
+  ctx.save();
+  if (offsetPx !== 0) ctx.translate(offsetPx, 0);
+  const futureCount = Math.min(MAX_FUTURE_SLOTS, history.entries.length - 1 - history.cursor);
+  for (let i = 0; i < futureCount; i++) {
+    const idx = history.cursor + 1 + i;
+    const future = history.entries[idx];
+    if (!future) continue;
+    const slotX = currentX + FUTURE_SLOT_GAP * (i + 1);
+    const alpha = 0.75 - i * 0.18;
+    const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
+    drawHistorySlot(
+      ctx,
+      future.chord,
+      toKeyObj(future.key),
+      slotX,
+      slotY,
+      FUTURE_SLOT_SIZE,
+      alpha,
+      isHover,
+      future.velocity,
+      isKeyLabelSlot(idx),
+    );
+  }
+  ctx.restore();
+
+  // 現在コードのスロット（固定位置）
+  {
+    const size = CURRENT_SIZE;
+    const x = currentX;
+    const y = slotY;
+    ctx.fillStyle = sounding.length > 0 ? 'rgba(120,200,255,0.12)' : 'rgba(255,255,255,0.04)';
+    ctx.fillRect(x - size / 2, y - size / 2, size, size);
+    drawVelocityBar(ctx, x, y, size, entry?.velocity, VELOCITY_BAR_ALPHA_SCALE);
+    ctx.strokeStyle = '#eee';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - size / 2 + 1, y - size / 2 + 1, size - 2, size - 2);
+    const info = chordDisplayInfo(entry);
+    if (info) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText(info.degreeLabel, x, y - 6);
+      if (info.func) {
+        ctx.fillStyle = 'rgba(140,210,255,0.95)';
+        ctx.font = 'bold 13px monospace';
+        ctx.fillText(info.func, x, y + 18);
+      }
+      // 実コード名（音名）は右上に小さく併記（実際に楽器で確かめる場面への保険）
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = 'rgba(215,220,230,0.8)';
+      ctx.font = '11px monospace';
+      ctx.fillText(info.noteName, x + size / 2 - 6, y - size / 2 + 6);
+      // キー名（最初のコード／転調確定したコードのみ）は左上に併記
+      if (isKeyLabelSlot(history.cursor)) {
+        ctx.textAlign = 'left';
+        ctx.fillText(keyNameOf(toKeyObj(entry.key)), x - size / 2 + 6, y - size / 2 + 6);
+      }
+    } else {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('—', x, y);
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // ホバー中の過去スロットをDock風に拡大して手前へ再描画する（半透明オーバーレイと同じ理由で、
+  // 通常描画より後に描く必要がある。[[project_gesture_app_3screen_minidaw_redesign]]で踏んだ
+  // 「半透明オーバーレイは対象要素より後に描く」教訓の応用）。
+  if (hoverSlot?.kind === 'past') {
+    const hoverGeom = pastGeoms.find((g) => history.cursor - 1 - g.index === hoverSlot.index);
+    const isInitial = hoverSlot.index === -1;
+    const hoverEntry = isInitial ? null : history.entries[hoverSlot.index];
+    if (hoverGeom && (isInitial || hoverEntry)) {
+      const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
+      drawHistorySlot(
+        ctx,
+        isInitial ? null : hoverEntry.chord,
+        isInitial ? null : toKeyObj(hoverEntry.key),
+        hoverGeom.x,
+        hoverGeom.y,
+        size,
+        1,
+        true,
+        isInitial ? null : hoverEntry.velocity,
+        isInitial ? false : isKeyLabelSlot(hoverSlot.index),
+      );
+    }
+  }
+
+  // 候補ブロック（現在スロットの右）。過去コード＋現在スロットの移動には追従させず、
+  // 新しい状態へのフェードインだけを演出する。
+  ctx.save();
+  ctx.globalAlpha = candidateAlpha;
+  const grid = computeCandidates();
+  // カテゴリごとに今回のグリッド内での最高スコアを基準にする（固定の上限値だと理論上の
+  // 最高点が実際にはほぼ出ず、「一番明るい緑」がいつまでも半透明のまま純色の#00FF00に
+  // 届かなかったため、常にその場の最良候補が上限に届くよう相対化した）。
+  const categoryMaxScore = (category) => Math.max(0, ...grid.filter((c) => c.category === category).map((c) => c.score));
+  const maxByCategory = { GREEN: categoryMaxScore('GREEN'), YELLOW: categoryMaxScore('YELLOW'), null: categoryMaxScore(null) };
+  for (const cell of grid) {
+    const x = candidateX + cell.col * cellW;
+    const y = candidateOriginY + cell.row * cellH;
+    const categoryMax = maxByCategory[cell.category];
+    const clampedScore = categoryMax > 0 ? Math.max(0, Math.min(1, cell.score / categoryMax)) : 0;
+    // 色はカテゴリごとの固定色（原色）のまま変化させない。スコアの強弱は面積のみで表現する
+    // （色のグラデーションと面積を両方スコアに連動させると、候補群の点差が僅かな場面で
+    // 色の変化がほぼ見えず「明るいのに小さい/大きいのに暗い」という食い違って見える組み合わせが
+    // 出やすかったため、単一の指標（面積）に一本化した）。
+    // 暗い（スコアの低い）候補ほどセル中央基準で矩形を縮小する。最良候補（clampedScore=1）は
+    // セルいっぱいに描く（CANDIDATE_FILL_SIZE_MINが縮小の下限比率）。
+    const sizeRatio = CANDIDATE_FILL_SIZE_MIN + clampedScore * (1 - CANDIDATE_FILL_SIZE_MIN);
+    const fillW = (cellW - 2) * sizeRatio;
+    const fillH = (cellH - 2) * sizeRatio;
+    const fillX = x + cellW / 2 - fillW / 2;
+    const fillY = y + cellH / 2 - fillH / 2;
+    ctx.fillStyle =
+      cell.category === 'GREEN' ? 'rgb(0, 255, 0)' : cell.category === 'YELLOW' ? 'rgb(255, 255, 0)' : 'hsl(0, 0%, 50%)';
+    ctx.fillRect(fillX, fillY, fillW, fillH);
+    // ピボットコード（近親調との共通コード）は色を混ぜず、塗り矩形（面積で縮小された本体）の
+    // 周りを囲む太い青枠で示す（色のオーバーレイだとセル本体の固定原色という原則が崩れるため、
+    // 枠線に分離した。セルグリッド全体でなく塗り矩形に合わせることで、縮小にも追従する）。
+    if (cell.isPivot) {
+      ctx.strokeStyle = 'hsl(210, 90%, 60%)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(fillX + 1.5, fillY + 1.5, fillW - 3, fillH - 3);
+      ctx.lineWidth = 1;
+    }
+    // 直前までの手で絞り込まれた転調候補（pendingPivot）のトニックそのものに一致するセルは、
+    // 「ここを弾けば転調が確定する」ことを示す黄枠で囲む（isPivotの青枠＝まだ確定していない
+    // 将来の可能性とは別軸なので、両方trueなら両方描く＝二重枠になる）。
+    if (cell.confirmsPivot) {
+      ctx.strokeStyle = 'hsl(50, 100%, 55%)';
+      ctx.lineWidth = 3;
+      const inset = cell.isPivot ? 6 : 1.5; // 青枠と重なる場合は内側にずらして両方見えるようにする
+      const shrink = inset * 2;
+      ctx.strokeRect(fillX + inset, fillY + inset, fillW - shrink, fillH - shrink);
+      ctx.lineWidth = 1;
+    }
+  }
+
+  // 進行テンプレートの目印（セル右上の番号付き三角マーク）。同じセルに複数該当する場合は
+  // 右から左へ並べる。枠線より後・テキストより前に描く（重なり順は枠線→バッジ→テキスト）。
+  {
+    const badgeSize = Math.max(11, Math.min(16, Math.floor(cellW / 6)));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const cell of grid) {
+      if (!cell.progressionHints || cell.progressionHints.length === 0) continue;
+      const x = candidateX + cell.col * cellW;
+      const y = candidateOriginY + cell.row * cellH;
+      cell.progressionHints.forEach((hint, i) => {
+        const bx = x + cellW - 1 - badgeSize * (i + 1);
+        const by = y + 1;
+        ctx.fillStyle = PROGRESSION_BADGE_COLOR;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + badgeSize, by);
+        ctx.lineTo(bx + badgeSize, by + badgeSize);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.font = `bold ${Math.max(8, badgeSize - 5)}px monospace`;
+        ctx.fillText(String(hint.badgeIndex), bx + badgeSize * 0.6, by + badgeSize * 0.4);
+      });
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // ホバー中の候補セル。塗りの濃さがそのままベロシティの目安になる（候補セル本体より後に描く）
+  if (hoverCandidate) {
+    const velocity = velocityFromCellY(hoverCandidate.yRatio);
+    const alpha = 0.08 + (velocity / 127) * 0.18;
+    const x = candidateX + hoverCandidate.col * cellW;
+    const y = candidateOriginY + hoverCandidate.row * cellH;
+    ctx.fillStyle = `rgba(150, 190, 255, ${alpha})`;
+    ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+  }
+
+  // 候補セル名（度数ラベル＋機能の2行）
+  {
+    const keyObj = currentKeyObj();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const cell of grid) {
+      const x = candidateX + cell.col * cellW + cellW / 2;
+      const y = candidateOriginY + cell.row * cellH + cellH / 2;
+      // 緑/黄の原色背景は明るいため黒系文字、灰セルは暗い背景のままなので白系文字にする
+      const isColored = cell.category === 'GREEN' || cell.category === 'YELLOW';
+      ctx.font = `${Math.max(9, Math.min(14, Math.floor(cellW / 6)))}px monospace`;
+      ctx.fillStyle = isColored ? '#111' : '#ddd';
+      ctx.fillText(degreeLabelOf(cell.chord, keyObj), x, y - cellH * 0.16);
+      const func = functionLabelOf(cell.chord, keyObj);
+      if (func) {
+        ctx.font = `bold ${Math.max(7, Math.min(11, Math.floor(cellW / 8)))}px monospace`;
+        ctx.fillStyle = isColored ? 'rgba(20,20,60,0.8)' : '#aaa';
+        ctx.fillText(func, x, y + cellH * 0.24);
+      }
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.restore(); // globalAlphaを戻す
+
+  drawLayerHint(ctx, W, H);
+  drawProgressionLegend(ctx, W, candidateOriginY);
+}
+
+const LAYER_HINT_LABEL = { normal: '', shift: '(Shift)', ctrl: '(Ctrl)', ctrlShift: '(Ctrl+Shift)' };
+
+/**
+ * 進行テンプレートの凡例（候補グリッドのすぐ上、右揃え）。例: "① カノン進行 3/8　② 王道進行 2/4"。
+ * 次の一手が現在のレイヤーに無い場合は、切り替え先のレイヤー名を添える（例: "(Shift)"）。
+ */
+function drawProgressionLegend(ctx, W, candidateOriginY) {
+  const legend = currentLegend();
+  if (legend.length === 0) return;
+  const parts = legend.map((item) => {
+    const layers = layersContainingSuffix(item.targetSuffix);
+    const needsSwitch = layers.length > 0 && !layers.includes(item.currentLayerName);
+    const layerNote = needsSwitch ? ` ${LAYER_HINT_LABEL[layers[0]] || ''}` : '';
+    return `${BADGE_NUMERALS[item.badgeIndex] ?? item.badgeIndex} ${item.name} ${item.position}/${item.total}${layerNote}`;
+  });
+  ctx.textAlign = 'right';
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#dcc84a';
+  ctx.fillText(parts.join('　'), W - 18, candidateOriginY - 10);
+}
+
+function drawLayerHint(ctx, W, H) {
+  const label =
+    ctrlHeld && shiftHeld
+      ? 'aug/オルタードレイヤー (Ctrl+Shift)'
+      : ctrlHeld
+        ? 'sus/付加音レイヤー (Ctrl)'
+        : shiftHeld
+          ? '4和音レイヤー (Shift)'
+          : 'トライアドレイヤー';
+  const color = ctrlHeld || shiftHeld ? '#4af' : '#555';
+  ctx.textAlign = 'right';
+  ctx.font = '13px monospace';
+  ctx.fillStyle = color;
+  const keyLabel = `${NOTE_NAMES[((tonicMidi % 12) + 12) % 12]} ${mode === 'minor' ? 'Minor' : 'Major'}`;
+  ctx.fillText(`${label}　調 = ${keyLabel}`, W - 18, H - 22);
+}

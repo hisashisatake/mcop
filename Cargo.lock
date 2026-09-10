@@ -2037,7 +2037,6 @@ dependencies = [
 name = "gesture-app"
 version = "0.1.0"
 dependencies = [
- "op505-core",
  "serde",
  "tauri",
  "tauri-build",
