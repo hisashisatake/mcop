@@ -98,7 +98,7 @@ const MIN_ROWS = 3;
 const MAX_ROWS = 12;
 const MIN_COLS = 1;
 const MAX_COLS = 3;
-const DEFAULT_ROWS = 5;
+const DEFAULT_ROWS = 7;
 const MIN_BASE_OCTAVE = -2;
 const MAX_BASE_OCTAVE = 2;
 const DEFAULT_COLS = 3;
@@ -112,6 +112,7 @@ let baseOctave = 0; // 基準オクターブの手動±調整
 
 let shiftHeld = false;
 let ctrlHeld = false;
+let altHeld = false; // 押している間だけ自動転回ON/OFFを反転する一時トグル
 let hoverCandidate = null; // {col, row, yRatio}
 let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用）
 let sounding = []; // 発音中のノート番号
@@ -317,13 +318,18 @@ function applyKey(newKey) {
   syncControlsFromState();
 }
 
+/** ALTキーを押している間だけ自動転回ON/OFFを反転した、実際に使う値。 */
+function effectiveAutoVoicing() {
+  return altHeld ? !autoVoicing : autoVoicing;
+}
+
 /** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
 function voicingFor(chord) {
   const prevEntry = currentEntry(history);
   const previousNotes = prevEntry ? prevEntry.voicing : [];
   const centerMidi = 60 + 12 * baseOctave;
   const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, currentKeyObj()) : false;
-  return autoVoicing
+  return effectiveAutoVoicing()
     ? voiceChord(chord, { previousNotes, centerMidi, requireRootInBass })
     : rawVoicing(chord, baseOctave);
 }
@@ -479,6 +485,11 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     } else if (e.key === 'Control') {
       ctrlHeld = true;
       invalidateCandidates();
+    } else if (e.key === 'Alt') {
+      // ブラウザ既定のAltキー副作用（メニューバーへのフォーカス移動等）を止める
+      e.preventDefault();
+      altHeld = true;
+      syncAutoVoicingToggleDisplay();
     } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       if (e.shiftKey) redoEdit();
@@ -514,10 +525,16 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     } else if (e.key === 'Control') {
       ctrlHeld = false;
       invalidateCandidates();
+    } else if (e.key === 'Alt') {
+      e.preventDefault();
+      altHeld = false;
+      syncAutoVoicingToggleDisplay();
     }
   });
   // ウィンドウがフォーカスを失うとkeyupを取りこぼすため、押しっぱなし状態を解除する
   window.addEventListener('blur', () => {
+    altHeld = false;
+    syncAutoVoicingToggleDisplay();
     shiftHeld = false;
     ctrlHeld = false;
     invalidateCandidates();
@@ -528,9 +545,15 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
 
 let rowsInputEl = null;
 let colsInputEl = null;
+let autoVoicingToggleEl = null;
 function syncRowsCols() {
   if (rowsInputEl) rowsInputEl.value = String(assistRows);
   if (colsInputEl) colsInputEl.value = String(assistCols);
+}
+
+/** ALTキーの押下/解放時、自動転回チェックボックスの見た目だけ実効値に合わせる（autoVoicing本体は変えない）。 */
+function syncAutoVoicingToggleDisplay() {
+  if (autoVoicingToggleEl) autoVoicingToggleEl.checked = effectiveAutoVoicing();
 }
 
 /** 調・候補の行数/列数・自動転回/基準オクターブを切り替えるUIを配線する。 */
@@ -546,6 +569,7 @@ export function bindChordScreenControls({
   modeSelectEl = modeSelect ?? null;
   rowsInputEl = rowsInput ?? null;
   colsInputEl = colsInput ?? null;
+  autoVoicingToggleEl = autoVoicingToggle ?? null;
 
   if (tonicSelect) {
     NOTE_NAMES.forEach((name, i) => {
