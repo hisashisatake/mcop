@@ -83,7 +83,7 @@ const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの�
 const HOVER_EXPAND_MS = 120;
 
 // 選択時のベロシティをスロット下端からの紺色バーで可視化する（過去・未来・現在の全スロット共通、
-// スロットを均等3分割した中央列の幅で描く。drawColumnDividers参照）。
+// 現在スロットの中央列幅＝スロット全体の1/3に合わせて描く）。
 // 過去/未来クリックは「その地点へ移動するだけ」で発音・ベロシティとも変更しない。ベロシティを
 // 実際に書き換えられる（＝再調整できる）のは現在コードスロットの中央列クリックのみ。
 const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
@@ -502,8 +502,9 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       jumpToIndex(cell.index);
       pointerHeld = false;
     } else if (cell.kind === 'current') {
-      // 現在コードスロットは3列（左/中央/右）。中央列だけ「クリック位置に応じてベロシティを
-      // 再調整する」特別な役割を持ち、左右列は従来どおりベロシティを変えず発音するだけ。
+      // 現在コードスロットは3列（左/中央/右）。中央列は「クリック位置に応じてベロシティを
+      // 再調整する」役割（移動なし）。左列は発音のみ（移動なし）。右列は発音した上で、
+      // 記録済みの未来（過去へ戻った際に残っている先のコード）があればそこへ再生位置を進める。
       const entry = currentEntry(history);
       if (!entry) {
         pointerHeld = false;
@@ -513,6 +514,11 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
         redoStack = [];
         history = updateVelocity(history, history.cursor, velocity);
         await playChord(voicingForPlayback(history.cursor), velocity);
+      } else if (cell.col === 'right') {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        if (history.cursor < history.entries.length - 1) {
+          jumpToIndex(history.cursor + 1);
+        }
       } else {
         await playChord(voicingForPlayback(history.cursor), entry.velocity);
       }
@@ -816,8 +822,8 @@ function lerp(a, b, t) {
 /**
  * 選択時のベロシティを、スロット下端からの紺色の縦バーとして描く（0=バーなし、127=満タン）。
  * velocityがnull/undefinedなら何も描かない（entryが無い＝未選択の枠にバーを付けないため）。
- * バーの幅はスロットを均等3分割した中央列の幅（スロット自体を3列に区切って見せるdrawColumnDividers
- * と対になる。中央列＝音量表示・調整、左右列＝発音／移動、という役割分担を視覚化する）。
+ * バーの幅はスロットを均等3分割した中央列の幅（現在コードスロットの中央列＝音量表示・調整、
+ * 左右列＝発音／移動、という役割分担に合わせている。区切り線は表示しない）。
  */
 function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
   if (velocity == null) return;
@@ -827,20 +833,6 @@ function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
   const barH = size * ratio;
   ctx.fillStyle = `rgba(${VELOCITY_BAR_COLOR}, ${alpha})`;
   ctx.fillRect(slotX - barW / 2, slotY + size / 2 - barH, barW, barH);
-}
-
-/** スロットを均等な3列（左/中央/右）に分ける薄い区切り線。極小スロットでは線が潰れるため呼び出し側でサイズを条件分岐する。 */
-function drawColumnDividers(ctx, slotX, slotY, size, alpha) {
-  ctx.strokeStyle = `rgba(180,180,180,${alpha * 0.4})`;
-  ctx.lineWidth = 1;
-  const x1 = slotX - size / 6;
-  const x2 = slotX + size / 6;
-  ctx.beginPath();
-  ctx.moveTo(x1, slotY - size / 2);
-  ctx.lineTo(x1, slotY + size / 2);
-  ctx.moveTo(x2, slotY - size / 2);
-  ctx.lineTo(x2, slotY + size / 2);
-  ctx.stroke();
 }
 
 /** スロット内テキスト1行の描画（フォント指定込み）。呼び出し側でtextAlign/Baselineは揃っている前提。 */
@@ -862,7 +854,6 @@ function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, ve
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
-  if (chord && size >= PAST_LABEL_ROOT_SIZE) drawColumnDividers(ctx, slotX, slotY, size, alpha);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
@@ -980,7 +971,6 @@ function draw(ctx, canvas) {
     ctx.fillStyle = sounding.length > 0 ? 'rgba(120,200,255,0.12)' : 'rgba(255,255,255,0.04)';
     ctx.fillRect(x - size / 2, y - size / 2, size, size);
     drawVelocityBar(ctx, x, y, size, entry?.velocity, VELOCITY_BAR_ALPHA_SCALE);
-    if (entry) drawColumnDividers(ctx, x, y, size, 1);
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 2;
     ctx.strokeRect(x - size / 2 + 1, y - size / 2 + 1, size - 2, size - 2);
