@@ -36,7 +36,10 @@
         <stack gap="spacing">
           <row justify="start" gap="spacing">
             <knob label="ALG" handle="algorithm"/>
+          </row>
+          <row justify="start" gap="spacing">
             <knob label="FB" handle="feedback"/>
+            <knob label="FB.VEL" handle="feedback_velocity_sens"/>
           </row>
           <row justify="start" gap="spacing">
             <knob label="FIXED NOTE" handle="fixed_note"/>

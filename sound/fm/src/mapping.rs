@@ -201,6 +201,16 @@ pub fn feedback_to_scale_with_max(feedback: u8, max: f32) -> f32 {
     max * table[feedback as usize]
 }
 
+/// フィードバックのベロシティ感度深さ(0〜255) × ベロシティ(0〜127) →
+/// `feedback_to_scale_with_max`の出力へ乗算する倍率。V.GAIN/VELの[carrier_velocity_gain]と
+/// 同じ線形カーブ（depth=255で強打時1.0・弱打ほど小さくなる、depth=0＝既定で常時1.0＝
+/// ベロシティに関わらずフィードバックが変化しない＝既存パッチの出力をビット単位で保つ）。
+pub fn feedback_velocity_scale(depth: u8, velocity: u8) -> f32 {
+    let velocity_gain = velocity_to_volume_gain(velocity);
+    let d = depth as f32 / 255.0;
+    1.0 - d * (1.0 - velocity_gain)
+}
+
 /// オペレーター間FM変調の深さスケール（固定の内部定数、暫定値）。
 /// 実機FM音源にチャンネル単位の「PM感度」相当のパラメーターは無く、
 /// モジュレーターのTL（出力レベル）がそのまま変調量になる。

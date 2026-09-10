@@ -322,6 +322,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -857,6 +858,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -1392,6 +1394,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -1927,6 +1930,7 @@
         "channel": {
           "algorithm": 4,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -2462,6 +2466,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -2997,6 +3002,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -3532,6 +3538,7 @@
         "channel": {
           "algorithm": 0,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -4067,6 +4074,7 @@
         "channel": {
           "algorithm": 4,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,
@@ -4602,6 +4610,7 @@
         "channel": {
           "algorithm": 7,
           "feedback": 108,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,

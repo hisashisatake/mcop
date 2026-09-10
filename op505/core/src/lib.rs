@@ -51,8 +51,8 @@ use std::collections::BTreeMap;
 use modulation_curves::{ams_to_depth, pms_to_cents_range};
 use sound_fm::algorithm::ALGORITHMS;
 use sound_fm::mapping::{
-    carrier_velocity_gain, feedback_to_scale_with_max, fixed_note_fine_to_cents, frequency_to_note,
-    note_to_frequency, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
+    carrier_velocity_gain, feedback_to_scale_with_max, feedback_velocity_scale, fixed_note_fine_to_cents,
+    frequency_to_note, note_to_frequency, velocity_to_volume_gain, FM_MODULATION_INDEX_SCALE,
 };
 use sound_fm::waveform::{self, gen_builtin_waveform};
 use operator::Operator;
@@ -355,6 +355,12 @@ pub fn standard_tremolo_gain_eg(delay_seconds: f32, hz: f32) -> TimeEgParams {
 pub struct Op505ChannelParams {
     pub algorithm: u8,
     pub feedback: u8,
+    /// フィードバックのベロシティ感度深さ(0〜255)。V.GAIN/VELと同じ線形カーブで、強打ほど
+    /// フィードバック量が増える（`feedback_velocity_scale`参照）。既定0＝ベロシティに
+    /// 関わらずフィードバックが変化しない（既存`.op505`バンクには存在しないフィールドのため
+    /// `#[serde(default)]`で既存プリセットの出力をビット単位で保つ）。
+    #[serde(default)]
+    pub feedback_velocity_sens: u8,
     pub filter_cutoff: u8,
     pub filter_resonance: u8,
     pub filter_type: u8,
@@ -435,6 +441,7 @@ impl Default for Op505ChannelParams {
         Self {
             algorithm: 0,
             feedback: 0,
+            feedback_velocity_sens: 0,
             filter_cutoff: 255,
             filter_resonance: 0,
             filter_type: 0,
@@ -745,7 +752,8 @@ impl Channel {
             }
             if op_idx == algo.feedback_op {
                 let fb_source = 0.5 * (self.feedback_buffer + self.feedback_buffer2);
-                let scale = feedback_to_scale_with_max(self.channel_params.feedback, FEEDBACK_SCALE_MAX);
+                let scale = feedback_to_scale_with_max(self.channel_params.feedback, FEEDBACK_SCALE_MAX)
+                    * feedback_velocity_scale(self.channel_params.feedback_velocity_sens, self.velocity);
                 modulation += fb_source * scale;
             }
             let wave = wave_table_for(wave_tables, self.operators[op_idx].params.waveform);
