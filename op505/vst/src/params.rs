@@ -95,8 +95,8 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
 /// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
 /// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
 /// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
-/// **DAWパラメーター数（70個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
-/// 62+8、2026-09-04のDelay Sync/Delay Sync Rate追加で60+8=68→62+8=70）はこの束が
+/// **DAWパラメーター数（71個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
+/// 63+8、2026-09-10のFeedback Velocity Sens追加で62+8=70→63+8=71）はこの束が
 /// `#[persist]`である限り不変**——段数拡張はここに収まる値の中身が増えるだけで、
 /// DAWから見えるパラメーター一覧には影響しない（実数は`param_ids_are_frozen`テストで凍結済み）。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -184,6 +184,8 @@ pub(crate) struct Op505VstParams {
     pub algorithm: IntParam,
     #[id = "feedback"]
     pub feedback: IntParam,
+    #[id = "feedback_vel_sens"]
+    pub feedback_velocity_sens: IntParam,
     #[id = "cutoff"]
     pub cutoff: IntParam,
     #[id = "resonance"]
@@ -261,6 +263,7 @@ impl Default for Op505VstParams {
         Self {
             algorithm: int_param(IntField::Patch(PatchInt::Algorithm)),
             feedback: int_param(IntField::Patch(PatchInt::Feedback)),
+            feedback_velocity_sens: int_param(IntField::Patch(PatchInt::FeedbackVelocitySens)),
             cutoff: int_param(IntField::Patch(PatchInt::Cutoff)),
             resonance: int_param(IntField::Patch(PatchInt::Resonance)),
             filter_type: int_param(IntField::Patch(PatchInt::FilterType)),
@@ -318,6 +321,7 @@ pub(crate) fn build_patch(p: &Op505VstParams, egs: &Op505EgBank) -> Op505Patch {
     let channel = Op505ChannelParams {
         algorithm: p.algorithm.value() as u8,
         feedback: p.feedback.value() as u8,
+        feedback_velocity_sens: p.feedback_velocity_sens.value() as u8,
         filter_cutoff: p.cutoff.value() as u8,
         filter_resonance: p.resonance.value() as u8,
         filter_type: p.filter_type.value() as u8,
@@ -409,6 +413,7 @@ pub(crate) fn int_param_ref(params: &Op505VstParams, field: IntField) -> &IntPar
     match field {
         IntField::Patch(PatchInt::Algorithm) => &params.algorithm,
         IntField::Patch(PatchInt::Feedback) => &params.feedback,
+        IntField::Patch(PatchInt::FeedbackVelocitySens) => &params.feedback_velocity_sens,
         IntField::Patch(PatchInt::FixedNote) => &params.fixed_note,
         IntField::Patch(PatchInt::FixedNoteFine) => &params.fixed_note_fine,
         IntField::Patch(PatchInt::Cutoff) => &params.cutoff,
@@ -506,6 +511,7 @@ mod tests {
         let mut expected: Vec<String> = [
             "algorithm",
             "feedback",
+            "feedback_vel_sens",
             "cutoff",
             "resonance",
             "filter_type",

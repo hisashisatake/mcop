@@ -488,6 +488,10 @@ impl ChannelState {
             ControlTarget::DelaySyncRate => {
                 DataEntryOutcome::Effect(self.effect_route_slot, EffectControlTarget::DelaySyncRate, cc_byte_to_u8(raw_value))
             }
+            ControlTarget::FeedbackVelocitySens => {
+                self.overrides.feedback_velocity_sens = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
             ControlTarget::Unassigned => DataEntryOutcome::StateChanged { voice_update: false },
         }
     }
@@ -571,6 +575,19 @@ mod tests {
         assert_eq!(eff.channel.pitch_fg.depth, 201);
         assert_eq!(eff.channel.cutoff_fg.depth, 201);
         assert_eq!(eff.channel.gain_fg.depth, 201);
+    }
+
+    /// NRPN(0,38) Feedback Velocity Sens：`PatchOverrides`経由で絶対上書きし、発音中ボイスへの
+    /// 即時反映は不要（`needs_voice_update`がfalse、FG Depth等と同じ通常の周期同期経路に乗る）。
+    #[test]
+    fn nrpn_feedback_velocity_sens_overrides_apply_absolute_value() {
+        let mut st = ChannelState::new(0, false);
+        select_nrpn(&mut st, 0, 38);
+        assert_eq!(st.apply_data_entry(100), DataEntryOutcome::StateChanged { voice_update: true });
+        assert_eq!(st.overrides.feedback_velocity_sens, Some(201));
+
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert_eq!(eff.channel.feedback_velocity_sens, 201);
     }
 
     /// NRPN(0,1) Channel Effect Route は`effect_route_slot`を書き換え、

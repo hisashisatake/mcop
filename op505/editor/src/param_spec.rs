@@ -104,11 +104,12 @@ impl OpInt {
     }
 }
 
-/// チャンネル単位＋オペレーター単位のintパラメーター（MASTER EFFECTSを除く50個）。
+/// チャンネル単位＋オペレーター単位のintパラメーター（MASTER EFFECTSを除く51個）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatchInt {
     Algorithm,
     Feedback,
+    FeedbackVelocitySens,
     FixedNote,
     FixedNoteFine,
     Cutoff,
@@ -119,11 +120,12 @@ pub enum PatchInt {
 }
 
 impl PatchInt {
-    /// 50個（チャンネル単一7 + FgDepth3 + Op(4×10)40）を全列挙する。
+    /// 51個（チャンネル単一8 + FgDepth3 + Op(4×10)40）を全列挙する。
     pub fn all() -> Vec<PatchInt> {
         let mut out = vec![
             PatchInt::Algorithm,
             PatchInt::Feedback,
+            PatchInt::FeedbackVelocitySens,
             PatchInt::FixedNote,
             PatchInt::FixedNoteFine,
             PatchInt::Cutoff,
@@ -145,6 +147,14 @@ impl PatchInt {
             PatchInt::Feedback => {
                 IntSpec { min: 0, max: 255, default: 0, short_name: "Feedback", daw_name: "Feedback", daw_bipolar: false }
             }
+            PatchInt::FeedbackVelocitySens => IntSpec {
+                min: 0,
+                max: 255,
+                default: 0,
+                short_name: "FB.VEL",
+                daw_name: "Feedback Velocity Sens",
+                daw_bipolar: false,
+            },
             PatchInt::FixedNote => {
                 IntSpec { min: 0, max: 127, default: 60, short_name: "Fixed Note", daw_name: "Fixed Note", daw_bipolar: false }
             }
@@ -447,7 +457,7 @@ mod tests {
 
     #[test]
     fn enum_counts_match_plan() {
-        assert_eq!(IntField::all().len(), 62, "IntField（Patch 50 + Fx 12）");
+        assert_eq!(IntField::all().len(), 63, "IntField（Patch 51 + Fx 12）");
         assert_eq!(BoolField::ALL.len(), 8, "BoolField（単一4 + Ame×4）");
         assert_eq!(EgSlot::ALL.len(), 7, "EgSlot（Op×4 + Fg×3）");
     }

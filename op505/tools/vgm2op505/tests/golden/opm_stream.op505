@@ -322,6 +322,7 @@
         "channel": {
           "algorithm": 7,
           "feedback": 0,
+          "feedback_velocity_sens": 0,
           "filter_cutoff": 255,
           "filter_resonance": 0,
           "filter_type": 0,

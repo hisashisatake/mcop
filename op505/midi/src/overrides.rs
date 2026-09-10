@@ -19,6 +19,8 @@ use op505_core::Op505Patch;
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct PatchOverrides {
     pub algorithm: Option<u8>,
+    /// NRPN(0,38) Feedback Velocity Sens（0〜255）の絶対上書き。
+    pub feedback_velocity_sens: Option<u8>,
     pub operator_waveforms: [Option<u8>; 4],
     pub filter_type: Option<u8>,
     pub filter_self_oscillation: Option<bool>,
@@ -47,6 +49,9 @@ impl PatchOverrides {
     pub fn apply(&self, patch: &mut Op505Patch) {
         if let Some(v) = self.algorithm {
             patch.channel.algorithm = v;
+        }
+        if let Some(v) = self.feedback_velocity_sens {
+            patch.channel.feedback_velocity_sens = v;
         }
         for (i, wf) in self.operator_waveforms.iter().enumerate() {
             if let Some(v) = wf {
@@ -127,6 +132,7 @@ mod tests {
         let mut patch = base;
         let overrides = PatchOverrides {
             algorithm: Some(5),
+            feedback_velocity_sens: Some(240),
             operator_waveforms: [Some(9), None, Some(3), None],
             filter_type: Some(2),
             filter_self_oscillation: Some(false),
@@ -145,6 +151,7 @@ mod tests {
         };
         overrides.apply(&mut patch);
         assert_eq!(patch.channel.algorithm, 5);
+        assert_eq!(patch.channel.feedback_velocity_sens, 240);
         assert_eq!(patch.operators[0].waveform, 9);
         assert_eq!(patch.operators[1].waveform, base.operators[1].waveform);
         assert_eq!(patch.operators[2].waveform, 3);
@@ -169,6 +176,7 @@ mod tests {
     fn clear_resets_all_fields_to_none() {
         let mut overrides = PatchOverrides {
             algorithm: Some(5),
+            feedback_velocity_sens: Some(240),
             operator_waveforms: [Some(9); 4],
             filter_type: Some(2),
             filter_self_oscillation: Some(false),

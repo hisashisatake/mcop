@@ -124,6 +124,7 @@ pub fn read_int(p: &Op505Patch, field: PatchInt) -> i32 {
     match field {
         PatchInt::Algorithm => p.channel.algorithm as i32,
         PatchInt::Feedback => p.channel.feedback as i32,
+        PatchInt::FeedbackVelocitySens => p.channel.feedback_velocity_sens as i32,
         PatchInt::FixedNote => p.channel.fixed_note as i32,
         PatchInt::FixedNoteFine => p.channel.fixed_note_fine as i32,
         PatchInt::Cutoff => p.channel.filter_cutoff as i32,
@@ -140,6 +141,7 @@ fn write_int(p: &mut Op505Patch, field: PatchInt, value: i32) {
     match field {
         PatchInt::Algorithm => p.channel.algorithm = value as u8,
         PatchInt::Feedback => p.channel.feedback = value as u8,
+        PatchInt::FeedbackVelocitySens => p.channel.feedback_velocity_sens = value as u8,
         PatchInt::FixedNote => p.channel.fixed_note = value as u8,
         PatchInt::FixedNoteFine => p.channel.fixed_note_fine = value as u8,
         PatchInt::Cutoff => p.channel.filter_cutoff = value as u8,

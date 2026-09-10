@@ -105,6 +105,10 @@ pub enum ControlTarget {
     /// NRPN(0,37): Delay/Panning Delayの同期先レート（0〜255、TimeEgの`sync_rate`と同じ
     /// 20音価アンカー＋幾何補間）。
     DelaySyncRate,
+    /// NRPN(0,38): Feedback Velocity Sens（0〜255）の絶対上書き。`PatchOverrides`経由
+    /// （Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」）。V.GAIN/VELと同じ線形カーブで
+    /// フィードバック量をベロシティ感度化する（`Op505ChannelParams::feedback_velocity_sens`）。
+    FeedbackVelocitySens,
 }
 
 /// RPN/NRPN選択状態から制御対象を解決する。
@@ -148,6 +152,7 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 35) => ControlTarget::Cc4Destination,
         RpnSelection::Nrpn(0, 36) => ControlTarget::DelaySync,
         RpnSelection::Nrpn(0, 37) => ControlTarget::DelaySyncRate,
+        RpnSelection::Nrpn(0, 38) => ControlTarget::FeedbackVelocitySens,
         RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
     }
 }
@@ -193,7 +198,8 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::Cc2Destination
         | ControlTarget::Cc4Destination
         | ControlTarget::DelaySync
-        | ControlTarget::DelaySyncRate => false,
+        | ControlTarget::DelaySyncRate
+        | ControlTarget::FeedbackVelocitySens => false,
     }
 }
 

@@ -32,6 +32,7 @@ pub fn build_panel_params<'a>(src: &'a dyn PanelParamSource) -> Op505PanelParams
     Op505PanelParams {
         algorithm: src.int(IntField::Patch(PatchInt::Algorithm)),
         feedback: src.int(IntField::Patch(PatchInt::Feedback)),
+        feedback_velocity_sens: src.int(IntField::Patch(PatchInt::FeedbackVelocitySens)),
         fixed_note_enable: src.boolean(BoolField::FixedNoteEnable),
         fixed_note: src.int(IntField::Patch(PatchInt::FixedNote)),
         fixed_note_fine: src.int(IntField::Patch(PatchInt::FixedNoteFine)),
