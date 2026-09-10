@@ -13,6 +13,27 @@ const MIN_OCTAVE = 1; // baseRoot探索の下限（chord.rootPc + 12*1 = 12〜23
 const MAX_OCTAVE = 8; // baseRoot探索の上限（chord.rootPc + 12*8 = 96〜107付近）
 const REGISTER_WEIGHT = 0.15; // 音域アンカー（centerMidiへの近さ）の重み。声部移動コストに対する相対的な強さ
 const ROTATION_PENALTY = 0.01; // 同コストなら基本形（回転なし）を優先するタイブレーク
+const DENSITY_PENALTY_MINOR2ND = 3.0; // 隣接音が短2度(1半音)の密集ペナルティ。強い濁りとして重く減点
+const DENSITY_PENALTY_MAJOR2ND = 0.4; // 隣接音が長2度(2半音)の密集ペナルティ
+
+/**
+ * 隣接する音同士が短2度・長2度で密集していることへのペナルティ。
+ * テンション（9th等）は常にintervalの値としては基準ルートの上に固定されるが、
+ * コアトーンの転回で1オクターブ以上持ち上げられると、ソート後の実際の並びでは
+ * テンションより上に来てテンションを追い越すことがある。この場合テンションが
+ * 転回後のコアトーンに挟まれて中間に埋もれ、隣接音程が極端に狭くなり濁って聞こえる。
+ * voiceLeadingCost/centerMidiとの近さだけでは検出できないため、実際に鳴る音の並び
+ * （notes、ソート済み）を見て直接評価する。
+ */
+function densityPenalty(notes) {
+  let penalty = 0;
+  for (let i = 1; i < notes.length; i++) {
+    const gap = notes[i] - notes[i - 1];
+    if (gap === 1) penalty += DENSITY_PENALTY_MINOR2ND;
+    else if (gap === 2) penalty += DENSITY_PENALTY_MAJOR2ND;
+  }
+  return penalty;
+}
 
 /** 直前のボイシングとの声部移動コスト（新しい各音を、直前ボイシング中の最も近い音へ寄せた距離の平均）。 */
 function voiceLeadingCost(notes, previousNotes) {
@@ -63,7 +84,8 @@ export function voiceChord(chord, { previousNotes = [], centerMidi = 60, require
       const cost =
         voiceLeadingCost(notes, previousNotes) +
         REGISTER_WEIGHT * Math.abs(centroid(notes) - centerMidi) +
-        ROTATION_PENALTY * k;
+        ROTATION_PENALTY * k +
+        densityPenalty(notes);
 
       if (cost < bestCost) {
         bestCost = cost;

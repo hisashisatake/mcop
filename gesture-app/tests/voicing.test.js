@@ -109,6 +109,18 @@ test('requireRootInBass: 移動量最小化だけだとバスが根音に着地�
   assert.equal(((cVoicingForced[0] % 12) + 12) % 12, c.rootPc, 'requireRootInBass指定時はバスが根音になるべき');
 });
 
+test('voiceChordは短2度(半音)で密集する配置を選ばない（テンションがコアトーンの転回に埋もれて濁る問題の回帰テスト）', () => {
+  // maj9のコアトーン(0,4,7,11)が転回で1オクターブ上がると、11(長7度)と12(オクターブ上の
+  // ルート)が半音で隣接し、さらに9th(14)がその間に埋もれる形になっていた
+  const maj9Def = NORMAL_LAYER.find((d) => d.suffix === 'maj9');
+  for (let rootPc = 0; rootPc < 12; rootPc++) {
+    const notes = voiceChord({ rootPc, intervals: maj9Def.intervals }, { previousNotes: [], centerMidi: 60 });
+    for (let i = 1; i < notes.length; i++) {
+      assert.notEqual(notes[i] - notes[i - 1], 1, `半音で密集: root=${rootPc} notes=[${notes.join(',')}]`);
+    }
+  }
+});
+
 test('voiceChordはMIDI範囲[0,127]を超えるボイシングを選ばない', () => {
   const chord = chordFor(0, '13');
   const notes = voiceChord(chord, { previousNotes: [], centerMidi: 60 });

@@ -107,7 +107,7 @@ let tonicMidi = DEFAULT_TONIC_MIDI;
 let mode = 'major'; // 'major' | 'minor'
 let assistRows = DEFAULT_ROWS;
 let assistCols = DEFAULT_COLS;
-let autoVoicing = true; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
+let autoVoicing = false; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
 let baseOctave = 0; // 基準オクターブの手動±調整
 
 let shiftHeld = false;
