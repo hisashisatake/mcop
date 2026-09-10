@@ -247,3 +247,11 @@ export function jumpTo(state, index) {
   if (index < -1 || index > state.entries.length - 1) return state;
   return { ...state, cursor: index };
 }
+
+/** 現在コードスロットの中央列クリック（音量再調整）用。指定indexのentryのvelocityだけを差し替える。範囲外なら変化なし。 */
+export function updateVelocity(state, index, velocity) {
+  if (index < 0 || index >= state.entries.length) return state;
+  const entries = state.entries.slice();
+  entries[index] = { ...entries[index], velocity };
+  return { ...state, entries };
+}

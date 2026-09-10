@@ -48,6 +48,7 @@ import {
   pendingPivotAt,
   selectChord,
   jumpTo,
+  updateVelocity,
 } from './chord-flow.js';
 import { matchProgressions } from './progressions.js';
 import { computePastSlotGeoms } from './chord-layout.js';
@@ -81,10 +82,10 @@ const PAST_LABEL_ROOT_SIZE = 28; // これ以上なら度数のみ（品質を�
 const HOVER_EXPAND_SIZE = 72; // 過去スロットにホバーしたときの拡大サイズ（Dock風）
 const HOVER_EXPAND_MS = 120;
 
-// 選択時のベロシティをスロット下端からの紺色バーで可視化する（過去・未来・現在の全スロット共通）。
-// 再選択（過去/未来クリックでの再生位置移動）ではこの値を書き換えない — entryは選択時に確定した
-// ベロシティを保持したまま、発音だけは常に一定のベロシティで行う（cellFromPointが過去/未来に
-// yRatio=0.5固定を返すため自然にそうなる）。
+// 選択時のベロシティをスロット下端からの紺色バーで可視化する（過去・未来・現在の全スロット共通、
+// スロットを均等3分割した中央列の幅で描く。drawColumnDividers参照）。
+// 過去/未来クリックは「その地点へ移動するだけ」で発音・ベロシティとも変更しない。ベロシティを
+// 実際に書き換えられる（＝再調整できる）のは現在コードスロットの中央列クリックのみ。
 const VELOCITY_BAR_COLOR = '40, 70, 150'; // 紺色
 const VELOCITY_BAR_ALPHA_SCALE = 0.55; // ラベル文字の可読性を保つため、スロットのalphaより少し抑える
 
@@ -233,6 +234,19 @@ function cellFromPoint(canvas, px, py) {
     const row = Math.floor(localY / layout.cellH);
     if (col < 0 || col >= assistCols || row < 0 || row >= assistRows) return null;
     return { kind: 'candidate', col, row, yRatio: (localY - row * layout.cellH) / layout.cellH };
+  }
+
+  // 現在コードスロット（過去/未来判定より先に見る必要がある。currentX位置は
+  // 「x < layout.currentX」が偽になる境界で、そのままだと未来列のfor loopにも
+  // 当たらず素通りしてしまうため、専用の判定をここに挟む）。3列（left/center/right）に
+  // 均等分割し、列によって用途を変える（mousedownハンドラ側: 左右=発音、中央=音量再調整）。
+  {
+    const half = CURRENT_SIZE / 2;
+    if (px >= layout.currentX - half && px < layout.currentX + half && py >= layout.slotY - half && py < layout.slotY + half) {
+      const localX = px - (layout.currentX - half);
+      const col = localX < CURRENT_SIZE / 3 ? 'left' : localX < (CURRENT_SIZE * 2) / 3 ? 'center' : 'right';
+      return { kind: 'current', col, yRatio: (py - (layout.slotY - half)) / CURRENT_SIZE };
+    }
   }
 
   // 過去コード列（現在スロットより左）。draw()と同じ並び: i=0が現在の直前(cursor-1)。
@@ -482,15 +496,25 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       commitSelection(found.chord, velocity);
       await playChord(currentEntry(history).voicing, velocity);
     } else if (cell.kind === 'past' || cell.kind === 'future') {
-      // 過去・未来どちらも「その地点へ再生位置を移動する」操作として対称に扱う。
-      // 過去の最奥（"—"＝まだ何も選んでいない初期状態）へ移動した場合はentryが無いため
-      // 発音しない（returnはしない — stopChord/onChordChangeの共通処理へは進む必要がある）
+      // 過去・未来どちらも「その地点へ再生位置を移動するだけ」の操作にする。発音は
+      // 現在コードスロットのクリックでのみ行う（過去/未来クリックのたびに発音されると
+      // 「聞き直す」のか「移動するだけ」なのか区別できなかったため、役割を分離した）。
       jumpToIndex(cell.index);
+      pointerHeld = false;
+    } else if (cell.kind === 'current') {
+      // 現在コードスロットは3列（左/中央/右）。中央列だけ「クリック位置に応じてベロシティを
+      // 再調整する」特別な役割を持ち、左右列は従来どおりベロシティを変えず発音するだけ。
       const entry = currentEntry(history);
-      if (entry) {
-        await playChord(voicingForPlayback(cell.index), velocityFromCellY(cell.yRatio));
-      } else {
+      if (!entry) {
         pointerHeld = false;
+      } else if (cell.col === 'center') {
+        const velocity = velocityFromCellY(cell.yRatio);
+        undoStack.push(history);
+        redoStack = [];
+        history = updateVelocity(history, history.cursor, velocity);
+        await playChord(voicingForPlayback(history.cursor), velocity);
+      } else {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
       }
     }
 
@@ -792,14 +816,31 @@ function lerp(a, b, t) {
 /**
  * 選択時のベロシティを、スロット下端からの紺色の縦バーとして描く（0=バーなし、127=満タン）。
  * velocityがnull/undefinedなら何も描かない（entryが無い＝未選択の枠にバーを付けないため）。
+ * バーの幅はスロットを均等3分割した中央列の幅（スロット自体を3列に区切って見せるdrawColumnDividers
+ * と対になる。中央列＝音量表示・調整、左右列＝発音／移動、という役割分担を視覚化する）。
  */
 function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
   if (velocity == null) return;
   const ratio = Math.max(0, Math.min(1, (velocity - VELOCITY_MIN) / (VELOCITY_MAX - VELOCITY_MIN)));
   if (ratio <= 0) return;
+  const barW = size / 3;
   const barH = size * ratio;
   ctx.fillStyle = `rgba(${VELOCITY_BAR_COLOR}, ${alpha})`;
-  ctx.fillRect(slotX - size / 2, slotY + size / 2 - barH, size, barH);
+  ctx.fillRect(slotX - barW / 2, slotY + size / 2 - barH, barW, barH);
+}
+
+/** スロットを均等な3列（左/中央/右）に分ける薄い区切り線。極小スロットでは線が潰れるため呼び出し側でサイズを条件分岐する。 */
+function drawColumnDividers(ctx, slotX, slotY, size, alpha) {
+  ctx.strokeStyle = `rgba(180,180,180,${alpha * 0.4})`;
+  ctx.lineWidth = 1;
+  const x1 = slotX - size / 6;
+  const x2 = slotX + size / 6;
+  ctx.beginPath();
+  ctx.moveTo(x1, slotY - size / 2);
+  ctx.lineTo(x1, slotY + size / 2);
+  ctx.moveTo(x2, slotY - size / 2);
+  ctx.lineTo(x2, slotY + size / 2);
+  ctx.stroke();
 }
 
 /** スロット内テキスト1行の描画（フォント指定込み）。呼び出し側でtextAlign/Baselineは揃っている前提。 */
@@ -821,6 +862,7 @@ function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, ve
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
+  if (chord && size >= PAST_LABEL_ROOT_SIZE) drawColumnDividers(ctx, slotX, slotY, size, alpha);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
@@ -938,6 +980,7 @@ function draw(ctx, canvas) {
     ctx.fillStyle = sounding.length > 0 ? 'rgba(120,200,255,0.12)' : 'rgba(255,255,255,0.04)';
     ctx.fillRect(x - size / 2, y - size / 2, size, size);
     drawVelocityBar(ctx, x, y, size, entry?.velocity, VELOCITY_BAR_ALPHA_SCALE);
+    if (entry) drawColumnDividers(ctx, x, y, size, 1);
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 2;
     ctx.strokeRect(x - size / 2 + 1, y - size / 2 + 1, size - 2, size - 2);

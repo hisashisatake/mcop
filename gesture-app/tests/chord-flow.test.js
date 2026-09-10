@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCandidateGrid, createHistory, keyAt, currentEntry, pendingPivotAt, selectChord, jumpTo } from '../src/chord-flow.js';
+import {
+  computeCandidateGrid,
+  createHistory,
+  keyAt,
+  currentEntry,
+  pendingPivotAt,
+  selectChord,
+  jumpTo,
+  updateVelocity,
+} from '../src/chord-flow.js';
 import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.js';
 
 const TONIC_MIDI = 60; // C4
@@ -259,5 +268,26 @@ test('history: jumpToは範囲外なら変化しない', () => {
   h = jumpTo(h, 5);
   assert.equal(h, before);
   h = jumpTo(h, -2);
+  assert.equal(h, before);
+});
+
+test('history: updateVelocityは指定indexのvelocityだけを差し替える', () => {
+  let h = createHistory(INITIAL_KEY);
+  h = selectChord(h, { ...entryFor('C'), velocity: 80 });
+  h = selectChord(h, { ...entryFor('F'), velocity: 90 });
+  h = updateVelocity(h, 0, 127);
+  assert.equal(h.entries[0].velocity, 127);
+  assert.equal(h.entries[0].chord.name, 'C'); // 他のフィールドは保持される
+  assert.equal(h.entries[1].velocity, 90); // 対象外のentryは変化しない
+  assert.equal(h.cursor, 1); // cursorは変化しない
+});
+
+test('history: updateVelocityは範囲外なら変化しない', () => {
+  let h = createHistory(INITIAL_KEY);
+  h = selectChord(h, { ...entryFor('C'), velocity: 80 });
+  const before = h;
+  h = updateVelocity(h, 5, 127);
+  assert.equal(h, before);
+  h = updateVelocity(h, -1, 127);
   assert.equal(h, before);
 });
