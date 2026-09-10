@@ -543,9 +543,31 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     if (next !== 'chord') release();
   });
 
-  window.addEventListener('keydown', (e) => {
+  window.addEventListener('keydown', async (e) => {
     if (!isActive('chord')) return;
-    if (e.key === 'Shift') {
+    if (e.code === 'Space') {
+      // 現在コードスロットの左クリックに相当（移動なし）。押しっぱなしでの再トリガーは
+      // 抑止し、キーを離すまで音を保持する（stopは下のkeyupで行う。マウスホールドと同じ挙動）。
+      e.preventDefault();
+      if (e.repeat) return;
+      const entry = currentEntry(history);
+      if (entry) {
+        await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key.toLowerCase() === 'a' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 過去スロットクリックと同じ「移動のみ」（発音しない）
+      if (history.cursor > -1) {
+        jumpToIndex(history.cursor - 1);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key.toLowerCase() === 'd' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 未来スロットクリックと同じ「移動のみ」（発音しない）
+      if (history.cursor < history.entries.length - 1) {
+        jumpToIndex(history.cursor + 1);
+        onChordChange?.(chordDisplayInfo(currentEntry(history)));
+      }
+    } else if (e.key === 'Shift') {
       shiftHeld = true;
       invalidateCandidates();
     } else if (e.key === 'Control') {
@@ -585,7 +607,10 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
   });
   window.addEventListener('keyup', (e) => {
     if (!isActive('chord')) return;
-    if (e.key === 'Shift') {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      release();
+    } else if (e.key === 'Shift') {
       shiftHeld = false;
       invalidateCandidates();
     } else if (e.key === 'Control') {
@@ -604,6 +629,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     shiftHeld = false;
     ctrlHeld = false;
     invalidateCandidates();
+    release(); // Spaceキー押しっぱなし中のフォーカスロストで音が鳴りっぱなしになるのを防ぐ
   });
 
   return { draw: (ctx) => isActive('chord') && draw(ctx, canvas) };
