@@ -159,6 +159,24 @@ function degreeLabelOf(chord, key) {
   return degreeName(chord, key) + chord.suffix;
 }
 
+/** キー名の表示文言。例: 'C' / 'Am'。 */
+function keyNameOf(key) {
+  return NOTE_NAMES[key.tonicPc] + (key.mode === 'minor' ? 'm' : '');
+}
+
+/**
+ * history.entries[index]の左上にキー名を表示すべきか。最初のコード（index===0）と、
+ * 直前のエントリからキーが変わった（＝転調が確定した）コードだけを対象にする
+ * （毎スロットに出すと転調の節目が埋もれるため）。indexが範囲外（初期"—"状態）はfalse。
+ */
+function isKeyLabelSlot(index) {
+  if (index < 0 || index >= history.entries.length) return false;
+  if (index === 0) return true;
+  const prevKey = toKeyObj(history.entries[index - 1].key);
+  const curKey = toKeyObj(history.entries[index].key);
+  return prevKey.tonicPc !== curKey.tonicPc || prevKey.mode !== curKey.mode;
+}
+
 /** コード機能の表示文言。'D'/'P'は解決先があれば'D→II'/'P→II'の形にする。該当なしは空文字。 */
 function functionLabelOf(chord, key) {
   const fn = chordFunction(chord, key);
@@ -779,13 +797,22 @@ function drawSlotText(ctx, text, x, y, size, alpha, color, bold) {
  * 「度数のみ（品質を除く）」→「非表示」の4段階を切り替える。
  * chord=nullは「まだ何も選んでいない"—"状態」へ戻るスロット（極小時は非表示、それ以外は"—"）。
  * keyはchordがある場合のみ必須（{tonicPc, mode}形式、呼び出し側でtoKeyObj()済みのものを渡す）。
+ * showKeyLabelは、最初のコード／転調が確定したコードにだけ左上へキー名を添える（isKeyLabelSlot参照）。
  */
-function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, velocity) {
+function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, velocity, showKeyLabel) {
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
+
+  if (chord && showKeyLabel && size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = `rgba(215,220,230,${alpha * 0.8})`;
+    ctx.font = '11px monospace';
+    ctx.fillText(keyNameOf(key), slotX - size / 2 + 6, slotY - size / 2 + 6);
+  }
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -855,6 +882,7 @@ function draw(ctx, canvas) {
       alpha,
       false,
       isInitial ? null : past.velocity,
+      isInitial ? false : isKeyLabelSlot(idx),
     );
   }
 
@@ -869,7 +897,18 @@ function draw(ctx, canvas) {
     const slotX = currentX + FUTURE_SLOT_GAP * (i + 1);
     const alpha = 0.75 - i * 0.18;
     const isHover = hoverSlot?.kind === 'future' && hoverSlot.index === idx;
-    drawHistorySlot(ctx, future.chord, toKeyObj(future.key), slotX, slotY, FUTURE_SLOT_SIZE, alpha, isHover, future.velocity);
+    drawHistorySlot(
+      ctx,
+      future.chord,
+      toKeyObj(future.key),
+      slotX,
+      slotY,
+      FUTURE_SLOT_SIZE,
+      alpha,
+      isHover,
+      future.velocity,
+      isKeyLabelSlot(idx),
+    );
   }
   ctx.restore();
 
@@ -902,6 +941,11 @@ function draw(ctx, canvas) {
       ctx.fillStyle = 'rgba(215,220,230,0.8)';
       ctx.font = '11px monospace';
       ctx.fillText(info.noteName, x + size / 2 - 6, y - size / 2 + 6);
+      // キー名（最初のコード／転調確定したコードのみ）は左上に併記
+      if (isKeyLabelSlot(history.cursor)) {
+        ctx.textAlign = 'left';
+        ctx.fillText(keyNameOf(toKeyObj(entry.key)), x - size / 2 + 6, y - size / 2 + 6);
+      }
     } else {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -931,6 +975,7 @@ function draw(ctx, canvas) {
         1,
         true,
         isInitial ? null : hoverEntry.velocity,
+        isInitial ? false : isKeyLabelSlot(hoverSlot.index),
       );
     }
   }
