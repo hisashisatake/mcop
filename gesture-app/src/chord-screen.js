@@ -92,7 +92,7 @@ const CANDIDATE_FILL_SIZE_MIN = 0.4; // 候補セルの塗り矩形の最小サ�
 
 const MAX_RECENT_HISTORY = 12; // 進行テンプレート照合に使う直近手数の上限（最長テンプレート=12小節ブルースに合わせる）
 const PROGRESSION_BADGE_COLOR = '#ffcc00';
-const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）
+const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③', 4: '④', 5: '⑤' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）。6件目以降は半角数字にフォールバック
 
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;

@@ -302,7 +302,7 @@ function windowMatches(recentTail, steps, endIndex, n) {
  * @returns {Array<{id: string, name: string, matchedLength: number, position: number, total: number, next: ProgressionStep}>}
  *   一致した手数の長い順、最大maxResults件（次の一手が無い＝非cyclicで末尾到達したものは含まない）
  */
-export function matchProgressions(recent, mode, { minMatch = 2, maxResults = 3 } = {}) {
+export function matchProgressions(recent, mode, { minMatch = 2, maxResults = Infinity } = {}) {
   const results = [];
   for (const prog of PROGRESSIONS) {
     if (prog.mode !== mode) continue;
