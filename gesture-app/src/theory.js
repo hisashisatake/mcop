@@ -216,10 +216,16 @@ export function classifyProgression(fromChord, toChord, key) {
   const isModalBorrow = !toIsDiatonic && isDiatonicInOppositeMode(toChord, key);
 
   // パッシングディミニッシュは「半音上がダイアトニックコードへ解決し、かつその解決先が
-  // 機能的に隣接している」場合に限定する
+  // 機能的に隣接している」場合に限定する。ただし「直前のコードの半音上」という
+  // 典型的な経過和音の形そのものであれば、isReachableDegreeの機能的隣接チェックを
+  // 免除する（例: Dm→D#dim→Emはfrom=S/to=Tの遷移が0.62でしきい値0.80に届かず
+  // 取りこぼしていたが、形そのものがパッシングディミニッシュとして自明なため）
   const passingDiminishedTarget = mod12(toDegree + 1);
+  const isChromaticApproachFromCurrent = mod12(toDegree - fromDegree) === 1;
   const isPassingDiminished =
-    toNormFamily === 'dim' && rootDegrees.includes(passingDiminishedTarget) && isReachableDegree(passingDiminishedTarget);
+    toNormFamily === 'dim' &&
+    rootDegrees.includes(passingDiminishedTarget) &&
+    (isReachableDegree(passingDiminishedTarget) || isChromaticApproachFromCurrent);
 
   const isDominantDegree = toDegree === vDegree || isSecondaryDominant;
   // augレイヤー由来（7#9#5/7#5/7b9/7b5/aug/maj7#5）は、ドミナント機能の度数に
@@ -330,8 +336,8 @@ export function degreeName(chord, key) {
 }
 
 /**
- * コード機能。{ kind: 'T'|'SD'|'D'|null, resolvesTo: 度数名|null }
- * resolvesToはkind==='D'のときだけ非nullになりうる（表示側で 'D→II' 等を組み立てる）。
+ * コード機能。{ kind: 'T'|'SD'|'D'|'P'|null, resolvesTo: 度数名|null }
+ * resolvesToはkind==='D'または'P'のときだけ非nullになりうる（表示側で 'D→II' 等を組み立てる）。
  *
  * 判定順（コード単体で決まる必要があるため、直前コードに依存するclassifyProgressionの
  * isReachableDegreeとは別ロジック）:
@@ -341,14 +347,22 @@ export function degreeName(chord, key) {
  *         V7本来の解決先（I）へ向かう裏コードとして扱う（例: Db7→I、G7の裏）
  *      どちらにも当たらなければresolvesTo=null（例: Eb7 — 半音下のD自体はダイアトニックだが、
  *      Eb7はV7の裏でもセカンダリードミナントでもなく、単体では明確な解決先を持たない）
- *   2. 現在のキーのFUNCTION_LOOKUPで度数から引く（ダイアトニックコード）
- *   3. 同主調（メジャー⇔マイナー）のFUNCTION_LOOKUPで同じ度数を引く（借用和音）
- *   4. 該当なしはkind=null
+ *   2. familyも含めて現在のキーにダイアトニックに属する場合のみ、FUNCTION_LOOKUPで
+ *      機能を引く（度数だけの一致では判定しない — 例えばDmaj(度数2)は「メジャーキーの
+ *      度数2=ii(min)」と度数が一致するだけで、family(maj)がiiとは別物なのでここには乗らない）
+ *   3. 同主調（メジャー⇔マイナー）でfamilyも含めてダイアトニックに属する場合のみ、
+ *      そちらのFUNCTION_LOOKUPで機能を引く（借用和音。こちらも度数だけの一致では判定しない —
+ *      例えばD#dim(度数3)は「Cマイナーの度数3=Ebmaj」と度数が一致するだけで、
+ *      family(dim)がCマイナーのbIII(maj)とは別物なのでフォールバックしない）
+ *   4. normalizeFamily===dimなら、半音上がダイアトニック根音のときに限り経過和音(P)として
+ *      その解決先を返す（パッシングディミニッシュ）
+ *   5. 該当なしはkind=null
  */
 export function chordFunction(chord, key) {
   const degree = mod12(chord.rootPc - key.tonicPc);
+  const nf = normalizeFamily(chord, key);
 
-  if (normalizeFamily(chord, key) === 'dom') {
+  if (nf === 'dom') {
     const rootDegrees = diatonicRootDegrees(key);
     const V_DEGREE = 7;
     const fourthUpTarget = mod12(degree + 5);
@@ -361,6 +375,24 @@ export function chordFunction(chord, key) {
     return { kind: 'D', resolvesTo };
   }
 
-  const fn = FUNCTION_LOOKUP[key.mode][degree] ?? FUNCTION_LOOKUP[key.mode === 'major' ? 'minor' : 'major'][degree];
-  return { kind: fn ? (fn === 'S' ? 'SD' : fn) : null, resolvesTo: null };
+  if (isDiatonic(chord, key)) {
+    const fn = FUNCTION_LOOKUP[key.mode][degree];
+    return { kind: fn === 'S' ? 'SD' : fn, resolvesTo: null };
+  }
+
+  if (isDiatonicInOppositeMode(chord, key)) {
+    const oppositeMode = key.mode === 'major' ? 'minor' : 'major';
+    const oppositeFn = FUNCTION_LOOKUP[oppositeMode][degree];
+    return { kind: oppositeFn === 'S' ? 'SD' : oppositeFn, resolvesTo: null };
+  }
+
+  if (nf === 'dim') {
+    const rootDegrees = diatonicRootDegrees(key);
+    const passingTarget = mod12(degree + 1);
+    if (rootDegrees.includes(passingTarget)) {
+      return { kind: 'P', resolvesTo: DEGREE_NAMES[passingTarget] };
+    }
+  }
+
+  return { kind: null, resolvesTo: null };
 }

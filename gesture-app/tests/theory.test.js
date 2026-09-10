@@ -246,3 +246,26 @@ test('chordFunction: G7sus4もnormalizeFamily経由でdomへ正規化されD判�
   const g7sus4 = chordFor(G, rowIndexOf(CTRL_LAYER, '7sus4'), { ctrl: true });
   assert.equal(chordFunction(g7sus4, C_MAJOR).kind, 'D');
 });
+
+test('chordFunction: 同主調フォールバックはfamilyも検証する（Dmajは度数だけならCマイナーのiiと一致するが、familyがhalfdimと違うためkind=null）', () => {
+  const dmaj = chordFor(D, rowIndexOf(NORMAL_LAYER, ''));
+  assert.equal(chordFunction(dmaj, C_MAJOR).kind, null);
+});
+
+test('chordFunction: 非ダイアトニックなdimは半音上がダイアトニックなら経過和音としてP→◯を返す（Ebdim→Eへの経過音）', () => {
+  const ebdim = chordFor(Eb, rowIndexOf(CTRL_SHIFT_LAYER, 'dim'), { ctrl: true, shift: true });
+  const result = chordFunction(ebdim, C_MAJOR);
+  assert.equal(result.kind, 'P');
+  assert.equal(result.resolvesTo, 'III');
+});
+
+test('chordFunction: 半音上も非ダイアトニックなdimは経過和音にもならずkind=null（Fdim）', () => {
+  const fdim = chordFor(F, rowIndexOf(CTRL_SHIFT_LAYER, 'dim'), { ctrl: true, shift: true });
+  assert.equal(chordFunction(fdim, C_MAJOR).kind, null);
+});
+
+test('classifyProgression: Dm→Ebdimは機能的隣接チェックを免除され取りこぼさずYELLOW（直前コードの半音上という経過和音の形そのもの）', () => {
+  const dm = chordFor(D, rowIndexOf(NORMAL_LAYER, 'm'));
+  const ebdim = chordFor(Eb, rowIndexOf(CTRL_SHIFT_LAYER, 'dim'), { ctrl: true, shift: true });
+  assert.equal(classifyProgression(dm, ebdim, C_MAJOR).category, 'YELLOW');
+});

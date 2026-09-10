@@ -158,11 +158,11 @@ function degreeLabelOf(chord, key) {
   return degreeName(chord, key) + chord.suffix;
 }
 
-/** コード機能の表示文言。'D'は解決先があれば'D→II'の形にする。該当なしは空文字。 */
+/** コード機能の表示文言。'D'/'P'は解決先があれば'D→II'/'P→II'の形にする。該当なしは空文字。 */
 function functionLabelOf(chord, key) {
   const fn = chordFunction(chord, key);
   if (!fn.kind) return '';
-  if (fn.kind === 'D') return fn.resolvesTo ? `D→${fn.resolvesTo}` : 'D';
+  if (fn.kind === 'D' || fn.kind === 'P') return fn.resolvesTo ? `${fn.kind}→${fn.resolvesTo}` : fn.kind;
   return fn.kind;
 }
 
