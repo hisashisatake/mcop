@@ -14,8 +14,7 @@
 /** @typedef {{degree: number, families?: string[], suffixes?: string[]}} ProgressionStep */
 /**
  * @typedef {{id: string, name: string, mode: 'major'|'minor', cyclic: boolean, steps: ProgressionStep[], minMatch?: number}} Progression
- *   minMatch: このテンプレートだけに適用するmatchProgressions()の最小一致手数の上書き
- *   （省略時はmatchProgressions()呼び出し側の既定値=2を使う）。
+ *   minMatch: このテンプレートだけに適用する最小一致手数の上書き（省略時は既定値2）。
  */
 
 /** @type {Progression[]} */
@@ -77,7 +76,9 @@ export const PROGRESSIONS = [
     // 1手目(IVmaj7)自体はダイアトニックで見つけやすいが、2手目(III7)がまさに元々の
     // 「見えにくい」問題の張本人。既定のminMatch=2だと1→2手目のリンクだけは
     // 事前案内できない(1手だけでは一致長が閾値に届かないため)ので、このテンプレートに
-    // 限りminMatch=1にして1手目から案内できるようにする。
+    // 限りminMatch=1にして1手目から案内できるようにする（一致はテンプレートの先頭からの
+    // 連続一致のみを見るmatchProgressions()の設計上、1手一致は自動的に先頭ステップの
+    // 単独一致に限定される）。
     minMatch: 1,
     steps: [
       { degree: 5, families: ['maj'] },
@@ -105,6 +106,13 @@ export const PROGRESSIONS = [
     name: '12小節ブルース',
     mode: 'major',
     cyclic: true,
+    // 全ステップ同じfamily(dom)かつ度数もI-I-I-I等の反復が多いため、既定のminMatch=2だと
+    // 「I→I」のようなありふれた2手が、本来の位置(例: 1〜2小節目)以外にも複数箇所
+    // (6〜7小節目等)で偶然一致し、実際より手前の小節にいるかのような誤表示を招く。
+    // minMatch=4にすると、この反復構造内で先頭以外から一致してしまうケースが
+    // 完全に無くなる（3手以下では依然として理論上ありうるが、4手あれば曲中で
+    // steps[0..3]と一致する部分列は先頭しか存在しない）。
+    minMatch: 4,
     steps: [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 7].map((degree) => ({ degree, families: ['dom'] })),
   },
   {
@@ -204,8 +212,8 @@ export const PROGRESSIONS = [
     ],
   },
   {
-    id: 'komuro',
-    name: '小室進行',
+    id: '6451',
+    name: '6451進行',
     mode: 'major',
     cyclic: true,
     steps: [
@@ -283,12 +291,10 @@ function stepMatches(step, played) {
   return step.families.includes(played.normFamily);
 }
 
-/** recentTail(長さn、古い順)が、steps[endIndex-n+1..endIndex]と連続一致するか。 */
-function windowMatches(recentTail, steps, endIndex, n) {
-  const startIndex = endIndex - n + 1;
-  if (startIndex < 0) return false; // テンプレート先頭より前へは巻き戻らない(cyclicでも同様)
+/** recentTail(長さn、古い順)が、steps[0..n-1]（テンプレートの先頭から連続）と一致するか。 */
+function windowMatches(recentTail, steps, n) {
   for (let i = 0; i < n; i++) {
-    if (!stepMatches(steps[startIndex + i], recentTail[i])) return false;
+    if (!stepMatches(steps[i], recentTail[i])) return false;
   }
   return true;
 }
@@ -297,27 +303,37 @@ function windowMatches(recentTail, steps, endIndex, n) {
  * 直近の演奏履歴が、登録済みテンプレートのどれかと連続一致しているかを判定する。
  * @param {Array<{degree: number, normFamily: string, suffix: string}>} recent 古い順（末尾が直前のコード）
  * @param {'major'|'minor'} mode 現在のキーのモード（一致するテンプレートのみ対象）
- * @param {{minMatch?: number, maxResults?: number}} [opts] minMatchは既定値。テンプレート側にminMatchが
- *   指定されていればそちらを優先する（just-two-of-us等、詳細はPROGRESSIONS内のコメント参照）
+ * @param {{maxResults?: number}} [opts] 最小一致手数は各テンプレートのminMatch（省略時2、
+ *   詳細はPROGRESSIONS内のコメント参照）で決まるため、ここでは変更できない
  * @returns {Array<{id: string, name: string, matchedLength: number, position: number, total: number, next: ProgressionStep}>}
  *   一致した手数の長い順、最大maxResults件（次の一手が無い＝非cyclicで末尾到達したものは含まない）
+ *
+ * 一致は必ずテンプレートの先頭(steps[0])から連続していることを要求する（途中や末尾の
+ * 部分列だけが偶然一致しても採用しない）。これが無いと、例えば6451進行(vi→IV→V→I)の
+ * 末尾2手(V→I)というありふれた終止形だけを弾いた場合でも「6451進行 4/4(完了)」と
+ * 表示されてしまう——vi→IVを一度も経由していないのに、である。この種の「途中からの
+ * 短い一致だけで高いposition/totalが誤表示される」問題は当初12小節ブルース1件・
+ * Just the Two of Us進行1件の局所修正で対処していたが、20個中14個のテンプレートに
+ * 及ぶ一般的な問題だと判明したため、先頭からの連続一致のみを認める設計へ変更した
+ * （2026-09-10）。トレードオフとして「途中から気づいて弾き始めた場合の先読み」は
+ * 失われるが、進捗表示の正確さを優先する。
  */
-export function matchProgressions(recent, mode, { minMatch = 2, maxResults = Infinity } = {}) {
+export function matchProgressions(recent, mode, { maxResults = Infinity } = {}) {
   const results = [];
   for (const prog of PROGRESSIONS) {
     if (prog.mode !== mode) continue;
     const steps = prog.steps;
-    const progMinMatch = prog.minMatch ?? minMatch;
+    const progMinMatch = prog.minMatch ?? 2;
     let best = null; // { n, endIndex }
     for (let endIndex = 0; endIndex < steps.length; endIndex++) {
-      const maxN = Math.min(recent.length, endIndex + 1);
-      for (let n = maxN; n >= progMinMatch; n--) {
-        const tail = recent.slice(recent.length - n);
-        if (windowMatches(tail, steps, endIndex, n)) {
-          if (!best || n > best.n) best = { n, endIndex };
-          break; // このendIndexでの最長一致が見つかったので次のendIndexへ
-        }
-      }
+      const n = endIndex + 1; // 先頭からendIndexまでの連続一致のみを見る
+      if (n > recent.length) break; // これ以上長い一致はrecentの手数を超える
+      // nが変わるとtail（recentの末尾n個）の中身自体が総入れ替えになるため、
+      // 「小さいnで不一致なら大きいnも不一致」という単調性は成立しない
+      // （例: 直近1手のVだけではsteps[0]=Iと不一致でも、I→Vの2手ならsteps[0..1]と一致する）。
+      // よって不一致でもbreakせず、全endIndexを試して見つかった中の最大nを採用する。
+      const tail = recent.slice(recent.length - n);
+      if (n >= progMinMatch && windowMatches(tail, steps, n)) best = { n, endIndex };
     }
     if (!best) continue;
 
