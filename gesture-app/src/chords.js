@@ -125,7 +125,7 @@ export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ct
 
 // velocityFromCellYが返しうる範囲。過去/未来スロットのベロシティバー表示（chord-screen.js）が
 // 同じ範囲で正規化するため、ここでエクスポートして共有する。
-export const VELOCITY_MIN = 40;
+export const VELOCITY_MIN = 10;
 export const VELOCITY_MAX = 127;
 
 /**

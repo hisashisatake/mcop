@@ -316,7 +316,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -852,7 +852,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -1388,7 +1388,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -2460,7 +2460,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -2996,7 +2996,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -3532,7 +3532,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -3912,7 +3912,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 125,
@@ -4068,7 +4068,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -4370,7 +4370,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 165,
@@ -4448,7 +4448,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 165,
@@ -4526,7 +4526,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 165,
@@ -4604,7 +4604,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -4984,7 +4984,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 67,
@@ -5140,7 +5140,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {
@@ -5520,7 +5520,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           },
           {
             "tl": 125,
@@ -5676,7 +5676,7 @@
             "op_fine_tune": 65,
             "eg_shift": 0,
             "level_scale": 0,
-            "velocity_gain": 109
+            "velocity_gain": 255
           }
         ],
         "channel": {

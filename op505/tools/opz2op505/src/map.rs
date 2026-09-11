@@ -337,12 +337,6 @@ pub fn convert_op(op: &OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOpt
 
     let vel_sens = if is_carrier { 0 } else { op.kvs.min(7) * 24 };
 
-    let velocity_gain = if is_carrier {
-        (op.kvs.min(7) as f32 * 255.0 / 7.0).round() as u8
-    } else {
-        255
-    };
-
     Op505OperatorParams {
         tl: if is_carrier {
             out_to_tl(op.out, alg_atten)
@@ -359,7 +353,12 @@ pub fn convert_op(op: &OpzOpData, is_carrier: bool, alg_atten: u8, opts: ConvOpt
         op_fine_tune,
         eg_shift: op.egsft.min(3) * 85,
         level_scale: (op.ls as u16 * 165 / 64).min(255) as u8,
-        velocity_gain,
+        // KVSは`velocity_sensitivity`（モジュレーターの明るさ）へのみ写像し、キャリアの音量は
+        // 常にフル感度にする（他の変換ツールと同じ「velocity=音量」ポリシー、spec-fm.md 3.4節）。
+        // 一時期キャリアKVSをここへ写像していたが、実機Bank Aのキャリアは軒並みKVS 0〜4のため
+        // 音量スイングが1dB未満まで潰れ、「ベロシティで音色だけ変わり音量が動かない」状態になった。
+        // MIDI音源としてはベロシティが音量に効くのが慣例（GM音源はオルガンでも効く）。
+        velocity_gain: 255,
     }
 }
 
