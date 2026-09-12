@@ -30,6 +30,11 @@
 //!   （`--env-amp-epsilon 0`のショートハンド）。比較検証用。
 //! - `--env-amp-epsilon <0-255>` env_ampキャッシュの許容誤差をNRPN(0,39)と同じ0〜255値で
 //!   直接指定する（未指定時はエンジン既定＝現行の8e9c3f9挙動のまま）。
+//! - `--internal-rate-div <1|2>` 内部レンダリングレートを`--sr`値のこの倍数分の1へ落とし
+//!   （例: `--sr 48000 --internal-rate-div 2`なら内部24kHzで計算）、出力直前に
+//!   `sound_core::Upsampler2x`で`--sr`のレートへ戻す（op505-standaloneの「内部24kHz
+//!   レンダリング」と同じ仕組みのオフライン検証・A/B計測用）。既定1（アップサンプラーを
+//!   一切通さず、この引数を追加する前とビット単位で不変）。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -49,6 +54,7 @@ fn main() -> ExitCode {
             eprintln!("usage: smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]");
             eprintln!("       [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>] [--max-voices <N>]");
             eprintln!("       [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-255>]");
+            eprintln!("       [--internal-rate-div <1|2>]");
             ExitCode::FAILURE
         }
     }
@@ -71,6 +77,9 @@ struct Args {
     /// `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差(NRPN(0,39)と同じ
     /// 0〜255値)を起動時に上書きする（None=エンジン既定=8e9c3f9の現行挙動のまま）。
     env_amp_epsilon: Option<u8>,
+    /// `--internal-rate-div`: 内部レンダリングレートを`sample_rate`のこの倍数分の1へ落とす
+    /// （1または2、既定1=アップサンプラーを通さずビット不変）。
+    internal_rate_div: u8,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -83,6 +92,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_voices: Option<usize> = None;
     let mut drum_banks: Vec<PathBuf> = Vec::new();
     let mut env_amp_epsilon: Option<u8> = None;
+    let mut internal_rate_div: u8 = 1;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -160,6 +170,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 env_amp_epsilon = Some(v.parse::<u8>().map_err(|_| format!("--env-amp-epsilon の値が不正(0-255): {v}"))?);
                 i += 2;
             }
+            // 内部レンダリングレートを--srのこの倍数分の1へ落とす（1または2のみ）。
+            "--internal-rate-div" => {
+                let v = args.get(i + 1).ok_or("--internal-rate-div に値がありません")?;
+                let n = v.parse::<u8>().map_err(|_| format!("--internal-rate-div の値が不正(1または2): {v}"))?;
+                if n != 1 && n != 2 {
+                    return Err(format!("--internal-rate-div は1または2を指定してください: {v}"));
+                }
+                internal_rate_div = n;
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -189,6 +209,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_voices,
         drum_banks,
         env_amp_epsilon,
+        internal_rate_div,
     })
 }
 
@@ -236,6 +257,7 @@ fn run(args: &[String]) -> Result<(), String> {
         args.max_secs,
         args.max_voices,
         args.env_amp_epsilon,
+        args.internal_rate_div,
     )?;
     // マスターリバーブ（send>0 のときのみ）。DAW での聴感を再現する後段適用。
     apply_reverb(&mut buf, 1, args.sample_rate, &args.reverb);

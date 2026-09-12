@@ -70,6 +70,12 @@ pub struct SharedEditState {
     fx_slot: AtomicU8,
     fx_dirty: AtomicBool,
 
+    /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値）。エディタの「Env Amp」メニュー
+    /// （Strict/Tolerant 1/Tolerant 2）が書き込む単発値。`fx_values`と同じdirtyフラグ方式だが、
+    /// 値1個だけなので配列にしていない。
+    env_amp_epsilon: AtomicU8,
+    env_amp_epsilon_dirty: AtomicBool,
+
     /// マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し）。`fx_values`等と違いdirty
     /// フラグは使わない——`MeterBridge`自体が`try_lock`ベースの橋渡しを既に実装しているため
     /// （`sound_core::MeterBridge`のdoc参照）。オーディオスレッド・GUIスレッド双方が
@@ -138,6 +144,8 @@ impl SharedEditState {
             fx_values: std::array::from_fn(|_| AtomicU8::new(0)),
             fx_slot: AtomicU8::new(0),
             fx_dirty: AtomicBool::new(false),
+            env_amp_epsilon: AtomicU8::new(0),
+            env_amp_epsilon_dirty: AtomicBool::new(false),
             master_meter: Arc::new(MeterBridge::new()),
             program_selections: std::array::from_fn(|_| AtomicU32::new(0)),
         }
@@ -179,6 +187,13 @@ impl SharedEditState {
         }
         self.fx_slot.store(slot, Ordering::Relaxed);
         self.fx_dirty.store(true, Ordering::Release);
+    }
+
+    /// env_ampキャッシュの許容誤差（0〜255）を書き込む。エディタの「Env Amp」メニューから
+    /// クリック直後に1回だけ呼ばれる（`fx_values`のような毎フレーム差分検知は不要）。
+    pub fn publish_env_amp_epsilon(&self, value: u8) {
+        self.env_amp_epsilon.store(value, Ordering::Relaxed);
+        self.env_amp_epsilon_dirty.store(true, Ordering::Release);
     }
 
     /// エディタを開く際の初期値取得用。`take_patch_if_dirty`と違いdirtyフラグには触れない
@@ -237,6 +252,14 @@ impl SharedEditState {
         let slot = self.fx_slot.load(Ordering::Relaxed);
         let values = std::array::from_fn(|i| self.fx_values[i].load(Ordering::Relaxed));
         Some((slot, values))
+    }
+
+    /// dirtyが立っていればenv_ampキャッシュの許容誤差を取り込む。
+    pub fn take_env_amp_epsilon_if_dirty(&self) -> Option<u8> {
+        if !self.env_amp_epsilon_dirty.swap(false, Ordering::Acquire) {
+            return None;
+        }
+        Some(self.env_amp_epsilon.load(Ordering::Relaxed))
     }
 
     // ---- オーディオスレッド→クエリスレッドの橋（`master_meter`と同型、dirty不要） ----

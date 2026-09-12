@@ -172,6 +172,28 @@ fn parse_env_amp_epsilon_arg() -> Option<u8> {
     None
 }
 
+/// `--internal-rate-div <1|2>`起動引数をパースする。値が無ければ`None`
+/// （設定ファイル`standalone.json`の`internal_rate_div`にフォールバックする、`main()`参照）。
+/// 1または2以外の値・パース失敗は無視して`None`を返す（`env_amp_epsilon`と同じ方針）。
+fn parse_internal_rate_div_arg() -> Option<u8> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--internal-rate-div" {
+            let v = args.get(i + 1)?;
+            return match v.parse::<u8>() {
+                Ok(n) if n == 1 || n == 2 => Some(n),
+                _ => {
+                    log::log(&format!("Invalid --internal-rate-div value (must be 1 or 2): {v} (ignoring)"));
+                    None
+                }
+            };
+        }
+        i += 1;
+    }
+    None
+}
+
 fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
     let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
@@ -187,17 +209,37 @@ fn main() {
     let sample_rate = supported.sample_rate().0 as f32;
     let stream_config: cpal::StreamConfig = supported.into();
 
-    let mut engine = Op505Engine::new(sample_rate);
+    let cfg = config::load();
+
+    // 内部レンダリングレート（起動引数優先、無ければ`standalone.json`の設定値、
+    // どちらも無指定/不正値なら1＝出力デバイスレートと同じ、アップサンプラーは通さない）。
+    // 1か2以外の値は無視して1として扱う（発音中の作り直しを避けるため、変更は次回起動から
+    // 有効。トレイメニュー「Performance」参照）。
+    let internal_rate_div: u8 = match parse_internal_rate_div_arg().or(cfg.internal_rate_div) {
+        Some(n) if n == 1 || n == 2 => n,
+        Some(n) => {
+            log::log(&format!("Invalid internal_rate_div value (must be 1 or 2): {n} (treating as 1)"));
+            1
+        }
+        None => 1,
+    };
+    let render_rate = sample_rate / internal_rate_div as f32;
+
+    let mut engine = Op505Engine::new(render_rate);
     // env_ampキャッシュの許容誤差（起動引数優先、無ければ`standalone.json`の設定値）。
     // どちらも無指定ならエンジン既定（現行の8e9c3f9挙動）のまま変更しない。
-    let env_amp_epsilon = parse_env_amp_epsilon_arg().or_else(|| config::load().env_amp_epsilon);
+    let env_amp_epsilon = parse_env_amp_epsilon_arg().or(cfg.env_amp_epsilon);
     if let Some(v) = env_amp_epsilon {
         op505_midi::apply_engine_control(&mut engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
     }
     // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングし、
     // 合算後にマスターボリューム/レベル計測を適用する（`sound_core::MasterSection`、
     // スロット配列・スクラッチ確保・合算ループを一本化した共通実装）。
-    let mut master = MasterSection::new(sample_rate, EFFECT_SLOT_COUNT);
+    let mut master = MasterSection::new(render_rate, EFFECT_SLOT_COUNT);
+    // `internal_rate_div=2`のときだけ使う2倍アップサンプラー（内部`render_rate`→出力
+    // `sample_rate`）。1のときは`None`のままで、オーディオコールバックは既存コードパスを
+    // 一切変えない（ビット不変を保つ）。
+    let mut upsampler = (internal_rate_div == 2).then(|| sound_core::Upsampler2x::new(num_channels));
     // トレイ起動音色エディタ（Step 1以降）が発音中ボイスへ即時反映する際の、発音中ボイスID
     // 一覧のスクラッチバッファ（`slot_buf`と同じ理由でオーディオスレッドの反復ヒープ確保を
     // 避ける）。エディタが無い/未操作の間は`apply_live_active`自体が呼ばれないため使われない。
@@ -236,6 +278,10 @@ fn main() {
     let mut meter_peak_r = 0.0f32;
     let mut meter_clipped = false;
     let mut frames_since_publish = 0usize;
+    // `internal_rate_div=2`のときだけ使う、アップサンプル後の出力レートスクラッチ
+    // （`sound_core::MasterSection`のslot_scratch/mix_scratchと同じgrow-onlyパターンで、
+    // オーディオスレッドでの反復ヒープ確保を避ける）。
+    let mut upsample_scratch: Vec<f32> = Vec::new();
 
     let tempo_clock_for_audio = Arc::clone(&tempo_clock);
     let stream = device
@@ -256,11 +302,30 @@ fn main() {
                 shared_edit_state
                     .publish_program_selections(std::array::from_fn(|i| state.channels[i].program_state.selection()));
                 let engine_ref = &mut engine;
-                let mixed = master.render(interleaved_len, num_channels, |slot_buf, stride| {
-                    engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);
-                });
-                for (o, v) in output.iter_mut().zip(mixed.iter()) {
-                    *o += v;
+                if let Some(up) = upsampler.as_mut() {
+                    // 内部`render_rate`でレンダリングし、出力直前に`sample_rate`へ
+                    // アップサンプリングする（standalone向けのCPU負荷軽減、詳細はplan/
+                    // spec-sound.md参照）。`div==1`の通常経路は1行も変えない。
+                    let out_frames = interleaved_len / num_channels;
+                    let in_frames = up.input_frames_for(out_frames);
+                    let render_len = in_frames * num_channels;
+                    let rendered = master.render(render_len, num_channels, |slot_buf, stride| {
+                        engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);
+                    });
+                    if upsample_scratch.len() < interleaved_len {
+                        upsample_scratch.resize(interleaved_len, 0.0);
+                    }
+                    up.process(rendered, &mut upsample_scratch[..interleaved_len], num_channels);
+                    for (o, v) in output.iter_mut().zip(upsample_scratch[..interleaved_len].iter()) {
+                        *o += v;
+                    }
+                } else {
+                    let mixed = master.render(interleaved_len, num_channels, |slot_buf, stride| {
+                        engine_ref.render_routed(slot_buf, stride, &channel_slot, num_channels);
+                    });
+                    for (o, v) in output.iter_mut().zip(mixed.iter()) {
+                        *o += v;
+                    }
                 }
 
                 let m = master.output_mut().take_measurement();
@@ -354,6 +419,10 @@ fn sync_editor_state(
         // マスターボリュームはスロットに属さない全体で1個の値のため、`slot`とは無関係に
         // 常に`MasterOutput`（`master.output_mut()`）へ適用する。
         master.output_mut().set_volume(values[shared::FX_MASTER_VOLUME]);
+    }
+
+    if let Some(v) = shared.take_env_amp_epsilon_if_dirty() {
+        op505_midi::apply_engine_control(engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
     }
 }
 

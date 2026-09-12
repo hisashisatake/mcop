@@ -43,6 +43,12 @@ pub trait PresetHost {
     fn auto_save_bank_edits(&self) -> bool {
         true
     }
+    /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値、`op505_midi::EngineControlTarget`
+    /// 参照）を即座に反映する。ホストごとに反映経路が異なる（standalone=`SharedEditState`の
+    /// dirtyフラグ経由でオーディオスレッドへ、VST=DAWパラメーター`env_amp_epsilon`の書き換え、
+    /// `process()`内の差分検知が拾って`Op505Engine`へ適用する）。既定は何もしない
+    /// （テスト用`MockHost`向け）。
+    fn apply_env_amp_epsilon(&self, _value: u8) {}
 }
 
 /// PRESETSパネルが保持するセッション状態（レジストリ＋今編集中の(bank, program)＋表示用文字列）。
@@ -588,6 +594,26 @@ pub fn draw_editor_top_bar(
             }
         });
 
+        // env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値）を3段階のプリセット値で
+        // 切り替える診断用メニュー。`radio_value`が`state.env_amp_epsilon`と一致する項目に
+        // チェック（ラジオボタン）を付ける。選んだ瞬間に`host.apply_env_amp_epsilon`を直接
+        // 呼ぶ（MASTER EFFECTSパネルのようなdirtyフラグ+毎フレームdiffの仕組みは、単発
+        // クリックのこの用途には不要）。
+        ui.menu_button("Envelope Amp", |ui| {
+            if ui.radio_value(&mut state.env_amp_epsilon, 0, "Strict (0)").clicked() {
+                host.apply_env_amp_epsilon(0);
+                ui.close();
+            }
+            if ui.radio_value(&mut state.env_amp_epsilon, 127, "Tolerant 1 (127)").clicked() {
+                host.apply_env_amp_epsilon(127);
+                ui.close();
+            }
+            if ui.radio_value(&mut state.env_amp_epsilon, 255, "Tolerant 2 (255)").clicked() {
+                host.apply_env_amp_epsilon(255);
+                ui.close();
+            }
+        });
+
         if ui.add_enabled(undo_ui.can_undo, egui::Button::new("↺")).on_hover_text("Undo (Ctrl+Z)").clicked() {
             events.undo_requested = true;
         }
@@ -939,6 +965,12 @@ pub struct EditorPresetState {
     /// ——「中央の空きスペースを2分割してそれぞれ固定幅にしたい」というユーザー要望による
     /// （2026-09-03）。
     center_half_width: f32,
+    /// 「Envelope Amp」メニューで最後に選んだ許容誤差値（0/127/255のいずれか）。
+    /// エンジン/DAWパラメーターの実際の値を読み返す経路が無いため、GUI側の選択状態を
+    /// そのまま表示に使う（MASTER EFFECTSパネルの`master`と同じ「GUI側コピーが表示の
+    /// 正とする」方針）。既定値1（エンジン既定と同じ）はどの選択肢とも一致しないため、
+    /// 一度も選んでいない間はどの項目にもチェックが付かない（意図した挙動）。
+    env_amp_epsilon: u8,
 }
 
 impl EditorPresetState {
@@ -953,6 +985,7 @@ impl EditorPresetState {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
+            env_amp_epsilon: 1,
         }
     }
 
@@ -1059,6 +1092,7 @@ mod tests {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
+            env_amp_epsilon: 1,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
@@ -1083,6 +1117,7 @@ mod tests {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
+            env_amp_epsilon: 1,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
