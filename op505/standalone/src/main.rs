@@ -420,6 +420,10 @@ fn sync_editor_state(
         // 常に`MasterOutput`（`master.output_mut()`）へ適用する。
         master.output_mut().set_volume(values[shared::FX_MASTER_VOLUME]);
     }
+
+    if let Some(v) = shared.take_env_amp_epsilon_if_dirty() {
+        op505_midi::apply_engine_control(engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
+    }
 }
 
 /// キューに溜まったMIDIメッセージを全て取り出し、エンジンへ適用する。

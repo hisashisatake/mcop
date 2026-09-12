@@ -37,4 +37,8 @@ impl PresetHost for StandalonePresetHost<'_> {
     fn auto_save_bank_edits(&self) -> bool {
         false
     }
+
+    fn apply_env_amp_epsilon(&self, value: u8) {
+        self.shared.publish_env_amp_epsilon(value);
+    }
 }

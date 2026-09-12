@@ -43,6 +43,12 @@ pub trait PresetHost {
     fn auto_save_bank_edits(&self) -> bool {
         true
     }
+    /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値、`op505_midi::EngineControlTarget`
+    /// 参照）を即座に反映する。ホストごとに反映経路が異なる（standalone=`SharedEditState`の
+    /// dirtyフラグ経由でオーディオスレッドへ、VST=DAWパラメーター`env_amp_epsilon`の書き換え、
+    /// `process()`内の差分検知が拾って`Op505Engine`へ適用する）。既定は何もしない
+    /// （テスト用`MockHost`向け）。
+    fn apply_env_amp_epsilon(&self, _value: u8) {}
 }
 
 /// PRESETSパネルが保持するセッション状態（レジストリ＋今編集中の(bank, program)＋表示用文字列）。
@@ -584,6 +590,25 @@ pub fn draw_editor_top_bar(
             }
             if ui.add_enabled(state.session.pending_save_as.is_none(), egui::Button::new("Save As...")).clicked() {
                 request_save_as(&mut state.session);
+                ui.close();
+            }
+        });
+
+        // env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値）を3段階のプリセット値で
+        // 切り替える診断用メニュー。連続スライダーではなく離散値なので、選んだ瞬間に
+        // `host.apply_env_amp_epsilon`を直接呼ぶ（MASTER EFFECTSパネルのようなdirty
+        // フラグ+毎フレームdiffの仕組みは、単発クリックのこの用途には不要）。
+        ui.menu_button("Env Amp", |ui| {
+            if ui.button("Strict (0)").clicked() {
+                host.apply_env_amp_epsilon(0);
+                ui.close();
+            }
+            if ui.button("Tolerant 1 (127)").clicked() {
+                host.apply_env_amp_epsilon(127);
+                ui.close();
+            }
+            if ui.button("Tolerant 2 (255)").clicked() {
+                host.apply_env_amp_epsilon(255);
                 ui.close();
             }
         });

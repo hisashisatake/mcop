@@ -34,4 +34,12 @@ impl PresetHost for VstPresetHost<'_> {
         self.shared_bank.write().expect("Poisoned RwLock on write").merge_file(bank_file.as_presets_file());
         self.dirty.store(true, Ordering::Release);
     }
+
+    /// DAWパラメーター`env_amp_epsilon`を書き換える。`process()`内の前回値との差分検知
+    /// （`lib.rs`の`last_env_amp_epsilon`）が次ブロックで拾い、`Op505Engine`へ適用する。
+    fn apply_env_amp_epsilon(&self, value: u8) {
+        self.setter.begin_set_parameter(&self.params.env_amp_epsilon);
+        self.setter.set_parameter(&self.params.env_amp_epsilon, value as i32);
+        self.setter.end_set_parameter(&self.params.env_amp_epsilon);
+    }
 }
