@@ -19,6 +19,13 @@ pub trait IntParamHandle {
     fn set(&self, value: i32);
     /// 操作終了。
     fn end_edit(&self);
+
+    /// 真偽値としてのビュー（0=false/非ゼロ=true、書き込みは0/1）。`DelaySync`のように
+    /// DAW/NRPN側の生値はu8のまま統一しつつ、UIだけチェックボックスで見せたい場合に使う
+    /// （`TimeEgHandle::sync_enabled_handle()`と同じ「型は変えずビューだけ変える」設計）。
+    fn as_bool_handle(&self) -> Box<dyn BoolParamHandle + '_> {
+        Box::new(IntAsBoolHandle { inner: self })
+    }
 }
 
 /// 中央値（バイポーラパラメーターで「変調なし」を表す生値）。
@@ -96,6 +103,29 @@ pub trait BoolParamHandle {
     fn begin_edit(&self);
     fn set(&self, value: bool);
     fn end_edit(&self);
+}
+
+/// `IntParamHandle::as_bool_handle()`の実体。0=false/非ゼロ=trueとして読み、
+/// 書き込みは0/1を書く。`T: ?Sized`にすることで、トレイトのデフォルトメソッド内で
+/// `Self`（`dyn IntParamHandle`越しの呼び出しでは非Sized）をそのまま包める
+/// （`TimeEgSyncEnabledHandle`と同じ設計）。
+struct IntAsBoolHandle<'a, T: IntParamHandle + ?Sized> {
+    inner: &'a T,
+}
+
+impl<T: IntParamHandle + ?Sized> BoolParamHandle for IntAsBoolHandle<'_, T> {
+    fn value(&self) -> bool {
+        self.inner.value() != 0
+    }
+    fn begin_edit(&self) {
+        self.inner.begin_edit();
+    }
+    fn set(&self, value: bool) {
+        self.inner.set(if value { 1 } else { 0 });
+    }
+    fn end_edit(&self) {
+        self.inner.end_edit();
+    }
 }
 
 /// レベルメーター等、オーディオスレッドが書きGUIが読むだけの計測値への読み取り専用ハンドル。

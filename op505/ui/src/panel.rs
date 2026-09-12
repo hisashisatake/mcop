@@ -4,8 +4,8 @@ use crate::layout::{self, leaf, row, stack, stack_centered, Justify};
 use crate::level_meter::level_meter;
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
 use crate::selector::{
-    enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, DELAY_SYNC_NAMES, FILTER_TYPE_NAMES, REVERB_TYPE_NAMES,
-    RETRIGGER_MODE_NAMES, TEXTURE_NAMES,
+    enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, REVERB_TYPE_NAMES, RETRIGGER_MODE_NAMES,
+    TEXTURE_NAMES,
 };
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;

@@ -177,8 +177,10 @@ impl PatchInt {
                 daw_name: "Filter Resonance",
                 daw_bipolar: false,
             },
+            // 実体は`sound_core::vcf::FilterType::from_u8`の3値（0=LP/1=HP/2以上=BP）。
+            // Algorithm/ReverbType/ChorusTypeと同様、DAWオートメーションの範囲も実体に揃える。
             PatchInt::FilterType => {
-                IntSpec { min: 0, max: 255, default: 0, short_name: "Filter Type", daw_name: "Filter Type", daw_bipolar: false }
+                IntSpec { min: 0, max: 2, default: 0, short_name: "Filter Type", daw_name: "Filter Type", daw_bipolar: false }
             }
             PatchInt::FgDepth(FgSlot::Pitch) => IntSpec {
                 min: 0,
