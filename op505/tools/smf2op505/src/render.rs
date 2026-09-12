@@ -253,7 +253,7 @@ pub fn render_smf(
     max_secs: Option<f32>,
     max_voices: Option<usize>,
 ) -> Result<Vec<f32>, String> {
-    render_smf_with_drums(data, bank, None, sample_rate, tail_secs, max_secs, max_voices)
+    render_smf_with_drums(data, bank, None, sample_rate, tail_secs, max_secs, max_voices, None)
 }
 
 /// [`render_smf`] のGM2リズムチャンネル対応版。`drums`にリズムキット集合
@@ -272,6 +272,7 @@ pub fn render_smf_with_drums(
     tail_secs: f32,
     max_secs: Option<f32>,
     max_voices: Option<usize>,
+    env_amp_epsilon: Option<u8>,
 ) -> Result<Vec<f32>, String> {
     let (division, events) = parse_smf(data)?;
 
@@ -279,6 +280,11 @@ pub fn render_smf_with_drums(
     // EXPERIMENT(max-voices): 同時発音数上限のA/B計測用（Noneはエンジン既定を使う）。
     if let Some(n) = max_voices {
         engine.set_max_voices(n);
+    }
+    // `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差を起動時に上書きする
+    // （NRPN(0,39)と同じ0〜255値、Noneはエンジン既定=8e9c3f9の現行挙動のまま）。
+    if let Some(v) = env_amp_epsilon {
+        op505_midi::apply_engine_control(&mut engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
     }
     // SMF内蔵のマスターエフェクト（CC91/93・NRPN(0,2)〜(0,8)で駆動）。既定 send=0 で透過。
     // main.rs の `--reverb-*`（op505-tools::fx）はこれとは独立した後段の診断用リバーブ。
@@ -520,6 +526,9 @@ fn handle_control_change(
             DataEntryOutcome::Effect(slot, target, value) => {
                 let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
                 sound_midi::apply_effect_control(fx, target, value);
+            }
+            DataEntryOutcome::Engine(target, value) => {
+                op505_midi::apply_engine_control(engine, target, value);
             }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。
@@ -1647,14 +1656,14 @@ mod tests {
             (0u32, vec![0xC0, 0]),      // PC=0 (kit 0)
             (0u32, vec![0x90, 36, 100]),
         ]);
-        let buf_bd = render_smf_with_drums(&smf_bd, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+        let buf_bd = render_smf_with_drums(&smf_bd, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
 
         let smf_hh = build_smf(&[
             (0u32, vec![0xB0, 0, 120]),
             (0u32, vec![0xC0, 0]),
             (0u32, vec![0x90, 42, 100]),
         ]);
-        let buf_hh = render_smf_with_drums(&smf_hh, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+        let buf_hh = render_smf_with_drums(&smf_hh, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
 
         assert!(buf_bd.iter().any(|s| s.abs() > 1e-4), "BD出力が無音");
         assert!(buf_hh.iter().any(|s| s.abs() > 1e-4), "HH出力が無音");
@@ -1696,7 +1705,7 @@ mod tests {
 
         // MIDI ch10 = ステータスバイト0x99（Note On, channel 9）
         let smf = build_smf(&[(0u32, vec![0x99, 36, 100])]);
-        let buf = render_smf_with_drums(&smf, &bank, Some(&drums), sr, 0.1, Some(0.3), None).unwrap();
+        let buf = render_smf_with_drums(&smf, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "ch10はBank Select無しでもドラムが鳴るはず");
     }
 }

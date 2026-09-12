@@ -109,6 +109,10 @@ pub enum ControlTarget {
     /// （Algorithm/FilterTypeと同じ「NRPN離散上書きレイヤー」）。V.GAIN/VELと同じ線形カーブで
     /// フィードバック量をベロシティ感度化する（`Op505ChannelParams::feedback_velocity_sens`）。
     FeedbackVelocitySens,
+    /// NRPN(0,39): env_ampキャッシュの許容誤差（0〜255）。チャンネル別ではなくエンジン全体に
+    /// 効くグローバル設定（Reverb/Chorus系と同様、`ChannelState`ではなく`Op505Engine`へ直接
+    /// 適用する。`engine_control::EngineControlTarget`/`apply_engine_control`参照）。
+    EnvAmpEpsilon,
 }
 
 /// RPN/NRPN選択状態から制御対象を解決する。
@@ -153,6 +157,7 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 36) => ControlTarget::DelaySync,
         RpnSelection::Nrpn(0, 37) => ControlTarget::DelaySyncRate,
         RpnSelection::Nrpn(0, 38) => ControlTarget::FeedbackVelocitySens,
+        RpnSelection::Nrpn(0, 39) => ControlTarget::EnvAmpEpsilon,
         RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
     }
 }
@@ -199,7 +204,8 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::Cc4Destination
         | ControlTarget::DelaySync
         | ControlTarget::DelaySyncRate
-        | ControlTarget::FeedbackVelocitySens => false,
+        | ControlTarget::FeedbackVelocitySens
+        | ControlTarget::EnvAmpEpsilon => false,
     }
 }
 
@@ -295,6 +301,14 @@ mod tests {
         assert_eq!(control_target(RpnSelection::Nrpn(0, 37)), ControlTarget::DelaySyncRate);
         assert!(!needs_voice_update(ControlTarget::DelaySync));
         assert!(!needs_voice_update(ControlTarget::DelaySyncRate));
+    }
+
+    /// NRPN(0,39)はenv_ampキャッシュの許容誤差（グローバル設定、`needs_voice_update`は
+    /// 他のエフェクト系NRPNと同様false）。
+    #[test]
+    fn env_amp_epsilon_address() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 39)), ControlTarget::EnvAmpEpsilon);
+        assert!(!needs_voice_update(ControlTarget::EnvAmpEpsilon));
     }
 
     /// RPN(0,1)/(0,2)はGM2必須セットのChannel Fine/Coarse Tuning。

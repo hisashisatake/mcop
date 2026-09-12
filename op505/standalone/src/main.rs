@@ -146,6 +146,32 @@ impl MidiState {
     }
 }
 
+/// `--strict-env-amp`/`--env-amp-epsilon <N>`起動引数をパースする。値が無ければ`None`
+/// （設定ファイル`standalone.json`の`env_amp_epsilon`にフォールバックする、`main()`参照）。
+/// 標準出力を持たないGUIサブシステムのため、不正な値は無視して`None`を返す
+/// （`log`モジュールへ警告を出す。起動を止めるほどの誤りではないため）。
+fn parse_env_amp_epsilon_arg() -> Option<u8> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--strict-env-amp" => return Some(0),
+            "--env-amp-epsilon" => {
+                let v = args.get(i + 1)?;
+                return match v.parse::<u8>() {
+                    Ok(n) => Some(n),
+                    Err(_) => {
+                        log::log(&format!("--env-amp-epsilon の値が不正です(0-255): {v}（無視します）"));
+                        None
+                    }
+                };
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 fn main() {
     let midi_queue: MidiQueue = Arc::new(Mutex::new(VecDeque::new()));
     let sink = midi_source::MidiSink::new(Arc::clone(&midi_queue));
@@ -162,6 +188,12 @@ fn main() {
     let stream_config: cpal::StreamConfig = supported.into();
 
     let mut engine = Op505Engine::new(sample_rate);
+    // env_ampキャッシュの許容誤差（起動引数優先、無ければ`standalone.json`の設定値）。
+    // どちらも無指定ならエンジン既定（現行の8e9c3f9挙動）のまま変更しない。
+    let env_amp_epsilon = parse_env_amp_epsilon_arg().or_else(|| config::load().env_amp_epsilon);
+    if let Some(v) = env_amp_epsilon {
+        op505_midi::apply_engine_control(&mut engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
+    }
     // 各MIDIチャンネルのeffect_route_slot（NRPN(0,1)、既定0）が指すスロットへルーティングし、
     // 合算後にマスターボリューム/レベル計測を適用する（`sound_core::MasterSection`、
     // スロット配列・スクラッチ確保・合算ループを一本化した共通実装）。
@@ -654,6 +686,9 @@ fn handle_control_change(
             DataEntryOutcome::Effect(slot, target, value) => {
                 let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
                 sound_midi::apply_effect_control(fx, target, value);
+            }
+            DataEntryOutcome::Engine(target, value) => {
+                op505_midi::apply_engine_control(engine, target, value);
             }
         },
         // CC38 Data Entry LSB: OP F-Number(NRPN 0,18〜21選択中)の下位7bit。

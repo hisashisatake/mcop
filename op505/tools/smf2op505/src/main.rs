@@ -4,7 +4,7 @@
 //! ```text
 //! smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]
 //!           [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>]
-//!           [--drum-bank <kit.op505>]...
+//!           [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-255>]
 //! ```
 //! - `out.wav` 省略時は `<song>` と同じディレクトリに `<songの拡張子なし名>.wav` を出力する。
 //! - プログラムチェンジ番号 = `.op505` のプログラム番号で音色を選ぶ
@@ -26,6 +26,10 @@
 //!   128 + キット0）で宣言すること。未指定時はリズムチャンネル機能を完全に無効化する
 //!   （`op505_midi::rhythm`参照）。指定してもリズムバンク範囲(15360〜15487)に1件も
 //!   エントリーが無ければエラー終了する（宣言忘れによる無音を起動時に検出するため）。
+//! - `--strict-env-amp` env_ampキャッシュを厳密一致相当（8e9c3f9以前の挙動）に切り替える
+//!   （`--env-amp-epsilon 0`のショートハンド）。比較検証用。
+//! - `--env-amp-epsilon <0-255>` env_ampキャッシュの許容誤差をNRPN(0,39)と同じ0〜255値で
+//!   直接指定する（未指定時はエンジン既定＝現行の8e9c3f9挙動のまま）。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -44,7 +48,7 @@ fn main() -> ExitCode {
             eprintln!("smf2op505: {msg}");
             eprintln!("usage: smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]");
             eprintln!("       [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>] [--max-voices <N>]");
-            eprintln!("       [--drum-bank <kit.op505>]...");
+            eprintln!("       [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-255>]");
             ExitCode::FAILURE
         }
     }
@@ -64,6 +68,9 @@ struct Args {
     max_voices: Option<usize>,
     /// GM2リズムキットバンクファイル（複数回指定可、順にmerge_fileで重ねる）。
     drum_banks: Vec<PathBuf>,
+    /// `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差(NRPN(0,39)と同じ
+    /// 0〜255値)を起動時に上書きする（None=エンジン既定=8e9c3f9の現行挙動のまま）。
+    env_amp_epsilon: Option<u8>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -75,6 +82,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_secs: Option<f32> = None;
     let mut max_voices: Option<usize> = None;
     let mut drum_banks: Vec<PathBuf> = Vec::new();
+    let mut env_amp_epsilon: Option<u8> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -141,6 +149,17 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 drum_banks.push(PathBuf::from(v));
                 i += 2;
             }
+            // 8e9c3f9(env_ampキャッシュ最適化)以前の厳密一致相当。比較検証用のショートハンド。
+            "--strict-env-amp" => {
+                env_amp_epsilon = Some(0);
+                i += 1;
+            }
+            // env_ampキャッシュの許容誤差を直接指定する(0〜255、NRPN(0,39)と同じ写像)。
+            "--env-amp-epsilon" => {
+                let v = args.get(i + 1).ok_or("--env-amp-epsilon に値がありません")?;
+                env_amp_epsilon = Some(v.parse::<u8>().map_err(|_| format!("--env-amp-epsilon の値が不正(0-255): {v}"))?);
+                i += 2;
+            }
             _ => {
                 positional.push(&args[i]);
                 i += 1;
@@ -158,7 +177,19 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         let stem = song.file_stem().and_then(|s| s.to_str()).unwrap_or("song");
         song.parent().unwrap_or(Path::new(".")).join(format!("{stem}.wav"))
     };
-    Ok(Args { bank, song, out, sample_rate, tail_secs, normalize, reverb, max_secs, max_voices, drum_banks })
+    Ok(Args {
+        bank,
+        song,
+        out,
+        sample_rate,
+        tail_secs,
+        normalize,
+        reverb,
+        max_secs,
+        max_voices,
+        drum_banks,
+        env_amp_epsilon,
+    })
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -204,6 +235,7 @@ fn run(args: &[String]) -> Result<(), String> {
         args.tail_secs,
         args.max_secs,
         args.max_voices,
+        args.env_amp_epsilon,
     )?;
     // マスターリバーブ（send>0 のときのみ）。DAW での聴感を再現する後段適用。
     apply_reverb(&mut buf, 1, args.sample_rate, &args.reverb);

@@ -135,6 +135,11 @@ impl Svf {
         self_oscillation: bool,
         filter_type: FilterType,
     ) -> f32 {
+        // ナイキスト保護。`g = tan(π·fc/fs)`は fc が fs/2 を超えると符号が反転し、
+        // `a1 = 1/(1 + g² + g·k)`の分母が0や負へ落ちて係数が発散する。係数0.49は
+        // 44.1kHz/48kHzでは`cutoff_to_hz`の上限20kHzに届かないため既存レートの出力は
+        // ビット不変で、約40.8kHz未満のレートでのみ作用する。
+        let cutoff_hz = cutoff_hz.min(sample_rate * 0.49);
         let key = (cutoff_hz.to_bits(), resonance, self_oscillation);
         if self.coeff_key != Some(key) {
             let g = (std::f32::consts::PI * cutoff_hz / sample_rate).tan();
@@ -386,6 +391,43 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// 低いサンプルレートでも係数が発散しないこと。ナイキスト保護が無いと
+    /// `cutoff_to_hz(255)`=20kHzが fs/2 を超え、`tan`の符号反転で数十サンプルのうちに
+    /// 無限大へ飛ぶ（24kHz・resonance=0で実際に再現する）。
+    #[test]
+    fn svf_stays_finite_below_40khz() {
+        for sr in [32000.0f32, 24000.0, 22050.0] {
+            for cutoff in [0u8, 128, 255] {
+                for resonance in [0u8, 128, 255] {
+                    for self_osc in [false, true] {
+                        let mut svf = Svf::new();
+                        let cutoff_hz = cutoff_to_hz(cutoff);
+                        for i in 0..4410 {
+                            let input = (i as f32 * 0.1).sin();
+                            let out = svf.process(input, sr, cutoff_hz, resonance, self_osc, FilterType::Lp);
+                            assert!(
+                                out.is_finite(),
+                                "non-finite: sr={sr} cutoff={cutoff} resonance={resonance} self_osc={self_osc}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 44.1kHz/48kHzではナイキスト保護が作用しない（＝これらのレートの出力が
+    /// 従来とビット単位で同一である）ことの根拠。上限20kHzが 0.49×fs に届かない。
+    #[test]
+    fn nyquist_guard_is_inactive_at_existing_rates() {
+        for sr in [44100.0f32, 48000.0] {
+            assert!(
+                cutoff_to_hz(255) < sr * 0.49,
+                "既存レート{sr}でクランプが作用してしまう（出力が変わる）"
+            );
         }
     }
 }
