@@ -253,7 +253,7 @@ pub fn render_smf(
     max_secs: Option<f32>,
     max_voices: Option<usize>,
 ) -> Result<Vec<f32>, String> {
-    render_smf_with_drums(data, bank, None, sample_rate, tail_secs, max_secs, max_voices, None)
+    render_smf_with_drums(data, bank, None, sample_rate, tail_secs, max_secs, max_voices, None, 1)
 }
 
 /// [`render_smf`] のGM2リズムチャンネル対応版。`drums`にリズムキット集合
@@ -264,6 +264,12 @@ pub fn render_smf(
 /// `drums`が`None`のときはリズムチャンネル機能を完全に無効化する：Bank Select CC0/32は
 /// 従来どおり無視し、MIDI ch10の初期ドラムONも立てない。これにより`render_smf`（`drums=None`
 /// で呼ぶだけ）の出力は本関数追加前とビット単位で不変。
+///
+/// `internal_rate_div`（1または2）は、内部レンダリングレートを`sample_rate / internal_rate_div`
+/// へ落とし、返す直前に`sound_core::Upsampler2x`で`sample_rate`へ引き伸ばす
+/// （standalone/op505-standaloneの「内部24kHzレンダリング」と同じ仕組みのオフライン検証用）。
+/// `1`のときはアップサンプラーを一切通さず、この引数を追加する前と出力がビット単位で不変。
+#[allow(clippy::too_many_arguments)]
 pub fn render_smf_with_drums(
     data: &[u8],
     bank: &PatchBank,
@@ -273,10 +279,15 @@ pub fn render_smf_with_drums(
     max_secs: Option<f32>,
     max_voices: Option<usize>,
     env_amp_epsilon: Option<u8>,
+    internal_rate_div: u8,
 ) -> Result<Vec<f32>, String> {
     let (division, events) = parse_smf(data)?;
 
-    let mut engine = Op505Engine::new(sample_rate);
+    // 内部レンダリングレート（`internal_rate_div=1`なら`sample_rate`と同じで、以下の
+    // どの計算も従来と完全に同じ値になる＝ビット不変が保たれる）。
+    let render_rate = sample_rate / internal_rate_div as f32;
+
+    let mut engine = Op505Engine::new(render_rate);
     // EXPERIMENT(max-voices): 同時発音数上限のA/B計測用（Noneはエンジン既定を使う）。
     if let Some(n) = max_voices {
         engine.set_max_voices(n);
@@ -290,7 +301,7 @@ pub fn render_smf_with_drums(
     // main.rs の `--reverb-*`（op505-tools::fx）はこれとは独立した後段の診断用リバーブ。
     // エフェクトスロット数分だけ持ち、各チャンネルの`effect_route_slot`（NRPN(0,1)）が
     // 指すスロットへルーティングする（誰も送らなければ全チャンネルがslot 0へ集まる）。
-    let mut master = MasterSection::new(sample_rate, EFFECT_SLOT_COUNT);
+    let mut master = MasterSection::new(render_rate, EFFECT_SLOT_COUNT);
     let mut out: Vec<f32> = Vec::new();
 
     let rhythm_kits_available = drums.map(|d| d.has_bank_in(RHYTHM_BANK_RANGE)).unwrap_or(false);
@@ -298,13 +309,13 @@ pub fn render_smf_with_drums(
         (0..16).map(|chi| ChannelState::new(chi, rhythm_kits_available)).collect();
 
     let mut tempo_us: f64 = 500_000.0; // 既定 120BPM
-    let mut spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64; // samples/tick
+    let mut spt = tempo_us / 1_000_000.0 * render_rate as f64 / division as f64; // samples/tick
     let mut cur_tick: u64 = 0;
     let mut sample_pos: f64 = 0.0;
     let mut rendered: usize = 0;
     let mut peak_voices: usize = 0;
 
-    let max_samples = max_secs.map(|s| (s * sample_rate).max(0.0) as usize);
+    let max_samples = max_secs.map(|s| (s * render_rate).max(0.0) as usize);
 
     for e in events {
         let dt = e.tick - cur_tick;
@@ -316,7 +327,7 @@ pub fn render_smf_with_drums(
             if target >= maxs {
                 render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, maxs);
                 eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
-                return Ok(out);
+                return Ok(finish_output(out, internal_rate_div));
             }
         }
         render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, target);
@@ -325,7 +336,7 @@ pub fn render_smf_with_drums(
         match e.kind {
             EvKind::Tempo(us) => {
                 tempo_us = us as f64;
-                spt = tempo_us / 1_000_000.0 * sample_rate as f64 / division as f64;
+                spt = tempo_us / 1_000_000.0 * render_rate as f64 / division as f64;
                 // TimeEg（Op505Engine::set_tempo）・マスターディレイ（MasterSection::set_tempo）
                 // 両方のテンポ同期に反映する。旧実装はtick→サンプル換算にしか使っておらず、
                 // これらの同期が常に既定120BPM固定になっていた（2026-09-04発見・修正）。
@@ -407,14 +418,27 @@ pub fn render_smf_with_drums(
     }
 
     // 残響テール（max_secs 指定時は上限でクランプ）
-    let mut tail_target = rendered + (sample_rate * tail_secs) as usize;
+    let mut tail_target = rendered + (render_rate * tail_secs) as usize;
     if let Some(maxs) = max_samples {
         tail_target = tail_target.min(maxs);
     }
     render_chunk(&mut engine, &mut master, &channels, &mut out, &mut rendered, tail_target);
     peak_voices = peak_voices.max(engine.active_voice_count());
     eprintln!("smf2op505: ピークボイス数(active_voice_count) = {peak_voices}");
-    Ok(out)
+    Ok(finish_output(out, internal_rate_div))
+}
+
+/// `internal_rate_div`が2のとき、内部レートでレンダリングした`out`を`Upsampler2x`で
+/// 2倍にアップサンプリングして返す（出力サンプルレートへ戻す）。1のときは何もしない
+/// （アップサンプラーを一切通さないため、この機能追加前とビット単位で不変）。
+fn finish_output(out: Vec<f32>, internal_rate_div: u8) -> Vec<f32> {
+    if internal_rate_div <= 1 {
+        return out;
+    }
+    let mut upsampler = sound_core::Upsampler2x::new(1);
+    let mut result = vec![0.0f32; out.len() * internal_rate_div as usize];
+    upsampler.process(&out, &mut result, 1);
+    result
 }
 
 /// 1つのコントロールチェンジを処理する。`op505-vst`のprocess()内CC matchと
@@ -1656,14 +1680,14 @@ mod tests {
             (0u32, vec![0xC0, 0]),      // PC=0 (kit 0)
             (0u32, vec![0x90, 36, 100]),
         ]);
-        let buf_bd = render_smf_with_drums(&smf_bd, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
+        let buf_bd = render_smf_with_drums(&smf_bd, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None, 1).unwrap();
 
         let smf_hh = build_smf(&[
             (0u32, vec![0xB0, 0, 120]),
             (0u32, vec![0xC0, 0]),
             (0u32, vec![0x90, 42, 100]),
         ]);
-        let buf_hh = render_smf_with_drums(&smf_hh, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
+        let buf_hh = render_smf_with_drums(&smf_hh, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None, 1).unwrap();
 
         assert!(buf_bd.iter().any(|s| s.abs() > 1e-4), "BD出力が無音");
         assert!(buf_hh.iter().any(|s| s.abs() > 1e-4), "HH出力が無音");
@@ -1705,7 +1729,7 @@ mod tests {
 
         // MIDI ch10 = ステータスバイト0x99（Note On, channel 9）
         let smf = build_smf(&[(0u32, vec![0x99, 36, 100])]);
-        let buf = render_smf_with_drums(&smf, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None).unwrap();
+        let buf = render_smf_with_drums(&smf, &bank, Some(&drums), sr, 0.1, Some(0.3), None, None, 1).unwrap();
         assert!(buf.iter().any(|s| s.abs() > 1e-4), "ch10はBank Select無しでもドラムが鳴るはず");
     }
 }

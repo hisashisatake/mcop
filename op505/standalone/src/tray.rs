@@ -155,6 +155,18 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     let (port_submenu, mut port_items) = build_port_items(current_port_name.as_deref());
     let _ = menu.append(&port_submenu);
     let _ = menu.append(&PredefinedMenuItem::separator());
+    // 内部レンダリングレートを24kHzへ落としCPU負荷を下げる設定（Stage 3、詳細はplan/
+    // spec-sound.md参照）。エンジン/エフェクトの作り直しが必要なため、トグルは設定ファイルへの
+    // 保存のみ行い、実際の適用は次回起動から（`--internal-rate-div`起動引数が優先する場合は
+    // その旨をログへ出す）。
+    let low_cpu_item = CheckMenuItem::new(
+        "Low CPU Mode (24kHz, restart required)",
+        true,
+        cfg.internal_rate_div == Some(2),
+        None,
+    );
+    let _ = menu.append(&low_cpu_item);
+    let _ = menu.append(&PredefinedMenuItem::separator());
     let open_log_item = MenuItem::new("Open Log", true, None);
     let open_config_item = MenuItem::new("Open Config Folder", true, None);
     let _ = menu.append(&open_log_item);
@@ -200,6 +212,7 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
                 &editor_item.id(),
                 &open_log_item.id(),
                 &open_config_item.id(),
+                &low_cpu_item,
                 &mut port_items,
                 &sink,
                 &mut current_midir,
@@ -228,6 +241,7 @@ fn handle_menu_event(
     editor_id: &MenuId,
     open_log_id: &MenuId,
     open_config_id: &MenuId,
+    low_cpu_item: &CheckMenuItem,
     port_items: &mut [(CheckMenuItem, Option<String>)],
     sink: &MidiSink,
     current_midir: &mut Option<midir_src::MidirSource>,
@@ -248,6 +262,19 @@ fn handle_menu_event(
     }
     if &id == open_config_id {
         open_path_in_explorer(&config::file_path());
+        return;
+    }
+    if &id == low_cpu_item.id() {
+        // クリック直後、tray-icon側が既にチェック状態をトグル済みなのでそれを読んで保存する
+        // （`is_checked()`は新しい状態を返す）。
+        let enabled = low_cpu_item.is_checked();
+        let mut cfg = config::load();
+        cfg.internal_rate_div = if enabled { Some(2) } else { Some(1) };
+        config::save(&cfg);
+        log::log(&format!(
+            "Low CPU Mode を{}にしました。反映にはop505-standaloneの再起動が必要です。",
+            if enabled { "ON" } else { "OFF" }
+        ));
         return;
     }
 

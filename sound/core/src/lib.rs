@@ -53,6 +53,9 @@ pub use vcf::{
 pub mod vca;
 pub use vca::{Vca, VoiceAmp};
 
+pub mod upsampler;
+pub use upsampler::Upsampler2x;
+
 
 // ---------------------------------------------------------------------------
 // Wave table format (ymfm-compatible log encoding)

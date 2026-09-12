@@ -20,6 +20,13 @@ pub struct StandaloneConfig {
     /// のまま。`--strict-env-amp`/`--env-amp-epsilon <N>`起動引数が指定されればそちらが優先する。
     #[serde(default)]
     pub env_amp_epsilon: Option<u8>,
+    /// 内部レンダリングレートを起動時の出力デバイスレートのこの倍数分の1へ落とす
+    /// （1または2、既定は未設定＝1扱い）。トレイメニュー「Low CPU Mode」が書き換える。
+    /// エンジン/エフェクトはサンプルレートを元に内部状態を構築するため、変更は次回起動から
+    /// 有効になる（発音中の作り直しを避けるため）。`--internal-rate-div <N>`起動引数が
+    /// 指定されればそちらが優先する。
+    #[serde(default)]
+    pub internal_rate_div: Option<u8>,
 }
 
 fn config_path() -> PathBuf {
