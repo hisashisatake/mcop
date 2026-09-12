@@ -109,6 +109,10 @@ struct Op505Plugin {
     last_chorus_send_to_reverb: u8,
     last_delay_sync: u8,
     last_delay_sync_rate: u8,
+    /// `env_amp_epsilon`（IntParam、0〜255）の前回値。NRPN(0,39)からも直接エンジンへ
+    /// 書き込まれるため、DAW値が変化していない間はNRPN側の設定が上書きされない
+    /// （他のFx系パラメーターと同じ1シャドウ差分検知方式）。既定1（現行既定挙動と一致）。
+    last_env_amp_epsilon: u8,
 
     // AT/Poly AT Destination（NRPN(0,16)/(0,17)）・CC2/CC4の加算先（NRPN(0,34)/(0,35)）は
     // `channels[ch].at_destination`/`poly_at_destination`/`cc2_destination`/`cc4_destination`
@@ -194,6 +198,7 @@ impl Default for Op505Plugin {
             last_chorus_send_to_reverb: DEFAULT_CHORUS_SEND_TO_REVERB,
             last_delay_sync: DEFAULT_DELAY_SYNC,
             last_delay_sync_rate: DEFAULT_DELAY_SYNC_RATE,
+            last_env_amp_epsilon: 1,
             rhythm_kits_available: false,
             program_patch: [None; 16],
             preset_bank: Op505PresetBank::default(),
@@ -360,6 +365,9 @@ impl Op505Plugin {
                 let fx = self.master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
                 sound_midi::apply_effect_control(fx, target, v);
             }
+            DataEntryOutcome::Engine(target, v) => {
+                op505_midi::apply_engine_control(&mut self.engine, target, v);
+            }
         }
     }
 }
@@ -433,6 +441,7 @@ impl Plugin for Op505Plugin {
         self.last_chorus_send_to_reverb = DEFAULT_CHORUS_SEND_TO_REVERB;
         self.last_delay_sync = DEFAULT_DELAY_SYNC;
         self.last_delay_sync_rate = DEFAULT_DELAY_SYNC_RATE;
+        self.last_env_amp_epsilon = 1;
         self.program_patch = [None; 16];
         self.meter_peak_l = 0.0;
         self.meter_peak_r = 0.0;
@@ -603,6 +612,14 @@ impl Plugin for Op505Plugin {
         if delay_sync_rate != self.last_delay_sync_rate {
             self.master.slot_mut(0).set_reverb_delay_sync_rate(delay_sync_rate);
             self.last_delay_sync_rate = delay_sync_rate;
+        }
+        // ENV AMP EPSILON：env_ampキャッシュの許容誤差(NRPN(0,39)と同じ0〜255生値、そのまま
+        // 渡す)。NRPN(0,39)からも直接エンジンへ書き込まれるため、DAW値が変化していない間は
+        // NRPN側の設定が上書きされない（他のFx系パラメーターと同じ1シャドウ差分検知方式）。
+        let env_amp_epsilon = self.params.env_amp_epsilon.value() as u8;
+        if env_amp_epsilon != self.last_env_amp_epsilon {
+            op505_midi::apply_engine_control(&mut self.engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, env_amp_epsilon);
+            self.last_env_amp_epsilon = env_amp_epsilon;
         }
 
         // マスターボリューム：NRPN/SysEx経由の上書き経路が無い（VSTは`SysExMessage = ()`）ため、

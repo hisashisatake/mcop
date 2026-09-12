@@ -20,6 +20,7 @@
 
 use crate::control::{control_target, ControlTarget};
 use crate::cutoff_fg::apply_cutoff_fg_expression;
+use crate::engine_control::EngineControlTarget;
 use crate::expression::{apply_expression_modulation, apply_soft_pedal, ExpressionDestination};
 use crate::mono::MonoState;
 use crate::overrides::PatchOverrides;
@@ -46,6 +47,9 @@ pub enum DataEntryOutcome {
     /// エフェクト系NRPN。呼び出し側が`effect_route_slot`（0〜`EFFECT_SLOT_COUNT - 1`）が指す
     /// 自分のMasterEffectsへ`value`を適用する。
     Effect(u8, EffectControlTarget, u8),
+    /// エンジングローバル系NRPN（チャンネル非依存、`Op505Engine`へ直接適用する）。
+    /// 呼び出し側が`op505_midi::apply_engine_control(engine, target, value)`を呼ぶ。
+    Engine(EngineControlTarget, u8),
 }
 
 /// エフェクト系NRPN（NRPN(0,2)〜(0,8)）の適用先。`MasterEffects`はsound-core型のため
@@ -491,6 +495,9 @@ impl ChannelState {
             ControlTarget::FeedbackVelocitySens => {
                 self.overrides.feedback_velocity_sens = Some(cc_byte_to_u8(raw_value));
                 DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::EnvAmpEpsilon => {
+                DataEntryOutcome::Engine(EngineControlTarget::EnvAmpEpsilon, cc_byte_to_u8(raw_value))
             }
             ControlTarget::Unassigned => DataEntryOutcome::StateChanged { voice_update: false },
         }

@@ -264,5 +264,9 @@ fn handle_menu_event(
     *current_midir = None;
     *current_midir = midir_src::connect(sink.clone(), chosen_name.as_deref(), tempo.clone());
 
-    config::save(&config::StandaloneConfig { midi_in_port: chosen_name });
+    // 他フィールド（env_amp_epsilon等）を消さないよう、既存設定を読み込んでから
+    // midi_in_portだけ差し替える（フィールド追加のたびに全部埋め直す必要が無いように）。
+    let mut cfg = config::load();
+    cfg.midi_in_port = chosen_name;
+    config::save(&cfg);
 }
