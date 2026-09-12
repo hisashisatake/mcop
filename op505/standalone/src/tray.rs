@@ -113,6 +113,24 @@ fn build_port_items(current: Option<&str>) -> (Submenu, Vec<(CheckMenuItem, Opti
     (submenu, items)
 }
 
+/// 内部レンダリングレート設定（Stage 3）のサブメニューを構築する。`High (48kHz)`＝
+/// `internal_rate_div=1`（アップサンプラーを通さない既定）、`Low (24kHz)`＝`2`。
+/// 各項目のMenuIdと対応する`internal_rate_div`値のペアを返す。
+fn build_performance_items(current_div: u8) -> (Submenu, Vec<(CheckMenuItem, u8)>) {
+    let submenu = Submenu::new("Performance (restart required)", true);
+    let mut items = Vec::new();
+
+    let high_item = CheckMenuItem::new("High (48kHz)", true, current_div != 2, None);
+    let _ = submenu.append(&high_item);
+    items.push((high_item, 1u8));
+
+    let low_item = CheckMenuItem::new("Low (24kHz)", true, current_div == 2, None);
+    let _ = submenu.append(&low_item);
+    items.push((low_item, 2u8));
+
+    (submenu, items)
+}
+
 fn open_path_in_explorer(path: &std::path::Path) {
     // ファイルならエクスプローラーで選択表示、ディレクトリならそのまま開く。
     let arg = if path.is_file() { format!("/select,{}", path.display()) } else { path.display().to_string() };
@@ -156,16 +174,11 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
     let _ = menu.append(&port_submenu);
     let _ = menu.append(&PredefinedMenuItem::separator());
     // 内部レンダリングレートを24kHzへ落としCPU負荷を下げる設定（Stage 3、詳細はplan/
-    // spec-sound.md参照）。エンジン/エフェクトの作り直しが必要なため、トグルは設定ファイルへの
-    // 保存のみ行い、実際の適用は次回起動から（`--internal-rate-div`起動引数が優先する場合は
-    // その旨をログへ出す）。
-    let low_cpu_item = CheckMenuItem::new(
-        "Low CPU Mode (24kHz, restart required)",
-        true,
-        cfg.internal_rate_div == Some(2),
-        None,
-    );
-    let _ = menu.append(&low_cpu_item);
+    // spec-sound.md参照）。エンジン/エフェクトの作り直しが必要なため、選択は設定ファイルへの
+    // 保存のみ行い、実際の適用は次回起動から。
+    let (performance_submenu, mut performance_items) =
+        build_performance_items(cfg.internal_rate_div.unwrap_or(1));
+    let _ = menu.append(&performance_submenu);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let open_log_item = MenuItem::new("Open Log", true, None);
     let open_config_item = MenuItem::new("Open Config Folder", true, None);
@@ -212,7 +225,7 @@ pub fn run(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
                 &editor_item.id(),
                 &open_log_item.id(),
                 &open_config_item.id(),
-                &low_cpu_item,
+                &mut performance_items,
                 &mut port_items,
                 &sink,
                 &mut current_midir,
@@ -241,7 +254,7 @@ fn handle_menu_event(
     editor_id: &MenuId,
     open_log_id: &MenuId,
     open_config_id: &MenuId,
-    low_cpu_item: &CheckMenuItem,
+    performance_items: &mut [(CheckMenuItem, u8)],
     port_items: &mut [(CheckMenuItem, Option<String>)],
     sink: &MidiSink,
     current_midir: &mut Option<midir_src::MidirSource>,
@@ -264,16 +277,20 @@ fn handle_menu_event(
         open_path_in_explorer(&config::file_path());
         return;
     }
-    if &id == low_cpu_item.id() {
-        // クリック直後、tray-icon側が既にチェック状態をトグル済みなのでそれを読んで保存する
-        // （`is_checked()`は新しい状態を返す）。
-        let enabled = low_cpu_item.is_checked();
+
+    if let Some(pos) = performance_items.iter().position(|(item, _)| item.id() == &id) {
+        for (item, _) in performance_items.iter() {
+            item.set_checked(false);
+        }
+        performance_items[pos].0.set_checked(true);
+        let div = performance_items[pos].1;
+
         let mut cfg = config::load();
-        cfg.internal_rate_div = if enabled { Some(2) } else { Some(1) };
+        cfg.internal_rate_div = Some(div);
         config::save(&cfg);
         log::log(&format!(
-            "Low CPU Mode を{}にしました。反映にはop505-standaloneの再起動が必要です。",
-            if enabled { "ON" } else { "OFF" }
+            "Performance set to {}. Restart op505-standalone to apply.",
+            if div == 2 { "Low (24kHz)" } else { "High (48kHz)" }
         ));
         return;
     }

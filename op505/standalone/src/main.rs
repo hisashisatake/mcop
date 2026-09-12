@@ -184,7 +184,7 @@ fn parse_internal_rate_div_arg() -> Option<u8> {
             return match v.parse::<u8>() {
                 Ok(n) if n == 1 || n == 2 => Some(n),
                 _ => {
-                    log::log(&format!("--internal-rate-div の値が不正です(1または2): {v}（無視します）"));
+                    log::log(&format!("Invalid --internal-rate-div value (must be 1 or 2): {v} (ignoring)"));
                     None
                 }
             };
@@ -214,11 +214,11 @@ fn main() {
     // 内部レンダリングレート（起動引数優先、無ければ`standalone.json`の設定値、
     // どちらも無指定/不正値なら1＝出力デバイスレートと同じ、アップサンプラーは通さない）。
     // 1か2以外の値は無視して1として扱う（発音中の作り直しを避けるため、変更は次回起動から
-    // 有効。トレイメニュー「Low CPU Mode」参照）。
+    // 有効。トレイメニュー「Performance」参照）。
     let internal_rate_div: u8 = match parse_internal_rate_div_arg().or(cfg.internal_rate_div) {
         Some(n) if n == 1 || n == 2 => n,
         Some(n) => {
-            log::log(&format!("internal_rate_div の値が不正です(1または2以外): {n}（1として扱います）"));
+            log::log(&format!("Invalid internal_rate_div value (must be 1 or 2): {n} (treating as 1)"));
             1
         }
         None => 1,
