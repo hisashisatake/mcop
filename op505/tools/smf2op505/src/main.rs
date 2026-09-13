@@ -4,7 +4,7 @@
 //! ```text
 //! smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]
 //!           [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>]
-//!           [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-255>]
+//!           [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-1>]
 //! ```
 //! - `out.wav` 省略時は `<song>` と同じディレクトリに `<songの拡張子なし名>.wav` を出力する。
 //! - プログラムチェンジ番号 = `.op505` のプログラム番号で音色を選ぶ
@@ -29,9 +29,10 @@
 //! - `--strict-env-amp` env_ampキャッシュを厳密一致（Strict、エンジンの既定と同じ）に
 //!   切り替える（`--env-amp-epsilon 0`のショートハンド）。未指定時と同じ挙動になるため、
 //!   明示したい場合のみ使う。
-//! - `--env-amp-epsilon <0-255>` env_ampキャッシュの許容誤差をNRPN(0,39)と同じ0〜255値で
-//!   直接指定する（0=Strict/厳密一致、1以上=Tolerant/1e-6固定。未指定時はエンジン既定の
-//!   Strictのまま。8e9c3f9で導入したTolerant(1e-6)は現在既定ではなく明示指定でのみ有効）。
+//! - `--env-amp-epsilon <0-1>` env_ampキャッシュの許容誤差を直接指定する（0=Strict/厳密一致、
+//!   1=Tolerant/1e-6固定。未指定時はエンジン既定のStrictのまま。8e9c3f9で導入した
+//!   Tolerant(1e-6)は現在既定ではなく明示指定でのみ有効。NRPN(0,39)自体は8bit統一の慣例で
+//!   0〜255の生値を受け付けるが、内部で0/非0の2値へ潰されるためこのCLIでは0/1のみ許可する）。
 //! - `--internal-rate-div <1|2>` 内部レンダリングレートを`--sr`値のこの倍数分の1へ落とし
 //!   （例: `--sr 48000 --internal-rate-div 2`なら内部24kHzで計算）、出力直前に
 //!   `sound_core::Upsampler2x`で`--sr`のレートへ戻す（op505-standaloneの「内部24kHz
@@ -55,7 +56,7 @@ fn main() -> ExitCode {
             eprintln!("smf2op505: {msg}");
             eprintln!("usage: smf2op505 <bank.op505> <song.mid> [out.wav] [--sr <Hz>] [--tail <秒>] [--no-normalize]");
             eprintln!("       [--reverb-send <N>] [--reverb-type <0-7>] [--reverb-time <N>] [--max-voices <N>]");
-            eprintln!("       [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-255>]");
+            eprintln!("       [--drum-bank <kit.op505>]... [--strict-env-amp] [--env-amp-epsilon <0-1>]");
             eprintln!("       [--internal-rate-div <1|2>]");
             ExitCode::FAILURE
         }
@@ -76,8 +77,8 @@ struct Args {
     max_voices: Option<usize>,
     /// GM2リズムキットバンクファイル（複数回指定可、順にmerge_fileで重ねる）。
     drum_banks: Vec<PathBuf>,
-    /// `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差(NRPN(0,39)と同じ
-    /// 0〜255値)を起動時に上書きする（None=エンジン既定のStrict（厳密一致）のまま）。
+    /// `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差(実質2値、
+    /// 0=Strict/1=Tolerant)を起動時に上書きする（None=エンジン既定のStrict（厳密一致）のまま）。
     env_amp_epsilon: Option<u8>,
     /// `--internal-rate-div`: 内部レンダリングレートを`sample_rate`のこの倍数分の1へ落とす
     /// （1または2、既定1=アップサンプラーを通さずビット不変）。
@@ -166,10 +167,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 env_amp_epsilon = Some(0);
                 i += 1;
             }
-            // env_ampキャッシュの許容誤差を直接指定する(0〜255、NRPN(0,39)と同じ写像)。
+            // env_ampキャッシュの許容誤差を直接指定する。実質2値（0=Strict/1=Tolerant、
+            // NRPN(0,39)は8bit慣例で0〜255を受け付けるが内部で0/非0の2値へ潰されるため）。
             "--env-amp-epsilon" => {
                 let v = args.get(i + 1).ok_or("--env-amp-epsilon に値がありません")?;
-                env_amp_epsilon = Some(v.parse::<u8>().map_err(|_| format!("--env-amp-epsilon の値が不正(0-255): {v}"))?);
+                let n = v.parse::<u8>().map_err(|_| format!("--env-amp-epsilon の値が不正(0または1): {v}"))?;
+                if n != 0 && n != 1 {
+                    return Err(format!("--env-amp-epsilon は0または1を指定してください: {v}"));
+                }
+                env_amp_epsilon = Some(n);
                 i += 2;
             }
             // 内部レンダリングレートを--srのこの倍数分の1へ落とす（1または2のみ）。

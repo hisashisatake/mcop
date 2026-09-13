@@ -148,7 +148,8 @@ impl MidiState {
 
 /// `--strict-env-amp`/`--env-amp-epsilon <N>`起動引数をパースする。値が無ければ`None`
 /// （設定ファイル`standalone.json`の`env_amp_epsilon`にフォールバックする、`main()`参照）。
-/// 標準出力を持たないGUIサブシステムのため、不正な値は無視して`None`を返す
+/// 実質2値（0=Strict/1=Tolerant、`op505_midi::nrpn_to_env_amp_epsilon`が内部で0/非0の2値へ
+/// 潰すため）なので、`--internal-rate-div`と同じ方式で0/1以外は無視して`None`を返す
 /// （`log`モジュールへ警告を出す。起動を止めるほどの誤りではないため）。
 fn parse_env_amp_epsilon_arg() -> Option<u8> {
     let args: Vec<String> = std::env::args().collect();
@@ -159,9 +160,9 @@ fn parse_env_amp_epsilon_arg() -> Option<u8> {
             "--env-amp-epsilon" => {
                 let v = args.get(i + 1)?;
                 return match v.parse::<u8>() {
-                    Ok(n) => Some(n),
-                    Err(_) => {
-                        log::log(&format!("--env-amp-epsilon の値が不正です(0-255): {v}（無視します）"));
+                    Ok(n) if n == 0 || n == 1 => Some(n),
+                    _ => {
+                        log::log(&format!("--env-amp-epsilon の値が不正です(0または1): {v}（無視します）"));
                         None
                     }
                 };

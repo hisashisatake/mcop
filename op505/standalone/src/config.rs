@@ -15,10 +15,12 @@ pub struct StandaloneConfig {
     /// （[`crate::sources::midir_src::connect`]参照）。
     #[serde(default)]
     pub midi_in_port: Option<String>,
-    /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値、`op505_midi::EngineControlTarget`
-    /// 参照）。起動時にこの値をエンジンへ適用する。未設定はエンジン既定（Strict/厳密一致）
-    /// のまま。音色エディタの「Envelope Amp」メニューを操作するたびにも上書き保存され、
-    /// 次回起動から選んだ値が引き継がれる（トレイ「Performance」と同じ方式）。
+    /// env_ampキャッシュの許容誤差（実質2値：0=Strict/1=Tolerant、`op505_midi::
+    /// EngineControlTarget`参照。NRPN(0,39)自体は8bit統一の慣例で0〜255の生値を受け付ける
+    /// が、内部で0/非0の2値へ潰されるため保存する値も0か1のみ）。起動時にこの値を
+    /// エンジンへ適用する。未設定はエンジン既定（Strict/厳密一致）のまま。音色エディタの
+    /// 「Envelope Amp」メニューを操作するたびにも上書き保存され、次回起動から選んだ値が
+    /// 引き継がれる（トレイ「Performance」と同じ方式）。
     /// `--strict-env-amp`/`--env-amp-epsilon <N>`起動引数が指定されればそちらが優先する。
     #[serde(default)]
     pub env_amp_epsilon: Option<u8>,
