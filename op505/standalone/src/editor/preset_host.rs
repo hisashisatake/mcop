@@ -40,5 +40,10 @@ impl PresetHost for StandalonePresetHost<'_> {
 
     fn apply_env_amp_epsilon(&self, value: u8) {
         self.shared.publish_env_amp_epsilon(value);
+        // トレイの「Performance」サブメニューと同じ方式で`standalone.json`へ永続化する
+        // （他フィールドを消さないよう、既存設定を読み込んでからこの1項目だけ差し替える）。
+        let mut cfg = crate::config::load();
+        cfg.env_amp_epsilon = Some(value);
+        crate::config::save(&cfg);
     }
 }

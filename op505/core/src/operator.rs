@@ -86,7 +86,7 @@ pub struct Operator {
     cached_pitch_ratio_key: Option<f32>,
     /// `env_amp`の等比数列キャッシュ。TimeEgは段ごとにcurveを持つため（ym38x6版のような
     /// グローバル`params.curve`フラグでの早期バイパスは使えない）、`delta`（前サンプルからの
-    /// env_level変化量）が前回とほぼ一致するかで有効性を判定する（`ENV_AMP_DELTA_EPSILON`
+    /// env_level変化量）が前回とほぼ一致するかで有効性を判定する（`env_amp_epsilon`
     /// 許容誤差比較。線形区間でも`level`計算の丸め誤差でdeltaが微妙にブレるため、厳密一致
     /// だと実測ヒット率48%しか出ない）。curve!=0の区間はdeltaが大きく揺れて自然にフォール
     /// スルー（直接powf()）する。
@@ -98,24 +98,32 @@ pub struct Operator {
     env_amp_resync_counter: u32,
     cached_tl_gain: f32,
     cached_tl_gain_key: Option<(u8, u8, u8, u8, u8)>,
-    /// env_ampキャッシュのヒット判定に使う許容誤差。既定`ENV_AMP_DELTA_EPSILON`（1e-6）、
-    /// `Op505Engine::set_env_amp_epsilon`（NRPN(0,39)経由）で変更できる。0.0にすると
-    /// `<=`比較が実質`==`（8e9c3f9以前の厳密一致）と等価になる。
+    /// env_ampキャッシュのヒット判定に使う許容誤差。既定は`ENV_AMP_DEFAULT_EPSILON`（0.0＝
+    /// Strict、厳密一致）。`Op505Engine::set_env_amp_epsilon`（Envelope Ampメニュー/
+    /// NRPN(0,39)経由）で`ENV_AMP_TOLERANT_EPSILON`（1e-6）へ切り替えられる。
     env_amp_epsilon: f32,
 }
 
 const ENV_AMP_RESYNC_INTERVAL: u32 = 4096;
 /// `delta == cached_env_delta`の厳密一致では、線形区間でもほぼ効かないことが実測で判明した
 /// （TimeEg::elapsedはf64蓄積だが`progress`をf32へキャストして`level`を計算するため、
-/// 丸め誤差でdeltaが毎サンプル微妙にブレる。実測ヒット率48%）。許容誤差を導入したところ
+/// 丸め誤差でdeltaが毎サンプル微妙にブレる。実測ヒット率48%）。この許容誤差を使うと
 /// ヒット率99.96%まで改善し、smf2op505での実測レンダリング時間が約17%短縮した
 /// （相対誤差は既存回帰テスト`env_amp_cache_stays_close_to_direct_computation`で0.026%、
 /// 許容ライン1%に対し十分小さいことを確認済み）。
 ///
-/// 実行時に変更可能（`Operator::env_amp_epsilon`フィールド、既定値はこの定数）。
-/// NRPN(0,39)経由で0（厳密一致相当、`<=`比較のため0.0は`==`と完全に等価）〜より緩い値へ
-/// 変更できる（`op505-midi`の`nrpn_to_env_amp_epsilon`参照）。
-pub(crate) const ENV_AMP_DELTA_EPSILON: f32 = 1e-6;
+/// **この値を超えて許容誤差を緩めてはならない**。実測で、EGステージの境界（Attack→Decay等）を
+/// またぐ1サンプルだけ本来より小さいdeltaになる区間があり、epsilonがこれより緩いと
+/// その境界サンプルもキャッシュ対象と誤判定され、env_ampが100%を超えてオーバーシュートする
+/// （境界の直前サンプルの比率で外挿してしまうため）。実測では2e-5から早くも最大5%の
+/// 理論値ズレが、1e-3（当初のTolerant 2の上限値）では100%超えのオーバーシュートが
+/// 再現した。1e-5でも安全マージンが薄いため、Tolerant設定はこの`ENV_AMP_TOLERANT_EPSILON`
+/// （8e9c3f9で最初に検証・出荷した値）だけを使う。
+pub const ENV_AMP_TOLERANT_EPSILON: f32 = 1e-6;
+/// env_ampキャッシュの既定許容誤差＝Strict（厳密一致、`<=`比較で0.0は`==`と等価）。
+/// Envelope Ampメニュー/NRPN(0,39)で明示的にTolerantを選ぶまでは、新規発音・新規エンジンとも
+/// 必ずこの値から始まる。
+pub(crate) const ENV_AMP_DEFAULT_EPSILON: f32 = 0.0;
 
 impl Operator {
     pub fn new(params: Op505OperatorParams) -> Self {
@@ -144,7 +152,7 @@ impl Operator {
             env_amp_resync_counter: 0,
             cached_tl_gain: 0.0,
             cached_tl_gain_key: None,
-            env_amp_epsilon: ENV_AMP_DELTA_EPSILON,
+            env_amp_epsilon: ENV_AMP_DEFAULT_EPSILON,
         }
     }
 

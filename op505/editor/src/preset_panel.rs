@@ -594,22 +594,23 @@ pub fn draw_editor_top_bar(
             }
         });
 
-        // env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値）を3段階のプリセット値で
+        // env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値）をStrict/Tolerantの2段階で
         // 切り替える診断用メニュー。`radio_value`が`state.env_amp_epsilon`と一致する項目に
         // チェック（ラジオボタン）を付ける。選んだ瞬間に`host.apply_env_amp_epsilon`を直接
         // 呼ぶ（MASTER EFFECTSパネルのようなdirtyフラグ+毎フレームdiffの仕組みは、単発
         // クリックのこの用途には不要）。
+        // かつてTolerant 1/2の2段階(127/255→epsilon 1e-6〜1e-3を対数補間)があったが、実測で
+        // 1e-6より緩い値はEGステージ境界でenv_ampが100%を超えてオーバーシュートする
+        // （音が一瞬跳ねて二度打ちしたように聴こえる）ことが判明したため、Tolerantは
+        // `op505_midi::nrpn_to_env_amp_epsilon`が固定で返す1e-6のみに一本化した
+        // （詳細はop505-coreの`ENV_AMP_TOLERANT_EPSILON`のdoc参照）。
         ui.menu_button("Envelope Amp", |ui| {
             if ui.radio_value(&mut state.env_amp_epsilon, 0, "Strict (0)").clicked() {
                 host.apply_env_amp_epsilon(0);
                 ui.close();
             }
-            if ui.radio_value(&mut state.env_amp_epsilon, 127, "Tolerant 1 (127)").clicked() {
-                host.apply_env_amp_epsilon(127);
-                ui.close();
-            }
-            if ui.radio_value(&mut state.env_amp_epsilon, 255, "Tolerant 2 (255)").clicked() {
-                host.apply_env_amp_epsilon(255);
+            if ui.radio_value(&mut state.env_amp_epsilon, 1, "Tolerant (1e-6)").clicked() {
+                host.apply_env_amp_epsilon(1);
                 ui.close();
             }
         });
@@ -965,11 +966,12 @@ pub struct EditorPresetState {
     /// ——「中央の空きスペースを2分割してそれぞれ固定幅にしたい」というユーザー要望による
     /// （2026-09-03）。
     center_half_width: f32,
-    /// 「Envelope Amp」メニューで最後に選んだ許容誤差値（0/127/255のいずれか）。
+    /// 「Envelope Amp」メニューで最後に選んだ許容誤差値（0=Strict/1=Tolerantのいずれか）。
     /// エンジン/DAWパラメーターの実際の値を読み返す経路が無いため、GUI側の選択状態を
     /// そのまま表示に使う（MASTER EFFECTSパネルの`master`と同じ「GUI側コピーが表示の
-    /// 正とする」方針）。既定値1（エンジン既定と同じ）はどの選択肢とも一致しないため、
-    /// 一度も選んでいない間はどの項目にもチェックが付かない（意図した挙動）。
+    /// 正とする」方針）。既定値0（Strict）は`Operator`/`Op505Engine`自身の既定
+    /// （`ENV_AMP_DEFAULT_EPSILON`）と一致するため、エディタを開いた直後からStrictが
+    /// 正しくチェックされた状態で表示される。
     env_amp_epsilon: u8,
 }
 
@@ -985,7 +987,7 @@ impl EditorPresetState {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
-            env_amp_epsilon: 1,
+            env_amp_epsilon: 0,
         }
     }
 
@@ -1003,6 +1005,14 @@ impl EditorPresetState {
     /// 現在選択中のprogram番号。Undoスナップショットの構築に使う。
     pub fn program(&self) -> u8 {
         self.session.program
+    }
+
+    /// 「Envelope Amp」メニューの初期選択表示を、ホストが持つ「今実際に効いている値」に
+    /// 合わせる（`new()`直後、パネル初回描画前に呼ぶこと）。Strict/Tolerantの2値化前に
+    /// 保存された値（127/255等）が渡ってきても、0=Strict/それ以外=Tolerant(1)へ正規化する
+    /// （standaloneの`standalone.json`に旧設定が残っているケースへの防御）。
+    pub fn sync_env_amp_epsilon_display(&mut self, value: u8) {
+        self.env_amp_epsilon = if value == 0 { 0 } else { 1 };
     }
 
     /// 現在の音色名（音欄の表示値）。Undoスナップショットの構築に使う。
@@ -1092,7 +1102,7 @@ mod tests {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
-            env_amp_epsilon: 1,
+            env_amp_epsilon: 0,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };
@@ -1117,7 +1127,7 @@ mod tests {
             right_content_width: 150.0,
             available_width: 0.0,
             center_half_width: 200.0,
-            env_amp_epsilon: 1,
+            env_amp_epsilon: 0,
         };
 
         let host = MockHost { auto_save: false, published: RefCell::new(vec![]) };

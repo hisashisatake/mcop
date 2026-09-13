@@ -293,7 +293,7 @@ pub fn render_smf_with_drums(
         engine.set_max_voices(n);
     }
     // `--strict-env-amp`/`--env-amp-epsilon`: env_ampキャッシュの許容誤差を起動時に上書きする
-    // （NRPN(0,39)と同じ0〜255値、Noneはエンジン既定=8e9c3f9の現行挙動のまま）。
+    // （NRPN(0,39)と同じ0〜255値、Noneはエンジン既定のStrict（厳密一致）のまま）。
     if let Some(v) = env_amp_epsilon {
         op505_midi::apply_engine_control(&mut engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
     }

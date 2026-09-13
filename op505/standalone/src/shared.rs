@@ -134,7 +134,14 @@ pub enum ProgramStatus {
 impl SharedEditState {
     /// 初期値は現在の既定パッチ・起動時プリセット集合で初期化する。dirtyフラグは全てfalseで
     /// 始まるため、エディタを一度も開かない限りオーディオスレッド側の分岐は素通りする。
-    pub fn new(default_patch: Op505Patch, presets: Op505PresetBank) -> Self {
+    ///
+    /// `initial_env_amp_epsilon`は`main()`が起動引数/`standalone.json`から決めてエンジンへ
+    /// 直接適用した値（`op505_midi::apply_engine_control`）をそのまま渡す。ここでは
+    /// dirtyフラグを立てずに値だけ記録する（エンジンへは既に適用済みのため、次のオーディオ
+    /// ブロックで二重適用させない）。これにより、後から開くエディタの「Envelope Amp」メニューが
+    /// [`current_env_amp_epsilon`](Self::current_env_amp_epsilon)経由で「今実際に効いている値」を
+    /// 初期選択状態として表示できる。
+    pub fn new(default_patch: Op505Patch, presets: Op505PresetBank, initial_env_amp_epsilon: u8) -> Self {
         Self {
             patch: RwLock::new(default_patch),
             patch_dirty: AtomicBool::new(false),
@@ -144,7 +151,7 @@ impl SharedEditState {
             fx_values: std::array::from_fn(|_| AtomicU8::new(0)),
             fx_slot: AtomicU8::new(0),
             fx_dirty: AtomicBool::new(false),
-            env_amp_epsilon: AtomicU8::new(0),
+            env_amp_epsilon: AtomicU8::new(initial_env_amp_epsilon),
             env_amp_epsilon_dirty: AtomicBool::new(false),
             master_meter: Arc::new(MeterBridge::new()),
             program_selections: std::array::from_fn(|_| AtomicU32::new(0)),
@@ -201,6 +208,12 @@ impl SharedEditState {
     /// GUIスレッドからのブロッキング`read()`は許容する（オーディオスレッドは呼ばない）。
     pub fn current_patch(&self) -> Op505Patch {
         *self.patch.read().unwrap()
+    }
+
+    /// エディタを開く際の「Envelope Amp」メニュー初期選択状態の取得用。`current_patch`と同じく
+    /// dirtyフラグには触れない（閲覧専用）。
+    pub fn current_env_amp_epsilon(&self) -> u8 {
+        self.env_amp_epsilon.load(Ordering::Relaxed)
     }
 
     // ---- オーディオスレッド側API（try_readのみ、ブロックしない） ----
@@ -352,7 +365,7 @@ mod tests {
 
     #[test]
     fn unused_state_never_reports_dirty() {
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         assert_eq!(shared.edit_channel(), None);
         assert!(shared.take_patch_if_dirty().is_none());
         assert!(shared.take_presets_if_dirty().is_none());
@@ -363,7 +376,7 @@ mod tests {
     fn publish_patch_round_trips() {
         let mut patch = Op505Patch::default();
         patch.channel.pitch_fg.depth = 42;
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         shared.publish_patch(patch);
         let taken = shared.take_patch_if_dirty().expect("dirty after publish");
         assert_eq!(taken.channel.pitch_fg.depth, 42);
@@ -373,7 +386,7 @@ mod tests {
 
     #[test]
     fn edit_channel_round_trips() {
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         shared.set_edit_channel(Some(3));
         assert_eq!(shared.edit_channel(), Some(3));
         shared.set_edit_channel(None);
@@ -385,7 +398,7 @@ mod tests {
         use op505_core::{Op505PresetEntry, Op505PresetFile};
         use std::path::PathBuf;
 
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         let file = Op505PresetFile::Presets {
             bank: 5,
             presets: vec![Op505PresetEntry { program: 2, name: "Test".to_string(), patch: Op505Patch::default() }],
@@ -414,7 +427,7 @@ mod tests {
         use op505_core::{Op505PresetEntry, Op505PresetFile};
         use std::path::PathBuf;
 
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         let file = Op505PresetFile::Presets {
             bank: 3,
             presets: vec![Op505PresetEntry { program: 7, name: "TestPatch".to_string(), patch: Op505Patch::default() }],
@@ -435,7 +448,7 @@ mod tests {
 
     #[test]
     fn resolve_program_name_not_found_when_preset_missing() {
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
         selections[0] = ProgramSelection::Melodic { bank: 99, program: 1 };
         shared.publish_program_selections(selections);
@@ -446,7 +459,7 @@ mod tests {
 
     #[test]
     fn resolve_program_name_editing_overrides_selection() {
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         shared.set_edit_channel(Some(4));
         let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
         selections[4] = ProgramSelection::Melodic { bank: 1, program: 2 };
@@ -458,7 +471,7 @@ mod tests {
 
     #[test]
     fn publish_fx_round_trips() {
-        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default());
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
         let mut values = [0u8; FX_VALUE_COUNT];
         values[FX_REVERB_SEND] = 200;
         shared.publish_fx(2, values);

@@ -63,6 +63,10 @@ impl EditorApp {
     pub fn new(shared: Arc<SharedEditState>, midi_sink: MidiSink, initial_patch: Op505Patch) -> Self {
         let master_meter = shared.master_meter();
         let ui_config = op505_core::ui_config::load();
+        let mut presets = EditorPresetState::new();
+        // 「Envelope Amp」メニューの初期選択を、今実際にエンジンへ効いている値に合わせる
+        // （patchと同じく「エディタを開くたびに引き継ぐ」方針、`current_env_amp_epsilon`のdoc参照）。
+        presets.sync_env_amp_epsilon_display(shared.current_env_amp_epsilon());
         Self {
             shared,
             midi_sink,
@@ -74,7 +78,7 @@ impl EditorApp {
             meter_fps: op505_core::meter_fps(&ui_config),
             level_meter_gap_px: op505_core::level_meter_gap_px(&ui_config),
             undo: Rc::new(RefCell::new(UndoStack::new())),
-            presets: EditorPresetState::new(),
+            presets,
             keyboard: KeyboardState::new(),
             edit_channel: None,
             pending_close_confirm: None,

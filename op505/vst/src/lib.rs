@@ -111,7 +111,8 @@ struct Op505Plugin {
     last_delay_sync_rate: u8,
     /// `env_amp_epsilon`（IntParam、0〜255）の前回値。NRPN(0,39)からも直接エンジンへ
     /// 書き込まれるため、DAW値が変化していない間はNRPN側の設定が上書きされない
-    /// （他のFx系パラメーターと同じ1シャドウ差分検知方式）。既定1（現行既定挙動と一致）。
+    /// （他のFx系パラメーターと同じ1シャドウ差分検知方式）。既定0（DAWパラメーターの
+    /// 既定値・`Op505Engine`自身の既定＝Strictと一致）。
     last_env_amp_epsilon: u8,
 
     // AT/Poly AT Destination（NRPN(0,16)/(0,17)）・CC2/CC4の加算先（NRPN(0,34)/(0,35)）は
@@ -198,7 +199,7 @@ impl Default for Op505Plugin {
             last_chorus_send_to_reverb: DEFAULT_CHORUS_SEND_TO_REVERB,
             last_delay_sync: DEFAULT_DELAY_SYNC,
             last_delay_sync_rate: DEFAULT_DELAY_SYNC_RATE,
-            last_env_amp_epsilon: 1,
+            last_env_amp_epsilon: 0,
             rhythm_kits_available: false,
             program_patch: [None; 16],
             preset_bank: Op505PresetBank::default(),
@@ -441,7 +442,7 @@ impl Plugin for Op505Plugin {
         self.last_chorus_send_to_reverb = DEFAULT_CHORUS_SEND_TO_REVERB;
         self.last_delay_sync = DEFAULT_DELAY_SYNC;
         self.last_delay_sync_rate = DEFAULT_DELAY_SYNC_RATE;
-        self.last_env_amp_epsilon = 1;
+        self.last_env_amp_epsilon = 0;
         self.program_patch = [None; 16];
         self.meter_peak_l = 0.0;
         self.meter_peak_r = 0.0;

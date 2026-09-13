@@ -253,10 +253,11 @@ pub(crate) struct Op505VstParams {
     #[id = "dly_rate"]
     pub delay_sync_rate: IntParam,
     /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255の生値、`nrpn_to_env_amp_epsilon`で
-    /// f32へ写像する。0=厳密一致相当/8e9c3f9以前の挙動、1=現行既定値=1e-6と完全一致）。
+    /// f32へ写像する。0=Strict/厳密一致（既定）、1以上=Tolerant/1e-6固定）。
     /// プリセット/patchの一部ではなくエンジンの計算精度モードそのものなので、`param_spec`
-    /// （プリセット共有パネル用の正本）は経由せずここで直接宣言する（standalone側もGUI
-    /// パネルを持たず、CLI/config.jsonでのみ設定するため、共有パネルウィジェットは不要）。
+    /// （プリセット共有パネル用の正本）は経由せずここで直接宣言する（GUI側は
+    /// `op505-editor`の`draw_editor_top_bar`にある「Envelope Amp」メニュー、
+    /// standalone/VST共有）。
     #[id = "env_amp_epsilon"]
     pub env_amp_epsilon: IntParam,
 
@@ -296,9 +297,11 @@ impl Default for Op505VstParams {
             master_volume: int_param(IntField::Fx(FxInt::MasterVolume)),
             delay_sync: int_param(IntField::Fx(FxInt::DelaySync)),
             delay_sync_rate: int_param(IntField::Fx(FxInt::DelaySyncRate)),
-            // 既定1（`nrpn_to_env_amp_epsilon(1) == 1e-6` == 現行既定挙動と完全一致）。
-            // 0にすると8e9c3f9以前の厳密一致相当になる。
-            env_amp_epsilon: IntParam::new("ENV AMP EPSILON", 1, IntRange::Linear { min: 0, max: 255 }),
+            // 既定0（Strict/厳密一致）。`Op505Engine`/`Operator`自身の既定
+            // （`ENV_AMP_DEFAULT_EPSILON`）と一致させ、DAWがこのパラメーターへ一度も
+            // 触れない新規インスタンスでの実挙動と食い違わないようにする。1以上は
+            // Tolerant（`nrpn_to_env_amp_epsilon`が固定で返す1e-6）。
+            env_amp_epsilon: IntParam::new("ENV AMP EPSILON", 0, IntRange::Linear { min: 0, max: 255 }),
             egs: Arc::new(RwLock::new(Op505EgBank::default())),
         }
     }

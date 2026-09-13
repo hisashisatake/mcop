@@ -249,7 +249,7 @@ fn main() {
     let mut state = MidiState::new(presets.clone(), default_patch);
     // トレイ起動音色エディタとの共有状態（Step 1以降）。エディタが一度も開かれなければ
     // 全dirtyフラグがfalseのままで、`sync_editor_state`は即座に返り既存挙動を変えない。
-    let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets));
+    let shared_edit_state = Arc::new(SharedEditState::new(default_patch, presets, env_amp_epsilon.unwrap_or(0)));
     // レベルメーターのpublish間隔（`%APPDATA%\op505\ui.json`、既定10fps）。ピーク検出自体は
     // 毎ブロック行い、この間隔でまとめて`MeterBridge`へ渡す（取りこぼしを避けるため
     // 区間内の最大値を累積してから送る）。

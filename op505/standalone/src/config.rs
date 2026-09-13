@@ -16,8 +16,10 @@ pub struct StandaloneConfig {
     #[serde(default)]
     pub midi_in_port: Option<String>,
     /// env_ampキャッシュの許容誤差（NRPN(0,39)と同じ0〜255値、`op505_midi::EngineControlTarget`
-    /// 参照）。起動時にこの値をエンジンへ適用する。未設定はエンジン既定（現行の8e9c3f9挙動）
-    /// のまま。`--strict-env-amp`/`--env-amp-epsilon <N>`起動引数が指定されればそちらが優先する。
+    /// 参照）。起動時にこの値をエンジンへ適用する。未設定はエンジン既定（Strict/厳密一致）
+    /// のまま。音色エディタの「Envelope Amp」メニューを操作するたびにも上書き保存され、
+    /// 次回起動から選んだ値が引き継がれる（トレイ「Performance」と同じ方式）。
+    /// `--strict-env-amp`/`--env-amp-epsilon <N>`起動引数が指定されればそちらが優先する。
     #[serde(default)]
     pub env_amp_epsilon: Option<u8>,
     /// 内部レンダリングレートを起動時の出力デバイスレートのこの倍数分の1へ落とす

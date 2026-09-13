@@ -865,9 +865,9 @@ pub struct Op505Engine {
     /// TimeEgのテンポ同期（`sync_enabled`）に使うBPM。ホストDAWのTransport（VST）や
     /// タップテンポ（gesture-app）から`set_tempo()`経由で設定される。既定120。
     tempo_bpm: f32,
-    /// env_ampキャッシュの許容誤差（`Operator::env_amp_epsilon`の既定値、NRPN(0,39)経由で
-    /// `set_env_amp_epsilon`から変更できる）。既定は`operator::ENV_AMP_DELTA_EPSILON`
-    /// （8e9c3f9で導入した現行挙動）。
+    /// env_ampキャッシュの許容誤差（`Operator::env_amp_epsilon`の既定値、Envelope Ampメニュー/
+    /// NRPN(0,39)経由で`set_env_amp_epsilon`から変更できる）。既定は
+    /// `operator::ENV_AMP_DEFAULT_EPSILON`（0.0＝Strict）。
     env_amp_epsilon: f32,
 }
 
@@ -888,7 +888,7 @@ impl Op505Engine {
             slot_mix_buf_l: Vec::new(),
             slot_mix_buf_r: Vec::new(),
             tempo_bpm: 120.0,
-            env_amp_epsilon: operator::ENV_AMP_DELTA_EPSILON,
+            env_amp_epsilon: operator::ENV_AMP_DEFAULT_EPSILON,
         }
     }
 
@@ -896,9 +896,10 @@ impl Op505Engine {
         self.max_voices = max_voices.max(1);
     }
 
-    /// env_ampキャッシュの許容誤差を変更する（NRPN(0,39)経由、`op505-midi`の
-    /// `apply_engine_control`から呼ばれる）。発音中の全ボイスへ即座に反映し、以降新規に
-    /// 発音するボイスにも引き継がれる。0.0にすると8e9c3f9以前の厳密一致相当になる。
+    /// env_ampキャッシュの許容誤差を変更する（Envelope Ampメニュー/NRPN(0,39)経由、
+    /// `op505-midi`の`apply_engine_control`から呼ばれる）。発音中の全ボイスへ即座に反映し、
+    /// 以降新規に発音するボイスにも引き継がれる。0.0がStrict（厳密一致）、
+    /// `operator::ENV_AMP_TOLERANT_EPSILON`（1e-6）がTolerant。
     pub fn set_env_amp_epsilon(&mut self, epsilon: f32) {
         self.env_amp_epsilon = epsilon;
         for ch in self.channels.values_mut() {
@@ -1091,7 +1092,7 @@ impl Vco for Op505Engine {
             self.steal_one_voice();
         }
         self.channels.insert(channel, Channel::new(frequency, velocity, patch));
-        if self.env_amp_epsilon != operator::ENV_AMP_DELTA_EPSILON {
+        if self.env_amp_epsilon != operator::ENV_AMP_DEFAULT_EPSILON {
             if let Some(ch) = self.channels.get_mut(&channel) {
                 for op in ch.operators.iter_mut() {
                     op.set_env_amp_epsilon(self.env_amp_epsilon);
