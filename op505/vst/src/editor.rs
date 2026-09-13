@@ -111,9 +111,16 @@ pub(crate) fn create_editor(
     level_meter_gap_px: f32,
 ) -> Option<Box<dyn Editor>> {
     let resize_state = egui_state.clone();
+    let mut initial_presets = EditorPresetState::new();
+    // 「Envelope Amp」メニューの初期選択を、DAWパラメーターが保持している実際の値に合わせる
+    // （standaloneの`EditorApp::new`と同じ考え方。プロジェクト読み込み直後にGUIを開いても
+    // Strict表示のまま固定される食い違いを防ぐ。`create_editor`＝`Plugin::editor()`は
+    // プラグインインスタンスにつき1回しか呼ばれないため、ここで一度読めば以降のGUI
+    // 開閉では値がそのまま保持される）。
+    initial_presets.sync_env_amp_epsilon_display(params.env_amp_epsilon.value() as u8);
     create_egui_editor(
         egui_state,
-        EditorState { presets: EditorPresetState::new(), undo: RefCell::new(UndoStack::new()) },
+        EditorState { presets: initial_presets, undo: RefCell::new(UndoStack::new()) },
         EguiSettings::default(),
         |_ctx, _queue, _state| {},
         move |ui, setter, _queue, state| {
