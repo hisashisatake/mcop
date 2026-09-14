@@ -37,6 +37,11 @@ pub use modulation_curves::lfo_rate_to_hz;
 /// `sound-core`を直接見に行けない。CC78のDelay判定で「無変調の待ち段」を識別するのに必要なので
 /// ここから供給する。
 pub use sound_core::BIPOLAR_NEUTRAL_RAW;
+/// `op505-midi`の演奏用FGフォールバック（CC1/77/78・CC92・NRPN(0,26)由来）が、
+/// 「stage_count==0だが既にTEXTUREテンプレートの形を持つFG」を誤って標準形状で
+/// 上書きしないよう判定するために再エクスポートする（`pitch_fg.rs`/`gain_fg.rs`/
+/// `cutoff_fg.rs`参照。`TEXTURE_TRIANGLE`は各ファイルのテスト専用）。
+pub use sound_core::{TEXTURE_OFF, TEXTURE_TRIANGLE};
 
 /// MIDI CC72/73/75（Release/Attack/Decay Time）・CC10（Pan）向けの`sound-core`純粋関数の
 /// 再エクスポート。`op505-midi`はsound-coreを直接見に行けない（上記`BIPOLAR_NEUTRAL_RAW`と同じ理由）。
@@ -684,10 +689,16 @@ impl Channel {
         //
         // stage_count==0はUI側のSTAGES=0（無効化、`ui_core::TimeEgProfile::min_stages=0`で
         // 許容されるFG専用の特殊値）に対応する。tick自体を呼ばずに変調量ゼロとして扱うことで、
-        // ボイス単位で毎サンプル回るTimeEg::tick()のコストを避ける（既存データはstage_count=0を
-        // 持ち得ないため、この分岐は出力をビット単位で変えない）。
+        // ボイス単位で毎サンプル回るTimeEg::tick()のコストを避ける。
+        // **texture!=OFFのときはstage_count==0でも無効化しない**——TEXTUREテンプレートは
+        // GRAPHの手描き段を使わない生成波形なので、STAGES=0（GRAPH側が空）のままでも
+        // 鳴らせるようにする必要がある。これを見落とすと、GRAPHを一度も描いていない
+        // （＝stage_count=0の）FGでTEXTUREを選んでも無音のまま変わらないという実害のあるバグになる
+        // （2026-09-14実機確認で発覚。詳細はmemory
+        // `project_fg_free_rate_texture_templates_design.md`参照）。既存データはtexture=OFFの
+        // ままのため`stage_count==0`単独と常に一致し、この変更は出力をビット単位で変えない。
         let pitch_fg = self.channel_params.pitch_fg;
-        let pitch_fg_cents = if pitch_fg.eg.stage_count == 0 {
+        let pitch_fg_cents = if pitch_fg.eg.stage_count == 0 && pitch_fg.eg.texture == TEXTURE_OFF {
             0.0
         } else {
             let pitch_fg_speed = self.pitch_fg_rate_scale * time_eg_speed_scale(&pitch_fg.eg, tempo_bpm);
@@ -717,6 +728,8 @@ impl Channel {
         // （Pitch/Cutoff FGの「変調量ゼロ」とは中立値が異なる。plan
         // `docs/timeeg-fg-disable-plan.md`の🔴落とし穴参照）。depthはstage_count==0のときは
         // 見ない（無効化はdepthより優先、Pitch/Cutoff FGの「STAGES=0はdepthを無視」と同じ規約）。
+        // **texture!=OFFのときはstage_count==0でも無効化しない**（Pitch FGと同じ理由、
+        // 上のコメント参照。既存データはtexture=OFFのためこの変更もビット不変）。
         //
         // depth==255は`1.0 - (1.0-eg_out)*(255/255)`ではなく`eg_out`をそのまま使う。数式上は
         // 恒等だが、`1.0 - x`を経由する往復はeg_outが0.5から離れるほど浮動小数点の丸め誤差で
@@ -725,7 +738,7 @@ impl Channel {
         // 既存プリセットの出力が変わってしまう。
         let gain_fg = self.channel_params.gain_fg;
         let gain_fg_to_operators = self.channel_params.gain_fg_to_operators;
-        let gain_fg_out = if gain_fg.eg.stage_count == 0 {
+        let gain_fg_out = if gain_fg.eg.stage_count == 0 && gain_fg.eg.texture == TEXTURE_OFF {
             1.0
         } else {
             let gain_fg_speed = time_eg_speed_scale(&gain_fg.eg, tempo_bpm);
@@ -784,8 +797,10 @@ impl Channel {
 
         // VCF：Cutoff FG（TimeEg）を先にtickし、effective_cutoffで基準Cutoffと合成してからSvfへ。
         // stage_count==0（無効化）のときはtickを呼ばず基準Cutoffをそのまま使う。
+        // **texture!=OFFのときはstage_count==0でも無効化しない**（Pitch FGと同じ理由、
+        // 上のコメント参照。既存データはtexture=OFFのためこの変更もビット不変）。
         let cp = &self.channel_params;
-        let cutoff = if cp.cutoff_fg.eg.stage_count == 0 {
+        let cutoff = if cp.cutoff_fg.eg.stage_count == 0 && cp.cutoff_fg.eg.texture == TEXTURE_OFF {
             cp.filter_cutoff
         } else {
             let cutoff_fg_speed = time_eg_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
@@ -1734,6 +1749,44 @@ mod tests {
         let out_legacy = render_512(legacy_transparent);
         assert!(out_disabled.iter().any(|&s| s != 0.0), "Gain FG無効時は無音にならないはず");
         assert_eq!(out_disabled, out_legacy, "STAGES=0は旧1段透過既定とビット一致するはず");
+    }
+
+    /// TEXTUREテンプレート波形はGRAPHの手描き段（stage_count）を必要としない設計
+    /// （`sound_core::template_params`が独自のカノニカル表を生成する）だが、
+    /// `stage_count==0`（GRAPH未編集、`loud_patch`の3FG既定）のときFG全体を無効化する
+    /// 早期return（このファイルの`pitch_fg_cents`/`gain_fg_out`/`cutoff`計算）がtextureの値を
+    /// 見ずに効いてしまい、GAIN/CUTOFF FGでTEXTUREを選んでも無音（無変調）のまま変わらない
+    /// バグがあった（2026-09-14、ユーザーが実機で「GAIN/CUTOFFのTEXTUREが効いていない」と
+    /// 報告して発覚。詳細はmemory `project_fg_free_rate_texture_templates_design.md`参照）。
+    /// 3FGとも、stage_count=0のままTEXTURE=TRIANGLEにすると出力がTEXTURE=OFFと異なる
+    /// （＝早期returnを通らずtick()まで到達している）ことを確認する。
+    #[test]
+    fn texture_takes_effect_even_when_stage_count_is_zero() {
+        let off = loud_patch(0); // 3FGとも既定でstage_count=0・texture=OFF（`Op505BipolarFg`/`default_gain_fg`参照）
+        let out_off = render_512(off);
+
+        let mut triangle_pitch = off;
+        triangle_pitch.channel.pitch_fg = Op505BipolarFg {
+            eg: TimeEgParams { texture: sound_core::TEXTURE_TRIANGLE, base_freq: 200, ..neutral_bipolar_eg() },
+            depth: 255,
+        };
+        assert!(render_512(triangle_pitch) != out_off, "Pitch FG: stage_count=0でもTEXTUREが効くはず");
+
+        let mut triangle_gain = off;
+        triangle_gain.channel.gain_fg = Op505GainFg {
+            eg: TimeEgParams { texture: sound_core::TEXTURE_TRIANGLE, base_freq: 200, ..default_gain_fg().eg },
+            depth: 255,
+        };
+        assert!(render_512(triangle_gain) != out_off, "Gain FG: stage_count=0でもTEXTUREが効くはず");
+
+        let mut triangle_cutoff = off;
+        triangle_cutoff.channel.cutoff_fg = Op505BipolarFg {
+            eg: TimeEgParams { texture: sound_core::TEXTURE_TRIANGLE, base_freq: 200, ..neutral_bipolar_eg() },
+            depth: 255,
+        };
+        // レゾナンスを上げ、カットオフの揺れが出力へ出やすくする。
+        triangle_cutoff.channel.filter_resonance = 200;
+        assert!(render_512(triangle_cutoff) != out_off, "Cutoff FG: stage_count=0でもTEXTUREが効くはず");
     }
 
     /// Gain FGのDepth新設が既存パッチの出力を1ビットも変えないための根拠テスト。
