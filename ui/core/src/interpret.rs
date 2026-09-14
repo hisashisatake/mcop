@@ -29,7 +29,7 @@ use crate::mapping::mul_fine_ratio;
 use crate::level_meter::level_meter;
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, MeterHandle, TimeEgHandle};
 use crate::patchbay::{finish_texture_lfo_patchbay, texture_lfo_dest_jack, texture_lfo_source_jack, JackLayout};
-use crate::selector::{enum_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES, TEXTURE_NAMES};
+use crate::selector::{enum_selector, fg_rate_selector, sync_rate_selector, CHORUS_TYPE_NAMES, FILTER_TYPE_NAMES, RATE_RANGE_NAMES, RETRIGGER_MODE_NAMES, REVERB_TYPE_NAMES, TEXTURE_NAMES};
 use crate::time_eg_editor::time_eg_editor;
 use crate::waveform::waveform_selector;
 
@@ -194,6 +194,24 @@ impl HandleStore {
             .entry(key.to_string())
             .or_insert_with(|| MockMeter { name: key.to_string(), start: std::time::Instant::now() })
     }
+
+    /// キーが存在することだけを保証する（無ければ既定値で挿入、戻り値は捨てる）。
+    /// `<fg-rate>`はsync/sync-rate/free-rate/rate-rangeの4本を同時に`&dyn ...ParamHandle`として
+    /// 借用する必要があるが、`int`/`bool_`は`&mut self`（未挿入時のentry構築用）なので
+    /// 複数キーを同時には呼べない。挿入（`&mut self`、この2関数）と読み出し（`&self`、
+    /// `get_int`/`get_bool`）を段階分けすることで、読み出し側は複数キーを同時に共有借用できる。
+    fn ensure_int(&mut self, key: &str) {
+        self.int(key);
+    }
+    fn ensure_bool(&mut self, key: &str) {
+        self.bool_(key);
+    }
+    fn get_int(&self, key: &str) -> &MockInt {
+        self.ints.get(key).expect("ensure_intが先に呼ばれているはず")
+    }
+    fn get_bool(&self, key: &str) -> &MockBool {
+        self.bools.get(key).expect("ensure_boolが先に呼ばれているはず")
+    }
 }
 
 /// `<panel repeat>`内では同じ`handle`文字列（例:`"op.tl"`）が4オペレーター分共有されてしまうため、
@@ -217,6 +235,7 @@ fn resolve_names(name: &str) -> &'static [&'static str] {
         "REVERB_TYPE_NAMES" => &REVERB_TYPE_NAMES,
         "CHORUS_TYPE_NAMES" => &CHORUS_TYPE_NAMES,
         "TEXTURE_NAMES" => &TEXTURE_NAMES,
+        "RATE_RANGE_NAMES" => &RATE_RANGE_NAMES,
         "RETRIGGER_MODE_NAMES" => &RETRIGGER_MODE_NAMES,
         "FILTER_TYPE_NAMES" => &FILTER_TYPE_NAMES,
         _ => &["?"],
@@ -367,6 +386,27 @@ fn draw_widget(ui: &mut egui::Ui, store: &mut HandleStore, leaf: &LeafInfo, idx:
             let key = scoped(handle, idx);
             let salt_n: usize = salt.parse().unwrap_or(0);
             sync_rate_selector(ui, store.int(&key), label, salt_n);
+        }
+        Widget::FgRate { label, sync, sync_rate, free_rate, rate_range, salt } => {
+            let sync_key = scoped(sync, idx);
+            let sync_rate_key = scoped(sync_rate, idx);
+            let free_rate_key = scoped(free_rate, idx);
+            let rate_range_key = scoped(rate_range, idx);
+            store.ensure_bool(&sync_key);
+            store.ensure_int(&sync_rate_key);
+            store.ensure_int(&free_rate_key);
+            store.ensure_int(&rate_range_key);
+            let salt_n: usize = salt.parse().unwrap_or(0);
+            let rr = store.get_int(&rate_range_key).value().clamp(0, 3) as u8;
+            fg_rate_selector(
+                ui,
+                store.get_bool(&sync_key),
+                store.get_int(&sync_rate_key),
+                store.get_int(&free_rate_key),
+                rr,
+                label,
+                salt_n,
+            );
         }
         Widget::EgPreview { mapping, tl, ar, d1r, d1l, d2r, rr, floor, loop_enabled, curve, delay } => {
             let mapping_v = parse_eg_amplitude_mapping(mapping);

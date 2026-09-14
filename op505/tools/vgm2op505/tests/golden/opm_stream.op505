@@ -71,7 +71,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -149,7 +152,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -227,7 +233,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -305,7 +314,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "mul": 1,
             "dt1": 131,
@@ -391,7 +403,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "depth": 0
           },
@@ -459,7 +474,10 @@
               "level_drift": 128,
               "depth_drift": 128,
               "texture": 0,
-              "auto_release": 0
+              "auto_release": 0,
+              "free_rate": 128,
+              "rate_range": 0,
+              "base_freq": 128
             },
             "depth": 0
           },
@@ -527,6 +545,9 @@
             "depth_drift": 128,
             "texture": 0,
             "auto_release": 0,
+            "free_rate": 128,
+            "rate_range": 0,
+            "base_freq": 128,
             "depth": 255
           },
           "gain_fg_to_master": true,

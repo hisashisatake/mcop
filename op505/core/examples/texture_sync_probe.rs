@@ -6,13 +6,17 @@
 //! 追従することを数値的に検証しつつ、実際に鳴らしたWAVも書き出す
 //! （質感LFO退役の当初動機の実証、memory `project_texture_lfo_retirement.md`参照）。
 //!
+//! TEXTUREテンプレート波形の導入後は、texture≠OFFの保持区間はGRAPHの段ではなく
+//! `template_params`のカノニカル表（S&Hは1段ループ）に置き換わる。GRAPH側の段構成は
+//! もはや波形に効かないが、「raw値に関係なくSYNC音価へロックする」ことの確認としてそのまま残す。
+//!
 //! 実行: cargo run -p op505-core --example texture_sync_probe -- <出力ディレクトリ>
 
 use std::path::Path;
 
 use op505_core::{Op505ChannelParams, Op505Engine, Op505OperatorParams, Op505Patch};
 use sound_core::{
-    seconds_to_time, sync_note_anchor, sync_rate_beats, tempo_speed_scale, TimeEg, TimeEgParams,
+    seconds_to_time, sync_note_anchor, sync_rate_beats, time_eg_speed_scale, TimeEg, TimeEgParams,
     TimeStage, Vco, MAX_STAGES, TEXTURE_SAMPLE_HOLD,
 };
 
@@ -72,7 +76,7 @@ fn render(patch: Op505Patch, bpm: f32) -> Vec<f32> {
 /// `TimeEg`を直接ドライブし、S&Hのホールド区間長(サンプル数)を実測してSYNC音価どおりに
 /// なっているか検証する。段境界の1サンプルだけの「飛び段」フラッシュは除外する。
 fn verify_sync_lock(params: &TimeEgParams, bpm: f32) {
-    let scale = tempo_speed_scale(params, bpm);
+    let scale = time_eg_speed_scale(params, bpm);
     let target_seconds = sync_rate_beats(params.sync_rate) * 60.0 / bpm;
     let expected_samples = (target_seconds * SAMPLE_RATE) as i64;
 

@@ -127,8 +127,12 @@ gesture-appのデュアルエンジン構成、Cargo.tomlのワークスペー�
     core/              ← クレート名sound-core。WaveTable・AdsrParams・PerformanceLfo・MasterEffects・VCO抽象境界
       Vcoトレイト      ← 発振エンジンの演奏ライフサイクル（note_on/note_off/render/pitch_bend系/channel_volume系）。Op505Engineが実装
       AudioProcessorトレイト ← 後段DSP共通境界（process(&mut [f32], num_channels)）。MasterEffectsが実装
-      time_eg          ← TimeEg（N点Time/Level方式EG）。`texture`フィールド（0=OFF/1=S&H/2=Random/3=Chaos）が
-                            旧質感LFOのS&H/Random/Chaos波形の後継（2026-08-20退役、詳細はspec-sound.md参照）。
+      time_eg          ← TimeEg（N点Time/Level方式EG）。`texture`フィールド（0=OFF/1=TRIANGLE/
+                            2=SAW UP/3=SAW DOWN/4=SQUARE/5=S&H/6=Random/7=Chaos）が旧質感LFOの
+                            S&H/Random/Chaos波形の後継＋幾何学的テンプレート波形4種（2026-08-20退役
+                            ＋2026-09-14拡張、詳細はspec-sound.md参照）。SYNC OFF時の速さは
+                            `free_rate`/`rate_range`（可変幅）/`base_freq`（基準周波数）が制御する
+                            （`sync_rate`とはフィールドを共有しない別軸、2026-09-14新設）。
                             `auto_release`フィールド（0=OFF/N≥1=保持区間通過でnote-off非依存の自動
                             リリース）はGM2リズムチャンネル向けのワンショット化機構（2026-08-24新設、
                             詳細はspec-sound.md「TimeEgのワンショット化」節）

@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 /// 段の最大数。当初はCZ-101の8段に準拠していたが10段へ拡張済み。4点T/Lは`stage_count=4`で表現する。
 pub const MAX_STAGES: usize = 10;
 
+/// `tick()`が1サンプル内で`time=0`（瞬時）の段を連鎖的に通過できる回数の上限。
+/// 全ループ段が`time=0`という設定でも無限ループしないためのフェイルセーフ
+/// （`MAX_STAGES`一周分では足りない可能性があるため2倍のマージンを持つ）。
+const TIME_ZERO_CHAIN_LIMIT: usize = MAX_STAGES * 2;
+
 /// バイポーラ解釈するEGの「無変調」を表す生レベル値。DT1・op_fine_tune等このプロジェクトの
 /// 他のバイポーラパラメーターと同じ中心128（`(v-128)/128`慣例）に揃えてある。
 pub const BIPOLAR_NEUTRAL_RAW: u8 = 128;
@@ -260,14 +265,47 @@ pub struct TimeEgParams {
     /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（OFF）にする。
     #[serde(default)]
     pub auto_release: u8,
+    /// SYNC OFF時の速さ（128=等倍）。`sync_rate`とはフィールドを共有しない別軸
+    /// （`sync_rate`の既定134を共有すると既存SYNC OFF音色が1.033倍速になり、かつ
+    /// 向きが逆になるため。詳細はmemory `project_fg_free_rate_texture_templates_design.md`）。
+    /// `free_rate_scale()`で`rate_range`とあわせて速度への乗率へ写す。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で128（等倍）にする。
+    #[serde(default = "default_free_rate")]
+    pub free_rate: u8,
+    /// `free_rate`が動かせる可変幅（0=×2／1=×4／2=×8／3=×16、既定0）。範囲外は
+    /// `RATE_RANGE_MULTIPLIERS`の最後の値へクランプする。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で0（×2）にする。
+    #[serde(default)]
+    pub rate_range: u8,
+    /// SYNC OFF時、TEXTUREテンプレート波形（TRIANGLE等）が基準とする周波数（128=5Hz）。
+    /// `base_freq_hz()`で0.16〜160Hz程度へ写す。texture=OFFのときは使われない。
+    /// 旧`.op505`バンクには存在しないフィールドのため`#[serde(default)]`で128（5Hz）にする。
+    #[serde(default = "default_base_freq")]
+    pub base_freq: u8,
 }
 
 /// `texture`の意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
 /// 呼び出し側の可読性のためにここへ集約する）。
+///
+/// TRIANGLE〜SQUAREは`template_params()`が生成するカノニカル表を`TimeEg`の状態機械へ
+/// 流す幾何学的テンプレート波形、S&H/Random/Chaosは旧質感LFOの後継（乱数系）。
+/// 2026-09-14に再採番（旧: OFF=0/S&H=1/Random=2/Chaos=3。既存データでtexture≠0は
+/// 0件確認済みのため移行不要、詳細はmemory `project_fg_free_rate_texture_templates_design.md`）。
 pub const TEXTURE_OFF: u8 = 0;
-pub const TEXTURE_SAMPLE_HOLD: u8 = 1;
-pub const TEXTURE_RANDOM: u8 = 2;
-pub const TEXTURE_CHAOS: u8 = 3;
+pub const TEXTURE_TRIANGLE: u8 = 1;
+pub const TEXTURE_SAW_UP: u8 = 2;
+pub const TEXTURE_SAW_DOWN: u8 = 3;
+pub const TEXTURE_SQUARE: u8 = 4;
+pub const TEXTURE_SAMPLE_HOLD: u8 = 5;
+pub const TEXTURE_RANDOM: u8 = 6;
+pub const TEXTURE_CHAOS: u8 = 7;
+
+/// `texture`が乱数系（S&H/Random/Chaos）かどうか。TRIANGLE〜SQUAREの幾何学的テンプレートは
+/// 決定論的な波形であり、`enter_stage`の乱数抽選（`texture_target_level`）を経由しない
+/// ——この判定で両者を区別する。
+pub fn is_random_texture(texture: u8) -> bool {
+    texture >= TEXTURE_SAMPLE_HOLD
+}
 
 /// `sync_rate`の`#[serde(default)]`用。フィールド欠落時（旧バンク）は`sync_enabled=0`なので
 /// この値自体は無視されるが、UIで初めてSYNCをONにしたときに1/4から始まるよう
@@ -279,6 +317,16 @@ fn default_sync_rate() -> u8 {
 /// `level_drift`/`depth_drift`の`#[serde(default)]`用。128＝無効（中心128慣例に揃える）。
 fn default_drift() -> u8 {
     BIPOLAR_NEUTRAL_RAW
+}
+
+/// `free_rate`の`#[serde(default)]`用。128＝等倍。
+fn default_free_rate() -> u8 {
+    FREE_RATE_NEUTRAL
+}
+
+/// `base_freq`の`#[serde(default)]`用。128＝5Hz。
+fn default_base_freq() -> u8 {
+    128
 }
 
 /// retrigger_modeの意味を表す定数（生のu8のまま`TimeEgParams`に持たせているため、
@@ -309,6 +357,9 @@ impl Default for TimeEgParams {
             depth_drift: default_drift(),
             texture: TEXTURE_OFF,
             auto_release: 0,
+            free_rate: FREE_RATE_NEUTRAL,
+            rate_range: 0,
+            base_freq: default_base_freq(),
         }
     }
 }
@@ -439,6 +490,57 @@ pub fn depth_drift_per_cycle(raw: u8) -> f32 {
     table[raw as usize]
 }
 
+/// SYNC OFF時、`free_rate`が動かせる可変幅（0=×2／1=×4／2=×8／3=×16）。
+/// 範囲外の`rate_range`は最後の値へクランプする。
+pub const RATE_RANGE_MULTIPLIERS: [f32; 4] = [2.0, 4.0, 8.0, 16.0];
+
+/// `free_rate`(0〜255)の中立値。この値のとき`free_rate_scale`は厳密に1.0（等倍）。
+pub const FREE_RATE_NEUTRAL: u8 = 128;
+
+/// `base_freq`(0〜255)が128（中央）のときの周波数（Hz）。
+pub const BASE_FREQ_CENTER_HZ: f32 = 5.0;
+
+/// `base_freq`の全レンジが張るオクターブ数（片側）。中央から両端まで
+/// `BASE_FREQ_SPAN_OCTAVES`オクターブ動く（0側は`/2^5=1/32`、255側は`*2^(127/128*5)`）。
+pub const BASE_FREQ_SPAN_OCTAVES: f32 = 5.0;
+
+/// SYNC OFF時、`free_rate`/`rate_range`から速度への乗率を求める（128で厳密に1.0、
+/// 既存出力のビット不変を保つガード。`depth_drift_per_cycle`と同じ指数式パターン）。
+/// `速さ = 基準周波数 × 可変幅^((free_rate-128)/128)`のうち可変幅の指数部分を担う。
+pub fn free_rate_scale(params: &TimeEgParams) -> f32 {
+    if params.free_rate == FREE_RATE_NEUTRAL {
+        return 1.0;
+    }
+    static TABLES: OnceLock<[[f32; 256]; RATE_RANGE_MULTIPLIERS.len()]> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        let mut tables = [[0.0f32; 256]; RATE_RANGE_MULTIPLIERS.len()];
+        for (range_idx, multiplier) in RATE_RANGE_MULTIPLIERS.iter().enumerate() {
+            for (raw, slot) in tables[range_idx].iter_mut().enumerate() {
+                let exponent = (raw as f32 - FREE_RATE_NEUTRAL as f32) / FREE_RATE_NEUTRAL as f32;
+                *slot = multiplier.powf(exponent);
+            }
+        }
+        tables
+    });
+    let range_idx = (params.rate_range as usize).min(RATE_RANGE_MULTIPLIERS.len() - 1);
+    tables[range_idx][params.free_rate as usize]
+}
+
+/// `base_freq`(0〜255、128=5Hz)→基準周波数（Hz、約0.16〜160Hz）。
+/// TEXTUREテンプレート波形（TRIANGLE等）がSYNC OFF時に基準とする速さ。
+pub fn base_freq_hz(raw: u8) -> f32 {
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0.0f32; 256];
+        for (raw, slot) in table.iter_mut().enumerate() {
+            let exponent = (raw as f32 - 128.0) / 128.0 * BASE_FREQ_SPAN_OCTAVES;
+            *slot = BASE_FREQ_CENTER_HZ * 2f32.powf(exponent);
+        }
+        table
+    });
+    table[raw as usize]
+}
+
 /// ループ区間（`loop_start..=release_point`）のレベルレンジの中点。ドリフトは
 /// この点を中心に振れ幅を伸縮する（`depth_drift`）。1段ループは跳ね戻し先レベルと
 /// 段自身のレベルの中点を使う。`neutral_level`はキーオン起点（`TimeEg::neutral_level`と
@@ -484,6 +586,120 @@ pub fn loop_level_range(params: &TimeEgParams, neutral_level: f32, loop_start: u
             hi = hi.max(l);
         }
         (lo, hi)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TEXTUREテンプレート波形（TRIANGLE/SAW UP/SAW DOWN/SQUARE）
+//
+// texture!=OFFのとき、GRAPHで手描きしたSTAGEの代わりに、ここで生成する「カノニカル表」を
+// `TimeEg`の既存状態機械（ループ・ドリフト・リリース連結）へそのまま流す（閉式の別実装は
+// しない）。速さは公称TIME値Tを`time_eg_speed_scale`のspeed_scaleで正規化して作るため、
+// Tの絶対値自体に意味はない（`TEMPLATE_NOMINAL_TIME`はどんな値でもよいが、u8の丸め誤差を
+// 抑えるため中庸な値を選ぶ）。
+// ---------------------------------------------------------------------------
+
+/// カノニカル表の公称TIME値。実際の速さは`speed_scale`（`free_rate_scale × base_freq_hz ×
+/// template_period_seconds`）で正規化するため、この値自体は各段の相対比率を作るためだけに使う。
+const TEMPLATE_NOMINAL_TIME: u8 = 100;
+
+/// テンプレートの「導入段」（lead）の時間を、neutralから目標レベルまでの距離に比例させる
+/// （距離が小さいほど短く、フル振幅ならT秒＝通常のループ段と同じ傾き＝速度になる）。
+/// 距離0（neutralが既に目標レベル）はtime=0（瞬時、time=0真0秒化で経過時間を消費しない）。
+fn lead_time_for(neutral_level: f32, target_level: u8, base_time: u8) -> u8 {
+    let target = target_level as f32 / 255.0;
+    let distance = (target - neutral_level).abs();
+    let base_seconds = time_to_seconds(base_time) as f64;
+    seconds_to_time((base_seconds * distance as f64) as f32)
+}
+
+/// texture（OFF以外）に応じたカノニカル表（保持区間のみ、リリース区間は含まない）を生成する。
+/// 戻り値: `(段配列, 保持区間の段数, loop_start)`。呼び出し元（`template_params`）が
+/// 元paramsのリリース区間をこの後ろへ連結する。
+fn canonical_template_stages(texture: u8, neutral_level: f32) -> ([TimeStage; MAX_STAGES], usize, usize) {
+    const T: u8 = TEMPLATE_NOMINAL_TIME;
+    let mut stages = [TimeStage::default(); MAX_STAGES];
+
+    match texture {
+        TEXTURE_TRIANGLE => {
+            stages[0] = TimeStage { time: lead_time_for(neutral_level, 255, T), level: 255, curve: 0 };
+            stages[1] = TimeStage { time: T, level: 0, curve: 0 };
+            stages[2] = TimeStage { time: T, level: 255, curve: 0 };
+            (stages, 3, 1)
+        }
+        TEXTURE_SAW_UP => {
+            stages[0] = TimeStage { time: lead_time_for(neutral_level, 255, T), level: 255, curve: 0 };
+            stages[1] = TimeStage { time: 0, level: 0, curve: 0 };
+            stages[2] = TimeStage { time: T, level: 255, curve: 0 };
+            (stages, 3, 1)
+        }
+        TEXTURE_SAW_DOWN => {
+            stages[0] = TimeStage { time: lead_time_for(neutral_level, 0, T), level: 0, curve: 0 };
+            stages[1] = TimeStage { time: 0, level: 255, curve: 0 };
+            stages[2] = TimeStage { time: T, level: 0, curve: 0 };
+            (stages, 3, 1)
+        }
+        TEXTURE_SQUARE => {
+            // SQUAREは元々瞬時遷移の波形のため、TRIANGLE/SAWと違いlead段（傾き補正）を持たない。
+            stages[0] = TimeStage { time: 0, level: 255, curve: 0 };
+            stages[1] = TimeStage { time: T, level: 255, curve: 0 };
+            stages[2] = TimeStage { time: 0, level: 0, curve: 0 };
+            stages[3] = TimeStage { time: T, level: 0, curve: 0 };
+            (stages, 4, 0)
+        }
+        // S&H/Random/Chaos（乱数系）：`enter_stage`のtexture分岐が段の終端レベルを乱数
+        // ターゲットへ差し替えるため、ここでのlevelは実質使われない（0/255はダミー）。
+        _ => {
+            stages[0] = TimeStage { time: 0, level: 0, curve: 0 };
+            stages[1] = TimeStage { time: T, level: 255, curve: 0 };
+            (stages, 2, 1)
+        }
+    }
+}
+
+/// カノニカル表のループ区間の公称秒数（1周の定義）。`time_eg_speed_scale`が
+/// `base_freq_hz × この値`でspeed_scaleを作り、実際の周期を基準周波数どおりにする。
+pub fn template_period_seconds(texture: u8) -> f32 {
+    let t = time_to_seconds(TEMPLATE_NOMINAL_TIME);
+    match texture {
+        TEXTURE_TRIANGLE | TEXTURE_SQUARE => 2.0 * t,
+        _ => t, // SAW UP/DOWN・S&H/Random/Chaos（1周期=T）。TEXTURE_OFFは呼び出し元で使わない想定。
+    }
+}
+
+/// texture（OFF以外）に応じたカノニカル表を生成し、元paramsのリリース区間
+/// （`release_point+1..stage_count`）を末尾へ連結した`TimeEgParams`を返す
+/// （OP EGのボイス解放・FGの既存リリース挙動を保つ）。`MAX_STAGES`超過時はリリース区間の
+/// 中間段を古い方から捨て、最終段は必ず残す（カノニカル表側の段は絶対に削らない。削ると
+/// 波形が`template_period_seconds`と食い違い、speed_scaleの正規化そのものが誤るため）。
+///
+/// `texture`フィールドは生成後のparamsにもそのまま残す（`TimeEg::tick`がテンプレート適用中を
+/// 判定するのに使うため）。それ以外の残りのフィールド（sync_enabled等）は元paramsをそのまま
+/// 引き継ぐ（`..*params`）。
+pub fn template_params(params: &TimeEgParams, neutral_level: f32) -> TimeEgParams {
+    let (mut stages, hold_count, loop_start) = canonical_template_stages(params.texture, neutral_level);
+
+    let orig_stage_count = clamp_stage_count(params.stage_count);
+    let orig_release_point = (params.release_point as usize).min(orig_stage_count - 1);
+    let release_len = orig_stage_count - (orig_release_point + 1);
+    let capacity_for_release = MAX_STAGES - hold_count;
+    let taken_len = release_len.min(capacity_for_release);
+    let skip = release_len - taken_len;
+
+    let mut total = hold_count;
+    for i in 0..taken_len {
+        let src_idx = orig_release_point + 1 + skip + i;
+        stages[total] = params.stages[src_idx];
+        total += 1;
+    }
+
+    TimeEgParams {
+        stages,
+        stage_count: total as u8,
+        loop_enabled: 1,
+        loop_start: loop_start as u8,
+        release_point: (hold_count - 1) as u8,
+        ..*params
     }
 }
 
@@ -720,6 +936,36 @@ pub fn tempo_speed_scale(params: &TimeEgParams, bpm: f32) -> f32 {
     region / target_seconds
 }
 
+/// `tempo_speed_scale`の後継。SYNC ON時は従来どおり同期（texture≠OFFなら対象区間を
+/// `template_period_seconds`で計算）、SYNC OFF時は`free_rate_scale`（texture≠OFFなら
+/// さらに`base_freq_hz × template_period_seconds`）で速度を決める。
+/// texture=OFF・free_rate=128（既定値）の既存音色は`tempo_speed_scale`とビット単位で
+/// 同じ値を返す（SYNC ON→同一計算経路、SYNC OFF→`free_rate_scale(128)==1.0`）。
+pub fn time_eg_speed_scale(params: &TimeEgParams, bpm: f32) -> f32 {
+    if params.sync_enabled != 0 {
+        if bpm <= 0.0 {
+            return 1.0;
+        }
+        let region = if params.texture != TEXTURE_OFF {
+            template_period_seconds(params.texture)
+        } else {
+            sync_region_seconds(params)
+        };
+        if region <= f32::EPSILON {
+            return 1.0;
+        }
+        let target_seconds = sync_rate_beats(params.sync_rate) * 60.0 / bpm;
+        return region / target_seconds;
+    }
+
+    let base = free_rate_scale(params);
+    if params.texture != TEXTURE_OFF {
+        base * base_freq_hz(params.base_freq) * template_period_seconds(params.texture)
+    } else {
+        base
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 状態機械
 // ---------------------------------------------------------------------------
@@ -771,6 +1017,13 @@ pub struct TimeEg {
     /// `auto_release`用：保持区間（`release_point`）を通過した回数。note_on/retriggerで0へ
     /// リセットする（「今のノートで何回通過したか」を表すため）。
     hold_passes: u8,
+    /// `texture != TEXTURE_OFF`のとき、直近`template_params()`した生成元paramsのキャッシュ。
+    /// `tick`は毎サンプル呼ばれるため、生成元が変わっていない限り`template_params`
+    /// （リリース区間の連結処理を含む）を再実行しない。note_on/retriggerでのリセットは
+    /// 不要（キャッシュはparamsの内容にのみ依存し、発音状態に依存しないため）。
+    cached_template_source: Option<TimeEgParams>,
+    /// `cached_template_source`に対応する`template_params()`の生成結果。
+    cached_template_result: TimeEgParams,
 }
 
 /// `texture_rng`のnote_on/retrigger既定シード（0だと不動点のため非ゼロの固定値）。
@@ -806,6 +1059,8 @@ impl TimeEg {
             texture_rng: TEXTURE_RNG_SEED,
             texture_chaos: TEXTURE_CHAOS_SEED,
             hold_passes: 0,
+            cached_template_source: None,
+            cached_template_result: TimeEgParams::default(),
         }
     }
 
@@ -856,6 +1111,21 @@ impl TimeEg {
         self.level
     }
 
+    /// `texture!=OFF`のときだけ`tick`から呼ばれる。生成元`source`が直近のキャッシュと
+    /// 一致すれば再生成せず`cached_template_result`（Copy）を返す。
+    /// `#[cold]`は「めったに通らない」とコンパイラへ伝え、`tick`の高速パス（大半を占める
+    /// texture=OFFの既存音色）側の最適化を優先させる（`advance_chain`と同じ原則、
+    /// 詳細はplans/swirling-petting-anchor.md「time=0真0秒化」の性能上の注意）。
+    #[cold]
+    fn resolve_template(&mut self, source: &TimeEgParams) -> TimeEgParams {
+        let cache_hit = matches!(&self.cached_template_source, Some(cached) if cached == source);
+        if !cache_hit {
+            self.cached_template_result = template_params(source, self.neutral_level);
+            self.cached_template_source = Some(*source);
+        }
+        self.cached_template_result
+    }
+
     fn shaped_output(&self, curve: u8) -> f32 {
         if curve == 0 {
             return self.level;
@@ -872,7 +1142,16 @@ impl TimeEg {
     /// 1サンプル分エンベロープを進め、現在のレベル(0.0〜1.0、Curve整形適用後)を返す。
     /// `speed_scale`は時間軸への乗算（大きいほど速い。`eg::Eg::tick`の`rate_scale`と向きを揃えた。
     /// テンポ同期はこの引数に「1周の合計時間÷目標時間」を渡すことで実現できる）。
-    pub fn tick(&mut self, sample_rate: f32, params: TimeEgParams, speed_scale: f32) -> f32 {
+    pub fn tick(&mut self, sample_rate: f32, mut params: TimeEgParams, speed_scale: f32) -> f32 {
+        // texture!=OFFのとき、GRAPHの手描きSTAGEの代わりにカノニカル表（`template_params`）を
+        // 使う。生成コストを避けるため、生成元paramsが変わっていない限り再生成しない
+        // （`resolve_template`のキャッシュ、`tick`は毎サンプル呼ばれるため）。
+        // if文＋再代入にしているのは、texture=OFF（大半のケース）で余分なコピーを発生させない
+        // ため（`if-else`式は両分岐の結果を一時領域へ格納する形になりがちで、高速パスに
+        // わずかなコストが乗る。実測で約3%の速度回帰を確認したためこの形にした）。
+        if params.texture != TEXTURE_OFF {
+            params = self.resolve_template(&params);
+        }
         let params = &params;
         let stage_count = clamp_stage_count(params.stage_count);
 
@@ -912,33 +1191,96 @@ impl TimeEg {
             return self.level;
         }
 
+        // リリース区間のスケール分離：`speed_scale`は本来ループ区間の速さ調整用だが、
+        // これをそのままリリース区間へも適用すると、テンプレートのRATEがリリース時間まで
+        // 支配してしまう（実測で1000倍以上の開きが出た、詳細はplans/swirling-petting-anchor.md
+        // 「リリース区間のスケール分離」節）。`self.releasing`（リリース区間に入ると真になる
+        // 既存フィールド）で外側の分岐を作り、**保持区間中（最頻出）は元のコードと同一の
+        // 1行のみ**が実行されるようにする（`self.releasing==true`のときだけtexture判定を追加）。
+        // texture=OFF（既存データ）は完全にビット不変——SYNC ON時にリリースも同期スケールで
+        // 伸縮する既存挙動もそのまま保たれる。
+        if self.releasing {
+            let effective_scale = if params.texture != TEXTURE_OFF { 1.0 } else { speed_scale };
+            self.elapsed += (1.0 / sample_rate as f64) * effective_scale as f64;
+        } else {
+            self.elapsed += (1.0 / sample_rate as f64) * speed_scale as f64;
+        }
+
+        // 高速パス：現在の段が`time>0`でまだ終端に達していない（＝最頻出のケース、
+        // 大半のサンプルがここで完結する）。`time==0`の段や段の切り替わりが絡む
+        // まれなケースだけ`advance_chain`（低速パス）へ回す。
         let cur = self.stage_index.min(stage_count - 1);
         let stage = &params.stages[cur];
         let curve = stage.curve;
         let seconds = time_to_seconds(stage.time) as f64;
-
-        self.elapsed += (1.0 / sample_rate as f64) * speed_scale as f64;
-
-        let (progress, overflow): (f64, f64) = if seconds <= f64::EPSILON {
-            (1.0, 0.0)
-        } else {
-            let p = self.elapsed / seconds;
-            if p >= 1.0 {
-                (1.0, self.elapsed - seconds)
-            } else {
-                (p, 0.0)
+        if seconds > f64::EPSILON {
+            let progress = self.elapsed / seconds;
+            if progress < 1.0 {
+                self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
+                return self.shaped_output(curve);
             }
-        };
-
-        self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
-        let out = self.shaped_output(curve);
-
-        if progress >= 1.0 {
-            self.level = self.segment_end;
-            self.advance(params, cur, stage_count, overflow.max(0.0));
         }
 
-        out
+        self.advance_chain(params, stage_count)
+    }
+
+    /// `tick`の低速パス：段の切り替わり（`time==0`の連鎖を含む）を処理する。
+    /// `time==0`（瞬時）の段は経過時間を一切消費せず通過する。1回のtickで複数の
+    /// time=0段が連続する場合、`elapsed`（このサンプル分＋前段からの持ち越し分）を
+    /// 使い切るまで`advance`を連鎖的に呼ぶ（`overflow`を次段へそのまま渡す）。
+    /// 「段が実際に進んだか」（`enter_stage`経由か`settle_at_current_level`経由か）で
+    /// 継続要否を判定する：ループ無効のサステイン到達（`settle_at_current_level`は
+    /// 同じ段に留まり`stage_index`を変えない）は1回で打ち切り、無駄な繰り返しを避ける。
+    /// 全ループ段がtime=0という設定でも`TIME_ZERO_CHAIN_LIMIT`で強制的に打ち切ることで
+    /// 無限ループを防ぐ（1サンプルあたりの段送り上限）。
+    ///
+    /// `#[cold]`はコンパイラへ「めったに通らない」と伝え、`tick`の高速パス（大半のサンプルが
+    /// 通る、段の途中で`progress<1.0`のまま返るケース）側のインライン化・分岐予測を優先させる。
+    #[cold]
+    fn advance_chain(&mut self, params: &TimeEgParams, stage_count: usize) -> f32 {
+        let mut curve;
+        let mut guard = 0usize;
+        loop {
+            let cur = self.stage_index.min(stage_count - 1);
+            let stage = &params.stages[cur];
+            curve = stage.curve;
+            let seconds = time_to_seconds(stage.time) as f64;
+
+            let (progress, overflow): (f64, f64) = if seconds <= f64::EPSILON {
+                (1.0, self.elapsed.max(0.0))
+            } else {
+                let p = self.elapsed / seconds;
+                if p >= 1.0 {
+                    (1.0, self.elapsed - seconds)
+                } else {
+                    (p, 0.0)
+                }
+            };
+
+            self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
+
+            if progress < 1.0 {
+                break;
+            }
+
+            self.level = self.segment_end;
+            let was_zero_time = seconds <= f64::EPSILON;
+            let stage_before = self.stage_index;
+            self.advance(params, cur, stage_count, overflow.max(0.0));
+            if self.idle {
+                break;
+            }
+            if was_zero_time && self.stage_index != stage_before {
+                guard += 1;
+                if guard >= TIME_ZERO_CHAIN_LIMIT {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        self.shaped_output(curve)
     }
 
     fn advance(&mut self, params: &TimeEgParams, cur: usize, stage_count: usize, overflow: f64) {
@@ -987,10 +1329,12 @@ impl TimeEg {
                 // 完全に平坦で音として何も起きない。跳ね戻すことで1段だけでノコギリ波を表現できる。
                 // 多段ループ（`loop_start < release_point`）は従来どおりレベル連続で周回する
                 // （区間の両端を行き来する三角波的な動きになる）。
-                // `texture`が有効なときは跳ね戻し自体を行わない。ノコギリ波の「同じ動きの
-                // 繰り返し」を作るための仕掛けだが、textureは`enter_stage`が毎回新しい乱数
-                // ターゲットへ向かうため、現在レベルから素直に続けた方が意図に合う。
-                if loop_start == release_point && params.texture == TEXTURE_OFF {
+                // 乱数系（S&H/Random/Chaos）が有効なときは跳ね戻し自体を行わない。ノコギリ波の
+                // 「同じ動きの繰り返し」を作るための仕掛けだが、乱数系は`enter_stage`が毎回
+                // 新しい乱数ターゲットへ向かうため、現在レベルから素直に続けた方が意図に合う。
+                // TRIANGLE/SAW/SQUAREは幾何学的テンプレートで多段ループなのでこの条件（1段ループ）
+                // 自体に該当せず、`is_random_texture`への変更で結果は変わらない。
+                if loop_start == release_point && !is_random_texture(params.texture) {
                     let bounce_raw = if loop_start == 0 {
                         self.neutral_level
                     } else {
@@ -1031,7 +1375,10 @@ impl TimeEg {
         self.segment_start = self.level;
         let raw_end = level_of(&params.stages[next]);
         let in_loop = Self::stage_in_loop_region(params, stage_count, next);
-        self.segment_end = if params.texture != TEXTURE_OFF && in_loop {
+        // 乱数系（S&H/Random/Chaos）だけがここで乱数ターゲットへ飛ぶ。TRIANGLE/SAW/SQUARE等の
+        // 幾何学的テンプレートは決定論的な波形なので、`texture`が生成後もOFF以外のまま
+        // 残る設計（`template_params`のtextureフィールド）でもここで乱数化されない。
+        self.segment_end = if is_random_texture(params.texture) && in_loop {
             let release_point = (params.release_point as usize).min(stage_count - 1);
             let loop_start = (params.loop_start as usize).min(release_point);
             let (lo, hi) = loop_level_range(params, self.neutral_level, loop_start, release_point);
@@ -1719,6 +2066,11 @@ mod tests {
         assert_eq!(params.level_drift, BIPOLAR_NEUTRAL_RAW, "missing level_drift should default to neutral(128), not 0");
         assert_eq!(params.depth_drift, BIPOLAR_NEUTRAL_RAW, "missing depth_drift should default to neutral(128), not 0");
         assert!(!params.has_drift());
+        // free_rate/rate_range/base_freqも旧バンクに存在しない。free_rateが素の0だと
+        // free_rate_scaleが「最速側いっぱい」になってしまう（128=等倍慣例からの逸脱）。
+        assert_eq!(params.free_rate, FREE_RATE_NEUTRAL, "missing free_rate should default to neutral(128), not 0");
+        assert_eq!(params.rate_range, 0, "missing rate_range should default to 0 (x2)");
+        assert_eq!(params.base_freq, 128, "missing base_freq should default to 128 (5Hz)");
     }
 
     // -----------------------------------------------------------------------
@@ -1958,23 +2310,22 @@ mod tests {
     }
 
     /// S&H: ループ区間の段内はレベルが一定（階段状）で、段境界でジャンプすること。
+    ///
+    /// 2026-09-14の再設計（`template_params`によるテンプレート化）以降、texture!=OFFのときは
+    /// GRAPHで手描きした段構成（`stages`/`loop_enabled`/`loop_start`/`release_point`）は
+    /// 一切参照されず、常に`canonical_template_stages`が生成する固定表（S&H/Random/Chaosは
+    /// 2段・強制ループ・振れ幅0〜255フル）に置き換わる。以下のtextureテスト群はこの新仕様に
+    /// 合わせて`stages`等の入力を最小限にしてある（渡しても無視されるため）。
     #[test]
     fn sample_hold_holds_level_within_stage() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(30, 200, 0), (30, 200, 0)]),
-            stage_count: 2,
-            loop_enabled: 1,
-            loop_start: 0,
-            release_point: 1,
-            texture: TEXTURE_SAMPLE_HOLD,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_SAMPLE_HOLD, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
 
-        let stage_samples = (time_to_seconds(30) as f64 * sr as f64) as usize;
-        // 最初の段（アタック相当）を抜けて、ループ内の1段ぶんを観測する。
-        for _ in 0..(stage_samples + 5) {
+        let stage_samples = (time_to_seconds(TEMPLATE_NOMINAL_TIME) as f64 * sr as f64) as usize;
+        // 段0（time=0、瞬時通過）を抜けて、ループ内の1段ぶんを観測する。
+        for _ in 0..5 {
             eg.tick(sr, params, 1.0);
         }
         let held = eg.tick(sr, params, 1.0);
@@ -1989,20 +2340,12 @@ mod tests {
     #[test]
     fn sample_hold_visits_multiple_distinct_levels() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(20, 255, 0), (10, 200, 0), (10, 0, 0)]),
-            stage_count: 3,
-            loop_enabled: 1,
-            loop_start: 1,
-            release_point: 2,
-            texture: TEXTURE_SAMPLE_HOLD,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_SAMPLE_HOLD, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
 
-        let stage_samples = (time_to_seconds(10) as f64 * sr as f64) as usize + 5;
-        let attack_samples = (time_to_seconds(20) as f64 * sr as f64) as usize + 5;
-        for _ in 0..attack_samples {
+        let stage_samples = (time_to_seconds(TEMPLATE_NOMINAL_TIME) as f64 * sr as f64) as usize + 5;
+        for _ in 0..5 {
             eg.tick(sr, params, 1.0);
         }
 
@@ -2018,27 +2361,18 @@ mod tests {
     }
 
     /// Random: S&Hと違い、段の間はレベルが動き続ける（一定に留まらない）こと。
-    /// 段のレベルをあえて異ならせ（lo/hiに幅を持たせ）、乱数ターゲットが現在値と
-    /// 一致してしまう確率を下げた上で、複数周期にわたり観測する。
     #[test]
     fn random_interpolates_within_stage_unlike_sample_hold() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(30, 255, 0), (30, 20, 0)]),
-            stage_count: 2,
-            loop_enabled: 1,
-            loop_start: 0,
-            release_point: 1,
-            texture: TEXTURE_RANDOM,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_RANDOM, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
 
         // 最初の段0到達（`pending_start`経由、texture未適用）を抜ける。
-        let stage_samples = (time_to_seconds(30) as f64 * sr as f64) as usize;
-        for _ in 0..(stage_samples + 5) {
+        for _ in 0..5 {
             eg.tick(sr, params, 1.0);
         }
+        let stage_samples = (time_to_seconds(TEMPLATE_NOMINAL_TIME) as f64 * sr as f64) as usize;
 
         let mut saw_change = false;
         for _ in 0..8 {
@@ -2057,37 +2391,27 @@ mod tests {
         assert!(saw_change, "Randomは段の途中でレベルが動き続けるはず（複数周期観測）");
     }
 
-    /// texture有効時、乱数ターゲットはループ区間のレベル最小〜最大の範囲内に収まること。
-    /// note_on直後の段0到達（`pending_start`経由、アタック相当）はtexture未適用の生値を
-    /// 辿るため、最初の1周ぶんはスキップしてから観測する（drift系テストの
-    /// `drift_test_attack_samples`と同じ考え方）。
+    /// texture有効時、乱数ターゲットは振れ幅0〜255フルの範囲内に収まること
+    /// （`canonical_template_stages`のS&H/Random/Chaosは`(0→0),(T→255)`の2段固定表なので、
+    /// `loop_level_range`は常に(0.0, 1.0)になる）。
     #[test]
     fn texture_targets_stay_within_loop_level_range() {
         let sr = 44100.0;
-        let (lo, hi) = (50u8, 220u8);
-        let params = TimeEgParams {
-            stages: stages_with(&[(10, hi, 0), (10, lo, 0), (10, hi, 0)]),
-            stage_count: 3,
-            loop_enabled: 1,
-            loop_start: 0,
-            release_point: 2,
-            texture: TEXTURE_RANDOM,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_RANDOM, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
 
-        // 段0→段1→段2（アタック相当、3段ぶん）をスキップしてループ折返し後だけ観測する。
-        let stage_samples = (time_to_seconds(10) as f64 * sr as f64) as usize;
-        for _ in 0..(stage_samples * 3 + 15) {
+        // 段0（アタック相当）をスキップしてループ折返し後だけ観測する。
+        let stage_samples = (time_to_seconds(TEMPLATE_NOMINAL_TIME) as f64 * sr as f64) as usize;
+        for _ in 0..(stage_samples + 15) {
             eg.tick(sr, params, 1.0);
         }
 
-        let (lo_f, hi_f) = (lo as f32 / 255.0, hi as f32 / 255.0);
         for _ in 0..200_000 {
             let level = eg.tick(sr, params, 1.0);
             assert!(
-                level >= lo_f - 1e-3 && level <= hi_f + 1e-3,
-                "texture targetはループ区間のレベル範囲内のはず: level={level} range=[{lo_f},{hi_f}]"
+                (0.0..=1.0).contains(&level),
+                "texture targetは振れ幅0〜255フルの範囲内のはず: level={level}"
             );
         }
     }
@@ -2096,14 +2420,7 @@ mod tests {
     #[test]
     fn chaos_is_deterministic_across_note_on() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(10, 255, 0), (10, 200, 0), (10, 0, 0)]),
-            stage_count: 3,
-            loop_enabled: 1,
-            loop_start: 1,
-            release_point: 2,
-            texture: TEXTURE_CHAOS,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_CHAOS, ..Default::default() };
 
         let run = || {
             let mut eg = TimeEg::new();
@@ -2123,14 +2440,7 @@ mod tests {
     #[test]
     fn note_on_resets_texture_rng() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(10, 255, 0), (10, 200, 0), (10, 50, 0)]),
-            stage_count: 3,
-            loop_enabled: 1,
-            loop_start: 1,
-            release_point: 2,
-            texture: TEXTURE_SAMPLE_HOLD,
-         ..Default::default()};
+        let params = TimeEgParams { texture: TEXTURE_SAMPLE_HOLD, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
 
@@ -2153,24 +2463,312 @@ mod tests {
         assert_eq!(first_run, second_run, "note_onは乱数状態を固定初期値へリセットするはず");
     }
 
-    /// ワンショット（`loop_enabled=0`）ではtextureが効かない（周回自体がないため）。
+    /// テンプレート化（2026-09-14）により、GRAPHの`loop_enabled=0`（ワンショット）設定は
+    /// texture!=OFFのとき無視され、常に強制ループになる（`template_params`が`loop_enabled: 1`
+    /// を生成するため）。旧仕様（ワンショットではtextureが効かない）とは逆の結果になった点を
+    /// 明示的に確認する（既存データはtexture=0のため実害なし、詳細はmemory
+    /// `project_fg_free_rate_texture_templates_design.md`）。
     #[test]
-    fn texture_has_no_effect_without_loop() {
+    fn texture_forces_loop_regardless_of_graph_loop_setting() {
         let sr = 44100.0;
-        let params = TimeEgParams {
-            stages: stages_with(&[(20, 255, 0), (20, 0, 0)]),
-            stage_count: 2,
-            loop_enabled: 0,
-            release_point: 1,
-            texture: TEXTURE_SAMPLE_HOLD,
-         ..Default::default()};
+        let params = TimeEgParams { loop_enabled: 0, texture: TEXTURE_SAMPLE_HOLD, ..Default::default() };
         let mut eg = TimeEg::new();
         eg.note_on();
-        let mut level = 0.0;
         for _ in 0..20_000 {
-            level = eg.tick(sr, params, 1.0);
+            eg.tick(sr, params, 1.0);
         }
-        assert!((level - 0.0).abs() < 1e-3, "ワンショットではrelease_pointの生レベルへ着地するはず: {level}");
+        assert!(!eg.is_idle(), "テンプレート適用時はloop_enabled=0でも強制ループしIdleにならないはず");
+    }
+
+    // -----------------------------------------------------------------------
+    // FG RATE拡張（free_rate/rate_range/base_freq）＋TEXTUREテンプレート波形
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn free_rate_neutral_is_unity_scale() {
+        for rate_range in 0..4u8 {
+            let params = TimeEgParams { free_rate: FREE_RATE_NEUTRAL, rate_range, ..Default::default() };
+            assert_eq!(free_rate_scale(&params), 1.0, "free_rate=128は可変幅に関わらず厳密に1.0のはず");
+        }
+    }
+
+    #[test]
+    fn free_rate_scale_moves_toward_multiplier_at_extremes() {
+        for (rate_range, multiplier) in RATE_RANGE_MULTIPLIERS.iter().enumerate() {
+            let fastest = TimeEgParams { free_rate: 255, rate_range: rate_range as u8, ..Default::default() };
+            let slowest = TimeEgParams { free_rate: 0, rate_range: rate_range as u8, ..Default::default() };
+            let fast_scale = free_rate_scale(&fastest);
+            let slow_scale = free_rate_scale(&slowest);
+            assert!(
+                (fast_scale - multiplier).abs() < 0.05 * multiplier,
+                "rate_range={rate_range}: free_rate=255は可変幅{multiplier}にほぼ達するはず: got={fast_scale}"
+            );
+            assert!(
+                (slow_scale - 1.0 / multiplier).abs() < 0.05 * (1.0 / multiplier),
+                "rate_range={rate_range}: free_rate=0は1/可変幅にほぼ達するはず: got={slow_scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_freq_hz_center_is_5hz() {
+        assert_eq!(base_freq_hz(128), 5.0);
+    }
+
+    #[test]
+    fn base_freq_hz_spans_roughly_0_16_to_160hz() {
+        assert!((base_freq_hz(0) - 0.15625).abs() < 0.01, "base_freq=0は約0.16Hzのはず: {}", base_freq_hz(0));
+        assert!((base_freq_hz(255) - 160.0).abs() < 5.0, "base_freq=255は約160Hzのはず: {}", base_freq_hz(255));
+    }
+
+    /// レベルが0.5を上向きに横切るサンプル位置（線形補間つき）を集める
+    /// （`sound-core/examples/fg_template_probe.rs`と同じ実測手法のユニットテスト版）。
+    fn rising_crossings_0_5(samples: &[f32]) -> Vec<f64> {
+        let mut out = Vec::new();
+        for i in 1..samples.len() {
+            let (a, b) = (samples[i - 1], samples[i]);
+            if a < 0.5 && b >= 0.5 {
+                let frac = if (b - a).abs() < 1e-12 { 0.0 } else { (0.5 - a) / (b - a) };
+                out.push((i - 1) as f64 + frac as f64);
+            }
+        }
+        out
+    }
+
+    /// テンプレート波形の実測周期（サンプル数）。先頭2周は導入段の影響を避けてスキップする。
+    fn measure_template_period_samples(
+        params: TimeEgParams,
+        sample_rate: f32,
+        speed_scale: f32,
+        total_samples: usize,
+    ) -> f64 {
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        let mut samples = Vec::with_capacity(total_samples);
+        for _ in 0..total_samples {
+            samples.push(eg.tick(sample_rate, params, speed_scale));
+        }
+        let crossings = rising_crossings_0_5(&samples);
+        let skip = 2.min(crossings.len().saturating_sub(2));
+        let used = &crossings[skip..];
+        assert!(used.len() >= 2, "ゼロ交差の観測数が不足: {}", crossings.len());
+        (used[used.len() - 1] - used[0]) / (used.len() - 1) as f64
+    }
+
+    /// SYNC OFF時、TRIANGLEの周期が基準周波数(既定5Hz)どおりになること
+    /// （`time_eg_speed_scale`が`base_freq_hz × template_period_seconds`で正規化する）。
+    #[test]
+    fn template_free_rate_period_matches_base_freq() {
+        let sr = 44100.0;
+        let params = TimeEgParams { texture: TEXTURE_TRIANGLE, ..Default::default() }; // base_freq=128=5Hz
+        let speed_scale = time_eg_speed_scale(&params, 0.0);
+        let period_samples = measure_template_period_samples(params, sr, speed_scale, 60_000);
+        let expected_samples = sr as f64 / 5.0;
+        let error = (period_samples - expected_samples).abs() / expected_samples;
+        assert!(
+            error < 0.001,
+            "TRIANGLE@5Hzはsample_rate/5と一致するはず: got={period_samples} expected={expected_samples}"
+        );
+    }
+
+    /// SYNC ON時、TRIANGLEの周期が指定音価(120BPM 1/4=0.5秒)どおりになること。
+    #[test]
+    fn template_sync_period_matches_note_value() {
+        let sr = 44100.0;
+        let bpm = 120.0;
+        let params = TimeEgParams {
+            texture: TEXTURE_TRIANGLE,
+            sync_enabled: 1,
+            sync_rate: sync_note_anchor(10), // 1/4
+            ..Default::default()
+        };
+        let speed_scale = time_eg_speed_scale(&params, bpm);
+        let period_samples = measure_template_period_samples(params, sr, speed_scale, 150_000);
+        let expected_samples = sr as f64 * (60.0 / bpm as f64);
+        let error = (period_samples - expected_samples).abs() / expected_samples;
+        assert!(
+            error < 0.001,
+            "TRIANGLE@120BPM 1/4は1拍(0.5秒)と一致するはず: got={period_samples} expected={expected_samples}"
+        );
+    }
+
+    /// リリース区間のスケール分離：テンプレート適用時、`base_freq`をどう変えても
+    /// note-off後にidleへ到達するまでの秒数がほぼ変わらない（対処前は23.5x〜0.02xの開きが出た、
+    /// 詳細はplans/swirling-petting-anchor.md「リリース区間のスケール分離」節）。
+    #[test]
+    fn template_release_scale_is_independent_of_base_freq() {
+        let sr = 44100.0;
+        let mut stages = [TimeStage::default(); MAX_STAGES];
+        stages[1] = TimeStage { time: 120, level: 0, curve: 0 };
+
+        let measure_release_samples = |base_freq: u8| -> usize {
+            let params = TimeEgParams {
+                stages,
+                stage_count: 2,
+                release_point: 0,
+                texture: TEXTURE_TRIANGLE,
+                base_freq,
+                ..Default::default()
+            };
+            let speed_scale = time_eg_speed_scale(&params, 0.0);
+            let mut eg = TimeEg::new();
+            eg.note_on();
+            for _ in 0..20_000 {
+                eg.tick(sr, params, speed_scale);
+            }
+            eg.note_off();
+            let mut n = 0usize;
+            let limit = sr as usize * 10;
+            while !eg.is_idle() && n < limit {
+                eg.tick(sr, params, speed_scale);
+                n += 1;
+            }
+            assert!(n < limit, "リリースがidleへ到達しなかった（base_freq={base_freq}）");
+            n
+        };
+
+        let low = measure_release_samples(0); // 約0.16Hz
+        let high = measure_release_samples(255); // 約160Hz
+        let ratio = low as f64 / high as f64;
+        assert!(
+            (0.67..1.5).contains(&ratio),
+            "リリース長はbase_freqにほぼ依存しないはず: low={low} high={high} ratio={ratio}"
+        );
+    }
+
+    /// texture=OFFのときは分離ガードが効かず、従来どおりspeed_scaleがリリースにもそのまま
+    /// 適用される（分離ガードが既存挙動を変えていないことの保証）。
+    #[test]
+    fn texture_off_release_still_scales_with_speed() {
+        let sr = 44100.0;
+        let mut stages = [TimeStage::default(); MAX_STAGES];
+        stages[0] = TimeStage { time: 50, level: 255, curve: 0 };
+        stages[1] = TimeStage { time: 50, level: 0, curve: 0 };
+        let params = TimeEgParams { stages, stage_count: 2, release_point: 0, ..Default::default() };
+
+        let measure_release_samples = |speed_scale: f32| -> usize {
+            let mut eg = TimeEg::new();
+            eg.note_on();
+            for _ in 0..10_000 {
+                eg.tick(sr, params, speed_scale);
+            }
+            eg.note_off();
+            let mut n = 0usize;
+            let limit = sr as usize * 10;
+            while !eg.is_idle() && n < limit {
+                eg.tick(sr, params, speed_scale);
+                n += 1;
+            }
+            n
+        };
+
+        let normal = measure_release_samples(1.0);
+        let doubled = measure_release_samples(2.0);
+        let ratio = normal as f64 / doubled as f64;
+        assert!(
+            (ratio - 2.0).abs() < 0.1,
+            "texture=OFFはspeed_scaleがリリースにもそのまま効くはず: normal={normal} doubled={doubled} ratio={ratio}"
+        );
+    }
+
+    /// TRIANGLEは連続的に動く幾何学的波形であり、乱数ジャンプ（`texture_target_level`由来）を
+    /// 含まないこと（`enter_stage`の`is_random_texture`条件で乱数分岐そのものに入らないことは
+    /// 別途コード上のガードで保証されるが、実際の出力でも確認する）。
+    #[test]
+    fn triangle_template_moves_smoothly_without_random_jumps() {
+        let sr = 44100.0;
+        let params = TimeEgParams { texture: TEXTURE_TRIANGLE, ..Default::default() };
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        for _ in 0..10 {
+            eg.tick(sr, params, 1.0);
+        }
+        let mut prev = eg.tick(sr, params, 1.0);
+        let mut max_jump = 0.0f32;
+        for _ in 0..20_000 {
+            let level = eg.tick(sr, params, 1.0);
+            max_jump = max_jump.max((level - prev).abs());
+            prev = level;
+        }
+        assert!(max_jump < 0.1, "TRIANGLEは滑らかに動くはず（乱数化の疑い）: max_jump={max_jump}");
+    }
+
+    /// SAW UP/DOWNは1周期につき1回だけ意図的な瞬時遷移（`time=0`の段、`(0→0)`/`(0→255)`）を
+    /// 持つ幾何学的波形。ループ4周期ぶんで大きな跳躍がちょうど4回（周期数と一致）だけ起きる
+    /// ことを確認する（乱数ターゲットなら段ごとに値がばらつき、この一致は起きない）。
+    #[test]
+    fn saw_templates_jump_exactly_once_per_cycle_not_randomly() {
+        let sr = 44100.0;
+        for &texture in &[TEXTURE_SAW_UP, TEXTURE_SAW_DOWN] {
+            let params = TimeEgParams { texture, ..Default::default() };
+            let mut eg = TimeEg::new();
+            eg.note_on();
+            for _ in 0..10 {
+                eg.tick(sr, params, 1.0);
+            }
+            let period_samples = (time_to_seconds(TEMPLATE_NOMINAL_TIME) as f64 * sr as f64) as usize;
+            let cycles = 4;
+            let mut prev = eg.tick(sr, params, 1.0);
+            let mut jump_count = 0usize;
+            for _ in 0..(period_samples * cycles) {
+                let level = eg.tick(sr, params, 1.0);
+                if (level - prev).abs() > 0.5 {
+                    jump_count += 1;
+                }
+                prev = level;
+            }
+            assert_eq!(
+                jump_count, cycles,
+                "texture={texture}: 1周期に1回だけ意図的な瞬時遷移があるはず（乱数なら回数が揺れる）: jump_count={jump_count}"
+            );
+        }
+    }
+
+    /// `template_params`のMAX_STAGES超過処理：カノニカル表側の段は絶対に削らず、
+    /// リリース区間の中間段を古い方から捨てて最終段を残す。
+    #[test]
+    fn template_params_release_overflow_drops_oldest_middle_stages() {
+        let mut stages = [TimeStage::default(); MAX_STAGES];
+        for i in 0..7usize {
+            stages[1 + i] = TimeStage { time: 30 + i as u8, level: i as u8 * 10, curve: 0 };
+        }
+        let source = TimeEgParams {
+            stages,
+            stage_count: 8, // release_point=0 → release区間は1..8の7段
+            release_point: 0,
+            texture: TEXTURE_SQUARE,
+            ..Default::default()
+        };
+        let result = template_params(&source, 0.0);
+
+        // SQUAREのカノニカル表は4段。MAX_STAGES=10なのでリリース区間に使える枠は6段。
+        // 元のリリース区間は7段あるので、先頭(古い方)を1段捨て、末尾6段（元のstages[2..8]）を採用する。
+        assert_eq!(result.stage_count, 10, "4(canonical)+6(release capacity)のはず");
+        for i in 0..6usize {
+            assert_eq!(
+                result.stages[4 + i],
+                source.stages[2 + i],
+                "リリース区間は末尾から採用され最終段が残るはず（index {i}）"
+            );
+        }
+        // note-offでidleへ到達すること（連結したリリース区間が正しく機能する）。
+        let sr = 44100.0;
+        let speed_scale = time_eg_speed_scale(&source, 0.0);
+        let mut eg = TimeEg::new();
+        eg.note_on();
+        for _ in 0..20_000 {
+            eg.tick(sr, source, speed_scale);
+        }
+        eg.note_off();
+        let mut became_idle = false;
+        for _ in 0..(sr as usize * 10) {
+            eg.tick(sr, source, speed_scale);
+            if eg.is_idle() {
+                became_idle = true;
+                break;
+            }
+        }
+        assert!(became_idle, "MAX_STAGES超過後もリリースが最終段まで辿り着きIdleに到達するはず");
     }
 
     /// `auto_release=0`（既定）では、従来どおり`note_off()`が即座にリリースへ入り、

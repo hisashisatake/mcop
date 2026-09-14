@@ -93,19 +93,24 @@
              解放条件に関与しないため、リリース後にオフセットを残せる／段数を8まで使える。
              STAGE=0は無効化（変調なし、エンジンがtickをスキップする）。 -->
         <time-eg-editor handle="params.pitch_fg.eg" mapping="RawLinear" tl-value="255" min-stages="0" terminal-level="free"/>
-        <!-- SYNC/RATE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を足すのではなく、
-             右のstackへ縦積みする（OP1〜4パネルと同じ配置規約。time-eg-editorは245px
-             固定サイズの自前描画ウィジェットのため、panel直下に別rowを足すとレイアウトが
-             伸びずグラフに重なる）。<sync-rate>は連続ノブ＋音価ドロップダウンの複合ウィジェット
-             （旧<enum label="NOTE">の置き換え、100×70）。両者は同じsync_rateの2つの見え方
-             なので互いに追従する。 -->
+        <!-- SYNC/RATE/RANGE/BASE/RETRIG/TEXTURE/P.DEPTHはtime-eg-editorの下に新しい行を
+             足すのではなく、右のstackへ縦積みする（OP1〜4パネルと同じ配置規約。
+             time-eg-editorは245px固定サイズの自前描画ウィジェットのため、panel直下に
+             別rowを足すとレイアウトが伸びずグラフに重なる）。<fg-rate>はSYNC ON/OFFで
+             ノブ・下段の表示先そのものを切り替える複合ウィジェット（ON=sync_rate+音価
+             ドロップダウン、OFF=free_rate+数値欄、100×70）。RANGE/BASEはSYNC OFF時の
+             free_rateが動かせる可変幅・基準周波数（詳細はmemory
+             `project_fg_free_rate_texture_templates_design.md`）。 -->
         <stack gap="spacing" center="true">
-          <!-- 質感（旧質感LFOのS&H/Random/Chaos波形の後継）。ループ区間の各段を
-               乱数値へ置き換える。OFF以外はLOOP必須（loop_enabled=0では効かない）。 -->
+          <!-- 質感。TRIANGLE〜SQUAREは幾何学的テンプレート波形、S&H以降は旧質感LFOの
+               後継（乱数系）。OFF以外は保持区間がテンプレートへ全面置換され、GRAPHの
+               手描きSTAGEは参照されなくなる（time_eg_editorが表示専用ビューへ切り替える）。 -->
           <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13" height="36"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7" height="36"/>
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.pitch_fg.eg.sync_rate_handle()" salt="6"/>
+          <fg-rate label="RATE" sync="params.pitch_fg.eg.sync_enabled_handle()" sync-rate="params.pitch_fg.eg.sync_rate_handle()" free-rate="params.pitch_fg.eg.free_rate_handle()" rate-range="params.pitch_fg.eg.rate_range_handle()" salt="6"/>
+          <enum label="RANGE" handle="params.pitch_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="18" height="36"/>
+          <knob label="BASE" handle="params.pitch_fg.eg.base_freq_handle()"/>
           <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
                持つため、バイポーラ表示（±）にはしない。 -->
           <knob label="P.DEPTH" handle="params.pitch_fg.depth"/>
@@ -137,7 +142,9 @@
           <enum label="TEXTURE" handle="params.gain_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
           <enum label="RETRIG" handle="params.gain_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
           <checkbox label="SYNC" handle="params.gain_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.gain_fg.eg.sync_rate_handle()" salt="10"/>
+          <fg-rate label="RATE" sync="params.gain_fg.eg.sync_enabled_handle()" sync-rate="params.gain_fg.eg.sync_rate_handle()" free-rate="params.gain_fg.eg.free_rate_handle()" rate-range="params.gain_fg.eg.rate_range_handle()" salt="10"/>
+          <enum label="RANGE" handle="params.gain_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="19" height="36"/>
+          <knob label="BASE" handle="params.gain_fg.eg.base_freq_handle()"/>
           <!-- Depthは符号を持たない振れ幅の倍率だが、既定255（EGの形をそのまま使う）である点が
                P.DEPTH/F.DEPTH（既定0＝無変調）と違う。詳細はOp505GainFgのdocコメント参照。 -->
           <knob label="G.DEPTH" handle="params.gain_fg.depth"/>
@@ -155,7 +162,9 @@
           <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <sync-rate label="RATE" handle="params.cutoff_fg.eg.sync_rate_handle()" salt="8"/>
+          <fg-rate label="RATE" sync="params.cutoff_fg.eg.sync_enabled_handle()" sync-rate="params.cutoff_fg.eg.sync_rate_handle()" free-rate="params.cutoff_fg.eg.free_rate_handle()" rate-range="params.cutoff_fg.eg.rate_range_handle()" salt="8"/>
+          <enum label="RANGE" handle="params.cutoff_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="20" height="36"/>
+          <knob label="BASE" handle="params.cutoff_fg.eg.base_freq_handle()"/>
           <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
           <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
         </stack>

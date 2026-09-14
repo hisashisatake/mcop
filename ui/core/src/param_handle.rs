@@ -178,8 +178,10 @@ pub trait TimeEgHandle {
         Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::RetriggerMode })
     }
 
-    /// 質感（`texture`、0=OFF/1=S&H/2=Random/3=Chaos）へのハンドル（旧質感LFOのS&H/Random/
-    /// Chaos波形の後継、memory `project_texture_lfo_retirement.md`参照）。
+    /// 質感（`texture`、0=OFF/1=TRIANGLE/2=SAW UP/3=SAW DOWN/4=SQUARE/5=S&H/6=Random/7=Chaos）
+    /// へのハンドル。TRIANGLE〜SQUAREは`template_params()`が生成する幾何学的テンプレート波形、
+    /// S&H以降は旧質感LFOの後継（乱数系）。2026-09-14に再採番（旧: OFF=0/S&H=1/Random=2/Chaos=3、
+    /// memory `project_fg_free_rate_texture_templates_design.md`参照）。
     fn texture_handle(&self) -> Box<dyn IntParamHandle + '_> {
         Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::Texture })
     }
@@ -189,6 +191,23 @@ pub trait TimeEgHandle {
     /// `project_gm2_rhythm_channel_implementation.md`参照）。
     fn auto_release_handle(&self) -> Box<dyn IntParamHandle + '_> {
         Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::AutoRelease })
+    }
+
+    /// SYNC OFF時の速さ（`free_rate`、0〜255・128=等倍）へのハンドル。`<fg-rate>`複合ウィジェットが
+    /// SYNC OFF時にこのハンドルへノブ・数値欄を向ける（memory
+    /// `project_fg_free_rate_texture_templates_design.md`参照）。
+    fn free_rate_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::FreeRate })
+    }
+
+    /// `free_rate`が動かせる可変幅（`rate_range`、0=×2/1=×4/2=×8/3=×16）へのハンドル。
+    fn rate_range_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::RateRange })
+    }
+
+    /// TEXTUREテンプレート波形がSYNC OFF時に基準とする周波数（`base_freq`、0〜255・128=5Hz）へのハンドル。
+    fn base_freq_handle(&self) -> Box<dyn IntParamHandle + '_> {
+        Box::new(TimeEgIntFieldHandle { eg: self, field: TimeEgIntField::BaseFreq })
     }
 }
 
@@ -218,6 +237,9 @@ enum TimeEgIntField {
     RetriggerMode,
     Texture,
     AutoRelease,
+    FreeRate,
+    RateRange,
+    BaseFreq,
 }
 
 struct TimeEgIntFieldHandle<'a, T: TimeEgHandle + ?Sized> {
@@ -233,6 +255,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::RetriggerMode => p.retrigger_mode as i32,
             TimeEgIntField::Texture => p.texture as i32,
             TimeEgIntField::AutoRelease => p.auto_release as i32,
+            TimeEgIntField::FreeRate => p.free_rate as i32,
+            TimeEgIntField::RateRange => p.rate_range as i32,
+            TimeEgIntField::BaseFreq => p.base_freq as i32,
         }
     }
     fn min(&self) -> i32 {
@@ -242,8 +267,11 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
         match self.field {
             TimeEgIntField::SyncRate => 255,
             TimeEgIntField::RetriggerMode => 1,
-            TimeEgIntField::Texture => 3,
+            TimeEgIntField::Texture => 7,
             TimeEgIntField::AutoRelease => 255,
+            TimeEgIntField::FreeRate => 255,
+            TimeEgIntField::RateRange => sound_core::RATE_RANGE_MULTIPLIERS.len() as i32 - 1,
+            TimeEgIntField::BaseFreq => 255,
         }
     }
     fn default(&self) -> i32 {
@@ -252,6 +280,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::RetriggerMode => sound_core::RETRIGGER_MODE_CONTINUE as i32,
             TimeEgIntField::Texture => sound_core::TEXTURE_OFF as i32,
             TimeEgIntField::AutoRelease => 0,
+            TimeEgIntField::FreeRate => sound_core::FREE_RATE_NEUTRAL as i32,
+            TimeEgIntField::RateRange => 0,
+            TimeEgIntField::BaseFreq => 128,
         }
     }
     fn name(&self) -> String {
@@ -260,17 +291,24 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
             TimeEgIntField::RetriggerMode => "Retrigger",
             TimeEgIntField::Texture => "Texture",
             TimeEgIntField::AutoRelease => "Auto Release",
+            TimeEgIntField::FreeRate => "Rate",
+            TimeEgIntField::RateRange => "Rate Range",
+            TimeEgIntField::BaseFreq => "Base Freq",
         };
         format!("{} {}", self.eg.name(), suffix)
     }
     /// `sync_rate`は生の0〜255ではなく音価名で見せる（ノブのツールチップ／数値欄用）。
     /// アンカーから外れているときは`~1/8`のようにチルダを付けて近似であることを示す。
+    /// `free_rate`は生値のまま表示する（`<fg-rate>`のノブはツールチップだけ別ハンドル
+    /// （`crate::selector::free_rate_display`）で倍率表示にし、数値欄はここの生値表示を使う。
+    /// memory `project_knob_display_vs_raw_input.md`の教訓どおり、同じハンドルで表示だけを
+    /// 書き換えると直接入力が壊れるため、上書きは倍率専用の別ハンドル側だけに限る）。
     fn display(&self) -> String {
         match self.field {
             TimeEgIntField::SyncRate => crate::selector::sync_rate_display(self.value() as u8),
             TimeEgIntField::RetriggerMode => self.value().to_string(),
             TimeEgIntField::Texture => {
-                crate::selector::TEXTURE_NAMES[self.value().clamp(0, 3) as usize].to_string()
+                crate::selector::TEXTURE_NAMES[self.value().clamp(0, 7) as usize].to_string()
             }
             TimeEgIntField::AutoRelease => {
                 if self.value() == 0 {
@@ -278,6 +316,9 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
                 } else {
                     self.value().to_string()
                 }
+            }
+            TimeEgIntField::FreeRate | TimeEgIntField::RateRange | TimeEgIntField::BaseFreq => {
+                self.value().to_string()
             }
         }
     }
@@ -294,10 +335,19 @@ impl<'a, T: TimeEgHandle + ?Sized> IntParamHandle for TimeEgIntFieldHandle<'a, T
                 params.retrigger_mode = value.clamp(0, 1) as u8;
             }
             TimeEgIntField::Texture => {
-                params.texture = value.clamp(0, 3) as u8;
+                params.texture = value.clamp(0, 7) as u8;
             }
             TimeEgIntField::AutoRelease => {
                 params.auto_release = value.clamp(0, 255) as u8;
+            }
+            TimeEgIntField::FreeRate => {
+                params.free_rate = value.clamp(0, 255) as u8;
+            }
+            TimeEgIntField::RateRange => {
+                params.rate_range = value.clamp(0, sound_core::RATE_RANGE_MULTIPLIERS.len() as i32 - 1) as u8;
+            }
+            TimeEgIntField::BaseFreq => {
+                params.base_freq = value.clamp(0, 255) as u8;
             }
         }
         self.eg.set_params(params);

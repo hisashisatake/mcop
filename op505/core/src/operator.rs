@@ -9,7 +9,7 @@
 use sound_fm::mapping::*;
 use sound_fm::waveform::{is_noise_waveform, noise_clock_rate, noise_color};
 use serde::{Deserialize, Serialize};
-use sound_core::{tempo_speed_scale, TimeEg, TimeEgParams, WaveTable, RETRIGGER_MODE_RESET};
+use sound_core::{time_eg_speed_scale, TimeEg, TimeEgParams, WaveTable, RETRIGGER_MODE_RESET};
 
 /// オペレーター単位パラメーター一式。ym38x6の`ar/d1r/d1l/d2r/rr/floor/loop_enabled/curve`
 /// （8フィールド）を`eg: TimeEgParams`（N点折れ線＋ループ範囲＋多段リリース）1つに統合する。
@@ -281,7 +281,7 @@ impl Operator {
 
     /// `modulation`: FM変調入力（位相オフセット、0.0〜1.0スケール）
     /// `tempo_bpm`: TimeEgのテンポ同期（`eg.sync_enabled`）が対象区間の速度を決めるのに使う
-    /// （`eg.sync_enabled=0`なら`tempo_speed_scale`が1.0を返すため無効時は無関係）。
+    /// （`eg.sync_enabled=0`なら`time_eg_speed_scale`はbpmを見ずfree_rate/テンプレート側で速さを決める）。
     pub fn tick(&mut self, sample_rate: f32, wave: &WaveTable, modulation: f32, note: u8, tempo_bpm: f32) -> f32 {
         if self.eg.is_idle() {
             return 0.0;
@@ -295,7 +295,7 @@ impl Operator {
             self.cached_rate_scale_key = Some(rate_scale_key);
             v
         };
-        let tempo_scale = tempo_speed_scale(&self.params.eg, tempo_bpm);
+        let tempo_scale = time_eg_speed_scale(&self.params.eg, tempo_bpm);
         let env_level = self.eg.tick(sample_rate, self.params.eg, ksr_mul * tempo_scale);
 
         let freq = self.effective_frequency();

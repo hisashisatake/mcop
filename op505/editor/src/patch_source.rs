@@ -133,6 +133,12 @@ pub fn read_int(p: &Op505Patch, field: PatchInt) -> i32 {
         PatchInt::FgDepth(FgSlot::Pitch) => p.channel.pitch_fg.depth as i32,
         PatchInt::FgDepth(FgSlot::Cutoff) => p.channel.cutoff_fg.depth as i32,
         PatchInt::FgDepth(FgSlot::Gain) => p.channel.gain_fg.depth as i32,
+        PatchInt::FgRate(FgSlot::Pitch) => p.channel.pitch_fg.eg.free_rate as i32,
+        PatchInt::FgRate(FgSlot::Cutoff) => p.channel.cutoff_fg.eg.free_rate as i32,
+        PatchInt::FgRate(FgSlot::Gain) => p.channel.gain_fg.eg.free_rate as i32,
+        PatchInt::FgTexture(FgSlot::Pitch) => p.channel.pitch_fg.eg.texture as i32,
+        PatchInt::FgTexture(FgSlot::Cutoff) => p.channel.cutoff_fg.eg.texture as i32,
+        PatchInt::FgTexture(FgSlot::Gain) => p.channel.gain_fg.eg.texture as i32,
         PatchInt::Op(op, op_int) => read_op_int(&p.operators[op.index()], op_int),
     }
 }
@@ -150,6 +156,12 @@ fn write_int(p: &mut Op505Patch, field: PatchInt, value: i32) {
         PatchInt::FgDepth(FgSlot::Pitch) => p.channel.pitch_fg.depth = value as u8,
         PatchInt::FgDepth(FgSlot::Cutoff) => p.channel.cutoff_fg.depth = value as u8,
         PatchInt::FgDepth(FgSlot::Gain) => p.channel.gain_fg.depth = value as u8,
+        PatchInt::FgRate(FgSlot::Pitch) => p.channel.pitch_fg.eg.free_rate = value as u8,
+        PatchInt::FgRate(FgSlot::Cutoff) => p.channel.cutoff_fg.eg.free_rate = value as u8,
+        PatchInt::FgRate(FgSlot::Gain) => p.channel.gain_fg.eg.free_rate = value as u8,
+        PatchInt::FgTexture(FgSlot::Pitch) => p.channel.pitch_fg.eg.texture = value as u8,
+        PatchInt::FgTexture(FgSlot::Cutoff) => p.channel.cutoff_fg.eg.texture = value as u8,
+        PatchInt::FgTexture(FgSlot::Gain) => p.channel.gain_fg.eg.texture = value as u8,
         PatchInt::Op(op, op_int) => write_op_int(&mut p.operators[op.index()], op_int, value),
     }
 }

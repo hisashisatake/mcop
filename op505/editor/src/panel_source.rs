@@ -7,6 +7,7 @@
 //! なのでどちらも通る）。詳細設計は`.claude/plans/fancy-wishing-toast.md`「② PanelParamSource」参照。
 
 use op505_ui::{BoolParamHandle, IntParamHandle, MeterHandle, Op505BipolarFgPanelParams, Op505OperatorPanelParams, Op505PanelParams, TimeEgHandle};
+use sound_core::TimeEgParams;
 
 use crate::param_spec::{BoolField, EgSlot, FgSlot, FxInt, IntField, OpIndex, OpInt, PatchInt};
 
@@ -63,7 +64,66 @@ pub fn build_panel_params<'a>(src: &'a dyn PanelParamSource) -> Op505PanelParams
 }
 
 fn bipolar_fg_panel_params<'a>(src: &'a dyn PanelParamSource, fg: FgSlot) -> Op505BipolarFgPanelParams<'a> {
-    Op505BipolarFgPanelParams { eg: src.eg(EgSlot::Fg(fg)), depth: src.int(IntField::Patch(PatchInt::FgDepth(fg))) }
+    let rate = src.int(IntField::Patch(PatchInt::FgRate(fg)));
+    let texture = src.int(IntField::Patch(PatchInt::FgTexture(fg)));
+    let eg = src.eg(EgSlot::Fg(fg));
+    Op505BipolarFgPanelParams {
+        eg: Box::new(FgRateTextureOverrideHandle { inner: eg, rate, texture }),
+        depth: src.int(IntField::Patch(PatchInt::FgDepth(fg))),
+    }
+}
+
+/// `TimeEgHandle`のうち`free_rate`/`texture`の2フィールドだけをDAW側の`IntParamHandle`
+/// （`PatchInt::FgRate`/`FgTexture`）へ差し替えて返すアダプタ。それ以外の段データ・
+/// sync_rate等は`inner`（persist状態、standaloneでは`Op505Patch`直接）へ素通しする。
+///
+/// VSTではpersist状態の`Op505EgBank`とDAWパラメーターの2箇所にfree_rate/textureが
+/// 存在することになるが（`op505-vst::params::build_patch`がDAW値で上書きする）、
+/// GRAPH表示専用ビュー（`time_eg_editor`）がDAWオートメーション/NRPN上書きの結果に
+/// 追従して見えるようにするため、パネル描画で読むこのハンドルの`params()`は常に
+/// DAW側の値を優先する。standaloneでは`rate`/`texture`が同じ`Op505Patch`の同じフィールドを
+/// 指す（`patch_source::read_int`/`write_int`参照）ため、実質無害な二重読み書きになる。
+///
+/// `set_params`は`rate`/`texture`が実際に変化したときだけDAWハンドルへ`begin_edit`/`set`/
+/// `end_edit`する（変化検知）。無条件に毎回書くと、GRAPHの段をドラッグするたびの
+/// `set_params`呼び出し（1ドラッグで多数回）が無関係なfree_rate/textureパラメーターの
+/// オートメーションgestureを大量に発行してしまう
+/// （CLAUDE.mdに記載のNRPN/DAWオートメーション共存で使う「シャドウフィールド＋差分検知方式」と同じ回避策）。
+struct FgRateTextureOverrideHandle<'a> {
+    inner: Box<dyn TimeEgHandle + 'a>,
+    rate: Box<dyn IntParamHandle + 'a>,
+    texture: Box<dyn IntParamHandle + 'a>,
+}
+
+impl TimeEgHandle for FgRateTextureOverrideHandle<'_> {
+    fn params(&self) -> TimeEgParams {
+        let mut params = self.inner.params();
+        params.free_rate = self.rate.value().clamp(0, 255) as u8;
+        params.texture = self.texture.value().clamp(0, 7) as u8;
+        params
+    }
+    fn set_params(&self, params: TimeEgParams) {
+        if params.free_rate as i32 != self.rate.value() {
+            self.rate.begin_edit();
+            self.rate.set(params.free_rate as i32);
+            self.rate.end_edit();
+        }
+        if params.texture as i32 != self.texture.value() {
+            self.texture.begin_edit();
+            self.texture.set(params.texture as i32);
+            self.texture.end_edit();
+        }
+        self.inner.set_params(params);
+    }
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+    fn begin_edit(&self) {
+        self.inner.begin_edit();
+    }
+    fn end_edit(&self) {
+        self.inner.end_edit();
+    }
 }
 
 fn operator_panel_params<'a>(src: &'a dyn PanelParamSource, op: OpIndex) -> Op505OperatorPanelParams<'a> {

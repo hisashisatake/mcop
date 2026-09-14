@@ -499,6 +499,30 @@ impl ChannelState {
             ControlTarget::EnvAmpEpsilon => {
                 DataEntryOutcome::Engine(EngineControlTarget::EnvAmpEpsilon, cc_byte_to_u8(raw_value))
             }
+            ControlTarget::PitchFgRate => {
+                self.overrides.pitch_fg_rate = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::CutoffFgRate => {
+                self.overrides.cutoff_fg_rate = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::GainFgRate => {
+                self.overrides.gain_fg_rate = Some(cc_byte_to_u8(raw_value));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::PitchFgTexture => {
+                self.overrides.pitch_fg_texture = Some(cc_byte_to_u7(raw_value).min(7));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::CutoffFgTexture => {
+                self.overrides.cutoff_fg_texture = Some(cc_byte_to_u7(raw_value).min(7));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
+            ControlTarget::GainFgTexture => {
+                self.overrides.gain_fg_texture = Some(cc_byte_to_u7(raw_value).min(7));
+                DataEntryOutcome::StateChanged { voice_update: true }
+            }
             ControlTarget::Unassigned => DataEntryOutcome::StateChanged { voice_update: false },
         }
     }
@@ -582,6 +606,52 @@ mod tests {
         assert_eq!(eff.channel.pitch_fg.depth, 201);
         assert_eq!(eff.channel.cutoff_fg.depth, 201);
         assert_eq!(eff.channel.gain_fg.depth, 201);
+    }
+
+    /// NRPN(0,40)〜(0,42) FG Rate（`free_rate`）：`PatchOverrides`経由で絶対上書きする。
+    #[test]
+    fn nrpn_fg_rate_overrides_apply_absolute_value() {
+        // raw_valueはMIDIの生CCバイト(0〜127の7bit)。100 -> cc_byte_to_u8 -> round(100/127*255)=201。
+        let mut st = ChannelState::new(0, false);
+        for lsb in [40u8, 41, 42] {
+            select_nrpn(&mut st, 0, lsb);
+            assert_eq!(
+                st.apply_data_entry(100),
+                DataEntryOutcome::StateChanged { voice_update: true },
+                "NRPN(0,{lsb}) should require voice update"
+            );
+        }
+        assert_eq!(st.overrides.pitch_fg_rate, Some(201));
+        assert_eq!(st.overrides.cutoff_fg_rate, Some(201));
+        assert_eq!(st.overrides.gain_fg_rate, Some(201));
+
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert_eq!(eff.channel.pitch_fg.eg.free_rate, 201);
+        assert_eq!(eff.channel.cutoff_fg.eg.free_rate, 201);
+        assert_eq!(eff.channel.gain_fg.eg.free_rate, 201);
+    }
+
+    /// NRPN(0,43)〜(0,45) FG Texture：`PatchOverrides`経由で絶対上書きし、0..=7へクランプする。
+    #[test]
+    fn nrpn_fg_texture_overrides_apply_absolute_value_and_clamp() {
+        let mut st = ChannelState::new(0, false);
+        for lsb in [43u8, 44, 45] {
+            select_nrpn(&mut st, 0, lsb);
+            // 生値100（7bit）はクランプ前なら100だが、textureは0..=7へクランプされる。
+            assert_eq!(
+                st.apply_data_entry(100),
+                DataEntryOutcome::StateChanged { voice_update: true },
+                "NRPN(0,{lsb}) should require voice update"
+            );
+        }
+        assert_eq!(st.overrides.pitch_fg_texture, Some(7));
+        assert_eq!(st.overrides.cutoff_fg_texture, Some(7));
+        assert_eq!(st.overrides.gain_fg_texture, Some(7));
+
+        let eff = st.build_effective_patch(&Op505Patch::default());
+        assert_eq!(eff.channel.pitch_fg.eg.texture, 7);
+        assert_eq!(eff.channel.cutoff_fg.eg.texture, 7);
+        assert_eq!(eff.channel.gain_fg.eg.texture, 7);
     }
 
     /// NRPN(0,38) Feedback Velocity Sens：`PatchOverrides`経由で絶対上書きし、発音中ボイスへの

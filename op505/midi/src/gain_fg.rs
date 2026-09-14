@@ -17,7 +17,11 @@ use crate::value::cc_byte_to_u8;
 /// `lfo_rate_to_hz`でHzを求め段のtimeへ直接焼き込む。CC92未送信なら発火せず
 /// 既存プリセットは出力ビット不変。
 pub fn apply_gain_fg_expression(patch: &mut Op505Patch, cc92: u8, pitch_fg_cc76: u8) {
-    if patch.channel.gain_fg.eg.stage_count == 0 {
+    // texture!=OFFのときは発火しない——TEXTUREテンプレートはstage_count==0のままでも
+    // 既に完全な形を持つため、ここで標準トレモロ形状へ丸ごと上書きすると
+    // ユーザーが選んだTEXTURE/RATE/BASEが消えてしまう（cutoff_fg.rsの同種コメント参照）。
+    let has_texture = patch.channel.gain_fg.eg.texture != op505_core::TEXTURE_OFF;
+    if patch.channel.gain_fg.eg.stage_count == 0 && !has_texture {
         if cc92 > 0 {
             let hz = lfo_rate_to_hz(cc_byte_to_u8(pitch_fg_cc76));
             patch.channel.gain_fg.eg = op505_core::standard_tremolo_gain_eg(0.0, hz);
@@ -75,5 +79,23 @@ mod tests {
         apply_gain_fg_expression(&mut patch, 80, 64);
         assert_eq!(patch.channel.gain_fg.eg.stage_count, 5);
         assert_eq!(patch.channel.gain_fg.depth, 80);
+    }
+
+    /// texture!=OFFのプリセット（stage_count==0のままTEXTUREテンプレートの形を持つ）は
+    /// フォールバックが発火せず、CC92は通常どおり既存depthへ加算されるだけのはず
+    /// （発火すると標準トレモロ形状へ丸ごと上書きされ、TEXTURE/RATE/BASEが消える。
+    /// 2026-09-14実機確認で発覚した不具合、`cutoff_fg.rs`の同種テスト参照）。
+    #[test]
+    fn no_fallback_when_texture_is_set_even_with_stage_count_zero() {
+        let mut patch = Op505Patch::default();
+        patch.channel.gain_fg.depth = 200;
+        patch.channel.gain_fg.eg.texture = op505_core::TEXTURE_TRIANGLE;
+        patch.channel.gain_fg.eg.free_rate = 200;
+        patch.channel.gain_fg.eg.base_freq = 64;
+        assert_eq!(patch.channel.gain_fg.eg.stage_count, 0, "TEXTURE選択時もGRAPH未編集(0)のままのはず");
+        let eg_before = patch.channel.gain_fg.eg;
+        apply_gain_fg_expression(&mut patch, 80, 64);
+        assert_eq!(patch.channel.gain_fg.eg, eg_before, "TEXTURE/RATE/BASEが標準トレモロ形状で上書きされてはいけない");
+        assert_eq!(patch.channel.gain_fg.depth, 255, "CC92は通常どおり既存depth(200)へ加算(+80→クランプ255)されるはず");
     }
 }

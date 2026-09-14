@@ -16,7 +16,7 @@ use egui::{Pos2, Rect, Shape, Stroke, Ui, Vec2};
 use sound_core::time_eg::{seconds_to_time, time_to_seconds};
 use sound_core::{TimeEgParams, MAX_STAGES};
 
-use crate::eg_preview::{tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
+use crate::eg_preview::{draw_ramp, tl_to_db, EgAmplitudeMapping, COLOR_BEZEL, COLOR_HELD, COLOR_PANEL, COLOR_RELEASE};
 use crate::knob::{bool_checkbox, spin_control, spin_control_width, SPIN_WIDTH_DEFAULT};
 use crate::param_handle::{BipolarHandle, BoolParamHandle, IntParamHandle, TimeEgHandle};
 use crate::time_eg_preview::{draw_geometry, time_eg_editor_layout, TimeEgGeometry, TIME_MAX_SECONDS, TIME_MIN_SECONDS};
@@ -906,6 +906,76 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
     });
 }
 
+/// TEXTUREテンプレート波形が選択されている間のGRAPH表示専用ビュー（線形時間軸）。
+/// 通常のGRAPH/VALUE編集が使う対数時間軸（`time_eg_preview`）は編集操作のためのものだが、
+/// ここは「本当の波形の形」（三角波の対称性・矩形波のデューティ比等）をそのまま見せたいので、
+/// 段の実秒数（`time_to_seconds`）に比例した幅で描く。リリース区間は表示しない
+/// （テクスチャの周期そのものが主題であり、リリースはnote-off後にしか鳴らないため）。
+/// 乱数系（S&H/Random/Chaos）は決定論的な形を持たないため、固定8ステップの矩形の連なりとして
+/// 「テンプレートが選ばれている」ことだけを示す（`sound_core::is_random_texture`参照）。
+fn draw_template_preview(ui: &mut Ui, size: Vec2, mapping: EgAmplitudeMapping, tl: u8, params: TimeEgParams) {
+    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, COLOR_BEZEL);
+    let inner = rect.shrink(GRAPH_PAD);
+    painter.rect_filled(inner, 2.0, COLOR_PANEL);
+    draw_neutral_baseline(painter, inner, mapping, tl);
+
+    let neutral_raw = crate::time_eg_preview::neutral_start_level(mapping);
+    let canonical = sound_core::template_params(&params, neutral_raw as f32 / 255.0);
+    let loop_start = canonical.loop_start as usize;
+    let release_point = canonical.release_point as usize;
+    let repeat = if sound_core::is_random_texture(params.texture) { 8 } else { 2 };
+
+    let mut seq: Vec<usize> = Vec::new();
+    for _ in 0..repeat {
+        seq.extend(loop_start..=release_point);
+    }
+
+    let floor = crate::time_eg_preview::axis_floor_db(mapping);
+    let tl_db = tl_to_db(tl);
+    let db_to_y = |db: f32| inner.bottom() - ((db.max(floor) - floor) / -floor) * inner.height();
+    let stage_db = |level: u8| crate::time_eg_preview::stage_target_db(mapping, floor, tl_db, level);
+
+    let total_seconds: f32 = seq.iter().map(|&i| time_to_seconds(canonical.stages[i].time)).sum();
+    let scale = if total_seconds > 0.0 { inner.width() / total_seconds } else { 0.0 };
+
+    let start_level = if loop_start == 0 { neutral_raw } else { canonical.stages[loop_start - 1].level };
+    let mut x = inner.left();
+    let mut points = vec![Pos2::new(x, db_to_y(stage_db(start_level)))];
+    for &stage_idx in &seq {
+        let stage = canonical.stages[stage_idx];
+        x = (x + time_to_seconds(stage.time) * scale).min(inner.right());
+        points.push(Pos2::new(x, db_to_y(stage_db(stage.level))));
+    }
+    for w in points.windows(2) {
+        draw_ramp(painter, w[0], w[1], COLOR_HELD, false, false, 1.0);
+    }
+}
+
+/// `time_eg_editor`のTEXTUREテンプレート適用中バリアント。GRAPH/VALUE編集タブと
+/// `stage_spin_row`（STAGES/LOOP/L.START/REL等）を丸ごとグレーアウトし、生成波形の
+/// 表示専用プレビューへ差し替える。`handle`側に保持された生のGRAPH段はそのまま残るため、
+/// TEXTUREをOFFへ戻せば従来どおりの編集（および元の波形）が復元される。
+fn draw_template_locked_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8, profile: TimeEgProfile, params: TimeEgParams) {
+    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            let name = crate::selector::TEXTURE_NAMES[(params.texture as usize).min(crate::selector::TEXTURE_NAMES.len() - 1)];
+            ui.label(egui::RichText::new(format!("{name} (generated)")).weak());
+        });
+
+        let content_size = Vec2::new(size.x, (size.y - HEADER_HEIGHT - SPIN_ROW_HEIGHT).max(0.0));
+        draw_template_preview(ui, content_size, mapping, tl, params);
+
+        ui.add_enabled_ui(false, |ui| {
+            stage_spin_row(ui, handle, profile);
+        });
+    });
+}
+
 /// TimeEg 1本ぶんのハイブリッドエディタ（GRAPH/VALUEタブ＋STAGES等のspin行）。
 /// `size`は外形の固定枠（Step 2）。GRAPH↔VALUE切替・段数(1〜`MAX_STAGES`)変更で`size`自体は変わらず、
 /// VALUEモードの段カラムはみ出し分は内部の水平ScrollAreaが吸収する。
@@ -915,7 +985,16 @@ fn draw_graph_mode(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: 
 /// 表示品質に影響しないが、複数EGを同時に置く画面では一意な文字列を渡すこと。
 /// `profile`はEG種別ごとの編集制約（`TimeEgProfile`参照）。panel.xmlの
 /// `min-stages`/`terminal-level`属性からui-codegenが埋め込む。
+///
+/// `params.texture != TEXTURE_OFF`のときは`draw_template_locked_editor`へ委譲し、
+/// 生成波形の表示専用ビューを描く（Step 4、`project_fg_free_rate_texture_templates_design.md`参照）。
 pub fn time_eg_editor(ui: &mut Ui, size: Vec2, handle: &dyn TimeEgHandle, mapping: EgAmplitudeMapping, tl: u8, profile: TimeEgProfile) {
+    let params = handle.params();
+    if params.texture != sound_core::TEXTURE_OFF {
+        draw_template_locked_editor(ui, size, handle, mapping, tl, profile, params);
+        return;
+    }
+
     let mode_id = ui.id().with(("time_eg_editor", handle.name(), "mode"));
     let mut mode = ui.memory(|m| m.data.get_temp::<Mode>(mode_id)).unwrap_or(Mode::Graph);
 

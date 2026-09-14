@@ -422,7 +422,8 @@ OPQ由来パラメーターとは独立した38x6独自拡張。
 **Cutoffへの変調：** カットオフのキーオン連動スイープ／オートワウ／アシッドは **Cutoff FG**
 （[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）が担う。旧「Filter EG」の後継で、
 5段EG＋Loop/Floor/Curveを持ち、Depthは**バイポーラ**（中心128、カットオフを開く/閉じる両方向）。
-ループ区間に`texture`（S&H/Random/Chaos）を指定すれば、乱数抽選された値へ向かう不規則な変調も表現できる
+ループ区間に`texture`（TRIANGLE〜SQUAREの定型波形、またはS&H/Random/Chaosの乱数系）を指定すれば、
+定型的なスイープや乱数抽選された値へ向かう不規則な変調も表現できる
 （[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
 
 **実装方式：** State Variable Filter（SVF、`sound-core::Svf`）
@@ -449,9 +450,9 @@ VCAが閉じなくても問題ない。**注意：** RRを速くすると（例�
 ゼロへ閉じ、各オペレーター本来のリリース尾を打ち消す（リリース瞬断）。ユーザーがGain FGのAR/RR等を変えることで、
 キャリアEGとは独立にアタック/リリースの「量」を上書きする効果音的な表現に使える（その際は上記の瞬断に留意）。
 
-Gain FGのループ区間に`texture`を指定すればS&H/Random/Chaosの不規則な音量ゆらぎも表現できる
-（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照。旧質感LFOのDestination=Volumeが担っていた乗算合流は、
-2026-08-20の退役でGain FG自体のtextureへ統合された）。
+Gain FGのループ区間に`texture`を指定すればTRIANGLE〜SQUAREの定型トレモロやS&H/Random/Chaosの
+不規則な音量ゆらぎも表現できる（[質感LFO（廃止済み）](#質感lfo廃止済み)節参照。旧質感LFOの
+Destination=Volumeが担っていた乗算合流は、2026-08-20の退役でGain FG自体のtextureへ統合された）。
 
 ---
 
@@ -465,8 +466,30 @@ Pitch / Cutoff / Gain——に集約する。3スロットは共通の部品**Ti
 FGは「**一発（ワンショット）にもループにもなる**」変調源で、アナログシンセ的なスイープ／うねり
 （アシッドフィルター・シンセタム・トレモロ）を一次源として持てる。ループさせればLFOに相当するが、
 LFOのサイン波では出せない「上りと下りが非対称な軌跡」を出せる点が固有価値。ループ区間に`texture`
-（S&H/Random/Chaos）を指定すれば、決め打ちの軌跡ではなく乱数抽選された不規則な揺れも表現できる
+（TRIANGLE/SAW UP/SAW DOWN/SQUAREの幾何学的テンプレート波形、またはS&H/Random/Chaosの乱数系）を
+指定すれば、GRAPHで描いた形の代わりにLFO的な定型波形・不規則な揺れも表現できる
 （[質感LFO（廃止済み）](#質感lfo廃止済み)節参照）。
+
+### SYNC OFF時の速さ（free_rate / rate_range / base_freq）
+
+SYNC ON時はテンポ同期（`sync_rate`、上記「FGのテンポ同期」参照）が速さを決めるのに対し、SYNC OFF時は
+`free_rate`/`rate_range`/`base_freq`の3フィールド（いずれも`TimeEgParams`、2026-09-14新設）が速さを
+決める。旧仕様はSYNC OFF時に速さを演奏中に変えられず、MC-505的なLFO運用ができなかったための拡張
+（詳細はmemory `project_fg_free_rate_texture_templates_design.md`）。
+
+- **`base_freq`（0〜255、128=5Hz）：** FGごとに持つ基準周波数。0.16〜160Hz程度の範囲を取る
+  （`base_freq_hz()`）。textureがOFFのときは使われない（GRAPHのSTAGE設定のtimeがそのまま速さを決める）。
+- **`free_rate`（0〜255、128=等倍）：** 基準周波数からの相対的な速さ。`sync_rate`とはフィールドを
+  共有しない別軸（`sync_rate`の既定134を共有すると既存SYNC OFF音色が1.033倍速になり、かつ向きが
+  逆になるため）。速さ＝`base_freq_hz × rate_range^((free_rate-128)/128)`。
+- **`rate_range`（0〜255、既定0=×2）：** `free_rate`が動かせる可変幅。0=×2／1=×4／2=×8／3=×16の
+  4段階（`RATE_RANGE_MULTIPLIERS`、範囲外は最後の値へクランプ）。UI上は倍率表示（×2等）で、
+  「オクターブ」という表現は使わない。
+
+**リリース区間はスケールしない：** テンプレート波形（TEXTURE≠OFF）のとき、`free_rate`/`rate_range`/
+`base_freq`が効くのは保持区間（ループ区間）のみで、リリース区間の速さには影響しない（実測で
+`base_freq`を0.156Hz〜160Hzへ振ってもnote-off後のリリース時間は公称値どおりで変わらないことを確認
+済み。対処前は0.156Hz時23.5倍・160Hz時0.02倍という開きが出ていた）。
 
 ### 3スロット
 
@@ -503,10 +526,10 @@ LFOのサイン波では出せない「上りと下りが非対称な軌跡」�
 `project_timeeg_fg_disable_and_loop_fix.md`）。
 
 TimeEg共通の機構（`loop_enabled`/`loop_start`/`release_point`によるループ・多段リリース、
-周回ごとの中心シフト/振れ幅変化`level_drift`/`depth_drift`、不規則な揺れ`texture`＝
-S&H/Random/Chaos、note-off非依存の自動リリース`auto_release`）の詳細は
-`sound/core/src/time_eg.rs`のdocコメント、`auto_release`は
-[TimeEgのワンショット化](#timeegのワンショット化auto_release)節を参照。
+周回ごとの中心シフト/振れ幅変化`level_drift`/`depth_drift`、定型波形/不規則な揺れ`texture`
+（TRIANGLE〜SQUARE/S&H/Random/Chaos）とSYNC OFF時の速さ`free_rate`/`rate_range`/`base_freq`、
+note-off非依存の自動リリース`auto_release`）の詳細は`sound/core/src/time_eg.rs`のdocコメント、
+`auto_release`は[TimeEgのワンショット化](#timeegのワンショット化auto_release)節を参照。
 
 旧チップ内LFO(PMS/PMD/AMS/AMD)は2026-08-20にPitch FGの2段三角ループ／Gain FGのOP単位配線へ
 完全統合され、旧質感LFOのS&H/Random/Chaosも同日、各FGループ区間の`texture`フィールドへ
@@ -737,21 +760,33 @@ op505-coreの回帰テストがGain FGへの変換が実機挙動と一致する
 独立レイヤーとして残っていた。
 
 op505エンジンから**2026-08-20に完全退役した**。TimeEg（[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節）へ
-`texture`フィールド（`TimeEgParams::texture`、0=OFF/1=S&H/2=Random/3=Chaos）が新設され、ループ区間の
-各段を自前のxorshift32乱数（S&H/Random）またはロジスティック写像`x=3.9x(1-x)`（Chaos）で決定論的に
-生成した値へ置き換える方式に統合された。ターゲットとなる値域は段のtime（アンカー＝拍）とlevel範囲
-（振れ幅）がそのまま担うため、質感LFOが持っていたRate/Depth/Destination/Waveform/Fade Mode/Fade
-Time/Offsetという専用パラメーター群は丸ごと不要になった——「質感LFOという独立レイヤー」自体が消滅し、
-FGの`texture`という1バイトのモード切り替えに収束した。
+`texture`フィールド（`TimeEgParams::texture`）が新設され、ループ区間の各段を自前のxorshift32乱数
+（S&H/Random）またはロジスティック写像`x=3.9x(1-x)`（Chaos）で決定論的に生成した値へ置き換える方式に
+統合された。ターゲットとなる値域は段のtime（アンカー＝拍）とlevel範囲（振れ幅）がそのまま担うため、
+質感LFOが持っていたRate/Depth/Destination/Waveform/Fade Mode/Fade Time/Offsetという専用パラメーター群は
+丸ごと不要になった——「質感LFOという独立レイヤー」自体が消滅し、FGの`texture`という1バイトのモード
+切り替えに収束した。**2026-09-14、SYNC OFF時のRATE拡張（次項）に合わせてTRIANGLE/SAW UP/SAW DOWN/
+SQUAREの幾何学的テンプレート波形4種を追加し、`texture`を0〜7の8値へ再採番した**（詳細はmemory
+`project_fg_free_rate_texture_templates_design.md`）。
 
-**S&H/Random/Chaosの違い（`loop_enabled=1`のときのみ有効）：**
+**textureの8値（`loop_enabled=1`のときのみ有効。OFF以外はGRAPHのSTAGE設定を無視し、`base_freq`/
+`free_rate`/`rate_range`が決める周波数で生成した波形へ丸ごと置き換わる。詳細は
+[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節の「SYNC OFF時の速さ」参照）：**
 
-| 値 | 挙動 |
-|---|---|
-| 0（既定） | OFF。従来どおりループ段のlevelをそのまま辿る |
-| 1 | S&H：ループ区間の各段へ入るたび、区間のレベル範囲内で乱数抽選した値へ**即座にジャンプしホールド**する |
-| 2 | Random：S&Hと異なり、現在値から乱数ターゲットへ**段の時間をかけて補間**しながら動く |
-| 3 | Chaos：S&Hと同じくホールドするが、ターゲット値をロジスティック写像で決定論的に生成する |
+| 値 | 名前 | 挙動 |
+|---|---|---|
+| 0（既定） | OFF | 従来どおりループ段のlevelをそのまま辿る（GRAPHのSTAGE設定を使う） |
+| 1 | TRIANGLE | 対称三角波（決定論的な幾何学的テンプレート） |
+| 2 | SAW UP | 右肩上がりのこぎり波 |
+| 3 | SAW DOWN | 右肩下がりのこぎり波 |
+| 4 | SQUARE | 矩形波 |
+| 5 | S&H | ループ区間の各段へ入るたび、区間のレベル範囲内で乱数抽選した値へ**即座にジャンプしホールド**する |
+| 6 | Random | S&Hと異なり、現在値から乱数ターゲットへ**段の時間をかけて補間**しながら動く |
+| 7 | Chaos | S&Hと同じくホールドするが、ターゲット値をロジスティック写像で決定論的に生成する |
+
+TRIANGLE〜SQUAREは`is_random_texture()`がfalseを返す決定論的テンプレートで、乱数状態
+（`texture_rng`/`texture_chaos`）を消費しない。S&H〜Chaosの3種（`is_random_texture()`がtrue）は
+旧質感LFO由来の乱数系で、挙動は退役前と変わらない。
 
 **FGのテンポ同期（SYNC/RATE）との組み合わせ：** `sync_enabled=1`にすると、対象区間（ループなら1周、
 ループ無効なら保持区間全体）の実時間が`sync_rate`（1/32T〜4/1の20音価アンカー＋幾何補間）ちょうどに
@@ -1237,6 +1272,8 @@ CC99/98またはCC101/100（RPN）に127,127（Null）を送ると選択解除�
 | CC4 Destination | CC4（フット）の加算先（destination enum、下記。既定Filter Cutoff＝手動ワウ） |
 | Pitch/Cutoff/Gain FG Loop | 各FGのループON/OFF（0/1、FGセクション参照） |
 | Pitch/Cutoff/Gain FG Curve | 各FGのカーブ（0=線形/1=サイン風、FGセクション参照） |
+| Pitch/Cutoff/Gain FG Rate | 各FGのSYNC OFF時の速さ（`free_rate`、0〜255、128=等倍、FGセクション「SYNC OFF時の速さ」参照） |
+| Pitch/Cutoff/Gain FG Texture | 各FGのtexture（0〜7、[質感LFO（廃止済み）](#質感lfo廃止済み)節参照） |
 | Reverb Type | Reverbのタイプ（type enum、マスターエフェクトセクション参照） |
 | Chorus Type | Chorusのタイプ（type enum、マスターエフェクトセクション参照） |
 | Operator F-Number (Op0〜3) | OP単位F-Numberの上書き（13bit × 4、下記参照） |
@@ -1271,7 +1308,9 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | Fixed Note Enable | 0, 22 | 0=OFF / 非0=ON（[固定音階](#固定音階fixed-notegm2リズムチャンネル用op505固有)節参照）。2026-08-29、質感LFOの欠番から新設 |
 | Fixed Note | 0, 23 | 0〜127（MIDIノート番号）。同上、2026-08-29新設 |
 | Fixed Note Fine | 0, 24 | 0〜255（128=中心のバイポーラ）。同上、2026-08-29新設 |
-| （欠番／`ReservedTextureLfo`） | 0, 25〜27 | 旧質感LFO Rate/Depth/Delay/Fade Time/Offset。同上、欠番として予約 |
+| Pitch FG Depth | 0, 25 | 0〜255。絶対上書き（`PatchOverrides`経由）。旧質感LFOの欠番から2026-08で新設（質感LFOのRate/Depth/Delay/Fade Time/Offsetは廃止、[質感LFO（廃止済み）](#質感lfo廃止済み)節参照） |
+| Cutoff FG Depth | 0, 26 | 同上 |
+| Gain FG Depth | 0, 27 | 同上 |
 | Pitch FG Loop | 0, 28 | 0=ワンショット / 1=ループ |
 | Pitch FG Curve | 0, 29 | 0=線形 / 1=サイン風 |
 | Cutoff FG Loop | 0, 30 | 0=ワンショット / 1=ループ |
@@ -1282,6 +1321,14 @@ NRPN番号は旧チャンネルLFO（＝旧パフォーマンスLFO）実装で�
 | CC4 Destination | 0, 35 | 0〜5（destination enum、下記参照。既定2=Filter Cutoff＝手動ワウ） |
 | Delay Sync | 0, 36 | 0=OFF / 非0=ON。Reverb Type=Delay/Panning Delayのテンポ同期（[マスターエフェクト](#マスターエフェクトreverb--chorus)節「ディレイのテンポ同期」参照）。2026-09-04新設 |
 | Delay Sync Rate | 0, 37 | 0〜255（TimeEgの`sync_rate`と同型）。同上、2026-09-04新設 |
+| Feedback Velocity Sens | 0, 38 | 0〜255。絶対上書き（`PatchOverrides`経由）。V.GAIN/VELと同じ線形カーブでフィードバック量をベロシティ感度化する |
+| Env Amp Epsilon | 0, 39 | 0〜255。env_ampキャッシュの許容誤差（チャンネル別ではなくエンジン全体のグローバル設定） |
+| Pitch FG Rate | 0, 40 | 0〜255（`free_rate`、128=等倍）。絶対上書き。SYNC OFF時の速さ（[ファンクションジェネレーター](#ファンクションジェネレーターfgpitchcutoffgain)節「SYNC OFF時の速さ」参照）。2026-09-14新設 |
+| Cutoff FG Rate | 0, 41 | 同上 |
+| Gain FG Rate | 0, 42 | 同上 |
+| Pitch FG Texture | 0, 43 | 0〜7（0=OFF/1=TRIANGLE/2=SAW UP/3=SAW DOWN/4=SQUARE/5=S&H/6=Random/7=Chaos、範囲外は0..=7へクランプ）。絶対上書き。同上 |
+| Cutoff FG Texture | 0, 44 | 同上 |
+| Gain FG Texture | 0, 45 | 同上 |
 
 **エフェクトスロット（2026-08-28新設）：**
 
@@ -1309,6 +1356,12 @@ Sync関連）はスロット選択UIを持たないため常にスロット0固�
 - **NRPN(0,14) Filter Type・NRPN(0,15) Filter Self-Oscillationは二重公開**
   （DAWパラメーターとの1シャドウ差分検知）になる。op505-vstフェーズ1で先に
   DAWパラメーター化されていたため、algorithmや質感LFO群と同じシャドウ差分検知パターンで両立させる。
+- **NRPN(0,25)〜(0,27)（Pitch/Cutoff/Gain FG Depth）・NRPN(0,40)〜(0,45)（同Rate/Texture）は
+  `op505-editor`のDAWパラメーター（`PatchInt::FgRate`/`FgTexture`等）と二重公開**になる。
+  Rate/Textureは2026-09-14実装（`FgRateTextureOverrideHandle`がGRAPH表示に使うEGハンドルの
+  free_rate/textureだけをDAW値へ差し替える方式）で、NRPN(0,28)〜(0,33)と異なり**GUIエディタの
+  表示にもDAWオートメーションが即座に反映される**（詳細はmemory
+  `project_fg_free_rate_texture_templates_design.md`）。
 - 上記以外（質感LFO・Algorithm・Waveform・AT/Poly AT/CC2/CC4 Destination・Operator F-Number）は
   ym38x6と同一のNRPN番号・意味論のまま`op505-vst`へ移植済み。
 

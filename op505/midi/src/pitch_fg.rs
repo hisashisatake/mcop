@@ -23,7 +23,11 @@ pub fn apply_pitch_fg_expression(patch: &mut Op505Patch, cc1: u8, cc77: u8, cc78
     let base_depth = patch.channel.pitch_fg.depth as i32;
     let depth = (base_depth + cc77 as i32 + cc1_depth_units).clamp(0, 255) as u8;
 
-    if patch.channel.pitch_fg.eg.stage_count == 0 && depth > 0 {
+    // texture!=OFFのときは発火しない——TEXTUREテンプレートはstage_count==0のままでも
+    // 既に完全な形を持つため、ここで標準ビブラート形状へ丸ごと上書きするとユーザーが選んだ
+    // TEXTURE/RATE/BASEが消えてしまう（cutoff_fg.rsの同種コメント参照）。
+    let has_texture = patch.channel.pitch_fg.eg.texture != op505_core::TEXTURE_OFF;
+    if patch.channel.pitch_fg.eg.stage_count == 0 && depth > 0 && !has_texture {
         patch.channel.pitch_fg.eg = op505_core::standard_bipolar_modulation_eg(
             0.0,
             op505_core::STANDARD_VIBRATO_HALF_PERIOD_SECONDS,
@@ -78,6 +82,23 @@ mod tests {
         apply_pitch_fg_expression(&mut patch, 0, 80, 64, 64);
         assert_eq!(patch.channel.pitch_fg.eg, eg_before, "既存の形はフォールバックで上書きされない");
         assert_eq!(patch.channel.pitch_fg.depth, 80);
+    }
+
+    /// texture!=OFFのプリセット（stage_count==0のままTEXTUREテンプレートの形を持つ）は
+    /// フォールバックが発火せず既存EGを保つはず（発火すると標準ビブラート形状へ丸ごと
+    /// 上書きされ、TEXTURE/RATE/BASEが消える。2026-09-14実機確認で発覚した不具合、
+    /// `cutoff_fg.rs`の同種テスト参照）。
+    #[test]
+    fn no_fallback_when_texture_is_set_even_with_stage_count_zero() {
+        let mut patch = Op505Patch::default();
+        patch.channel.pitch_fg.eg.texture = op505_core::TEXTURE_TRIANGLE;
+        patch.channel.pitch_fg.eg.free_rate = 200;
+        patch.channel.pitch_fg.eg.base_freq = 64;
+        assert_eq!(patch.channel.pitch_fg.eg.stage_count, 0, "TEXTURE選択時もGRAPH未編集(0)のままのはず");
+        let eg_before = patch.channel.pitch_fg.eg;
+        apply_pitch_fg_expression(&mut patch, 0, 80, 64, 64);
+        assert_eq!(patch.channel.pitch_fg.eg, eg_before, "TEXTURE/RATE/BASEが標準ビブラート形状で上書きされてはいけない");
+        assert_eq!(patch.channel.pitch_fg.depth, 80, "depth自体は従来どおりCC77が加算されるはず");
     }
 
     /// CC78(Delay)はmaterialize後の第0段（中央レベル）へも従来通り効く。
