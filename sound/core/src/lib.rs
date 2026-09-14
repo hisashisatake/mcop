@@ -39,9 +39,10 @@ pub use time_eg::{
     apply_loop_drift, bipolar_level, depth_drift_per_cycle, drift_accumulated_after_cycles,
     level_drift_per_cycle, loop_level_range, loop_pivot_level, nearest_sync_note, pan_gains,
     seconds_to_time, sync_note_anchor, sync_note_beats, sync_rate_beats, sync_region_seconds,
-    tempo_speed_scale, time_to_seconds, TimeEg, TimeEgParams, TimeStage, BIPOLAR_NEUTRAL_LEVEL,
-    BIPOLAR_NEUTRAL_RAW, MAX_STAGES, RETRIGGER_MODE_CONTINUE, RETRIGGER_MODE_RESET,
-    SYNC_NOTE_COUNT, TEXTURE_CHAOS, TEXTURE_OFF, TEXTURE_RANDOM, TEXTURE_SAMPLE_HOLD,
+    tempo_speed_scale, time_eg_speed_scale, time_to_seconds, TimeEg, TimeEgParams, TimeStage,
+    BIPOLAR_NEUTRAL_LEVEL, BIPOLAR_NEUTRAL_RAW, MAX_STAGES, RETRIGGER_MODE_CONTINUE,
+    RETRIGGER_MODE_RESET, SYNC_NOTE_COUNT, TEXTURE_CHAOS, TEXTURE_OFF, TEXTURE_RANDOM,
+    TEXTURE_SAMPLE_HOLD, TEXTURE_SAW_DOWN, TEXTURE_SAW_UP, TEXTURE_SQUARE, TEXTURE_TRIANGLE,
 };
 
 pub mod vcf;

@@ -59,7 +59,7 @@ use operator::Operator;
 use serde::{Deserialize, Serialize};
 use sound_core::{
     bipolar_level, convert_wave_32, cutoff_to_hz,
-    effective_cutoff_bipolar_level, tempo_speed_scale,
+    effective_cutoff_bipolar_level, time_eg_speed_scale,
     FilterType, Svf, TimeEg, TimeEgParams, TimeStage, Vco, WaveTable,
     RETRIGGER_MODE_RESET,
 };
@@ -677,7 +677,8 @@ impl Channel {
         }
 
         // Pitch FG：ループ可能TimeEgでビブラート/シンセタムを作る一次源。
-        // CC76由来の速度補正(pitch_fg_rate_scale)とテンポ同期(tempo_speed_scale)を乗算で共存させる。
+        // CC76由来の速度補正(pitch_fg_rate_scale)とFGの速さ(time_eg_speed_scale：SYNC ON=テンポ同期／
+        // SYNC OFF=free_rate・TEXTUREテンプレートの基準周波数)を乗算で共存させる。
         // レベルはバイポーラ（生値128＝無変調の中心）で符号を持ち、Depthは振れ幅の倍率。
         // これにより1つのDepthのままFGの形だけで上下対称のビブラートが描ける。
         //
@@ -689,7 +690,7 @@ impl Channel {
         let pitch_fg_cents = if pitch_fg.eg.stage_count == 0 {
             0.0
         } else {
-            let pitch_fg_speed = self.pitch_fg_rate_scale * tempo_speed_scale(&pitch_fg.eg, tempo_bpm);
+            let pitch_fg_speed = self.pitch_fg_rate_scale * time_eg_speed_scale(&pitch_fg.eg, tempo_bpm);
             let pitch_fg_out = self.pitch_fg_eg.tick(sample_rate, pitch_fg.eg, pitch_fg_speed);
             bipolar_level(pitch_fg_out) * (pitch_fg.depth as f32 / 255.0) * 1200.0
         };
@@ -727,7 +728,7 @@ impl Channel {
         let gain_fg_out = if gain_fg.eg.stage_count == 0 {
             1.0
         } else {
-            let gain_fg_speed = tempo_speed_scale(&gain_fg.eg, tempo_bpm);
+            let gain_fg_speed = time_eg_speed_scale(&gain_fg.eg, tempo_bpm);
             let eg_out = self.gain_fg_eg.tick(sample_rate, gain_fg.eg, gain_fg_speed);
             if gain_fg.depth == 255 {
                 eg_out
@@ -787,7 +788,7 @@ impl Channel {
         let cutoff = if cp.cutoff_fg.eg.stage_count == 0 {
             cp.filter_cutoff
         } else {
-            let cutoff_fg_speed = tempo_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
+            let cutoff_fg_speed = time_eg_speed_scale(&cp.cutoff_fg.eg, tempo_bpm);
             let cutoff_level = self.cutoff_fg_eg.tick(sample_rate, cp.cutoff_fg.eg, cutoff_fg_speed);
             effective_cutoff_bipolar_level(cp.filter_cutoff, cutoff_level, cp.cutoff_fg.depth)
         };
