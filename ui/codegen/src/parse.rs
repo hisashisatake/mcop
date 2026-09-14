@@ -327,6 +327,21 @@ fn build_leaf_info(el: Node, ctx: &Ctx, style: &Style) -> Result<LeafInfo, Strin
                 Size { w: 100.0, h: 70.0 },
             )
         }
+        "fg-rate" => {
+            let label = req_attr(el, "label")?;
+            let sync = resolve_path(&req_attr(el, "sync")?, ctx);
+            let sync_rate = resolve_path(&req_attr(el, "sync-rate")?, ctx);
+            let free_rate = resolve_path(&req_attr(el, "free-rate")?, ctx);
+            let rate_range = resolve_path(&req_attr(el, "rate-range")?, ctx);
+            let salt = el.attribute("salt").unwrap_or("0").to_string();
+            (
+                Widget::FgRate { label: label.clone(), sync, sync_rate, free_rate, rate_range, salt },
+                label,
+                "fg-rate".to_string(),
+                // <sync-rate>と同じ枠（100×70）。
+                Size { w: 100.0, h: 70.0 },
+            )
+        }
         "eg-preview" => {
             let mapping = el.attribute("mapping").unwrap_or("DbLinear").to_string();
             let widget = Widget::EgPreview {

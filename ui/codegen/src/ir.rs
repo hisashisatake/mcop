@@ -119,6 +119,12 @@ pub enum Widget {
     /// TimeEgのテンポ同期レート（連続ノブ＋音価ドロップダウンの複合ウィジェット）。
     /// 候補名は`SYNC_NOTE_NAMES`固定なので`<enum>`と違い`names`属性を取らない。
     SyncRate { label: String, handle: String, salt: String },
+    /// FG（Pitch/Cutoff/Gain）専用のRATE複合ウィジェット。`SyncRate`を拡張し、SYNC ON/OFFで
+    /// 参照先そのものを`sync_rate`/`free_rate`へ切り替える（`sync_rate_selector`と違い1つの
+    /// 値の2つの見え方ではなく、別フィールドを指す）。`rate_range`はノブのツールチップに
+    /// 倍率("×1.41")を出すための現在値取得専用（`ui_core::selector::free_rate_display`参照、
+    /// パネルXMLでは`<enum>`の`RATE_RANGE_NAMES`と同じハンドルを指す）。
+    FgRate { label: String, sync: String, sync_rate: String, free_rate: String, rate_range: String, salt: String },
     #[allow(clippy::too_many_arguments)]
     EgPreview {
         mapping: String,
