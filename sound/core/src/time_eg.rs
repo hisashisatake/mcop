@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 /// 段の最大数。当初はCZ-101の8段に準拠していたが10段へ拡張済み。4点T/Lは`stage_count=4`で表現する。
 pub const MAX_STAGES: usize = 10;
 
+/// `tick()`が1サンプル内で`time=0`（瞬時）の段を連鎖的に通過できる回数の上限。
+/// 全ループ段が`time=0`という設定でも無限ループしないためのフェイルセーフ
+/// （`MAX_STAGES`一周分では足りない可能性があるため2倍のマージンを持つ）。
+const TIME_ZERO_CHAIN_LIMIT: usize = MAX_STAGES * 2;
+
 /// バイポーラ解釈するEGの「無変調」を表す生レベル値。DT1・op_fine_tune等このプロジェクトの
 /// 他のバイポーラパラメーターと同じ中心128（`(v-128)/128`慣例）に揃えてある。
 pub const BIPOLAR_NEUTRAL_RAW: u8 = 128;
@@ -912,33 +917,83 @@ impl TimeEg {
             return self.level;
         }
 
+        self.elapsed += (1.0 / sample_rate as f64) * speed_scale as f64;
+
+        // 高速パス：現在の段が`time>0`でまだ終端に達していない（＝最頻出のケース、
+        // 大半のサンプルがここで完結する）。`time==0`の段や段の切り替わりが絡む
+        // まれなケースだけ`advance_chain`（低速パス）へ回す。
         let cur = self.stage_index.min(stage_count - 1);
         let stage = &params.stages[cur];
         let curve = stage.curve;
         let seconds = time_to_seconds(stage.time) as f64;
-
-        self.elapsed += (1.0 / sample_rate as f64) * speed_scale as f64;
-
-        let (progress, overflow): (f64, f64) = if seconds <= f64::EPSILON {
-            (1.0, 0.0)
-        } else {
-            let p = self.elapsed / seconds;
-            if p >= 1.0 {
-                (1.0, self.elapsed - seconds)
-            } else {
-                (p, 0.0)
+        if seconds > f64::EPSILON {
+            let progress = self.elapsed / seconds;
+            if progress < 1.0 {
+                self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
+                return self.shaped_output(curve);
             }
-        };
-
-        self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
-        let out = self.shaped_output(curve);
-
-        if progress >= 1.0 {
-            self.level = self.segment_end;
-            self.advance(params, cur, stage_count, overflow.max(0.0));
         }
 
-        out
+        self.advance_chain(params, stage_count)
+    }
+
+    /// `tick`の低速パス：段の切り替わり（`time==0`の連鎖を含む）を処理する。
+    /// `time==0`（瞬時）の段は経過時間を一切消費せず通過する。1回のtickで複数の
+    /// time=0段が連続する場合、`elapsed`（このサンプル分＋前段からの持ち越し分）を
+    /// 使い切るまで`advance`を連鎖的に呼ぶ（`overflow`を次段へそのまま渡す）。
+    /// 「段が実際に進んだか」（`enter_stage`経由か`settle_at_current_level`経由か）で
+    /// 継続要否を判定する：ループ無効のサステイン到達（`settle_at_current_level`は
+    /// 同じ段に留まり`stage_index`を変えない）は1回で打ち切り、無駄な繰り返しを避ける。
+    /// 全ループ段がtime=0という設定でも`TIME_ZERO_CHAIN_LIMIT`で強制的に打ち切ることで
+    /// 無限ループを防ぐ（1サンプルあたりの段送り上限）。
+    ///
+    /// `#[cold]`はコンパイラへ「めったに通らない」と伝え、`tick`の高速パス（大半のサンプルが
+    /// 通る、段の途中で`progress<1.0`のまま返るケース）側のインライン化・分岐予測を優先させる。
+    #[cold]
+    fn advance_chain(&mut self, params: &TimeEgParams, stage_count: usize) -> f32 {
+        let mut curve;
+        let mut guard = 0usize;
+        loop {
+            let cur = self.stage_index.min(stage_count - 1);
+            let stage = &params.stages[cur];
+            curve = stage.curve;
+            let seconds = time_to_seconds(stage.time) as f64;
+
+            let (progress, overflow): (f64, f64) = if seconds <= f64::EPSILON {
+                (1.0, self.elapsed.max(0.0))
+            } else {
+                let p = self.elapsed / seconds;
+                if p >= 1.0 {
+                    (1.0, self.elapsed - seconds)
+                } else {
+                    (p, 0.0)
+                }
+            };
+
+            self.level = self.segment_start + (self.segment_end - self.segment_start) * progress as f32;
+
+            if progress < 1.0 {
+                break;
+            }
+
+            self.level = self.segment_end;
+            let was_zero_time = seconds <= f64::EPSILON;
+            let stage_before = self.stage_index;
+            self.advance(params, cur, stage_count, overflow.max(0.0));
+            if self.idle {
+                break;
+            }
+            if was_zero_time && self.stage_index != stage_before {
+                guard += 1;
+                if guard >= TIME_ZERO_CHAIN_LIMIT {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        self.shaped_output(curve)
     }
 
     fn advance(&mut self, params: &TimeEgParams, cur: usize, stage_count: usize, overflow: f64) {
