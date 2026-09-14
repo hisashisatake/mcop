@@ -42,6 +42,15 @@ pub struct PatchOverrides {
     pub cutoff_fg_curve: Option<u8>,
     pub gain_fg_loop: Option<u8>,
     pub gain_fg_curve: Option<u8>,
+    /// NRPN(0,40)〜(0,42) FG Rate（`free_rate`、0〜255）の絶対上書き。
+    pub pitch_fg_rate: Option<u8>,
+    pub cutoff_fg_rate: Option<u8>,
+    pub gain_fg_rate: Option<u8>,
+    /// NRPN(0,43)〜(0,45) FG Texture（0〜7）の絶対上書き。範囲外の値は上位（`channel_state.rs`）で
+    /// 0..=7へクランプ済みの前提。
+    pub pitch_fg_texture: Option<u8>,
+    pub cutoff_fg_texture: Option<u8>,
+    pub gain_fg_texture: Option<u8>,
 }
 
 impl PatchOverrides {
@@ -106,6 +115,24 @@ impl PatchOverrides {
                 stage.curve = v;
             }
         }
+        if let Some(v) = self.pitch_fg_rate {
+            patch.channel.pitch_fg.eg.free_rate = v;
+        }
+        if let Some(v) = self.cutoff_fg_rate {
+            patch.channel.cutoff_fg.eg.free_rate = v;
+        }
+        if let Some(v) = self.gain_fg_rate {
+            patch.channel.gain_fg.eg.free_rate = v;
+        }
+        if let Some(v) = self.pitch_fg_texture {
+            patch.channel.pitch_fg.eg.texture = v;
+        }
+        if let Some(v) = self.cutoff_fg_texture {
+            patch.channel.cutoff_fg.eg.texture = v;
+        }
+        if let Some(v) = self.gain_fg_texture {
+            patch.channel.gain_fg.eg.texture = v;
+        }
     }
 
     /// 上書きレイヤーを全て解除する（Program Change・System Reset時に呼ぶ）。
@@ -148,6 +175,12 @@ mod tests {
             cutoff_fg_curve: Some(1),
             gain_fg_loop: Some(1),
             gain_fg_curve: Some(1),
+            pitch_fg_rate: Some(100),
+            cutoff_fg_rate: Some(110),
+            gain_fg_rate: Some(120),
+            pitch_fg_texture: Some(1),
+            cutoff_fg_texture: Some(2),
+            gain_fg_texture: Some(3),
         };
         overrides.apply(&mut patch);
         assert_eq!(patch.channel.algorithm, 5);
@@ -170,6 +203,12 @@ mod tests {
         assert!(patch.channel.cutoff_fg.eg.stages.iter().all(|s| s.curve == 1));
         assert_eq!(patch.channel.gain_fg.eg.loop_enabled, 1);
         assert!(patch.channel.gain_fg.eg.stages.iter().all(|s| s.curve == 1));
+        assert_eq!(patch.channel.pitch_fg.eg.free_rate, 100);
+        assert_eq!(patch.channel.cutoff_fg.eg.free_rate, 110);
+        assert_eq!(patch.channel.gain_fg.eg.free_rate, 120);
+        assert_eq!(patch.channel.pitch_fg.eg.texture, 1);
+        assert_eq!(patch.channel.cutoff_fg.eg.texture, 2);
+        assert_eq!(patch.channel.gain_fg.eg.texture, 3);
     }
 
     #[test]
@@ -192,6 +231,12 @@ mod tests {
             cutoff_fg_curve: Some(1),
             gain_fg_loop: Some(1),
             gain_fg_curve: Some(1),
+            pitch_fg_rate: Some(100),
+            cutoff_fg_rate: Some(110),
+            gain_fg_rate: Some(120),
+            pitch_fg_texture: Some(1),
+            cutoff_fg_texture: Some(2),
+            gain_fg_texture: Some(3),
         };
         overrides.clear();
         assert_eq!(overrides, PatchOverrides::default());

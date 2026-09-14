@@ -113,6 +113,19 @@ pub enum ControlTarget {
     /// 効くグローバル設定（Reverb/Chorus系と同様、`ChannelState`ではなく`Op505Engine`へ直接
     /// 適用する。`engine_control::EngineControlTarget`/`apply_engine_control`参照）。
     EnvAmpEpsilon,
+    /// NRPN(0,40): Pitch FG Rate（`free_rate`、0〜255）の絶対上書き。`PatchOverrides`経由
+    /// （FG Depthと同じ「NRPN離散上書きレイヤー」）。
+    PitchFgRate,
+    /// NRPN(0,41): Cutoff FG Rate（0〜255）の絶対上書き。
+    CutoffFgRate,
+    /// NRPN(0,42): Gain FG Rate（0〜255）の絶対上書き。
+    GainFgRate,
+    /// NRPN(0,43): Pitch FG Texture（0〜7、0..=7へクランプ）の絶対上書き。
+    PitchFgTexture,
+    /// NRPN(0,44): Cutoff FG Texture（0〜7）の絶対上書き。
+    CutoffFgTexture,
+    /// NRPN(0,45): Gain FG Texture（0〜7）の絶対上書き。
+    GainFgTexture,
 }
 
 /// RPN/NRPN選択状態から制御対象を解決する。
@@ -158,6 +171,12 @@ pub fn control_target(selection: RpnSelection) -> ControlTarget {
         RpnSelection::Nrpn(0, 37) => ControlTarget::DelaySyncRate,
         RpnSelection::Nrpn(0, 38) => ControlTarget::FeedbackVelocitySens,
         RpnSelection::Nrpn(0, 39) => ControlTarget::EnvAmpEpsilon,
+        RpnSelection::Nrpn(0, 40) => ControlTarget::PitchFgRate,
+        RpnSelection::Nrpn(0, 41) => ControlTarget::CutoffFgRate,
+        RpnSelection::Nrpn(0, 42) => ControlTarget::GainFgRate,
+        RpnSelection::Nrpn(0, 43) => ControlTarget::PitchFgTexture,
+        RpnSelection::Nrpn(0, 44) => ControlTarget::CutoffFgTexture,
+        RpnSelection::Nrpn(0, 45) => ControlTarget::GainFgTexture,
         RpnSelection::Nrpn(_, _) => ControlTarget::Unassigned,
     }
 }
@@ -205,7 +224,13 @@ pub fn needs_voice_update(target: ControlTarget) -> bool {
         | ControlTarget::DelaySync
         | ControlTarget::DelaySyncRate
         | ControlTarget::FeedbackVelocitySens
-        | ControlTarget::EnvAmpEpsilon => false,
+        | ControlTarget::EnvAmpEpsilon
+        | ControlTarget::PitchFgRate
+        | ControlTarget::CutoffFgRate
+        | ControlTarget::GainFgRate
+        | ControlTarget::PitchFgTexture
+        | ControlTarget::CutoffFgTexture
+        | ControlTarget::GainFgTexture => false,
     }
 }
 
@@ -309,6 +334,27 @@ mod tests {
     fn env_amp_epsilon_address() {
         assert_eq!(control_target(RpnSelection::Nrpn(0, 39)), ControlTarget::EnvAmpEpsilon);
         assert!(!needs_voice_update(ControlTarget::EnvAmpEpsilon));
+    }
+
+    /// NRPN(0,40)〜(0,45)はFG Rate/Texture 6項目（2026-09-14実装）。
+    #[test]
+    fn fg_rate_texture_addresses() {
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 40)), ControlTarget::PitchFgRate);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 41)), ControlTarget::CutoffFgRate);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 42)), ControlTarget::GainFgRate);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 43)), ControlTarget::PitchFgTexture);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 44)), ControlTarget::CutoffFgTexture);
+        assert_eq!(control_target(RpnSelection::Nrpn(0, 45)), ControlTarget::GainFgTexture);
+        for target in [
+            ControlTarget::PitchFgRate,
+            ControlTarget::CutoffFgRate,
+            ControlTarget::GainFgRate,
+            ControlTarget::PitchFgTexture,
+            ControlTarget::CutoffFgTexture,
+            ControlTarget::GainFgTexture,
+        ] {
+            assert!(!needs_voice_update(target));
+        }
     }
 
     /// RPN(0,1)/(0,2)はGM2必須セットのChannel Fine/Coarse Tuning。
