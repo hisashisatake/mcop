@@ -104,7 +104,7 @@ impl OpInt {
     }
 }
 
-/// チャンネル単位＋オペレーター単位のintパラメーター（MASTER EFFECTSを除く51個）。
+/// チャンネル単位＋オペレーター単位のintパラメーター（MASTER EFFECTSを除く57個）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PatchInt {
     Algorithm,
@@ -116,11 +116,17 @@ pub enum PatchInt {
     Resonance,
     FilterType,
     FgDepth(FgSlot),
+    /// SYNC OFF時のFGの速さ（`sound_core::TimeEgParams::free_rate`、0〜255・128=等倍）。
+    /// DAW/NRPN化はRATEとTEXTUREのみ（可変幅・基準周波数はエディタ専用、
+    /// memory `project_fg_free_rate_texture_templates_design.md`参照）。
+    FgRate(FgSlot),
+    /// FGの質感（`sound_core::TimeEgParams::texture`、0〜7）。
+    FgTexture(FgSlot),
     Op(OpIndex, OpInt),
 }
 
 impl PatchInt {
-    /// 51個（チャンネル単一8 + FgDepth3 + Op(4×10)40）を全列挙する。
+    /// 57個（チャンネル単一8 + FgDepth3 + FgRate3 + FgTexture3 + Op(4×10)40）を全列挙する。
     pub fn all() -> Vec<PatchInt> {
         let mut out = vec![
             PatchInt::Algorithm,
@@ -133,6 +139,8 @@ impl PatchInt {
             PatchInt::FilterType,
         ];
         out.extend(FgSlot::ALL.into_iter().map(PatchInt::FgDepth));
+        out.extend(FgSlot::ALL.into_iter().map(PatchInt::FgRate));
+        out.extend(FgSlot::ALL.into_iter().map(PatchInt::FgTexture));
         for op in OpIndex::ALL {
             out.extend(OpInt::ALL.into_iter().map(|f| PatchInt::Op(op, f)));
         }
@@ -206,6 +214,54 @@ impl PatchInt {
                 default: 255,
                 short_name: "Gain FG Depth",
                 daw_name: "Gain FG Depth",
+                daw_bipolar: false,
+            },
+            PatchInt::FgRate(FgSlot::Pitch) => IntSpec {
+                min: 0,
+                max: 255,
+                default: sound_core::FREE_RATE_NEUTRAL as i32,
+                short_name: "Pitch FG Rate",
+                daw_name: "Pitch FG Rate",
+                daw_bipolar: false,
+            },
+            PatchInt::FgRate(FgSlot::Cutoff) => IntSpec {
+                min: 0,
+                max: 255,
+                default: sound_core::FREE_RATE_NEUTRAL as i32,
+                short_name: "Cutoff FG Rate",
+                daw_name: "Cutoff FG Rate",
+                daw_bipolar: false,
+            },
+            PatchInt::FgRate(FgSlot::Gain) => IntSpec {
+                min: 0,
+                max: 255,
+                default: sound_core::FREE_RATE_NEUTRAL as i32,
+                short_name: "Gain FG Rate",
+                daw_name: "Gain FG Rate",
+                daw_bipolar: false,
+            },
+            PatchInt::FgTexture(FgSlot::Pitch) => IntSpec {
+                min: 0,
+                max: 7,
+                default: sound_core::TEXTURE_OFF as i32,
+                short_name: "Pitch FG Texture",
+                daw_name: "Pitch FG Texture",
+                daw_bipolar: false,
+            },
+            PatchInt::FgTexture(FgSlot::Cutoff) => IntSpec {
+                min: 0,
+                max: 7,
+                default: sound_core::TEXTURE_OFF as i32,
+                short_name: "Cutoff FG Texture",
+                daw_name: "Cutoff FG Texture",
+                daw_bipolar: false,
+            },
+            PatchInt::FgTexture(FgSlot::Gain) => IntSpec {
+                min: 0,
+                max: 7,
+                default: sound_core::TEXTURE_OFF as i32,
+                short_name: "Gain FG Texture",
+                daw_name: "Gain FG Texture",
                 daw_bipolar: false,
             },
             PatchInt::Op(_, f) => f.spec(),
@@ -459,7 +515,7 @@ mod tests {
 
     #[test]
     fn enum_counts_match_plan() {
-        assert_eq!(IntField::all().len(), 63, "IntField（Patch 51 + Fx 12）");
+        assert_eq!(IntField::all().len(), 69, "IntField（Patch 57 + Fx 12）");
         assert_eq!(BoolField::ALL.len(), 8, "BoolField（単一4 + Ame×4）");
         assert_eq!(EgSlot::ALL.len(), 7, "EgSlot（Op×4 + Fg×3）");
     }

@@ -87,16 +87,20 @@ pub(crate) fn instant_sustain_eg() -> TimeEgParams {
 }
 
 /// TimeEg 7本（OP1〜4 EG／Pitch FG／Cutoff FG／Gain FG）の束。1本＝10段×3(time/level/curve)+
-/// メタ10(stage_count/loop_enabled/loop_start/release_point/sync_enabled/sync_rate/
-/// retrigger_mode/level_drift/depth_drift/texture)=40値、7本で280値
-/// （8段時代は28値×7本=196値だった。段数拡張後もメタ側の実数はここに明記しないと
+/// メタ13(stage_count/loop_enabled/loop_start/release_point/sync_enabled/sync_rate/
+/// retrigger_mode/level_drift/depth_drift/texture/free_rate/rate_range/base_freq)=43値、
+/// 7本で301値（8段時代は28値×7本=196値だった。段数拡張後もメタ側の実数はここに明記しないと
 /// 古いコメントのまま取り残されるため、フィールド名を列挙してある）。
-/// `Op505Patch`の全269値のうち大半を占めるが、DAWパラメーターにはせずnice-plugの
-/// `#[persist]`でプロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと
-/// 読み書き」するAPIのため、DAWパラメーター化するとグラフの点を1つ動かすたび29個の
-/// オートメーションイベントが走り記録単位が壊れる。詳細はplan参照）。
-/// **DAWパラメーター数（71個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
-/// 63+8、2026-09-10のFeedback Velocity Sens追加で62+8=70→63+8=71）はこの束が
+/// `Op505Patch`の大半を占めるが、DAWパラメーターにはせずnice-plugの`#[persist]`で
+/// プロジェクト状態として保存する（理由: TimeEgHandleは「EG1本を丸ごと読み書き」するAPIのため、
+/// DAWパラメーター化するとグラフの点を1つ動かすたび29個のオートメーションイベントが走り
+/// 記録単位が壊れる。詳細はplan参照）。**例外はfree_rate/texture**（FGのRATE/TEXTUREのみ、
+/// `pitch_fg_rate`等6個のDAWパラメーターとして別途持つ。`build_patch`/`apply_patch`が
+/// このpersist側の値をDAW値で上書きする「シャドウフィールド」として扱う——理由はNRPN由来の
+/// 演奏補正と同じ表現力を持たせるため、詳細はmemory
+/// `project_fg_free_rate_texture_templates_design.md`参照）。
+/// **DAWパラメーター数（77個。内訳はop505-editor::param_spec::IntField/BoolFieldのenum件数
+/// 69+8、2026-09-14のFG Rate/Texture6個追加で63+8=71→69+8=77）はこの束が
 /// `#[persist]`である限り不変**——段数拡張はここに収まる値の中身が増えるだけで、
 /// DAWから見えるパラメーター一覧には影響しない（実数は`param_ids_are_frozen`テストで凍結済み）。
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -207,6 +211,22 @@ pub(crate) struct Op505VstParams {
     #[id = "gain_fg_depth"]
     pub gain_fg_depth: IntParam,
 
+    // ---- FG Rate/Texture（EG本体はOp505EgBank側だが、この2フィールドだけDAW値が正になる。
+    //      build_patch/apply_patchがpersist側を上書きする「シャドウフィールド」方式、
+    //      memory `project_fg_free_rate_texture_templates_design.md`参照） ----
+    #[id = "pitch_fg_rate"]
+    pub pitch_fg_rate: IntParam,
+    #[id = "cutoff_fg_rate"]
+    pub cutoff_fg_rate: IntParam,
+    #[id = "gain_fg_rate"]
+    pub gain_fg_rate: IntParam,
+    #[id = "pitch_fg_texture"]
+    pub pitch_fg_texture: IntParam,
+    #[id = "cutoff_fg_texture"]
+    pub cutoff_fg_texture: IntParam,
+    #[id = "gain_fg_texture"]
+    pub gain_fg_texture: IntParam,
+
     // ---- Gain FGの行先スイッチ（Depthなし、bool 2個。旧CHIP LFO AM経路の厳密代替。
     //      memory `project_chip_lfo_retirement_investigation.md`参照） ----
     #[id = "gain_fg_to_master"]
@@ -281,6 +301,12 @@ impl Default for Op505VstParams {
             pitch_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Pitch))),
             cutoff_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Cutoff))),
             gain_fg_depth: int_param(IntField::Patch(PatchInt::FgDepth(FgSlot::Gain))),
+            pitch_fg_rate: int_param(IntField::Patch(PatchInt::FgRate(FgSlot::Pitch))),
+            cutoff_fg_rate: int_param(IntField::Patch(PatchInt::FgRate(FgSlot::Cutoff))),
+            gain_fg_rate: int_param(IntField::Patch(PatchInt::FgRate(FgSlot::Gain))),
+            pitch_fg_texture: int_param(IntField::Patch(PatchInt::FgTexture(FgSlot::Pitch))),
+            cutoff_fg_texture: int_param(IntField::Patch(PatchInt::FgTexture(FgSlot::Cutoff))),
+            gain_fg_texture: int_param(IntField::Patch(PatchInt::FgTexture(FgSlot::Gain))),
             gain_fg_to_master: bool_param(BoolField::GainFgToMaster),
             gain_fg_to_operators: bool_param(BoolField::GainFgToOperators),
             fixed_note_enable: bool_param(BoolField::FixedNoteEnable),
@@ -334,6 +360,15 @@ pub(crate) fn build_patch(p: &Op505VstParams, egs: &Op505EgBank) -> Op505Patch {
         }
     });
 
+    // FGごとのfree_rate/textureはDAWパラメーターが正（persist側の値を上書きする、
+    // 「シャドウフィールド」方式。`Op505EgBank`のdocコメント参照）。それ以外の段データ・
+    // sync_rate等はpersist側（`egs`）をそのまま使う。
+    let with_rate_texture = |eg: TimeEgParams, rate: &IntParam, texture: &IntParam| TimeEgParams {
+        free_rate: rate.value() as u8,
+        texture: texture.value() as u8,
+        ..eg
+    };
+
     let channel = Op505ChannelParams {
         algorithm: p.algorithm.value() as u8,
         feedback: p.feedback.value() as u8,
@@ -342,9 +377,18 @@ pub(crate) fn build_patch(p: &Op505VstParams, egs: &Op505EgBank) -> Op505Patch {
         filter_resonance: p.resonance.value() as u8,
         filter_type: p.filter_type.value() as u8,
         filter_self_oscillation: p.filter_self_oscillation.value(),
-        pitch_fg: Op505BipolarFg { eg: egs.pitch_fg, depth: p.pitch_fg_depth.value() as u8 },
-        cutoff_fg: Op505BipolarFg { eg: egs.cutoff_fg, depth: p.cutoff_fg_depth.value() as u8 },
-        gain_fg: Op505GainFg { eg: egs.gain_fg, depth: p.gain_fg_depth.value() as u8 },
+        pitch_fg: Op505BipolarFg {
+            eg: with_rate_texture(egs.pitch_fg, &p.pitch_fg_rate, &p.pitch_fg_texture),
+            depth: p.pitch_fg_depth.value() as u8,
+        },
+        cutoff_fg: Op505BipolarFg {
+            eg: with_rate_texture(egs.cutoff_fg, &p.cutoff_fg_rate, &p.cutoff_fg_texture),
+            depth: p.cutoff_fg_depth.value() as u8,
+        },
+        gain_fg: Op505GainFg {
+            eg: with_rate_texture(egs.gain_fg, &p.gain_fg_rate, &p.gain_fg_texture),
+            depth: p.gain_fg_depth.value() as u8,
+        },
         gain_fg_to_master: p.gain_fg_to_master.value(),
         gain_fg_to_operators: p.gain_fg_to_operators.value(),
         fixed_note_enable: p.fixed_note_enable.value(),
@@ -377,6 +421,12 @@ pub(crate) fn apply_patch(p: &Op505VstParams, setter: &ParamSetter<'_>, patch: &
     set!(p.pitch_fg_depth, ch.pitch_fg.depth as i32);
     set!(p.cutoff_fg_depth, ch.cutoff_fg.depth as i32);
     set!(p.gain_fg_depth, ch.gain_fg.depth as i32);
+    set!(p.pitch_fg_rate, ch.pitch_fg.eg.free_rate as i32);
+    set!(p.cutoff_fg_rate, ch.cutoff_fg.eg.free_rate as i32);
+    set!(p.gain_fg_rate, ch.gain_fg.eg.free_rate as i32);
+    set!(p.pitch_fg_texture, ch.pitch_fg.eg.texture as i32);
+    set!(p.cutoff_fg_texture, ch.cutoff_fg.eg.texture as i32);
+    set!(p.gain_fg_texture, ch.gain_fg.eg.texture as i32);
     set!(p.gain_fg_to_master, ch.gain_fg_to_master);
     set!(p.gain_fg_to_operators, ch.gain_fg_to_operators);
     set!(p.fixed_note_enable, ch.fixed_note_enable);
@@ -438,6 +488,12 @@ pub(crate) fn int_param_ref(params: &Op505VstParams, field: IntField) -> &IntPar
         IntField::Patch(PatchInt::FgDepth(FgSlot::Pitch)) => &params.pitch_fg_depth,
         IntField::Patch(PatchInt::FgDepth(FgSlot::Cutoff)) => &params.cutoff_fg_depth,
         IntField::Patch(PatchInt::FgDepth(FgSlot::Gain)) => &params.gain_fg_depth,
+        IntField::Patch(PatchInt::FgRate(FgSlot::Pitch)) => &params.pitch_fg_rate,
+        IntField::Patch(PatchInt::FgRate(FgSlot::Cutoff)) => &params.cutoff_fg_rate,
+        IntField::Patch(PatchInt::FgRate(FgSlot::Gain)) => &params.gain_fg_rate,
+        IntField::Patch(PatchInt::FgTexture(FgSlot::Pitch)) => &params.pitch_fg_texture,
+        IntField::Patch(PatchInt::FgTexture(FgSlot::Cutoff)) => &params.cutoff_fg_texture,
+        IntField::Patch(PatchInt::FgTexture(FgSlot::Gain)) => &params.gain_fg_texture,
         IntField::Patch(PatchInt::Op(op, op_int)) => {
             let o = &params.operators[op.index()];
             match op_int {
@@ -535,6 +591,12 @@ mod tests {
             "pitch_fg_depth",
             "cutoff_fg_depth",
             "gain_fg_depth",
+            "pitch_fg_rate",
+            "cutoff_fg_rate",
+            "gain_fg_rate",
+            "pitch_fg_texture",
+            "cutoff_fg_texture",
+            "gain_fg_texture",
             "gain_fg_to_master",
             "gain_fg_to_operators",
             "fixed_note_enable",
@@ -584,6 +646,28 @@ mod tests {
         assert_eq!(patch.channel.algorithm, 4);
         assert_eq!(patch.channel.fixed_note, 72);
         assert_eq!(patch.operators[0].eg, egs.operators[0], "EGはegs引数からそのままコピーされるはず");
+    }
+
+    /// FGのfree_rate/textureはDAWパラメーターが正であり、persist側（`egs`）に何が
+    /// 入っていても`build_patch`の出力ではDAW値に上書きされるはず（`with_rate_texture`）。
+    /// それ以外の段データ等はpersist側からそのまま引き継がれることも合わせて確認する。
+    #[test]
+    fn build_patch_overrides_fg_rate_and_texture_from_daw_params() {
+        let params = Op505VstParams {
+            pitch_fg_rate: IntParam::new("Pitch FG Rate", 200, IntRange::Linear { min: 0, max: 255 }),
+            pitch_fg_texture: IntParam::new("Pitch FG Texture", 4, IntRange::Linear { min: 0, max: 7 }),
+            ..Op505VstParams::default()
+        };
+        let mut egs = Op505EgBank::default();
+        egs.pitch_fg.free_rate = 10; // DAW値(200)と食い違わせて上書きされることを確認する
+        egs.pitch_fg.texture = 1;
+        egs.pitch_fg.stage_count = 5; // free_rate/texture以外はegs側がそのまま出るはず
+
+        let patch = build_patch(&params, &egs);
+
+        assert_eq!(patch.channel.pitch_fg.eg.free_rate, 200, "DAWパラメーターの値が優先されるはず");
+        assert_eq!(patch.channel.pitch_fg.eg.texture, 4, "DAWパラメーターの値が優先されるはず");
+        assert_eq!(patch.channel.pitch_fg.eg.stage_count, 5, "free_rate/texture以外はegs側のはず");
     }
 
     #[test]
