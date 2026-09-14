@@ -13,9 +13,16 @@ use crate::value::cc_byte_to_u8;
 /// （Pitch FGと共有するチャンネルのシャドウ値）から`lfo_rate_to_hz`でHzを求め
 /// 段のtimeへ直接焼き込む（Cutoff FGにも`rate_scale`APIが無いため）。NRPN(0,26)未送信なら
 /// 発火せず既存プリセットは出力ビット不変。
+///
+/// **texture!=OFFのときは発火しない**——TEXTUREテンプレートは`stage_count==0`のままでも
+/// 既に完全な形（テンプレート波形）を持つため、フォールバックが発火するとユーザーが選んだ
+/// TEXTURE/RATE/BASEが標準オートワウ形状へ丸ごと上書きされてしまう（2026-09-14実機確認で
+/// 発覚。「TEXTUREは効いているように聞こえるがRATE/BASEが効かない」の正体はこの誤上書き
+/// だった。詳細はmemory `project_fg_free_rate_texture_templates_design.md`参照）。
 pub fn apply_cutoff_fg_expression(patch: &mut Op505Patch, pitch_fg_cc76: u8) {
     let depth = patch.channel.cutoff_fg.depth;
-    if patch.channel.cutoff_fg.eg.stage_count == 0 && depth > 0 {
+    let has_texture = patch.channel.cutoff_fg.eg.texture != op505_core::TEXTURE_OFF;
+    if patch.channel.cutoff_fg.eg.stage_count == 0 && depth > 0 && !has_texture {
         let hz = lfo_rate_to_hz(cc_byte_to_u8(pitch_fg_cc76));
         let half_period = 0.5 / hz;
         patch.channel.cutoff_fg.eg = op505_core::standard_bipolar_modulation_eg(0.0, half_period, half_period);
@@ -57,5 +64,21 @@ mod tests {
         let before = patch;
         apply_cutoff_fg_expression(&mut patch, 64);
         assert_eq!(patch, before);
+    }
+
+    /// texture!=OFFのプリセット（stage_count==0のままTEXTUREテンプレートの形を持つ）は
+    /// フォールバックが発火せず不変のはず。発火すると標準オートワウ形状へ丸ごと上書きされ、
+    /// ユーザーが選んだTEXTURE/RATE/BASEが消える（2026-09-14実機確認で発覚した不具合）。
+    #[test]
+    fn no_fallback_when_texture_is_set_even_with_stage_count_zero() {
+        let mut patch = Op505Patch::default();
+        patch.channel.cutoff_fg.depth = 120;
+        patch.channel.cutoff_fg.eg.texture = op505_core::TEXTURE_TRIANGLE;
+        patch.channel.cutoff_fg.eg.free_rate = 200;
+        patch.channel.cutoff_fg.eg.base_freq = 64;
+        assert_eq!(patch.channel.cutoff_fg.eg.stage_count, 0, "TEXTURE選択時もGRAPH未編集(0)のままのはず");
+        let before = patch;
+        apply_cutoff_fg_expression(&mut patch, 64);
+        assert_eq!(patch, before, "TEXTURE/RATE/BASEが標準オートワウ形状で上書きされてはいけない");
     }
 }
