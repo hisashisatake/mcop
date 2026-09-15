@@ -580,11 +580,18 @@ fn draw_panel(
 /// **n=1のとき`ui.horizontal`ではラップしない**（`repeat`ありパネルだと、内部のfor文全体が
 /// 1個の`ui.horizontal`クロージャに閉じ込められ、本来縦積みされるべき複数回の`Frame::show`が
 /// 横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ`ui.horizontal`で横並びにする）。
+///
+/// `match-height="true"`のグループは、`ui.memory`のtemp dataへ前フレームの実測最大高さを
+/// `group_index`（レイアウト内でのグループ通し番号）でキー化して保存する。同じキーで次
+/// フレーム読み出し、全パネルへ事前適用してから今フレームの実測最大値を書き戻す
+/// （「先頭パネルの高さを捕捉し以降へ適用する」旧方式は、先頭が一番低いパネルだと機能
+/// しなかった。例: MASTER VOLUME(低)+MASTER EFFECT(高)。`codegen.rs`の`gen_panel`と同じ設計）。
 #[allow(clippy::too_many_arguments)]
 fn draw_panels_group(
     ui: &mut egui::Ui,
     store: &mut HandleStore,
     g: &PanelsGroup,
+    group_index: usize,
     full_width: f32,
     frame_stroke: f32,
     style: &Style,
@@ -599,20 +606,25 @@ fn draw_panels_group(
         draw_panel(ui, store, &g.panels[0], w, None, style, base_spacing, jacks, frame_stroke);
         return;
     }
-    let match_height = g.match_height;
+    let match_height_enabled = g.match_height;
     let margin_v = style.panel_inner_margin.vertical() + style.panel_outer_margin.vertical();
+    let match_height_id = ui.id().with(("op505_match_height", group_index));
+    let match_height: Option<f32> =
+        if match_height_enabled { ui.memory(|m| m.data.get_temp(match_height_id)) } else { None };
+    let mut mh_max: f32 = 0.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = style.panels_gap;
-        let mut captured_height: Option<f32> = None;
-        for (i, p) in g.panels.iter().enumerate() {
+        for p in g.panels.iter() {
             let w = usable * p.span_fraction;
-            let min_height = if match_height && i > 0 { captured_height } else { None };
-            let resp = draw_panel(ui, store, p, w, min_height, style, base_spacing, jacks, frame_stroke);
-            if i == 0 && match_height {
-                captured_height = Some(resp.rect.height() - margin_v - frame_stroke * 2.0);
+            let resp = draw_panel(ui, store, p, w, match_height, style, base_spacing, jacks, frame_stroke);
+            if match_height_enabled {
+                mh_max = mh_max.max(resp.rect.height() - margin_v - frame_stroke * 2.0);
             }
         }
     });
+    if match_height_enabled {
+        ui.memory_mut(|m| m.data.insert_temp(match_height_id, mh_max));
+    }
 }
 
 /// [`ui_codegen::Margin`]（f32・全パネル共通）をパース時に検証済みの`egui::Margin`（i8）へ変換する。
@@ -633,8 +645,8 @@ pub fn draw_panel_from_ir(ui: &mut egui::Ui, layout_ir: &Layout, store: &mut Han
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
         let mut jacks = JackLayout::new();
 
-        for group in &layout_ir.groups {
-            draw_panels_group(ui, store, group, full_width, frame_stroke, &layout_ir.style, base_spacing, &mut jacks);
+        for (i, group) in layout_ir.groups.iter().enumerate() {
+            draw_panels_group(ui, store, group, i, full_width, frame_stroke, &layout_ir.style, base_spacing, &mut jacks);
         }
 
         finish_texture_lfo_patchbay(ui, store.int("params.texture_lfo_destination"), jacks);

@@ -293,16 +293,23 @@ fn gen_body_lines(body: &[BodyStmt]) -> Vec<String> {
 }
 
 /// 1個の`<panel>`（`egui::Frame::group`本体、`repeat`があればfor文でラップ）を生成する。
-/// `width_expr`はこのパネルが占める幅を表すRust式（変数名）。`match_height`が`true`かつ
-/// このパネルがグループ先頭（`capture_height`）なら`let group_resp = ...`で外形高さを捕捉し、
-/// 先頭以外は捕捉済みの`match_height`（マージン・枠線ぶんを差し引いた中身の高さ）を
-/// `set_min_height`する（`<panels match-height="true">`、グループが1個の`<panel>`のみの場合は実質無効）。
+/// `width_expr`はこのパネルが占める幅を表すRust式（変数名）。`track_height`（グループの
+/// `match-height="true"`）なら、**全パネル共通**で以下を行う（グループが1個の`<panel>`のみの
+/// 場合は実質無効）：
+/// - 描画前に`match_height`（`Option<f32>`、前フレームでこのグループが実測した最大中身高さ。
+///   初回フレームはNone）があれば`set_min_height`する
+/// - 描画後、このパネルの中身高さを`mh_max`（グループ全体の最大値を追跡する外側の
+///   `let mut`）へ反映する
+///
+/// 「先頭パネルの高さを捕捉し以降へ適用する」という旧方式（先頭が一番低いと機能しない、
+/// 例: MASTER VOLUME(低)+MASTER EFFECT(高)）をやめ、**前フレームの実測最大値**を
+/// 全パネルへ事前適用する方式にした（`ui.memory`のtemp dataで1フレーム遅れて収束する。
+/// `gen_panels_group`側の`match_height_id`参照）。
 ///
 /// `Frame::show`が返す`response.rect`は`inner_margin`+枠線+`outer_margin`を含む外形なので、
-/// 捕捉した高さをそのまま次のパネルの中身（`ui.set_min_height`は`inner_margin`の内側に効く）へ
-/// 渡すとマージンぶん二重に積み増しされる。`margin_v`（style由来のコンパイル時定数）と
-/// 実行時の`frame_stroke`を差し引いて中身の高さへ変換してから使う。
-fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bool, style: &Style) -> Vec<String> {
+/// 中身の高さへ変換する際は`margin_v`（style由来のコンパイル時定数）と実行時の`frame_stroke`を
+/// 差し引く（`set_min_height`は`inner_margin`の内側に効くため、外形のまま渡すと二重に積み増しされる）。
+fn gen_panel(p: &Panel, width_expr: &str, track_height: bool, style: &Style) -> Vec<String> {
     let is_grid = p.repeat.is_some() && p.columns.is_some();
     let cell_width_expr = if is_grid { "w_cell" } else { width_expr };
     let body_lines = gen_body_lines(&p.body);
@@ -311,14 +318,14 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     let frame_expr =
         format!("egui::Frame::group(ui.style()).inner_margin({inner_margin}).outer_margin({outer_margin})");
     let has_source_jack = panel_has_source_jack(&p.body);
-    let group_stmt = if capture_height || has_source_jack {
+    let group_stmt = if track_height || has_source_jack {
         format!("let group_resp = {frame_expr}.show(ui, |ui| {{")
     } else {
         format!("{frame_expr}.show(ui, |ui| {{")
     };
     let mut inner = vec![group_stmt, format!("    ui.set_width({cell_width_expr});")];
-    if match_height && !capture_height {
-        inner.push("    ui.set_min_height(match_height);".to_string());
+    if track_height {
+        inner.push("    if let Some(h) = match_height { ui.set_min_height(h); }".to_string());
     }
     inner.push("    ui.spacing_mut().item_spacing = base_spacing;".to_string());
     inner.push("    ui.vertical(|ui| {".to_string());
@@ -330,9 +337,9 @@ fn gen_panel(p: &Panel, width_expr: &str, match_height: bool, capture_height: bo
     if has_source_jack {
         inner.push("tx_jacks.set_source_panel_rect(group_resp.response.rect);".to_string());
     }
-    if capture_height && match_height {
+    if track_height {
         let margin_v = fmt_num(style.panel_inner_margin.vertical() + style.panel_outer_margin.vertical());
-        inner.push(format!("let match_height = group_resp.response.rect.height() - {margin_v} - frame_stroke * 2.0;"));
+        inner.push(format!("mh_max = mh_max.max(group_resp.response.rect.height() - {margin_v} - frame_stroke * 2.0);"));
     }
     match &p.repeat {
         None => inner,
@@ -429,7 +436,12 @@ fn gen_repeat_grid(
 /// 1個の`ui.horizontal`クロージャに閉じ込められ、本来ScrollArea直下で縦積みされるべき
 /// 複数回の`Frame::show`が横並びになってしまう実バグを踏んだため。n>1の複数カラム行だけ
 /// `ui.horizontal`で横並びにする）。
-fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
+///
+/// `match-height="true"`のグループは、`ui.memory`のtemp dataへ前フレームの実測最大高さを
+/// `group_index`（レイアウト内でのグループ通し番号、呼び出し元`generate_rust`が付与）で
+/// キー化して保存する。同じキーで次フレーム読み出し、全パネルへ事前適用してから
+/// 今フレームの実測最大値を書き戻す（`gen_panel`のdocコメント参照）。
+fn gen_panels_group(g: &PanelsGroup, style: &Style, group_index: usize) -> String {
     let n = g.panels.len();
     let gap = fmt_num(style.panels_gap);
     let margin_h = fmt_num(style.panel_inner_margin.horizontal() + style.panel_outer_margin.horizontal());
@@ -445,20 +457,27 @@ fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
         out.push(format!("let w_{i} = usable * {};", fmt_num(p.span_fraction)));
     }
     if n == 1 {
-        out.extend(gen_panel(&g.panels[0], "w_0", false, false, style));
+        out.extend(gen_panel(&g.panels[0], "w_0", false, style));
         return out.join("\n");
+    }
+    if g.match_height {
+        out.push(format!("let match_height_id = ui.id().with((\"op505_match_height\", {group_index}usize));"));
+        out.push("let match_height: Option<f32> = ui.memory(|m| m.data.get_temp(match_height_id));".to_string());
+        out.push("let mut mh_max: f32 = 0.0;".to_string());
     }
     out.push("ui.horizontal(|ui| {".to_string());
     out.push(format!("    ui.spacing_mut().item_spacing.x = {gap};"));
     for (i, p) in g.panels.iter().enumerate() {
         let width_expr = format!("w_{i}");
-        let capture_height = i == 0 && g.match_height;
-        let lines = gen_panel(p, &width_expr, g.match_height, capture_height, style);
+        let lines = gen_panel(p, &width_expr, g.match_height, style);
         for l in &lines {
             out.push(indent(l, 4));
         }
     }
     out.push("});".to_string());
+    if g.match_height {
+        out.push("ui.memory_mut(|m| m.data.insert_temp(match_height_id, mh_max));".to_string());
+    }
     out.join("\n")
 }
 
@@ -469,7 +488,8 @@ fn gen_panels_group(g: &PanelsGroup, style: &Style) -> String {
 /// 自体を出力しない（Step 3(c)）。
 pub fn generate_rust(layout: &Layout) -> String {
     let style = &layout.style;
-    let parts: Vec<String> = layout.groups.iter().map(|g| gen_panels_group(g, style)).collect();
+    let parts: Vec<String> =
+        layout.groups.iter().enumerate().map(|(i, g)| gen_panels_group(g, style, i)).collect();
     let body = indent(&parts.join("\n\n"), 8);
     // ScrollArea::both()（縦横）にし、`full_width`をレイアウトが重ならずに収まる最小幅
     // （PANEL_MIN_WIDTH）で下げ止める。これを下回るウィンドウ幅では、パネル自体は

@@ -24,6 +24,23 @@ pub const SQUARE_VARIANTS: [&str; 8] = [
     "PWM 50%", "PWM 33%", "PWM 25%", "PWM 16.7%", "PWM 12.5%", "PWM 6.25%", "Half", "2x Half",
 ];
 
+/// `waveform_selector`のセル幅。`ui-codegen`のparse.rs（"waveform"宣言のSize.w）と
+/// 一致させること（`ui_core::knob::KNOB_CELL_SIZE`と同じ理由、egui非依存のui-codegenは
+/// あちらの定数を参照できないため手で同期する）。
+const CELL_WIDTH: f32 = 130.0;
+
+/// `content_width`ぶんの中身をセル幅の中央へ置く。`egui::ComboBox`や`ui.horizontal`は
+/// 内部で利用可能幅いっぱいのmax_rectを左端から取るため、外側のLayoutに`Align::Center`を
+/// 指定するだけでは中央寄せにならない（`ui_core::knob::knob`のspin_control行と同じ既知の
+/// egui制約）。そこで差分の半分だけ`add_space`で明示的に空けて中心を揃える。
+fn centered(ui: &mut egui::Ui, content_width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(((CELL_WIDTH - content_width) * 0.5).max(0.0));
+        add_contents(ui);
+    });
+}
+
 /// `egui::DragValue`用のbegin/set/end発行ヘルパー。
 ///
 /// `DragValue`はドラッグ操作（`drag_started`/`drag_stopped`で括れる）と、クリックしてテキストを
@@ -64,7 +81,7 @@ pub fn waveform_selector(ui: &mut egui::Ui, handle: &dyn IntParamHandle, salt: u
     };
 
     ui.allocate_ui_with_layout(
-        egui::vec2(130.0, 66.0),
+        egui::vec2(CELL_WIDTH, 66.0),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             ui.label(egui::RichText::new("WAVE").size(9.0));
@@ -80,39 +97,45 @@ pub fn waveform_selector(ui: &mut egui::Ui, handle: &dyn IntParamHandle, salt: u
             // カテゴリ切り替え時、ビルトイン4種同士ならバリアント位置を保つ（例: Sine#3→Saw#3）。
             let preserved_variant = if current < 32 { current % 8 } else { 0 };
 
-            egui::ComboBox::from_id_salt(("wf_cat", salt))
-                .selected_text(cat_label)
-                .width(80.0)
-                .show_ui(ui, |ui| {
-                    for (label, cat_base) in WAVEFORM_CATEGORIES {
-                        if ui.selectable_label(cat_label == label, label).clicked() {
-                            let new_value = match label {
-                                "Noise" => 32,
-                                "User" => 64,
-                                _ => cat_base + preserved_variant,
-                            };
-                            set(new_value);
+            const CAT_WIDTH: f32 = 80.0;
+            centered(ui, CAT_WIDTH, |ui| {
+                egui::ComboBox::from_id_salt(("wf_cat", salt))
+                    .selected_text(cat_label)
+                    .width(CAT_WIDTH)
+                    .show_ui(ui, |ui| {
+                        for (label, cat_base) in WAVEFORM_CATEGORIES {
+                            if ui.selectable_label(cat_label == label, label).clicked() {
+                                let new_value = match label {
+                                    "Noise" => 32,
+                                    "User" => 64,
+                                    _ => cat_base + preserved_variant,
+                                };
+                                set(new_value);
+                            }
                         }
-                    }
-                });
+                    });
+            });
 
             match variant_names {
                 Some(names) => {
                     let variant = (current - base).clamp(0, 7) as usize;
-                    egui::ComboBox::from_id_salt(("wf_var", salt))
-                        .selected_text(names[variant])
-                        .width(110.0)
-                        .show_ui(ui, |ui| {
-                            for (i, name) in names.iter().enumerate() {
-                                if ui.selectable_label(variant == i, *name).clicked() {
-                                    set(base + i as i32);
+                    const VARIANT_WIDTH: f32 = 110.0;
+                    centered(ui, VARIANT_WIDTH, |ui| {
+                        egui::ComboBox::from_id_salt(("wf_var", salt))
+                            .selected_text(names[variant])
+                            .width(VARIANT_WIDTH)
+                            .show_ui(ui, |ui| {
+                                for (i, name) in names.iter().enumerate() {
+                                    if ui.selectable_label(variant == i, *name).clicked() {
+                                        set(base + i as i32);
+                                    }
                                 }
-                            }
-                        });
+                            });
+                    });
                 }
                 None if cat_label == "Noise" => {
                     let mut np = (current - 32).clamp(0, 31);
-                    ui.horizontal(|ui| {
+                    centered(ui, 70.0, |ui| {
                         ui.label(egui::RichText::new("NP").size(9.0));
                         let response = ui.add(egui::DragValue::new(&mut np).range(0..=31));
                         commit_drag_value(handle, &response, 32 + np);
@@ -120,7 +143,7 @@ pub fn waveform_selector(ui: &mut egui::Ui, handle: &dyn IntParamHandle, salt: u
                 }
                 None => {
                     let mut slot = current.clamp(64, 255);
-                    ui.horizontal(|ui| {
+                    centered(ui, 80.0, |ui| {
                         ui.label(egui::RichText::new("Slot").size(9.0));
                         let response = ui.add(egui::DragValue::new(&mut slot).range(64..=255));
                         commit_drag_value(handle, &response, slot);

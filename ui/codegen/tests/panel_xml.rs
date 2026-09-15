@@ -15,9 +15,10 @@ fn generates_without_error() {
     assert!(rust.trim_end().ends_with('}'));
 }
 
-/// OPパネルのレイアウト木が、ビルド成果物の実測と一致することを確認する（2026-08-23更新、
-/// 5列stackからrow×3段（TL/MUL/EGSFT/V.GAIN・VEL統合・DT1/FINE/KSR/LEVEL SCALE・WAVE/AM）
-/// への組み替え、およびV.GAIN/VELの1ノブ統合(dual_knob)に追従）。
+/// OPパネルのレイアウト木が、ビルド成果物の実測と一致することを確認する（2026-09-15更新、
+/// 5列stack+row×3段の構成から、time-eg-editor用stack 1本+ノブ用stack 3本（TL/DT1/V.GAIN・
+/// MUL/FINE/LEVEL SCALE・EGSFT/KSR/WAVE/AM）を横並びする現行構成へ追従。V.GAIN/VELの
+/// 1ノブ統合(dual_knob)は変更なし）。
 /// **この木構造アサーションは非常に壊れやすい**——panel.xmlのOPパネル内訳
 /// （stack/rowの分割単位・並び順）を変えるたびに追従が必要。
 /// 外形サイズはウィジェット自然サイズ+既定マージン4px×2辺。
@@ -26,12 +27,11 @@ fn op_panel_tree_matches_taffy_reference() {
     let xml = panel_xml();
     let rust = ui_codegen::generate_rust(&xml).unwrap();
     let expected_tree = "let tree = row(Justify::Start, outer_gap, vec![\
-leaf(268.0, 253.0), \
-stack_centered(outer_gap, vec![\
-row(Justify::Start, outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-row(Justify::Start, outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
-row(Justify::Start, outer_gap, vec![leaf(138.0, 74.0), leaf(78.0, 28.0)])\
-])]);";
+stack(outer_gap, vec![leaf(268.0, 253.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(70.0, 74.0)]), \
+stack_centered(outer_gap, vec![leaf(70.0, 74.0), leaf(70.0, 74.0), leaf(138.0, 74.0), leaf(78.0, 28.0)])\
+]);";
     assert!(rust.contains(expected_tree), "OPパネルの木構造が想定と異なります:\n{rust}");
 
     // V.GAIN/VELは1ノブへ統合済み（dual_knob）。is_carrier述語で実ハンドル自体を出し分ける

@@ -19,36 +19,7 @@
   </style>
 
   <panels match-height="true">
-    <panel title="CHANNEL" span="25%">
-      <header>
-        <title/>
-      </header>
-      <row justify="start" gap="spacing">
-        <stack gap="spacing" center="true">
-          <algorithm-diagram handle="algorithm"/>
-          <row justify="start" gap="spacing">
-            <!-- 固定音階（GM2リズムチャンネル用）。有効時はnote_onの周波数を無視し
-                 FIXED NOTE+FINEの固定ピッチで鳴らす（memory
-                 `project_gm2_rhythm_channel_implementation.md`参照）。 -->
-            <checkbox label="FIXED" handle="fixed_note_enable"/>
-          </row>
-        </stack>
-        <stack gap="spacing">
-          <row justify="start" gap="spacing">
-            <knob label="ALG" handle="algorithm"/>
-          </row>
-          <row justify="start" gap="spacing">
-            <knob label="FB" handle="feedback"/>
-            <knob label="FB.VEL" handle="feedback_velocity_sens"/>
-          </row>
-          <row justify="start" gap="spacing">
-            <knob label="FIXED NOTE" handle="fixed_note"/>
-            <knob label="FINE" handle="fixed_note_fine" bipolar="true"/>
-          </row>
-        </stack>
-      </row>
-    </panel>
-    <panel title="MASTER VOLUME" span="20%">
+    <panel title="MASTER VOLUME" span="30%">
       <header>
         <title/>
       </header>
@@ -57,7 +28,7 @@
         <knob label="VOLUME" handle="master_volume"/>
       </row>
     </panel>
-    <panel title="MASTER EFFECT" span="55%">
+    <panel title="MASTER EFFECT" span="70%">
       <header>
         <title/>
       </header>
@@ -84,7 +55,7 @@
   </panels>
 
   <panels>
-    <panel title="PITCH FG" span="30%">
+    <panel title="PITCH FG" span="50%">
       <header>
         <title/>
       </header>
@@ -108,16 +79,18 @@
           <enum label="TEXTURE" handle="params.pitch_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="13" height="36"/>
           <enum label="RETRIG" handle="params.pitch_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="7" height="36"/>
           <checkbox label="SYNC" handle="params.pitch_fg.eg.sync_enabled_handle()"/>
-          <fg-rate label="RATE" sync="params.pitch_fg.eg.sync_enabled_handle()" sync-rate="params.pitch_fg.eg.sync_rate_handle()" free-rate="params.pitch_fg.eg.free_rate_handle()" rate-range="params.pitch_fg.eg.rate_range_handle()" salt="6"/>
-          <enum label="RANGE" handle="params.pitch_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="18" height="36"/>
           <knob label="BASE" handle="params.pitch_fg.eg.base_freq_handle()"/>
+          <enum label="RANGE" handle="params.pitch_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="18" height="36"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <fg-rate label="RATE" sync="params.pitch_fg.eg.sync_enabled_handle()" sync-rate="params.pitch_fg.eg.sync_rate_handle()" free-rate="params.pitch_fg.eg.free_rate_handle()" rate-range="params.pitch_fg.eg.rate_range_handle()" salt="6"/>
           <!-- Depthは符号を持たない振れ幅の倍率（0＝変調なし）。符号はFGのレベル波形が
                持つため、バイポーラ表示（±）にはしない。 -->
           <knob label="P.DEPTH" handle="params.pitch_fg.depth"/>
         </stack>
       </row>
     </panel>
-    <panel title="GAIN FG" span="30%">
+    <panel title="GAIN FG" span="50%">
       <header>
         <title/>
       </header>
@@ -133,25 +106,28 @@
                OP=am_enableな各オペレーターのamp_factorへ乗算（変調指数のうねり）。
                両方ON/両方OFFも可（排他ではない）。TimeEgグラフ下の余白に横並びで置き、
                専用カラムを持たせないことで横幅を節約する。 -->
-          <row justify="start" gap="spacing">
-            <checkbox label="MASTER" handle="gain_fg_to_master"/>
-            <checkbox label="OP" handle="gain_fg_to_operators"/>
-          </row>
         </stack>
         <stack gap="spacing" center="true">
           <enum label="TEXTURE" handle="params.gain_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="14" height="36"/>
           <enum label="RETRIG" handle="params.gain_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="11" height="36"/>
           <checkbox label="SYNC" handle="params.gain_fg.eg.sync_enabled_handle()"/>
-          <fg-rate label="RATE" sync="params.gain_fg.eg.sync_enabled_handle()" sync-rate="params.gain_fg.eg.sync_rate_handle()" free-rate="params.gain_fg.eg.free_rate_handle()" rate-range="params.gain_fg.eg.rate_range_handle()" salt="10"/>
-          <enum label="RANGE" handle="params.gain_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="19" height="36"/>
           <knob label="BASE" handle="params.gain_fg.eg.base_freq_handle()"/>
+          <enum label="RANGE" handle="params.gain_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="19" height="36"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <fg-rate label="RATE" sync="params.gain_fg.eg.sync_enabled_handle()" sync-rate="params.gain_fg.eg.sync_rate_handle()" free-rate="params.gain_fg.eg.free_rate_handle()" rate-range="params.gain_fg.eg.rate_range_handle()" salt="10"/>
           <!-- Depthは符号を持たない振れ幅の倍率だが、既定255（EGの形をそのまま使う）である点が
                P.DEPTH/F.DEPTH（既定0＝無変調）と違う。詳細はOp505GainFgのdocコメント参照。 -->
           <knob label="G.DEPTH" handle="params.gain_fg.depth"/>
+          <checkbox label="MASTER" handle="gain_fg_to_master"/>
+          <checkbox label="OP" handle="gain_fg_to_operators"/>
         </stack>
       </row>
     </panel>
-    <panel title="CUTOFF FG" span="40%">
+  </panels>
+
+  <panels match-height="true">
+    <panel title="CUTOFF FG" span="65%">
       <header>
         <title/>
       </header>
@@ -162,9 +138,11 @@
           <enum label="TEXTURE" handle="params.cutoff_fg.eg.texture_handle()" names="TEXTURE_NAMES" salt="15" height="36"/>
           <enum label="RETRIG" handle="params.cutoff_fg.eg.retrigger_mode_handle()" names="RETRIGGER_MODE_NAMES" salt="9" height="36"/>
           <checkbox label="SYNC" handle="params.cutoff_fg.eg.sync_enabled_handle()"/>
-          <fg-rate label="RATE" sync="params.cutoff_fg.eg.sync_enabled_handle()" sync-rate="params.cutoff_fg.eg.sync_rate_handle()" free-rate="params.cutoff_fg.eg.free_rate_handle()" rate-range="params.cutoff_fg.eg.rate_range_handle()" salt="8"/>
-          <enum label="RANGE" handle="params.cutoff_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="20" height="36"/>
           <knob label="BASE" handle="params.cutoff_fg.eg.base_freq_handle()"/>
+          <enum label="RANGE" handle="params.cutoff_fg.eg.rate_range_handle()" names="RATE_RANGE_NAMES" salt="20" height="36"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <fg-rate label="RATE" sync="params.cutoff_fg.eg.sync_enabled_handle()" sync-rate="params.cutoff_fg.eg.sync_rate_handle()" free-rate="params.cutoff_fg.eg.free_rate_handle()" rate-range="params.cutoff_fg.eg.rate_range_handle()" salt="8"/>
           <!-- P.DEPTHと同じくバイポーラ表示にしない（符号はレベル波形側）。 -->
           <knob label="F.DEPTH" handle="params.cutoff_fg.depth"/>
         </stack>
@@ -178,6 +156,33 @@
         </stack>
       </row>
     </panel>
+    <panel title="CHANNEL" span="35%">
+      <header>
+        <title/>
+      </header>
+      <row justify="start" gap="spacing">
+        <stack gap="spacing" center="true">
+          <algorithm-diagram handle="algorithm"/>
+          <row justify="start" gap="spacing">
+            <!-- 固定音階（GM2リズムチャンネル用）。有効時はnote_onの周波数を無視し
+                 FIXED NOTE+FINEの固定ピッチで鳴らす（memory
+                 `project_gm2_rhythm_channel_implementation.md`参照）。 -->
+            <checkbox label="FIXED" handle="fixed_note_enable"/>
+          </row>
+        </stack>
+        <stack gap="spacing">
+          <row justify="start" gap="spacing">
+            <knob label="ALG" handle="algorithm"/>
+            <knob label="FB" handle="feedback"/>
+            <knob label="FB.VEL" handle="feedback_velocity_sens"/>
+          </row>
+          <row justify="start" gap="spacing">
+            <knob label="FIXED NOTE" handle="fixed_note"/>
+            <knob label="FINE" handle="fixed_note_fine" bipolar="true"/>
+          </row>
+        </stack>
+      </row>
+    </panel>
   </panels>
 
   <panels>
@@ -188,29 +193,26 @@
           tooltip="Effective frequency ratio of MUL×FINE (excludes DT1)"/>
       </header>
       <row justify="start" gap="spacing">
-        <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
+        <stack gap="spacing" center="false">
+          <time-eg-editor handle="eg" mapping="DbLinear" tl="tl"/>
+        </stack>
         <stack gap="spacing" center="true">
-            <row gap="spacing">
-                <knob label="TL" handle="tl"/>
-                <knob label="MUL" handle="mul"/>
-                <knob label="EGSFT" handle="eg_shift"/>
-                <!-- キャリアはV.GAIN・モジュレーターはVELのみ意味を持つため、1ノブへ統合し
-                     有効な方のラベルだけ通常色で表示する（dual_knob、alt-label/alt-handle）。
-                     パラメーターJSON側はvelocity_gain/vel_sensの2フィールドのまま変更なし。 -->
-                <knob label="V.GAIN" handle="velocity_gain" alt-label="VEL" alt-handle="vel_sens" enabled-if="is_carrier"/>
-            </row>
-            <row gap="spacing">
-                <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
-                <knob label="DT1" handle="dt1" bipolar="true"/>
-                <!-- FINEも同じく中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
-                <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
-                <knob label="KSR" handle="ksr"/>
-                <knob label="LEVEL SCALE" handle="level_scale"/>
-            </row>
-            <row gap="spacing">
-                <waveform handle="waveform" index="i"/>
-                <checkbox label="AM" handle="ame"/>
-            </row>
+          <knob label="TL" handle="tl"/>
+          <!-- DT1も同じく中央128＝デチューンなしのバイポーラ（dt1_to_cents参照）。 -->
+          <knob label="DT1" handle="dt1" bipolar="true"/>
+          <knob label="V.GAIN" handle="velocity_gain" alt-label="VEL" alt-handle="vel_sens" enabled-if="is_carrier"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <knob label="MUL" handle="mul"/>
+          <!-- FINEも同じく中央128＝デチューンなしのバイポーラ（op_fine_tune_to_cents参照）。 -->
+          <knob label="FINE" handle="op_fine_tune" bipolar="true"/>
+          <knob label="LEVEL SCALE" handle="level_scale"/>
+        </stack>
+        <stack gap="spacing" center="true">
+          <knob label="EGSFT" handle="eg_shift"/>
+          <knob label="KSR" handle="ksr"/>
+          <waveform handle="waveform" index="i"/>
+          <checkbox label="AM" handle="ame"/>
         </stack>
       </row>
     </panel>
