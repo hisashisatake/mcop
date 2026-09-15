@@ -8,9 +8,9 @@
 // オブジェクトを返す設計、rhythm/melodyのgetState側は配列・Mapを複製して返す）。
 // これによりUndoスタックへ積んだ古いスナップショットが後から書き換わる事故を防ぐ。
 
-import { getChordState, setChordState } from './chord-screen.js';
-import { getRows, setRows, patternV1ToRows } from './rhythm-screen.js';
-import { getNotes, setNotes } from './melody-screen.js';
+import { getChordState, setChordState } from './chord-screen.ts';
+import { getRows, setRows, patternV1ToRows } from './rhythm-screen.ts';
+import { getNotes, setNotes } from './melody-screen.ts';
 import { getBpm, setBpm } from './tempo-state.ts';
 import { tapTempo } from './midi.ts';
 import type { ProjectState } from './types.ts';

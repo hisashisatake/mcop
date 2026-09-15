@@ -8,8 +8,6 @@
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "strict": true,
-    "allowJs": true,
-    "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true
   },

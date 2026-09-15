@@ -22,6 +22,7 @@
 import { isActive } from './screens.ts';
 import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
+import type { RhythmRow } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が1小節のステップ数として参照するためexportする。
 export const STEPS = 16;
@@ -32,20 +33,19 @@ const BOTTOM_MARGIN = 180; // 右下固定の#status-panel（波形メモリ/Ban
 const MIN_ROW_H = 18; // これを下回る行高になる場合は固定してスクロールに切り替える
 
 // 既定12行のノート番号と短縮ラベル（見た目は従来のまま）。Rust側は行の概念を持たず
-// ノート番号で直接引くため、この対応表はJS側だけが持つ。project-state.jsの
-// v1(.gap505)互換読込（`patternV1ToRows`）でも使う。
+// ノート番号で直接引くため、この対応表はJS側だけが持つ。project-state.jsのv1(.gap505)
+// 互換読込（`patternV1ToRows`）でも使う。
 export const DEFAULT_ROW_NOTES = [49, 51, 46, 42, 39, 37, 38, 40, 48, 45, 41, 36];
 export const DEFAULT_ROW_LABELS = ['Crash', 'Ride', 'OpenHH', 'ClosedHH', 'Clap', 'Rim', 'Snare', 'E.Snare', 'HiTom', 'MidTom', 'LoTom', 'Kick'];
 
 // [消音, 通常, アクセント, 弱]。Rust側の0〜3と対応。
 const LEVEL_COLORS = ['#1c1c1c', 'hsl(200,55%,42%)', 'hsl(32,90%,55%)', 'hsl(200,35%,26%)'];
 
-/** @type {Array<{note: number, label: string, steps: number[]}>} */
-let rows = DEFAULT_ROW_NOTES.map((note, i) => ({ note, label: DEFAULT_ROW_LABELS[i], steps: new Array(STEPS).fill(0) }));
+let rows: RhythmRow[] = DEFAULT_ROW_NOTES.map((note, i) => ({ note, label: DEFAULT_ROW_LABELS[i], steps: new Array(STEPS).fill(0) }));
 let scrollRow = 0;
 let currentStep = -1;
 
-function clamp(v, lo, hi) {
+function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
@@ -53,7 +53,7 @@ onRhythmStepTick((step) => {
   currentStep = step;
 });
 
-export function setupRhythmScreen(canvas) {
+export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: CanvasRenderingContext2D) => void } {
   canvas.addEventListener('mousedown', (e) => {
     if (!isActive('rhythm') || e.button !== 0) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
@@ -77,7 +77,7 @@ export function setupRhythmScreen(canvas) {
     { passive: false },
   );
 
-  return { draw: (ctx) => draw(ctx, canvas) };
+  return { draw: (ctx: CanvasRenderingContext2D) => draw(ctx, canvas) };
 }
 
 /**
@@ -87,19 +87,19 @@ export function setupRhythmScreen(canvas) {
  * （統合Undo/Redoのスタックへ積んだ後で元の配列が書き換わり、過去のスナップショットまで
  * 壊れてしまう事故を防ぐため）。
  */
-export function getRows() {
+export function getRows(): RhythmRow[] {
   return rows.map((r) => ({ note: r.note, label: r.label, steps: r.steps.slice() }));
 }
 
 /**
- * 統合Undo/Redo・ファイル読込（Open/Import）による復元用。行の集合自体が変わりうる
+ * 統合Undo/Redo・ファイル読込による復元用。行の集合自体が変わりうる
  * （Importで未知のノート番号の行が増減する）ため、ノート番号をキーに差分を取る:
  * - 新しい側に無いノートは全ステップを消音にしてRustへ送る
  * - 残る/新規のノートはステップごとに現在値と比較し、変化した位置だけ送る
  * （192セル全部を無条件送信すると、リズムを一切編集していないUndo/Redoでも
  * 毎回大量のinvokeが走ってしまうため）。
  */
-export function setRows(newRows) {
+export function setRows(newRows: RhythmRow[]): void {
   const oldByNote = new Map(rows.map((r) => [r.note, r]));
   const newByNote = new Map(newRows.map((r) => [r.note, r]));
 
@@ -123,7 +123,7 @@ export function setRows(newRows) {
 }
 
 /** v1(.gap505)形式の12×16固定パターンを、現行のrows形式へ変換する（project-state.js参照）。 */
-export function patternV1ToRows(pattern) {
+export function patternV1ToRows(pattern: number[][]): RhythmRow[] {
   return DEFAULT_ROW_NOTES.map((note, i) => ({
     note,
     label: DEFAULT_ROW_LABELS[i],
@@ -135,7 +135,7 @@ export function patternV1ToRows(pattern) {
  * ボタンはmain.js側でまとめて配線する（停止時に両画面のカーソルを揃えてリセットする
  * 必要があるため、両画面を知っているmain.jsが持つのが自然。詳細はmidi_out.rs
  * `SEQUENCER_RUNNING`のコメント参照）。 */
-export function bindRhythmScreenControls({ metronomeToggle }) {
+export function bindRhythmScreenControls({ metronomeToggle }: { metronomeToggle?: HTMLInputElement | null }): void {
   if (!metronomeToggle) return;
   metronomeToggle.checked = false;
   metronomeToggle.addEventListener('change', () => {
@@ -146,11 +146,18 @@ export function bindRhythmScreenControls({ metronomeToggle }) {
 /** 再生/停止ボタンの停止側からmain.js経由で呼ばれる。再生カーソルのハイライトを
  * 即座に消す（Rust側は`rhythm-step`イベントの送出自体を止めるだけで、直前のカーソル
  * 位置を明示的に片付けてはくれないため）。 */
-export function resetRhythmCursor() {
+export function resetRhythmCursor(): void {
   currentStep = -1;
 }
 
-function gridMetrics(canvas) {
+interface GridMetrics {
+  cw: number;
+  ch: number;
+  bodyH: number;
+  visibleRows: number;
+}
+
+function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
   const cw = (canvas.width - LABEL_WIDTH) / STEPS;
   const bodyH = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
   const naturalCh = rows.length > 0 ? bodyH / rows.length : bodyH;
@@ -159,7 +166,7 @@ function gridMetrics(canvas) {
   return { cw, ch, bodyH, visibleRows };
 }
 
-function cellFromPoint(canvas, px, py) {
+function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): { rowIndex: number; step: number } | null {
   const { cw, ch, visibleRows } = gridMetrics(canvas);
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
@@ -172,7 +179,7 @@ function cellFromPoint(canvas, px, py) {
   return { rowIndex, step };
 }
 
-function draw(ctx, canvas) {
+function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   if (!isActive('rhythm')) return;
   const W = canvas.width;
   const H = canvas.height;

@@ -5,15 +5,20 @@ import { isTauri } from '@tauri-apps/api/core';
 import { setProgram, tapTempo, openEditor, queryProgramName, setSequencerRunning, CHORD_CHANNEL } from './midi.ts';
 import { setupMidiLog } from './midi-log.ts';
 import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.ts';
-import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
-import { setupRhythmScreen, bindRhythmScreenControls, resetRhythmCursor } from './rhythm-screen.js';
-import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from './melody-screen.js';
+import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.ts';
+import { setupRhythmScreen, bindRhythmScreenControls, resetRhythmCursor } from './rhythm-screen.ts';
+import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from './melody-screen.ts';
 import { activeScreen, bindScreenTabs, onScreenChange } from './screens.ts';
 import { getBpm, setBpm } from './tempo-state.ts';
 import { undo, redo } from './undo-manager.ts';
 import { openProject, saveProject, saveProjectAs, importMidi, exportMidi } from './project-file.ts';
+import type { ProgramInfo } from './types.ts';
 
-setupMidiLog(document.getElementById('midi-log'));
+function byId<T extends HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
+}
+
+setupMidiLog(byId('midi-log'));
 
 // 波形メモリ音色専用のBank Select番号（凍結済みym38x6-coreのWAVEFORM_MEMORY_BANKと一致させていた
 // 値）。op505向けの音色は2026-08-25に移植済み: op505-coreにはこのBankを特別扱いする
@@ -27,13 +32,13 @@ const WAVEFORM_MEMORY_BANK = 16383;
 // ─────────────────────────────────────────────
 // Canvas
 // ─────────────────────────────────────────────
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const chordEl = document.getElementById('chord-display');
-const chordFunctionEl = document.getElementById('chord-function');
-const chordNoteNameEl = document.getElementById('chord-note-name');
+const canvas = byId<HTMLCanvasElement>('canvas');
+const ctx = canvas.getContext('2d')!;
+const chordEl = byId('chord-display');
+const chordFunctionEl = byId('chord-function');
+const chordNoteNameEl = byId('chord-note-name');
 
-function resize() {
+function resize(): void {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 }
@@ -47,7 +52,7 @@ resize();
 // 壊れているNCHITTEST判定を経由せずリサイズが機能する。
 // 'East'/'South'単体は実機検証で無反応だったため使わず、動作を確認できた
 // 'SouthEast'（斜め）のみ使う——横だけ/縦だけ動かせば実質その方向だけのリサイズになる。
-document.getElementById('resize-grip').addEventListener('mousedown', async (e) => {
+byId('resize-grip').addEventListener('mousedown', async (e) => {
   e.preventDefault();
   if (!isTauri()) return;
   await getCurrentWindow().startResizeDragging('SouthEast');
@@ -61,10 +66,10 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 // 「波形メモリ」チェックON時はBank欄をWAVEFORM_MEMORY_BANKに固定して編集不可にする。
 // ─────────────────────────────────────────────
 (() => {
-  const wmToggle = document.getElementById('waveform-memory-toggle');
-  const bankEl = document.getElementById('program-bank');
-  const numEl = document.getElementById('program-num');
-  const labelEl = document.getElementById('program-label');
+  const wmToggle = byId<HTMLInputElement>('waveform-memory-toggle');
+  const bankEl = byId<HTMLInputElement>('program-bank');
+  const numEl = byId<HTMLInputElement>('program-num');
+  const labelEl = byId('program-label');
 
   // 各モードで最後に使っていたBank/Program（モード切替時の復元先）
   let savedFmBank = parseInt(bankEl.value, 10) || 0;
@@ -74,12 +79,12 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
   // standaloneへの問い合わせ結果（Rust側`ProgramInfoDto`のstatus）を表示文字列へ変換する。
   // 音色名の正解はstandaloneが持つ`.op505`プリセットのみであり、ここでは名前を推測しない
   // （memory `project_gesture_app_program_name_standalone_query.md`参照）。
-  function formatProgramInfo(info) {
+  function formatProgramInfo(info: ProgramInfo): string {
     switch (info.status) {
       case 'disconnected':
         return 'standalone未接続';
       case 'resolved':
-        return info.name;
+        return info.name ?? '';
       case 'not_found':
         return `Bank ${info.bank} / Program ${info.program}（.op505未登録）`;
       case 'rhythm':
@@ -91,28 +96,28 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
     }
   }
 
-  async function refreshProgramLabel() {
+  async function refreshProgramLabel(): Promise<void> {
     const info = await queryProgramName(CHORD_CHANNEL);
     labelEl.textContent = formatProgramInfo(info);
   }
 
-  function syncBankField() {
+  function syncBankField(): void {
     if (wmToggle.checked) {
       // FM → 波形メモリ：現在のFM Bank/Programを退避し、波形メモリ側の前回Programを復元
       savedFmBank = parseInt(bankEl.value, 10) || 0;
       savedFmProgram = parseInt(numEl.value, 10) || 0;
-      bankEl.value = WAVEFORM_MEMORY_BANK;
-      numEl.value = savedWmProgram;
+      bankEl.value = String(WAVEFORM_MEMORY_BANK);
+      numEl.value = String(savedWmProgram);
     } else {
       // 波形メモリ → FM：現在のProgramを退避し、FM側のBank/Programを復元
       savedWmProgram = parseInt(numEl.value, 10) || 0;
-      bankEl.value = savedFmBank;
-      numEl.value = savedFmProgram;
+      bankEl.value = String(savedFmBank);
+      numEl.value = String(savedFmProgram);
     }
     bankEl.disabled = wmToggle.checked;
   }
 
-  async function applyProgram() {
+  async function applyProgram(): Promise<void> {
     const bank = wmToggle.checked
       ? WAVEFORM_MEMORY_BANK
       : Math.max(0, Math.min(16383, parseInt(bankEl.value, 10) || 0));
@@ -152,25 +157,25 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 // 確定したBPMはtap_tempoコマンド経由でstandaloneへ送られ、MIDI Clock(0xF8)として
 // 実際に送出される（クロック送信スレッド自体はsrc-tauri/src/midi_out.rsが持つ）。
 // ─────────────────────────────────────────────
-const tempoDisplayEl = document.getElementById('tempo-display');
+const tempoDisplayEl = byId('tempo-display');
 
 /** tempo-state.jsの現在値を#tempo-displayへ反映する。Undo/Redo・ファイル読込でBPMが
  * 変わった際、main.js側からこれを呼んで表示を追随させる（tapTempo()自体はMIDI Clock送出
  * のみでDOM更新は行わないため）。 */
-function refreshTempoDisplay() {
+function refreshTempoDisplay(): void {
   const bpm = getBpm();
   tempoDisplayEl.textContent = bpm == null ? '— BPM' : `${Math.round(bpm)} BPM`;
 }
 refreshTempoDisplay();
 
 (() => {
-  const tapBtn = document.getElementById('tap-tempo-btn');
+  const tapBtn = byId('tap-tempo-btn');
   const MIN_BPM = 40;
   const MAX_BPM = 300;
   const RESET_GAP_MS = 2000;
   const MOVING_AVERAGE_WINDOW = 4; // 直近何区間を平均するか
 
-  let tapTimestamps = [];
+  let tapTimestamps: number[] = [];
 
   tapBtn.addEventListener('click', async () => {
     const now = performance.now();
@@ -184,7 +189,7 @@ refreshTempoDisplay();
     if (tapTimestamps.length < 3) {
       return; // 3タップ（2区間）が揃うまではBPMを確定しない
     }
-    const intervals = [];
+    const intervals: number[] = [];
     for (let i = 1; i < tapTimestamps.length; i++) {
       intervals.push(tapTimestamps[i] - tapTimestamps[i - 1]);
     }
@@ -208,17 +213,17 @@ const chordScreen = setupChordScreen(canvas, {
 });
 
 bindChordScreenControls({
-  tonicSelect: document.getElementById('key-tonic'),
-  modeSelect: document.getElementById('key-mode'),
-  rowsInput: document.getElementById('candidate-rows'),
-  colsInput: document.getElementById('candidate-cols'),
-  autoVoicingToggle: document.getElementById('auto-voicing-toggle'),
-  baseOctaveInput: document.getElementById('base-octave'),
+  tonicSelect: byId<HTMLSelectElement>('key-tonic'),
+  modeSelect: byId<HTMLSelectElement>('key-mode'),
+  rowsInput: byId<HTMLInputElement>('candidate-rows'),
+  colsInput: byId<HTMLInputElement>('candidate-cols'),
+  autoVoicingToggle: byId<HTMLInputElement>('auto-voicing-toggle'),
+  baseOctaveInput: byId<HTMLInputElement>('base-octave'),
 });
 
 const rhythmScreen = setupRhythmScreen(canvas);
 bindRhythmScreenControls({
-  metronomeToggle: document.getElementById('metronome-toggle'),
+  metronomeToggle: byId<HTMLInputElement>('metronome-toggle'),
 });
 
 const melodyScreen = setupMelodyScreen(canvas);
@@ -227,9 +232,9 @@ const melodyScreen = setupMelodyScreen(canvas);
 // 再生/停止する。停止時は両画面の再生カーソルも揃えてリセットする（Rust側は
 // `rhythm-step`/`melody-step`イベントの送出を止めるだけで、直前のカーソル位置は
 // 明示的に片付けてくれないため）。
-const sequencerPlayBtn = document.getElementById('sequencer-play-btn');
-const sequencerStopBtn = document.getElementById('sequencer-stop-btn');
-function updateSequencerButtons(running) {
+const sequencerPlayBtn = byId<HTMLButtonElement>('sequencer-play-btn');
+const sequencerStopBtn = byId<HTMLButtonElement>('sequencer-stop-btn');
+function updateSequencerButtons(running: boolean): void {
   sequencerPlayBtn.disabled = running;
   sequencerStopBtn.disabled = !running;
 }
@@ -246,23 +251,23 @@ sequencerStopBtn.addEventListener('click', () => {
 });
 
 bindScreenTabs({
-  chord: document.getElementById('tab-chord'),
-  rhythm: document.getElementById('tab-rhythm'),
-  melody: document.getElementById('tab-melody'),
+  chord: byId('tab-chord'),
+  rhythm: byId('tab-rhythm'),
+  melody: byId('tab-melody'),
 });
 
 // ハンバーガーメニュー: 画面タブ・ヒント・MIDIログ・音源/演奏設定を収めたドロワーの開閉。
 // 画面を切り替えたら、選んだ画面がすぐ見えるようドロワーを自動で閉じる。
-const menuToggleEl = document.getElementById('menu-toggle');
-const drawerEl = document.getElementById('drawer');
+const menuToggleEl = byId('menu-toggle');
+const drawerEl = byId('drawer');
 menuToggleEl.addEventListener('click', () => drawerEl.classList.toggle('open'));
 onScreenChange(() => drawerEl.classList.remove('open'));
 
 // 画面ごとのコントロールパネル・キーボードヒントの出し分け
-const chordControlsEl = document.getElementById('chord-controls');
-const rhythmControlsEl = document.getElementById('rhythm-controls');
-const statusKeyRowEl = document.getElementById('status-key-row'); // 常時表示の#status-panel内、Key選択はコード画面専用
-const hintEl = document.getElementById('hint');
+const chordControlsEl = byId('chord-controls');
+const rhythmControlsEl = byId('rhythm-controls');
+const statusKeyRowEl = byId('status-key-row'); // 常時表示の#status-panel内、Key選択はコード画面専用
+const hintEl = byId('hint');
 const CHORD_HINT = hintEl.innerHTML;
 const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>再生/停止は左上メニューバーのアイコンから（再生にはTAPでテンポ確定が必要）<br>メトロノームON/OFFは下の音源パネルから<br>E: 音色エディタ';
 const MELODY_HINT = '<div class="drawer-section-title">操作</div>空セルをクリック+ドラッグ: ノート作成（長さ調整）<br>ノートをクリック: 選択<br>選択中ノートをクリック: 音量を巡回（通常→アクセント→弱）<br>選択中ノートをドラッグ: 移動<br>ノート右端をドラッグ: 長さ変更<br>DEL: 選択中ノートを削除<br>ホイール: 音域スクロール　Shift+ホイール: 小節スクロール<br>再生/停止はリズムと共通（左上メニューバー）<br>E: 音色エディタ';
@@ -278,10 +283,10 @@ onScreenChange((next) => {
 
 setupPerformanceLfo(canvas, activeChannels);
 bindLfoIndicator({
-  label: document.getElementById('lfo-label'),
-  depthBar: document.getElementById('lfo-depth-bar'),
-  rateLabel: document.getElementById('lfo-rate-label'),
-  rateBar: document.getElementById('lfo-rate-bar'),
+  label: byId('lfo-label'),
+  depthBar: byId('lfo-depth-bar'),
+  rateLabel: byId('lfo-rate-label'),
+  rateBar: byId('lfo-rate-bar'),
 });
 
 // Ctrl+Z/Ctrl+Yは統合Undo/Redo（undo-manager.js）として、アクティブな画面を問わず
@@ -309,22 +314,22 @@ window.addEventListener('keydown', async (e) => {
 // ─────────────────────────────────────────────
 // Fileメニュー（Open/Save/Save As、独自プロジェクト形式.gap505）
 // ─────────────────────────────────────────────
-document.getElementById('file-open-btn').addEventListener('click', async () => {
+byId('file-open-btn').addEventListener('click', async () => {
   if (await openProject()) refreshTempoDisplay();
 });
-document.getElementById('file-save-btn').addEventListener('click', () => saveProject());
-document.getElementById('file-save-as-btn').addEventListener('click', () => saveProjectAs());
+byId('file-save-btn').addEventListener('click', () => saveProject());
+byId('file-save-as-btn').addEventListener('click', () => saveProjectAs());
 
 // MIDI Import/Export（フェーズ3、リズム/メロディの2ch分のみ対象、コードは対象外）
-document.getElementById('file-import-btn').addEventListener('click', async () => {
+byId('file-import-btn').addEventListener('click', async () => {
   if (await importMidi()) refreshTempoDisplay();
 });
-document.getElementById('file-export-btn').addEventListener('click', () => exportMidi());
+byId('file-export-btn').addEventListener('click', () => exportMidi());
 
 // ─────────────────────────────────────────────
 // アニメーションループ
 // ─────────────────────────────────────────────
-function tick() {
+function tick(): void {
   const screen = activeScreen();
   if (screen === 'rhythm') rhythmScreen.draw(ctx);
   else if (screen === 'melody') melodyScreen.draw(ctx);

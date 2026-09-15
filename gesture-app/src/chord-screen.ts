@@ -57,6 +57,19 @@ import { matchProgressions } from './progressions.ts';
 import { computePastSlotGeoms } from './chord-layout.ts';
 import { isActive, onScreenChange } from './screens.ts';
 import { pushUndo } from './undo-manager.ts';
+import type {
+  CandidateGridCell,
+  Chord,
+  ChordHistory,
+  HistoryEntry,
+  Key,
+  KeyObj,
+  Mode,
+  PastSlotGeom,
+  PendingPivot,
+  PlayedChordSummary,
+  ProgressionLegendEntry,
+} from './types.ts';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
@@ -97,7 +110,7 @@ const CANDIDATE_FILL_SIZE_MIN = 0.4; // 候補セルの塗り矩形の最小サ�
 
 const MAX_RECENT_HISTORY = 12; // 進行テンプレート照合に使う直近手数の上限（最長テンプレート=12小節ブルースに合わせる）
 const PROGRESSION_BADGE_COLOR = '#ffcc00';
-const BADGE_NUMERALS = { 1: '①', 2: '②', 3: '③', 4: '④', 5: '⑤' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）。6件目以降は半角数字にフォールバック
+const BADGE_NUMERALS: Record<number, string> = { 1: '①', 2: '②', 3: '③', 4: '④', 5: '⑤' }; // 凡例文字列の番号（セル右上のバッジ内数字は普通の半角数字のまま）。6件目以降は半角数字にフォールバック
 
 const MIN_ROWS = 3;
 const MAX_ROWS = 12;
@@ -109,7 +122,7 @@ const MAX_BASE_OCTAVE = 2;
 const DEFAULT_COLS = 3;
 
 let tonicMidi = DEFAULT_TONIC_MIDI;
-let mode = 'major'; // 'major' | 'minor'
+let mode: Mode = 'major';
 let assistRows = DEFAULT_ROWS;
 let assistCols = DEFAULT_COLS;
 let autoVoicing = false; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
@@ -118,9 +131,22 @@ let baseOctave = 0; // 基準オクターブの手動±調整
 let shiftHeld = false;
 let ctrlHeld = false;
 let altHeld = false; // 押している間だけ自動転回ON/OFFを反転する一時トグル
-let hoverCandidate = null; // {col, row, yRatio}
-let hoverSlot = null; // { kind: 'past'|'future', index, yRatio, startTime }（過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用）
-let sounding = []; // 発音中のノート番号
+
+interface HoverCandidate {
+  col: number;
+  row: number;
+  yRatio: number;
+}
+interface HoverSlot {
+  kind: 'past' | 'future';
+  index: number;
+  yRatio: number;
+  startTime: number;
+}
+
+let hoverCandidate: HoverCandidate | null = null;
+let hoverSlot: HoverSlot | null = null; // 過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用
+let sounding: number[] = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
 
 // { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity, voicing}], cursor, initialKey }
@@ -129,41 +155,53 @@ let pointerHeld = false; // マウスボタンを押している最中か（awai
 // voicingは選択時に直前エントリのvoicingを踏まえて一度だけ計算し焼き付ける（実際に鳴らすMIDI
 // ノート配列。過去/未来クリックでの再訪では保存済みの値をそのまま鳴らし、毎回同じ響きにする）。
 // 自動転回ON/OFF・基準オクターブ設定が変わったときだけ、revoiceHistory()で履歴全体を計算し直す。
-let history = createHistory({ tonicMidi, mode });
-let candidateCache = null; // { cacheKey, grid: [...] }
+let history: ChordHistory = createHistory({ tonicMidi, mode });
+
+interface CandidateCache {
+  cacheKey: string;
+  grid: CandidateGridCell[];
+  legend: ProgressionLegendEntry[];
+}
+let candidateCache: CandidateCache | null = null; // { cacheKey, grid: [...] }
+
+export interface ChordDisplayInfo {
+  degreeLabel: string;
+  func: string;
+  noteName: string;
+}
 
 // setupChordScreen()に渡されたonChordChangeを保持する（Undo/Redo・ファイル読込による
 // 復元時にもHUD更新を呼べるようにするため、モジュール変数として持つ）。
-let onChangeCallback = null;
+let onChangeCallback: ((info: ChordDisplayInfo | null) => void) | null = null;
 
-let tonicSelectEl = null;
-let modeSelectEl = null;
+let tonicSelectEl: HTMLSelectElement | null = null;
+let modeSelectEl: HTMLSelectElement | null = null;
 
 // 選択・Undo/Redo時の横スライド演出用（純粋に見た目だけの補間。ロジック上は瞬時に切り替わる）
 let slideDirection = 0; // +1 = 前進（右→左へ流れる）, -1 = 後退
 let slideStart = 0;
 
 /** 発音中チャンネル（performance-lfoが即時反映に使う）。 */
-export function activeChannels() {
+export function activeChannels(): number[] {
   return sounding.length > 0 ? [CHORD_CHANNEL] : [];
 }
 
 /** {tonicMidi, mode}形式のキー（historyのentry.key等）をtheory.jsが期待する{tonicPc, mode}へ変換する。 */
-function toKeyObj(key) {
+function toKeyObj(key: Key): KeyObj {
   return { tonicPc: ((key.tonicMidi % 12) + 12) % 12, mode: key.mode };
 }
 
-function currentKeyObj() {
+function currentKeyObj(): KeyObj {
   return toKeyObj(keyAt(history));
 }
 
 /** ディグリーネーム（度数＋品質サフィックス、スペースなし）。例: 'IIm7' / 'V7' / 'I'。 */
-function degreeLabelOf(chord, key) {
+function degreeLabelOf(chord: Chord, key: KeyObj): string {
   return degreeName(chord, key) + chord.suffix;
 }
 
 /** キー名の表示文言。例: 'C' / 'Am'。 */
-function keyNameOf(key) {
+function keyNameOf(key: KeyObj): string {
   return NOTE_NAMES[key.tonicPc] + (key.mode === 'minor' ? 'm' : '');
 }
 
@@ -172,7 +210,7 @@ function keyNameOf(key) {
  * 直前のエントリからキーが変わった（＝転調が確定した）コードだけを対象にする
  * （毎スロットに出すと転調の節目が埋もれるため）。indexが範囲外（初期"—"状態）はfalse。
  */
-function isKeyLabelSlot(index) {
+function isKeyLabelSlot(index: number): boolean {
   if (index < 0 || index >= history.entries.length) return false;
   if (index === 0) return true;
   const prevKey = toKeyObj(history.entries[index - 1].key);
@@ -181,7 +219,7 @@ function isKeyLabelSlot(index) {
 }
 
 /** コード機能の表示文言。'D'/'P'は解決先があれば'D→II'/'P→II'の形にする。該当なしは空文字。 */
-function functionLabelOf(chord, key) {
+function functionLabelOf(chord: Chord, key: KeyObj): string {
   const fn = chordFunction(chord, key);
   if (!fn.kind) return '';
   if (fn.kind === 'D' || fn.kind === 'P') return fn.resolvesTo ? `${fn.kind}→${fn.resolvesTo}` : fn.kind;
@@ -189,7 +227,7 @@ function functionLabelOf(chord, key) {
 }
 
 /** 現在スロット・HUD向けの表示3点セット（度数ラベル・機能・従来の音名）。entryが無ければnull。 */
-function chordDisplayInfo(entry) {
+function chordDisplayInfo(entry: HistoryEntry | null): ChordDisplayInfo | null {
   if (!entry) return null;
   const keyObj = toKeyObj(entry.key);
   return {
@@ -199,28 +237,34 @@ function chordDisplayInfo(entry) {
   };
 }
 
-function invalidateCandidates() {
+function invalidateCandidates(): void {
   candidateCache = null;
 }
 
-function syncControlsFromState() {
+function syncControlsFromState(): void {
   const k = keyAt(history);
   if (tonicSelectEl) tonicSelectEl.value = String(((k.tonicMidi % 12) + 12) % 12);
   if (modeSelectEl) modeSelectEl.value = k.mode;
 }
 
-function resetHistory() {
+function resetHistory(): void {
   history = createHistory({ tonicMidi, mode });
   invalidateCandidates();
   syncControlsFromState();
 }
 
-function startSlide(direction) {
+function startSlide(direction: number): void {
   slideDirection = direction;
   slideStart = performance.now();
 }
 
-function cellFromPoint(canvas, px, py) {
+type CellHit =
+  | { kind: 'candidate'; col: number; row: number; yRatio: number }
+  | { kind: 'current'; col: 'left' | 'center' | 'right'; yRatio: number }
+  | { kind: 'past'; index: number; yRatio: number }
+  | { kind: 'future'; index: number; yRatio: number };
+
+function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): CellHit | null {
   const layout = computeLayout(canvas);
   const x = px;
   const y = py - TOP_MARGIN;
@@ -244,7 +288,7 @@ function cellFromPoint(canvas, px, py) {
     const half = CURRENT_SIZE / 2;
     if (px >= layout.currentX - half && px < layout.currentX + half && py >= layout.slotY - half && py < layout.slotY + half) {
       const localX = px - (layout.currentX - half);
-      const col = localX < CURRENT_SIZE / 3 ? 'left' : localX < (CURRENT_SIZE * 2) / 3 ? 'center' : 'right';
+      const col: 'left' | 'center' | 'right' = localX < CURRENT_SIZE / 3 ? 'left' : localX < (CURRENT_SIZE * 2) / 3 ? 'center' : 'right';
       return { kind: 'current', col, yRatio: (py - (layout.slotY - half)) / CURRENT_SIZE };
     }
   }
@@ -274,7 +318,20 @@ function cellFromPoint(canvas, px, py) {
   return null;
 }
 
-function computeLayout(canvas) {
+interface Layout {
+  W: number;
+  H: number;
+  bodyH: number;
+  currentX: number;
+  candidateX: number;
+  cellW: number;
+  cellH: number;
+  candidateOriginY: number;
+  slotY: number;
+  pastGeoms: PastSlotGeom[];
+}
+
+function computeLayout(canvas: HTMLCanvasElement): Layout {
   const W = canvas.width;
   const H = canvas.height;
   // 過去/現在/未来スロットと候補ブロックは、ハンバーガーメニュー化で常時表示のUIが
@@ -310,7 +367,7 @@ function computeLayout(canvas) {
   return { W, H, bodyH, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms };
 }
 
-async function stopChord() {
+async function stopChord(): Promise<void> {
   const notes = sounding;
   sounding = [];
   for (const note of notes) {
@@ -324,11 +381,11 @@ async function stopChord() {
  * セカンダリードミナント等で候補調に接近しただけ（approachesKey）ではまだ確定させず、
  * その候補調へpendingPivotを絞り込んで持ち越す。無関係なコードを弾けば自然に外れる。
  */
-function evaluateTheoryTransition(chord) {
+function evaluateTheoryTransition(chord: Chord): { key: Key; pendingPivot: PendingPivot | null } {
   const key = currentKeyObj();
   const prevPivot = pendingPivotAt(history);
-  let newKey = { tonicMidi, mode };
-  let carriedPivotKeys = null;
+  let newKey: Key = { tonicMidi, mode };
+  let carriedPivotKeys: KeyObj[] | null = null;
   if (prevPivot) {
     const confirmed = prevPivot.keys.find((k) => confirmsModulation(chord, k));
     if (confirmed) {
@@ -338,25 +395,25 @@ function evaluateTheoryTransition(chord) {
       if (approaching.length > 0) carriedPivotKeys = approaching;
     }
   }
-  const newKeyObj = { tonicPc: ((newKey.tonicMidi % 12) + 12) % 12, mode: newKey.mode };
+  const newKeyObj: KeyObj = { tonicPc: ((newKey.tonicMidi % 12) + 12) % 12, mode: newKey.mode };
   const pivots = pivotKeysFor(chord, newKeyObj);
-  const newPendingPivot = pivots.length > 0 ? { keys: pivots } : carriedPivotKeys ? { keys: carriedPivotKeys } : null;
+  const newPendingPivot: PendingPivot | null = pivots.length > 0 ? { keys: pivots } : carriedPivotKeys ? { keys: carriedPivotKeys } : null;
   return { key: newKey, pendingPivot: newPendingPivot };
 }
 
-function applyKey(newKey) {
+function applyKey(newKey: Key): void {
   tonicMidi = newKey.tonicMidi;
   mode = newKey.mode;
   syncControlsFromState();
 }
 
 /** ALTキーを押している間だけ自動転回ON/OFFを反転した、実際に使う値。 */
-function effectiveAutoVoicing() {
+function effectiveAutoVoicing(): boolean {
   return altHeld ? !autoVoicing : autoVoicing;
 }
 
 /** prevEntry（直前のコード、無ければnull）とkey（isStrongResolution判定用）を踏まえて、chordのボイシングを計算する。 */
-function computeVoicing(chord, prevEntry, key) {
+function computeVoicing(chord: Chord, prevEntry: HistoryEntry | null, key: KeyObj): number[] {
   const previousNotes = prevEntry ? prevEntry.voicing : [];
   const centerMidi = 60 + 12 * baseOctave;
   const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, key) : false;
@@ -366,7 +423,7 @@ function computeVoicing(chord, prevEntry, key) {
 }
 
 /** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
-function voicingFor(chord) {
+function voicingFor(chord: Chord): number[] {
   return computeVoicing(chord, currentEntry(history), currentKeyObj());
 }
 
@@ -376,7 +433,7 @@ function voicingFor(chord) {
  * ALT押下中だけは例外として、その場でcomputeVoicingにより実効の自動転回設定で
  * 再計算する（保存済みのentry.voicing自体は書き換えない。ALTを離せば元の響きに戻る）。
  */
-function voicingForPlayback(index) {
+function voicingForPlayback(index: number): number[] {
   const entry = history.entries[index];
   if (!altHeld) return entry.voicing;
   const prevEntry = index > 0 ? history.entries[index - 1] : null;
@@ -389,7 +446,7 @@ function voicingForPlayback(index) {
  * 編集操作なので統合Undo/Redo（undo-manager.js）へ直前の状態を積む。
  * velocity・voicingは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
  */
-function commitSelection(chord, velocity) {
+function commitSelection(chord: Chord, velocity: number): void {
   const { key, pendingPivot } = evaluateTheoryTransition(chord);
   const voicing = voicingFor(chord);
   pushUndo();
@@ -404,10 +461,10 @@ function commitSelection(chord, velocity) {
  * （各entryは新規オブジェクトとして作り直す。統合Undo/Redoのスナップショットが古いentry参照を
  * 保持しているため、既存entryを書き換えるとそちらまで巻き込んで壊れる）。
  */
-function revoiceHistory() {
+function revoiceHistory(): void {
   const centerMidi = 60 + 12 * baseOctave;
-  let previousNotes = [];
-  let previousChord = null;
+  let previousNotes: number[] = [];
+  let previousChord: Chord | null = null;
   let previousKey = toKeyObj(history.initialKey);
   const entries = history.entries.map((entry) => {
     const requireRootInBass = previousChord ? isStrongResolution(previousChord, entry.chord, previousKey) : false;
@@ -423,7 +480,7 @@ function revoiceHistory() {
 }
 
 /** 過去/未来の地点へ即座に再生位置を移動する（発音は呼び出し側が行う）。編集操作ではないためundo/redoスタックには積まない。 */
-function jumpToIndex(index) {
+function jumpToIndex(index: number): void {
   const direction = index < history.cursor ? -1 : 1;
   history = jumpTo(history, index);
   applyKey(keyAt(history));
@@ -436,7 +493,7 @@ function jumpToIndex(index) {
  * スナップショットを組み立てる際に呼ぶ。historyは常に新規オブジェクトを返す設計
  * （chord-flow.js参照）なので、参照をそのまま返してよい。
  */
-export function getChordState() {
+export function getChordState(): ChordHistory {
   return history;
 }
 
@@ -445,7 +502,7 @@ export function getChordState() {
  * 基準オクターブ設定を反映するためrevoiceHistory()を呼んでからHUDへ通知する
  * （旧undoEdit/redoEditと同じ手順）。
  */
-export function setChordState(newHistory) {
+export function setChordState(newHistory: ChordHistory): void {
   history = newHistory;
   revoiceHistory();
   applyKey(keyAt(history));
@@ -453,7 +510,7 @@ export function setChordState(newHistory) {
   onChangeCallback?.(chordDisplayInfo(currentEntry(history)));
 }
 
-async function playChord(notes, velocity) {
+async function playChord(notes: number[], velocity: number): Promise<void> {
   await stopChord();
   await applyLfoTo(CHORD_CHANNEL);
   for (const note of notes) {
@@ -462,8 +519,12 @@ async function playChord(notes, velocity) {
   sounding = notes.slice();
 }
 
-export function setupChordScreen(canvas, { onChordChange } = {}) {
-  onChangeCallback = onChordChange;
+export interface SetupChordScreenOptions {
+  onChordChange?: (info: ChordDisplayInfo | null) => void;
+}
+
+export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: SetupChordScreenOptions = {}): { draw: (ctx: CanvasRenderingContext2D) => void } {
+  onChangeCallback = onChordChange ?? null;
   canvas.addEventListener('mousemove', (e) => {
     if (!isActive('chord')) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
@@ -474,7 +535,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     if (nextHoverSlot?.kind !== hoverSlot?.kind || nextHoverSlot?.index !== hoverSlot?.index) {
       hoverSlot = nextHoverSlot ? { ...nextHoverSlot, startTime: performance.now() } : null;
     } else if (nextHoverSlot) {
-      hoverSlot = { ...hoverSlot, yRatio: nextHoverSlot.yRatio };
+      hoverSlot = { ...hoverSlot!, yRatio: nextHoverSlot.yRatio };
     }
   });
 
@@ -494,7 +555,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       // 選択は保持時間に関わらず確定する（離しても現在コードとして残る）
       const velocity = velocityFromCellY(cell.yRatio);
       commitSelection(found.chord, velocity);
-      await playChord(currentEntry(history).voicing, velocity);
+      await playChord(currentEntry(history)!.voicing, velocity);
     } else if (cell.kind === 'past' || cell.kind === 'future') {
       // 過去・未来どちらも「その地点へ再生位置を移動するだけ」の操作にする。発音は
       // 現在コードスロットのクリックでのみ行う（過去/未来クリックのたびに発音されると
@@ -622,20 +683,29 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
     release(); // Spaceキー押しっぱなし中のフォーカスロストで音が鳴りっぱなしになるのを防ぐ
   });
 
-  return { draw: (ctx) => isActive('chord') && draw(ctx, canvas) };
+  return { draw: (ctx: CanvasRenderingContext2D) => isActive('chord') && draw(ctx, canvas) };
 }
 
-let rowsInputEl = null;
-let colsInputEl = null;
-let autoVoicingToggleEl = null;
-function syncRowsCols() {
+let rowsInputEl: HTMLInputElement | null = null;
+let colsInputEl: HTMLInputElement | null = null;
+let autoVoicingToggleEl: HTMLInputElement | null = null;
+function syncRowsCols(): void {
   if (rowsInputEl) rowsInputEl.value = String(assistRows);
   if (colsInputEl) colsInputEl.value = String(assistCols);
 }
 
 /** ALTキーの押下/解放時、自動転回チェックボックスの見た目だけ実効値に合わせる（autoVoicing本体は変えない）。 */
-function syncAutoVoicingToggleDisplay() {
+function syncAutoVoicingToggleDisplay(): void {
   if (autoVoicingToggleEl) autoVoicingToggleEl.checked = effectiveAutoVoicing();
+}
+
+export interface BindChordScreenControlsOptions {
+  tonicSelect?: HTMLSelectElement | null;
+  modeSelect?: HTMLSelectElement | null;
+  rowsInput?: HTMLInputElement | null;
+  colsInput?: HTMLInputElement | null;
+  autoVoicingToggle?: HTMLInputElement | null;
+  baseOctaveInput?: HTMLInputElement | null;
 }
 
 /** 調・候補の行数/列数・自動転回/基準オクターブを切り替えるUIを配線する。 */
@@ -646,7 +716,7 @@ export function bindChordScreenControls({
   colsInput,
   autoVoicingToggle,
   baseOctaveInput,
-} = {}) {
+}: BindChordScreenControlsOptions = {}): void {
   tonicSelectEl = tonicSelect ?? null;
   modeSelectEl = modeSelect ?? null;
   rowsInputEl = rowsInput ?? null;
@@ -731,7 +801,7 @@ export function bindChordScreenControls({
  * Just the Two of Us進行の継続が見えていたのに、ImMaj7を選んだ直後にまた消えた）。
  * 窓の先頭1点だけを基準に固定すれば、窓の中で何度ピボットが確定してもキー計算がぶれない。
  */
-function progressionAnchorKey() {
+function progressionAnchorKey(): KeyObj {
   if (history.cursor < 0) return toKeyObj(history.initialKey);
   const oldestIndex = Math.max(0, history.cursor - MAX_RECENT_HISTORY + 1);
   return oldestIndex === 0 ? toKeyObj(history.initialKey) : toKeyObj(history.entries[oldestIndex - 1].key);
@@ -742,12 +812,12 @@ function progressionAnchorKey() {
  * 配列（古い順）へ変換する。進行テンプレート照合専用（anchorKeyの定義はprogressionAnchorKey()参照。
  * 窓の中で転調が確定していても、窓全体を一貫してanchorKey基準で解釈する）。
  */
-function recentHistoryForProgressionMatch(anchorKey) {
-  const recent = [];
+function recentHistoryForProgressionMatch(anchorKey: KeyObj): PlayedChordSummary[] {
+  const recent: PlayedChordSummary[] = [];
   for (let i = history.cursor; i >= 0 && recent.length < MAX_RECENT_HISTORY; i--) {
     const entry = history.entries[i];
     recent.unshift({
-      degree: ((entry.chord.rootPc - anchorKey.tonicPc) % 12 + 12) % 12,
+      degree: (((entry.chord.rootPc - anchorKey.tonicPc) % 12) + 12) % 12,
       normFamily: normalizeFamily(entry.chord, anchorKey),
       suffix: entry.chord.suffix,
     });
@@ -756,7 +826,7 @@ function recentHistoryForProgressionMatch(anchorKey) {
 }
 
 /** 候補グリッドを、状態が変わったときだけ再計算してキャッシュする。 */
-function computeCandidates() {
+function computeCandidates(): CandidateGridCell[] {
   const key = currentKeyObj();
   const progressionKey = progressionAnchorKey();
   const entry = currentEntry(history);
@@ -801,7 +871,7 @@ function computeCandidates() {
 }
 
 /** computeCandidates()と同じキャッシュを共有する進行テンプレート凡例。必ずcomputeCandidates()の後に呼ぶ。 */
-function currentLegend() {
+function currentLegend(): ProgressionLegendEntry[] {
   return candidateCache?.legend ?? [];
 }
 
@@ -812,7 +882,7 @@ function currentLegend() {
  * pastT: 過去コード列の位置・サイズ補間係数（0→1、draw()側でスロットごとにlerpする）。
  * candidateAlpha: 候補ブロックのフェードイン係数（0→1）。
  */
-function currentSlideState() {
+function currentSlideState(): { offsetPx: number; pastT: number; candidateAlpha: number } {
   if (slideDirection === 0) return { offsetPx: 0, pastT: 1, candidateAlpha: 1 };
   const elapsed = performance.now() - slideStart;
   const t = Math.min(1, elapsed / SLIDE_DURATION_MS);
@@ -824,14 +894,14 @@ function currentSlideState() {
 }
 
 /** Dock風ホバー拡大の補間係数（0→1、ease-out）。過去スロットのホバー中のみ意味を持つ。 */
-function hoverExpandT() {
+function hoverExpandT(): number {
   if (!hoverSlot || hoverSlot.kind !== 'past') return 0;
   const elapsed = performance.now() - hoverSlot.startTime;
   const t = Math.min(1, elapsed / HOVER_EXPAND_MS);
   return 1 - (1 - t) ** 2;
 }
 
-function lerp(a, b, t) {
+function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
@@ -841,7 +911,7 @@ function lerp(a, b, t) {
  * バーの幅はスロットを均等3分割した中央列の幅（現在コードスロットの中央列＝音量表示・調整、
  * 左右列＝発音／移動、という役割分担に合わせている。区切り線は表示しない）。
  */
-function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
+function drawVelocityBar(ctx: CanvasRenderingContext2D, slotX: number, slotY: number, size: number, velocity: number | null | undefined, alpha: number): void {
   if (velocity == null) return;
   const ratio = Math.max(0, Math.min(1, (velocity - VELOCITY_MIN) / (VELOCITY_MAX - VELOCITY_MIN)));
   if (ratio <= 0) return;
@@ -852,7 +922,7 @@ function drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha) {
 }
 
 /** スロット内テキスト1行の描画（フォント指定込み）。呼び出し側でtextAlign/Baselineは揃っている前提。 */
-function drawSlotText(ctx, text, x, y, size, alpha, color, bold) {
+function drawSlotText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, alpha: number, color: string, bold: boolean): void {
   ctx.fillStyle = color;
   ctx.font = `${bold ? 'bold ' : ''}${Math.max(9, Math.min(16, Math.floor(size / 5)))}px monospace`;
   ctx.fillText(text, x, y);
@@ -866,14 +936,25 @@ function drawSlotText(ctx, text, x, y, size, alpha, color, bold) {
  * keyはchordがある場合のみ必須（{tonicPc, mode}形式、呼び出し側でtoKeyObj()済みのものを渡す）。
  * showKeyLabelは、最初のコード／転調が確定したコードにだけ左上へキー名を添える（isKeyLabelSlot参照）。
  */
-function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, velocity, showKeyLabel) {
+function drawHistorySlot(
+  ctx: CanvasRenderingContext2D,
+  chord: Chord | null,
+  key: KeyObj | null,
+  slotX: number,
+  slotY: number,
+  size: number,
+  alpha: number,
+  isHover: boolean,
+  velocity: number | null | undefined,
+  showKeyLabel: boolean,
+): void {
   ctx.fillStyle = isHover ? `rgba(150,190,255,${Math.min(1, alpha + 0.15)})` : `rgba(200,200,200,${alpha * 0.15})`;
   ctx.fillRect(slotX - size / 2, slotY - size / 2, size, size);
   drawVelocityBar(ctx, slotX, slotY, size, velocity, alpha * VELOCITY_BAR_ALPHA_SCALE);
   ctx.strokeStyle = `rgba(180,180,180,${alpha})`;
   ctx.strokeRect(slotX - size / 2 + 0.5, slotY - size / 2 + 0.5, size, size);
 
-  if (chord && showKeyLabel && size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
+  if (chord && showKeyLabel && key && size >= PAST_LABEL_DEGREE_FUNC_SIZE) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = `rgba(215,220,230,${alpha * 0.8})`;
@@ -885,7 +966,7 @@ function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, ve
   ctx.textBaseline = 'middle';
   const textColor = `rgba(220,220,220,${alpha})`;
 
-  if (!chord) {
+  if (!chord || !key) {
     if (size >= PAST_LABEL_ROOT_SIZE) drawSlotText(ctx, '—', slotX, slotY, size, alpha, textColor, false);
     return;
   }
@@ -905,7 +986,7 @@ function drawHistorySlot(ctx, chord, key, slotX, slotY, size, alpha, isHover, ve
   }
 }
 
-function draw(ctx, canvas) {
+function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   const layout = computeLayout(canvas);
   const { W, H, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms } = layout;
 
@@ -941,14 +1022,14 @@ function draw(ctx, canvas) {
     const alpha = startGeom ? targetAlpha * pastT : targetAlpha;
     drawHistorySlot(
       ctx,
-      isInitial ? null : past.chord,
-      isInitial ? null : toKeyObj(past.key),
+      isInitial ? null : past!.chord,
+      isInitial ? null : toKeyObj(past!.key),
       x,
       y,
       size,
       alpha,
       false,
-      isInitial ? null : past.velocity,
+      isInitial ? null : past!.velocity,
       isInitial ? false : isKeyLabelSlot(idx),
     );
   }
@@ -1009,7 +1090,7 @@ function draw(ctx, canvas) {
       ctx.font = '11px monospace';
       ctx.fillText(info.noteName, x + size / 2 - 6, y - size / 2 + 6);
       // キー名（最初のコード／転調確定したコードのみ）は左上に併記
-      if (isKeyLabelSlot(history.cursor)) {
+      if (isKeyLabelSlot(history.cursor) && entry) {
         ctx.textAlign = 'left';
         ctx.fillText(keyNameOf(toKeyObj(entry.key)), x - size / 2 + 6, y - size / 2 + 6);
       }
@@ -1027,22 +1108,23 @@ function draw(ctx, canvas) {
   // 通常描画より後に描く必要がある。[[project_gesture_app_3screen_minidaw_redesign]]で踏んだ
   // 「半透明オーバーレイは対象要素より後に描く」教訓の応用）。
   if (hoverSlot?.kind === 'past') {
-    const hoverGeom = pastGeoms.find((g) => history.cursor - 1 - g.index === hoverSlot.index);
-    const isInitial = hoverSlot.index === -1;
-    const hoverEntry = isInitial ? null : history.entries[hoverSlot.index];
+    const hoverIndex = hoverSlot.index;
+    const hoverGeom = pastGeoms.find((g) => history.cursor - 1 - g.index === hoverIndex);
+    const isInitial = hoverIndex === -1;
+    const hoverEntry = isInitial ? null : history.entries[hoverIndex];
     if (hoverGeom && (isInitial || hoverEntry)) {
       const size = lerp(hoverGeom.size, HOVER_EXPAND_SIZE, hoverExpandT());
       drawHistorySlot(
         ctx,
-        isInitial ? null : hoverEntry.chord,
-        isInitial ? null : toKeyObj(hoverEntry.key),
+        isInitial ? null : hoverEntry!.chord,
+        isInitial ? null : toKeyObj(hoverEntry!.key),
         hoverGeom.x,
         hoverGeom.y,
         size,
         1,
         true,
-        isInitial ? null : hoverEntry.velocity,
-        isInitial ? false : isKeyLabelSlot(hoverSlot.index),
+        isInitial ? null : hoverEntry!.velocity,
+        isInitial ? false : isKeyLabelSlot(hoverIndex),
       );
     }
   }
@@ -1055,12 +1137,12 @@ function draw(ctx, canvas) {
   // カテゴリごとに今回のグリッド内での最高スコアを基準にする（固定の上限値だと理論上の
   // 最高点が実際にはほぼ出ず、「一番明るい緑」がいつまでも半透明のまま純色の#00FF00に
   // 届かなかったため、常にその場の最良候補が上限に届くよう相対化した）。
-  const categoryMaxScore = (category) => Math.max(0, ...grid.filter((c) => c.category === category).map((c) => c.score));
-  const maxByCategory = { GREEN: categoryMaxScore('GREEN'), YELLOW: categoryMaxScore('YELLOW'), null: categoryMaxScore(null) };
+  const categoryMaxScore = (category: CandidateGridCell['category']) => Math.max(0, ...grid.filter((c) => c.category === category).map((c) => c.score));
+  const maxByCategory: Record<string, number> = { GREEN: categoryMaxScore('GREEN'), YELLOW: categoryMaxScore('YELLOW'), null: categoryMaxScore(null) };
   for (const cell of grid) {
     const x = candidateX + cell.col * cellW;
     const y = candidateOriginY + cell.row * cellH;
-    const categoryMax = maxByCategory[cell.category];
+    const categoryMax = maxByCategory[String(cell.category)];
     const clampedScore = categoryMax > 0 ? Math.max(0, Math.min(1, cell.score / categoryMax)) : 0;
     // 色はカテゴリごとの固定色（原色）のまま変化させない。スコアの強弱は面積のみで表現する
     // （色のグラデーションと面積を両方スコアに連動させると、候補群の点差が僅かな場面で
@@ -1164,13 +1246,13 @@ function draw(ctx, canvas) {
   drawProgressionLegend(ctx, W, candidateOriginY);
 }
 
-const LAYER_HINT_LABEL = { normal: '', shift: '(Shift)', ctrl: '(Ctrl)', ctrlShift: '(Ctrl+Shift)' };
+const LAYER_HINT_LABEL: Record<string, string> = { normal: '', shift: '(Shift)', ctrl: '(Ctrl)', ctrlShift: '(Ctrl+Shift)' };
 
 /**
  * 進行テンプレートの凡例（候補グリッドのすぐ上、右揃え）。例: "① カノン進行 3/8　② 王道進行 2/4"。
  * 次の一手が現在のレイヤーに無い場合は、切り替え先のレイヤー名を添える（例: "(Shift)"）。
  */
-function drawProgressionLegend(ctx, W, candidateOriginY) {
+function drawProgressionLegend(ctx: CanvasRenderingContext2D, W: number, candidateOriginY: number): void {
   const legend = currentLegend();
   if (legend.length === 0) return;
   const parts = legend.map((item) => {
@@ -1185,7 +1267,7 @@ function drawProgressionLegend(ctx, W, candidateOriginY) {
   ctx.fillText(parts.join('　'), W - 18, candidateOriginY - 10);
 }
 
-function drawLayerHint(ctx, W, H) {
+function drawLayerHint(ctx: CanvasRenderingContext2D, W: number, H: number): void {
   const label =
     ctrlHeld && shiftHeld
       ? 'aug/オルタードレイヤー (Ctrl+Shift)'

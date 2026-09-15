@@ -19,6 +19,7 @@ import { isActive } from './screens.ts';
 import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
+import type { MelodyNote } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
 // この3定数はexportする。
@@ -43,8 +44,10 @@ const EDGE_ZONE_PX = 6;
 // （rhythmのLEVEL_COLORSと違い、メロディは存在しないセルを描かないため）。
 const LEVEL_COLORS = ['', 'hsl(200,55%,42%)', 'hsl(32,90%,55%)', 'hsl(200,35%,26%)'];
 
-let notes = new Map(); // id -> { startStep, lengthSteps, pitch, level }
-let selectedId = null;
+type NoteData = Omit<MelodyNote, 'id'>;
+
+let notes = new Map<number, NoteData>(); // id -> { startStep, lengthSteps, pitch, level }
+let selectedId: number | null = null;
 let currentStep = -1;
 let nextNoteId = 1;
 
@@ -52,7 +55,16 @@ let scrollStep = 0;
 let scrollRow = 0;
 let scrollInitialized = false;
 
-let drag = null;
+interface DragState {
+  mode: 'resize' | 'pendingMoveOrCycle' | 'pendingMoveOrClick' | 'move' | 'create';
+  id: number;
+  startClientX?: number;
+  startClientY?: number;
+  moved?: boolean;
+  startStep?: number;
+}
+
+let drag: DragState | null = null;
 
 onMelodyStepTick((step) => {
   currentStep = step;
@@ -60,12 +72,12 @@ onMelodyStepTick((step) => {
 
 /** 再生/停止ボタンの停止側からmain.js経由で呼ばれる。カーソルのハイライトを
  * 即座に消す（rhythm-screen.jsの`resetRhythmCursor`と対）。 */
-export function resetMelodyCursor() {
+export function resetMelodyCursor(): void {
   currentStep = -1;
 }
 
 /** DELキー押下でmain.jsから呼ばれる。選択中ノートが無ければ何もしない。 */
-export function deleteSelectedMelodyNote() {
+export function deleteSelectedMelodyNote(): void {
   if (selectedId == null) return;
   pushUndo();
   notes.delete(selectedId);
@@ -78,7 +90,7 @@ export function deleteSelectedMelodyNote() {
  * スナップショットを組み立てる際に呼ぶ。`notes`はMapのままだとJSON化できないため配列形式
  * （{id, startStep, lengthSteps, pitch, level}[]）へ変換して返す。
  */
-export function getNotes() {
+export function getNotes(): MelodyNote[] {
   return [...notes.entries()].map(([id, n]) => ({ id, ...n }));
 }
 
@@ -87,8 +99,8 @@ export function getNotes() {
  * 変化した分だけRust側の共有ノートリストへadd/update/deleteをミラーする
  * （編集していないUndo/Redoで全ノートを送り直さずに済む）。
  */
-export function setNotes(notesArray) {
-  const nextNotes = new Map(
+export function setNotes(notesArray: MelodyNote[]): void {
+  const nextNotes = new Map<number, NoteData>(
     notesArray.map((n) => [n.id, { startStep: n.startStep, lengthSteps: n.lengthSteps, pitch: n.pitch, level: n.level }]),
   );
   for (const id of notes.keys()) {
@@ -112,51 +124,56 @@ export function setNotes(notesArray) {
   if (selectedId != null && !notes.has(selectedId)) selectedId = null;
 }
 
-function pitchName(pitch) {
+function pitchName(pitch: number): string {
   const name = NOTE_NAMES[((pitch % 12) + 12) % 12];
   const octave = Math.floor(pitch / 12) - 1;
   return `${name}${octave}`;
 }
 
-function isBlackKey(pitch) {
+function isBlackKey(pitch: number): boolean {
   return [1, 3, 6, 8, 10].includes(((pitch % 12) + 12) % 12);
 }
 
-function pitchToRowIndex(pitch) {
+function pitchToRowIndex(pitch: number): number {
   return MAX_PITCH - pitch; // 0=最高音(画面上端)、ROWS-1=最低音(画面下端)
 }
 
-function rowIndexToPitch(rowIndex) {
+function rowIndexToPitch(rowIndex: number): number {
   return MAX_PITCH - rowIndex;
 }
 
-function clamp(v, lo, hi) {
+function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function gridMetrics(canvas) {
+interface GridMetrics {
+  visibleCols: number;
+  visibleRows: number;
+}
+
+function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
   const visibleCols = Math.max(1, Math.floor((canvas.width - LABEL_WIDTH) / CELL_W));
   const visibleRows = Math.max(1, Math.floor((canvas.height - TOP_MARGIN - BOTTOM_MARGIN) / CELL_H));
   return { visibleCols, visibleRows };
 }
 
-function ensureScrollInitialized(canvas) {
+function ensureScrollInitialized(canvas: HTMLCanvasElement): void {
   if (scrollInitialized) return;
   const { visibleRows } = gridMetrics(canvas);
   scrollRow = clamp(pitchToRowIndex(60) - Math.floor(visibleRows / 2), 0, Math.max(0, ROWS - visibleRows));
   scrollInitialized = true;
 }
 
-function stepToX(step) {
+function stepToX(step: number): number {
   return LABEL_WIDTH + (step - scrollStep) * CELL_W;
 }
 
-function rowIndexToY(rowIndex) {
+function rowIndexToY(rowIndex: number): number {
   return TOP_MARGIN + (rowIndex - scrollRow) * CELL_H;
 }
 
 /** 画面座標(px,py) → { step, pitch }。グリッド外ならnull。 */
-function pointToCell(canvas, px, py) {
+function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { step: number; pitch: number } | null {
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
   if (x < 0 || y < 0) return null;
@@ -166,7 +183,7 @@ function pointToCell(canvas, px, py) {
   return { step, pitch: rowIndexToPitch(rowIndex) };
 }
 
-function findNoteAt(step, pitch) {
+function findNoteAt(step: number, pitch: number): { id: number; note: NoteData } | null {
   for (const [id, n] of notes) {
     if (n.pitch === pitch && step >= n.startStep && step < n.startStep + n.lengthSteps) {
       return { id, note: n };
@@ -175,13 +192,13 @@ function findNoteAt(step, pitch) {
   return null;
 }
 
-function commitNote(id) {
+function commitNote(id: number): void {
   const n = notes.get(id);
   if (!n) return;
   updateMelodyNote(id, n.startStep, n.lengthSteps, n.pitch, n.level);
 }
 
-export function setupMelodyScreen(canvas) {
+export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: CanvasRenderingContext2D) => void } {
   canvas.addEventListener('mousedown', (e) => {
     if (!isActive('melody') || e.button !== 0) return;
     ensureScrollInitialized(canvas);
@@ -215,8 +232,8 @@ export function setupMelodyScreen(canvas) {
     if (!n) return;
 
     if (drag.mode === 'pendingMoveOrClick' || drag.mode === 'pendingMoveOrCycle') {
-      const dx = e.clientX - drag.startClientX;
-      const dy = e.clientY - drag.startClientY;
+      const dx = e.clientX - drag.startClientX!;
+      const dy = e.clientY - drag.startClientY!;
       if (!drag.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
         pushUndo(); // 実際に動かし始めた瞬間（=編集開始）を捉える。単なる選択クリックは積まない
         drag.moved = true;
@@ -272,10 +289,10 @@ export function setupMelodyScreen(canvas) {
     { passive: false },
   );
 
-  return { draw: (ctx) => draw(ctx, canvas) };
+  return { draw: (ctx: CanvasRenderingContext2D) => draw(ctx, canvas) };
 }
 
-function draw(ctx, canvas) {
+function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   if (!isActive('melody')) return;
   ensureScrollInitialized(canvas);
 
