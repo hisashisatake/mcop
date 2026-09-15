@@ -47,15 +47,46 @@
       display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     }
 
-    /* 左上: ハンバーガーメニュー（常時表示、これ以外の操作UI・ログ・設定は全てドロワーの中） */
-    #menu-toggle {
-      position: fixed; top: 14px; left: 18px;
-      width: 36px; height: 36px;
-      background: #1a1a1a; color: #ccc; border: 1px solid #333;
-      font-size: 16px; line-height: 1; cursor: pointer;
+    /* 上部: メニューバー（常時表示、画面幅いっぱい）。音色エディタのメニューバー
+       （op505-editor `draw_editor_top_bar`、egui::MenuBar）と同じ見た目に揃える：
+       帯自体は塗りつぶした背景を持つが、中の項目（☰・画面ごとのアイコンボタン）は
+       枠なし・非ホバー時透明のフラットなツールバー項目にする（「押しっぱなしの
+       ボタン」に見えないようにするのが狙い）。ハンバーガーメニューを左端に置き、
+       画面ごとに出し入れするアイコンボタン（現状はRHYTHM画面の再生/停止）を
+       右へ続けて並べる。これ以外の操作UI・ログ・設定は全てハンバーガーメニューの
+       ドロワーの中。 */
+    #menu-bar {
+      position: fixed; top: 0; left: 0; right: 0; height: 40px;
+      background: #1a1a1a; border-bottom: 1px solid #333;
+      display: flex; align-items: center; gap: 2px; padding: 0 6px;
       z-index: 30;
     }
-    #menu-toggle:hover { background: #2a2a2a; }
+    #menu-bar button {
+      width: 34px; height: 34px;
+      background: transparent; color: #ccc; border: none;
+      font-size: 16px; line-height: 1; cursor: pointer;
+    }
+    #menu-bar button:hover { background: rgba(255,255,255,0.08); }
+    #menu-bar button:disabled { opacity: 0.35; cursor: default; background: transparent; }
+    /* テンポ表示+タップテンポボタンはバー右端へ寄せる（左側の☰・画面アイコン群とは独立した
+       グループ）。グループ先頭要素（テンポ表示）へmargin-left: autoを付けることで、
+       このグループ全体を右端へ押し出す。 */
+    .menu-bar-label {
+      margin-left: auto;
+      color: #aaa; font-size: 12px; padding: 0 4px; margin-right: 10px;
+    }
+    /* "TAP"はアイコンではなく文字ラベル+実際にタップ連打する操作ボタンのため、他の
+       フラットなアイコンボタンとは違いボタンらしい枠・背景を持たせる（ユーザー要望、
+       押せることが見た目で分かるように）。バー右端との間も1文字分ほど空ける。
+       セレクタは`#menu-bar #tap-tempo-btn`にする（`#tap-tempo-btn`単体だと`#menu-bar button`
+       と詳細度が同点にならず負けてしまい、width: 34px固定が残って"TAP"の文字が枠から
+       はみ出す不具合があった、実機で確認済み）。 */
+    #menu-bar #tap-tempo-btn {
+      width: auto; height: 28px; padding: 0 10px; margin-right: 10px;
+      background: #222; border: 1px solid #444;
+    }
+    #menu-bar #tap-tempo-btn:hover { background: #2a2a2a; }
+    #menu-bar #tap-tempo-btn:active { background: #3a5; color: #fff; border-color: #3a5; }
 
     /* ドロワー本体。左端からスライドして開く。画面タブ・ヒント・MIDIログ・音源/演奏設定を
        ここへ集約し、閉じている間はcanvas上に何も重ならないようにする
@@ -69,7 +100,7 @@
       transition: transform 0.18s ease-out;
       z-index: 25;
       overflow-y: auto;
-      padding: 62px 18px 18px;
+      padding: 56px 18px 18px;
       display: flex; flex-direction: column; gap: 20px;
     }
     #drawer.open { transform: translateX(0); }
@@ -121,9 +152,10 @@
     }
 
     /* 音源モード切替（波形メモリ/Bank,Program）とProgram切り替え（動作確認用の簡易UI）。
-       波形メモリ・Key・TAPは常時表示の#status-panelへ抜き出したため、同じ見た目のルールを
+       波形メモリ・Keyは常時表示の#status-panelへ抜き出したため、同じ見た目のルールを
        #program-panel（ドロワー内、Bank/Program手動指定・候補行数列数・メトロノーム）と
-       #status-panelの両方へ適用する。 */
+       #status-panelの両方へ適用する（タップテンポボタン・テンポ表示自体は2026-09-15に
+       メニューバーへ移設）。 */
     #program-panel, #status-panel {
       font-size: 12px; color: #888;
     }
@@ -143,9 +175,6 @@
     #program-panel input[type="number"]:disabled {
       opacity: 0.4;
     }
-    #program-panel button:disabled, #status-panel button:disabled {
-      opacity: 0.4; cursor: default;
-    }
     #program-panel select, #status-panel select {
       background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 4px;
@@ -155,16 +184,6 @@
     }
     #program-label {
       color: #aaa; text-align: right;
-    }
-    #tempo-display {
-      color: #aaa;
-    }
-    #program-panel button, #status-panel button {
-      background: #222; color: #eee; border: 1px solid #444;
-      font-family: monospace; font-size: 12px; padding: 2px 8px; cursor: pointer;
-    }
-    #program-panel button:active, #status-panel button:active {
-      background: #3a5; color: #fff; border-color: #3a5;
     }
 
     /* 右下の手動リサイズグリップ。Tauri/WebView2側の既知の不具合
@@ -194,7 +213,13 @@
 <body>
   <canvas id="canvas"></canvas>
 
-  <button type="button" id="menu-toggle" title="メニュー">☰</button>
+  <div id="menu-bar">
+    <button type="button" id="menu-toggle" title="メニュー">☰</button>
+    <button type="button" id="rhythm-play-btn" title="再生" hidden>▶</button>
+    <button type="button" id="rhythm-stop-btn" title="停止" hidden disabled>■</button>
+    <span id="tempo-display" class="menu-bar-label">120 BPM</span>
+    <button id="tap-tempo-btn" type="button" title="タップテンポ">TAP</button>
+  </div>
 
   <div id="drawer">
     <div id="drawer-tabs">
@@ -226,10 +251,6 @@
       <div id="rhythm-controls" hidden>
         <div class="program-row">
           <label><input type="checkbox" id="metronome-toggle"> メトロノーム</label>
-        </div>
-        <div class="program-row">
-          <button type="button" id="rhythm-play-btn">▶ 再生</button>
-          <button type="button" id="rhythm-stop-btn" disabled>■ 停止</button>
         </div>
       </div>
     </div>
@@ -268,10 +289,6 @@
           <option value="minor">Minor</option>
         </select>
       </div>
-    </div>
-    <div class="program-row">
-      <button id="tap-tempo-btn" type="button">TAP</button>
-      <span id="tempo-display">120 BPM</span>
     </div>
   </div>
 
