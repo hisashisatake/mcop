@@ -15,8 +15,9 @@ use params::{
     DEFAULT_REVERB_TIME, DEFAULT_REVERB_TYPE,
 };
 
+use nice_plug::editor::dpi::LogicalSize;
 use nice_plug::prelude::*;
-use nice_plug_egui::EguiState;
+use nice_plug_egui::{EguiEditor, EguiEditorState, RepaintNotifier};
 use op505_core::{op505_presets_dir, Op505Engine, Op505Patch, Op505PresetBank};
 use sound_core::{cc76_to_rate_scale, ChorusType, MasterSection, MeterBridge, ReverbType, Vco};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,7 +154,10 @@ struct Op505Plugin {
     preset_bank_dirty: Arc<AtomicBool>,
 
     // GUIエディターのウィンドウサイズ状態（`editor()`で使い回す）。
-    egui_state: Arc<EguiState>,
+    editor_state: Arc<EguiEditorState>,
+    // リアルタイムセーフなGUI再描画要求ハンドル（`RepaintNotifier`）。メーター更新等で
+    // `request_repaint_after`が効かない場合のフォールバック手段として`editor.rs`へ渡す。
+    repaint_notifier: RepaintNotifier,
 
     // マスター出力の計測値（オーディオスレッド⇄GUIの橋渡し）。オーディオスレッドは
     // `MasterSection::render()`後に`take_measurement()`でピークを読み、`publish()`する
@@ -207,7 +211,11 @@ impl Default for Op505Plugin {
             preset_bank_dirty: Arc::new(AtomicBool::new(false)),
             // 既定サイズもeditor_min_width()以上にしておく（下回るとエディタが開いた瞬間から
             // 横スクロールを要求する状態になり体験が悪いため）。
-            egui_state: EguiState::from_size(op505_editor::layout::editor_min_width().ceil() as u32, 680),
+            editor_state: EguiEditorState::from_size(
+                LogicalSize::new(op505_editor::layout::editor_min_width().ceil(), 680.0),
+                1.0,
+            ),
+            repaint_notifier: RepaintNotifier::new(),
             master_meter: Arc::new(MeterBridge::new()),
             meter_peak_l: 0.0,
             meter_peak_r: 0.0,
@@ -345,6 +353,43 @@ impl Op505Plugin {
         self.channels[midi_ch].last_note = Some(note);
     }
 
+    /// 1ノートの解放処理（`NoteEvent::NoteOff`/velocity=0の`NoteEvent::NoteOn`から呼ぶ、
+    /// 従来はmatch腕に直接書かれていたロジックを切り出したもの）。ペダル・Mono状態を経由して
+    /// 実際にエンジンへnote_offするかどうかを決める。nice-plug 0.4のkey Wildcard対応
+    /// （CLAPの「チャンネル内の全キー解放」相当）でも同じ経路を使うため、ここでは
+    /// `midi_ch`のみを受け取り`note`は必ず具体的な値とする。
+    fn note_off_voice_core(&mut self, midi_ch: usize, note: u8) {
+        let channel = midi_ch as u8;
+        self.channels[midi_ch].poly_pressure[note as usize] = 0;
+        let pedal_released = self.channels[midi_ch].pedal.note_off(note);
+        if self.channels[midi_ch].mono.enabled {
+            let portamento = self.channels[midi_ch].portamento_on;
+            match self.channels[midi_ch].mono.note_off(note, portamento) {
+                MonoNoteOff::Nothing => {}
+                MonoNoteOff::Release(released_note) => {
+                    self.engine.note_off(midi_channel_note_id(channel, released_note));
+                }
+                MonoNoteOff::Fallback { release, sound, velocity } => {
+                    self.engine.note_off(midi_channel_note_id(channel, release));
+                    self.note_on_voice_core(midi_ch, sound, velocity);
+                }
+                MonoNoteOff::LegatoFallback { voice, sound, velocity } => {
+                    let seconds = self.channels[midi_ch].portamento_seconds();
+                    let id = midi_channel_note_id(channel, voice);
+                    let freq = 440.0 * 2.0_f32.powf((sound as f32 - 69.0) / 12.0);
+                    if !self.engine.glide_to(id, freq, seconds) {
+                        // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
+                        self.channels[midi_ch].mono.demote_legato(sound);
+                        self.engine.note_off(id);
+                        self.note_on_voice_core(midi_ch, sound, velocity);
+                    }
+                }
+            }
+        } else if pedal_released {
+            self.engine.note_off(midi_channel_note_id(channel, note));
+        }
+    }
+
     /// CC6(Data Entry MSB)受信時、`ChannelState::apply_data_entry`（`op505-midi`、smf2op505/
     /// standaloneと共有する参照実装）へ委譲する。`value`はCC値の正規化値（0.0〜1.0）で、
     /// `cc_to_u7`で生バイト相当（0〜127）へ変換してから渡す（`cc_to_u7`は冪等なので
@@ -389,6 +434,7 @@ impl Plugin for Op505Plugin {
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = false;
 
+    type Editor = EguiEditor<editor::Op505EditorApp>;
     type SysExMessage = ();
     type BackgroundTask = ();
 
@@ -396,11 +442,11 @@ impl Plugin for Op505Plugin {
         self.params.clone()
     }
 
-    fn initialize(
+    fn activate(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
+        _context: &mut impl ActivateContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         self.engine = Op505Engine::new(self.sample_rate);
@@ -450,13 +496,14 @@ impl Plugin for Op505Plugin {
         self.frames_since_publish = 0;
     }
 
-    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Self::Editor> {
         // エディタを開くたびの1回だけ読む（GUIスレッドかつ低頻度のためファイルI/Oを許容する）。
         let ui_config = op505_core::ui_config::load();
         let meter_fps = op505_core::meter_fps(&ui_config);
         let level_meter_gap_px = op505_core::level_meter_gap_px(&ui_config);
         editor::create_editor(
-            self.egui_state.clone(),
+            self.editor_state.clone(),
+            self.repaint_notifier.clone(),
             self.params.clone(),
             self.shared_preset_bank.clone(),
             self.preset_bank_dirty.clone(),
@@ -683,7 +730,12 @@ impl Plugin for Op505Plugin {
 
         while let Some(event) = context.next_event() {
             match event {
-                NoteEvent::NoteOn { channel, note, velocity, .. } if velocity > 0.0 => {
+                NoteEvent::NoteOn { channel, key, velocity, .. } if velocity > 0.0 => {
+                    // channel/keyがどちらかWildcardなら発音対象を決められないため無視する
+                    // （nice-plug 0.4のChannel/Key型、number()はOption<u8>）。
+                    let (Some(channel), Some(note)) = (channel.number(), key.number()) else {
+                        continue;
+                    };
                     let velocity_u8 = (velocity * 127.0).round() as u8;
                     let midi_ch = channel as usize;
                     // 弾き直したらペダル保留を解除する（`ym38x6-vst`と同一理由）。
@@ -718,39 +770,29 @@ impl Plugin for Op505Plugin {
                         self.note_on_voice_core(midi_ch, note, velocity_u8);
                     }
                 }
-                NoteEvent::NoteOn { channel, note, .. } | NoteEvent::NoteOff { channel, note, .. } => {
-                    let midi_ch = channel as usize;
-                    self.channels[midi_ch].poly_pressure[note as usize] = 0;
-                    // ペダルの内部ブックキーピング（keys_down等）は常に更新する。実際に
-                    // エンジンへnote_offするかどうかはMono Mode有無で分岐する。
-                    let pedal_released = self.channels[midi_ch].pedal.note_off(note);
-                    if self.channels[midi_ch].mono.enabled {
-                        // Mono Mode: サステインペダルより優先する（CC126/127のコメント参照）。
-                        // 押鍵状態（MonoState）だけで解放/フォールバックを決める。
-                        let portamento = self.channels[midi_ch].portamento_on;
-                        match self.channels[midi_ch].mono.note_off(note, portamento) {
-                            MonoNoteOff::Nothing => {}
-                            MonoNoteOff::Release(released_note) => {
-                                self.engine.note_off(midi_channel_note_id(channel, released_note));
-                            }
-                            MonoNoteOff::Fallback { release, sound, velocity } => {
-                                self.engine.note_off(midi_channel_note_id(channel, release));
-                                self.note_on_voice_core(midi_ch, sound, velocity);
-                            }
-                            MonoNoteOff::LegatoFallback { voice, sound, velocity } => {
-                                let seconds = self.channels[midi_ch].portamento_seconds();
-                                let id = midi_channel_note_id(channel, voice);
-                                let freq = 440.0 * 2.0_f32.powf((sound as f32 - 69.0) / 12.0);
-                                if !self.engine.glide_to(id, freq, seconds) {
-                                    // ボイスが既にIdle等で消えていたら通常発音へフォールバックする。
-                                    self.channels[midi_ch].mono.demote_legato(sound);
-                                    self.engine.note_off(id);
-                                    self.note_on_voice_core(midi_ch, sound, velocity);
+                NoteEvent::NoteOn { channel, key, .. } | NoteEvent::NoteOff { channel, key, .. } => {
+                    // keyがWildcardの場合（CLAPの「チャンネル内の全キー解放」相当、NoteOffのみで
+                    // 実際に飛んでくる）、対象チャンネル（channelもWildcardなら16ch全て）の
+                    // 押鍵中ノートを全て同じ解放経路（`note_off_voice_core`）へ通す。
+                    match key.number() {
+                        Some(note) => {
+                            let Some(channel) = channel.number() else { continue };
+                            self.note_off_voice_core(channel as usize, note);
+                        }
+                        None => match channel.number() {
+                            Some(ch) => {
+                                for note in 0u8..MIDI_NOTE_COUNT {
+                                    self.note_off_voice_core(ch as usize, note);
                                 }
                             }
-                        }
-                    } else if pedal_released {
-                        self.engine.note_off(midi_channel_note_id(channel, note));
+                            None => {
+                                for midi_ch in 0..MIDI_CHANNEL_COUNT {
+                                    for note in 0u8..MIDI_NOTE_COUNT {
+                                        self.note_off_voice_core(midi_ch, note);
+                                    }
+                                }
+                            }
+                        },
                     }
                 }
                 NoteEvent::MidiPitchBend { channel, value, .. } => {
@@ -762,7 +804,11 @@ impl Plugin for Op505Plugin {
                 NoteEvent::MidiChannelPressure { channel, pressure, .. } => {
                     self.channels[channel as usize].channel_pressure = cc_to_u8(pressure);
                 }
-                NoteEvent::PolyPressure { channel, note, pressure, .. } => {
+                NoteEvent::PolyPressure { channel, key, pressure, .. } => {
+                    // NoteOnと同じ理由でWildcardは無視する（対象ノートを決められないため）。
+                    let (Some(channel), Some(note)) = (channel.number(), key.number()) else {
+                        continue;
+                    };
                     self.channels[channel as usize].poly_pressure[note as usize] = cc_to_u8(pressure);
                 }
                 NoteEvent::MidiProgramChange { program, channel, .. } => {

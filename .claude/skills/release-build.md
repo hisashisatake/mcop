@@ -19,17 +19,20 @@ cargo nice-plug bundle op505-vst --release
 
 REAPER等のDAWで動作確認する場合は `target\bundled` をVST plug-in pathsに追加してRe-scanする。
 
-**REAPERでGUIを目視確認する際の罠（nice-plug VST3のリサイズ非対称性）**: nice-plug 0.1.9の
-VST3ラッパーは「プラグイン発リサイズ（プラグイン自身の右下角ドラッグ）」のみに対応し、
+**REAPERでGUIを目視確認する際の注意（nice-plug VST3のリサイズ非対称性は解消済み）**: nice-plug
+0.1.9のVST3ラッパーは「プラグイン発リサイズ（プラグイン自身の右下角ドラッグ）」のみに対応し、
 「ホスト発リサイズ（REAPER本体ウィンドウやFXウィンドウの最大化・枠ドラッグ）」には追随しない
-（`onSize()`が未実装のスタブ、詳細はmemory`project_niceplug_vst3_clap_resize_unimplemented`）。
-REAPER本体を最大化しただけでは埋め込みGUIは初期サイズのまま変わらず、その状態でスクリーン
-ショットを撮ると、本来は正常なパネルが表示領域の都合で意図せず一部だけ潰れて見えたり、
-無地に見えたりすることがある（実際に2026-09-02、この状態を「OP1のTimeEgエディタがGRAPHタブで
-描画されない」という**実在しないバグ**と誤認した事例あり、詳細はmemory
-`feedback_niceplug_vst3_unresized_gui_false_positive`）。GUI確認・スクリーンショット取得の
-前には**必ずプラグイン自身の右下リサイズハンドルを手動（またはgui-probe経由で）ドラッグして
-広げてから**判定すること。何かが「描画されていない」ように見えたら、まずリサイズ不足を疑う。
+という制約があった（`onSize()`が未実装のスタブ）。2026-09-15のnice-plug 0.4.2＋
+nice-plug-egui 0.5.1への更新でこの非対称性は解消し、ホスト発リサイズにも追随するように
+なった（`ResizeHint::resizable()`、REAPER実機のVST3・CLAP両方で確認済み。詳細はmemory
+`project_niceplug_upgrade_survey`）。
+旧バージョン時代は、REAPER本体を最大化しても埋め込みGUIが初期サイズのまま変わらず、その状態で
+スクリーンショットを撮ると本来は正常なパネルが意図せず一部だけ潰れて見えることがあった
+（2026-09-02、これを「OP1のTimeEgエディタがGRAPHタブで描画されない」という**実在しないバグ**と
+誤認した事例あり、詳細はmemory`feedback_niceplug_vst3_unresized_gui_false_positive`）。現在は
+ホスト側の最大化・枠ドラッグでも追随するため起きにくいが、何かが「描画されていない」ように
+見えたら、念のためウィンドウサイズ（プラグイン発リサイズハンドルのドラッグ含む）を先に疑う
+習慣は引き続き有効。
 
 ## op505-standalone（常駐MIDIアプリ）とMMEドライバのインストール
 

@@ -70,7 +70,7 @@ impl PreviewApp {
 impl eframe::App for PreviewApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         CTX.with(|c| *c.borrow_mut() = Some(ui.ctx().clone()));
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             XML_STATE.with(|s| {
                 let s = s.borrow();
                 // キャンバス内に描く文字列は必ずASCIIにする。wasm版のeguiは既定フォントしか持たず

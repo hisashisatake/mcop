@@ -8,7 +8,7 @@ edition = "2021"
 # Tauriには依存しない（serde非依存はOp505EgBank誤移設を構造的に防ぐための意図的な制約。
 # 詳細は`.claude/plans/fancy-wishing-toast.md`とspec-fm.md 8章⑧）。
 [dependencies]
-egui = "0.34"
+egui = "0.36"
 op505-core = { path = "../core" }
 op505-ui = { path = "../ui" }
 ui-core = { path = "../../ui/core" }
