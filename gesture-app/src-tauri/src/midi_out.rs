@@ -198,32 +198,29 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 // 行う（JS側のrequestAnimationFrameは数十msの誤差が出るため刻みに使わない）。
 // ─────────────────────────────────────────────
 const RHYTHM_STEPS: usize = 16;
-const RHYTHM_ROWS: usize = 12;
 const CLOCKS_PER_STEP: u32 = CLOCKS_PER_BAR / RHYTHM_STEPS as u32;
-
-/// 行→GM2ノート番号。gm2_drum_kit.pyのSTANDARD_KITと一致させること
-/// （Crash/Ride/OpenHH/ClosedHH/Clap/RimShot/Snare/E.Snare/HiTom/MidTom/LoTom/Kickの並び）。
-const DRUM_NOTES: [u8; RHYTHM_ROWS] = [49, 51, 46, 42, 39, 37, 38, 40, 48, 45, 41, 36];
 
 const RHYTHM_VELOCITY_NORMAL: u8 = 95;
 const RHYTHM_VELOCITY_ACCENT: u8 = 127;
 const RHYTHM_VELOCITY_WEAK: u8 = 55;
 
-/// [row][step] = 0(消音)/1(通常)/2(アクセント)/3(弱)。
-static RHYTHM_PATTERN: OnceLock<Mutex<[[u8; RHYTHM_STEPS]; RHYTHM_ROWS]>> = OnceLock::new();
+/// [note][step] = 0(消音)/1(通常)/2(アクセント)/3(弱)。GM2ノート番号(0〜127)で直接引く
+/// （フェーズ3で行の固定12個制約を撤廃。どのノート番号をどの見た目の行として表示するかは
+/// JS側（rhythm-screen.js）だけの関心事にし、Rust側は行の概念を持たない）。
+static RHYTHM_PATTERN: OnceLock<Mutex<[[u8; RHYTHM_STEPS]; 128]>> = OnceLock::new();
 
-fn rhythm_pattern() -> &'static Mutex<[[u8; RHYTHM_STEPS]; RHYTHM_ROWS]> {
-    RHYTHM_PATTERN.get_or_init(|| Mutex::new([[0; RHYTHM_STEPS]; RHYTHM_ROWS]))
+fn rhythm_pattern() -> &'static Mutex<[[u8; RHYTHM_STEPS]; 128]> {
+    RHYTHM_PATTERN.get_or_init(|| Mutex::new([[0; RHYTHM_STEPS]; 128]))
 }
 
-/// リズム画面のグリッドクリックで呼ばれる。`level`は0〜3（4以上は3にクランプ）。
-/// パターンはテンポが未設定（クロック未送出）でも保持され、`tap_tempo`後に反映される。
-pub fn set_rhythm_step(row: u8, step: u8, level: u8) {
-    let (row, step) = (row as usize, step as usize);
-    if row >= RHYTHM_ROWS || step >= RHYTHM_STEPS {
+/// リズム画面のグリッドクリックで呼ばれる。`note`はGM2ノート番号、`level`は0〜3（4以上は3に
+/// クランプ）。パターンはテンポが未設定（クロック未送出）でも保持され、`tap_tempo`後に反映される。
+pub fn set_rhythm_step(note: u8, step: u8, level: u8) {
+    let step = step as usize;
+    if step >= RHYTHM_STEPS {
         return;
     }
-    rhythm_pattern().lock().unwrap()[row][step] = level.min(3);
+    rhythm_pattern().lock().unwrap()[note as usize][step] = level.min(3);
 }
 
 // ─────────────────────────────────────────────
@@ -367,8 +364,8 @@ fn clock_loop() {
             let step = (clock_in_bar / CLOCKS_PER_STEP) as usize;
             {
                 let pattern = rhythm_pattern().lock().unwrap();
-                for row in 0..RHYTHM_ROWS {
-                    let level = pattern[row][step];
+                for note in 0..128usize {
+                    let level = pattern[note][step];
                     if level == 0 {
                         continue;
                     }
@@ -377,8 +374,8 @@ fn clock_loop() {
                         3 => RHYTHM_VELOCITY_WEAK,
                         _ => RHYTHM_VELOCITY_NORMAL,
                     };
-                    note_on(RHYTHM_CHANNEL, DRUM_NOTES[row], velocity);
-                    note_off(RHYTHM_CHANNEL, DRUM_NOTES[row]);
+                    note_on(RHYTHM_CHANNEL, note as u8, velocity);
+                    note_off(RHYTHM_CHANNEL, note as u8);
                 }
             }
             if let Some(handle) = APP_HANDLE.get() {

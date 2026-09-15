@@ -211,12 +211,13 @@ fn set_metronome_enabled(enabled: bool) {
     midi_out::set_metronome_enabled(enabled);
 }
 
-/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`level`は0(消音)〜
-/// 3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、ここでは
-/// 共有パターンへ書き込むだけ。
+/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`note`はGM2ノート番号
+/// （行の対応表自体はJS側`rhythm-screen.js`が持つ、フェーズ3で行の固定12個制約を撤廃）、
+/// `level`は0(消音)〜3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、
+/// ここでは共有パターンへ書き込むだけ。
 #[tauri::command]
-fn set_rhythm_step(row: u8, step: u8, level: u8) {
-    midi_out::set_rhythm_step(row, step, level);
+fn set_rhythm_step(note: u8, step: u8, level: u8) {
+    midi_out::set_rhythm_step(note, step, level);
 }
 
 /// リズム/メロディ画面共通の再生/停止ボタンで呼ばれる。クロック自体（メトロノーム・
@@ -270,6 +271,8 @@ fn main() {
             project_file::open_project,
             project_file::save_project_as,
             project_file::save_project_to,
+            project_file::import_midi,
+            project_file::export_midi,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

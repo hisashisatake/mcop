@@ -9,12 +9,14 @@
 // これによりUndoスタックへ積んだ古いスナップショットが後から書き換わる事故を防ぐ。
 
 import { getChordState, setChordState } from './chord-screen.js';
-import { getPattern, setPattern } from './rhythm-screen.js';
+import { getRows, setRows, patternV1ToRows } from './rhythm-screen.js';
 import { getNotes, setNotes } from './melody-screen.js';
 import { getBpm, setBpm } from './tempo-state.js';
 import { tapTempo } from './midi.js';
 
-const VERSION = 1;
+// v1→v2: リズムの「12行固定パターン」を「ノート番号キーの可変長rows」へ変更した
+// （フェーズ3、MIDI Importで未知のノート番号の行が増減できるようにするため）。
+const VERSION = 2;
 
 /** プロジェクト全体の現在状態を1個のプレーンオブジェクトへ集約する。 */
 export function captureProjectState() {
@@ -22,15 +24,17 @@ export function captureProjectState() {
     version: VERSION,
     bpm: getBpm(),
     chord: getChordState(), // { entries, cursor, initialKey }
-    rhythm: { pattern: getPattern() },
+    rhythm: { rows: getRows() },
     melody: { notes: getNotes() },
   };
 }
 
-/** captureProjectState()の形式の状態を各画面へ丸ごと反映する。 */
+/** captureProjectState()の形式の状態を各画面へ丸ごと反映する。version 1（rhythm.pattern
+ * 形式）のファイルもDEFAULT_ROW_NOTES対応で読み込める。 */
 export function applyProjectState(state) {
   setChordState(state.chord);
-  setPattern(state.rhythm.pattern);
+  const rows = state.version >= 2 ? state.rhythm.rows : patternV1ToRows(state.rhythm.pattern);
+  setRows(rows);
   setNotes(state.melody.notes);
   setBpm(state.bpm ?? null);
   if (state.bpm != null) tapTempo(state.bpm);
@@ -40,7 +44,7 @@ export function serializeProject() {
   return JSON.stringify(captureProjectState(), null, 2);
 }
 
-/** JSON文字列をパースして反映する。versionが将来増えた場合の吸収はここに書く。 */
+/** JSON文字列をパースして反映する。 */
 export function deserializeAndApply(json) {
   const state = JSON.parse(json);
   applyProjectState(state);

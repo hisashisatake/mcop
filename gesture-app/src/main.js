@@ -9,7 +9,7 @@ import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from '
 import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
 import { getBpm, setBpm } from './tempo-state.js';
 import { undo, redo } from './undo-manager.js';
-import { openProject, saveProject, saveProjectAs } from './project-file.js';
+import { openProject, saveProject, saveProjectAs, importMidi, exportMidi } from './project-file.js';
 
 setupMidiLog(document.getElementById('midi-log'));
 
@@ -309,6 +309,12 @@ document.getElementById('file-open-btn').addEventListener('click', async () => {
 });
 document.getElementById('file-save-btn').addEventListener('click', () => saveProject());
 document.getElementById('file-save-as-btn').addEventListener('click', () => saveProjectAs());
+
+// MIDI Import/Export（フェーズ3、リズム/メロディの2ch分のみ対象、コードは対象外）
+document.getElementById('file-import-btn').addEventListener('click', async () => {
+  if (await importMidi()) refreshTempoDisplay();
+});
+document.getElementById('file-export-btn').addEventListener('click', () => exportMidi());
 
 // ─────────────────────────────────────────────
 // アニメーションループ

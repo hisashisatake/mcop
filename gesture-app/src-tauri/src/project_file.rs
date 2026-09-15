@@ -60,3 +60,54 @@ pub async fn save_project_as(json: String) -> Option<String> {
 pub fn save_project_to(path: String, json: String) -> bool {
     fs::write(&path, json).is_ok()
 }
+
+// ─────────────────────────────────────────────
+// MIDI Import/Export（フェーズ3、標準MIDIファイル.mid）
+//
+// .gap505と違い中身はバイナリ（SMFフォーマット）。パース・生成はJS側`smf.js`が担い、
+// ここでもバイト列をそのまま読み書きするだけでSMFのフォーマットには一切関知しない。
+// ─────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct MidiFileDto {
+    path: String,
+    bytes: Vec<u8>,
+}
+
+fn pick_open_midi_path() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Standard MIDI File", &["mid", "midi"])
+        .pick_file()
+}
+
+fn pick_save_midi_path() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Standard MIDI File", &["mid", "midi"])
+        .set_file_name("untitled.mid")
+        .save_file()
+}
+
+/// ファイルを開くダイアログを出し、選ばれた.midファイルのバイト列を読んで返す。
+/// キャンセル時・読み込み失敗時は`None`。
+#[tauri::command]
+pub async fn import_midi() -> Option<MidiFileDto> {
+    let path = tauri::async_runtime::spawn_blocking(pick_open_midi_path)
+        .await
+        .ok()??;
+    let bytes = fs::read(&path).ok()?;
+    Some(MidiFileDto {
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+    })
+}
+
+/// 保存先を選ぶダイアログを出し、JSが組み立てたSMFバイト列を書き込む。
+/// 書き込めたパスを返す（キャンセル・失敗時は`None`）。
+#[tauri::command]
+pub async fn export_midi(bytes: Vec<u8>) -> Option<String> {
+    let path = tauri::async_runtime::spawn_blocking(pick_save_midi_path)
+        .await
+        .ok()??;
+    fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}

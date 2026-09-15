@@ -67,10 +67,11 @@ export function onSequencerTick(callback) {
   tauriEvent.listen('sequencer-tick', (event) => callback(event.payload));
 }
 
-/** リズム画面のグリッドセルのベロシティ段階を設定する。`level`は0(消音)〜3(弱)。
+/** リズム画面のグリッドセルのベロシティ段階を設定する。`note`はGM2ノート番号
+ * （行の対応表自体はJS側rhythm-screen.jsが持つ）、`level`は0(消音)〜3(弱)。
  * 実際の発音判定・送信はRust側`clock_loop`が持つ共有パターンへの書き込みのみ行う。 */
-export function setRhythmStep(row, step, level) {
-  return invoke('set_rhythm_step', { row, step, level });
+export function setRhythmStep(note, step, level) {
+  return invoke('set_rhythm_step', { note, step, level });
 }
 
 /** Rust側`clock_loop`が16分音符（6クロック）ごとに送る`rhythm-step`（payload=小節内の

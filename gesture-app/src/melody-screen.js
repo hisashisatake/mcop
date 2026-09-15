@@ -20,13 +20,15 @@ import { NOTE_NAMES } from './chords.js';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.js';
 import { pushUndo } from './undo-manager.js';
 
-const MIN_PITCH = 21; // A0
-const MAX_PITCH = 108; // C8
+// MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
+// この3定数はexportする。
+export const MIN_PITCH = 21; // A0
+export const MAX_PITCH = 108; // C8
 const ROWS = MAX_PITCH - MIN_PITCH + 1; // 88
 
 const STEPS_PER_BAR = 8;
 const BARS = 8;
-const TOTAL_STEPS = STEPS_PER_BAR * BARS; // 64
+export const TOTAL_STEPS = STEPS_PER_BAR * BARS; // 64
 
 const CELL_W = 40;
 const CELL_H = 18;

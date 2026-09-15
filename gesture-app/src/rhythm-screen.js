@@ -1,6 +1,6 @@
-// リズム画面（フェーズ4：ステップシーケンサー本体）。
+// リズム画面（フェーズ4：ステップシーケンサー本体、フェーズ3で行の動的化に対応）。
 //
-// 16ステップ×12打楽器行のグリッド。セルをクリックするたびに
+// 16ステップ×N打楽器行のグリッド。セルをクリックするたびに
 // 消音→通常→アクセント→弱→消音…の順にベロシティが巡回する（3段階＋消音）。
 // 発音のタイミング自体はRust側`clock_loop`が持つ（JSタイマーは数十msの誤差が
 // 出るため使わない）。JSはパターンをRustへミラーし、`rhythm-step`イベントで
@@ -12,30 +12,42 @@
 //
 // メトロノームのON/OFF・MIDI Clock自体（TimeEgテンポ同期が使う）は再生/停止ボタンとは
 // 独立で、停止中も動き続ける。
+//
+// フェーズ3（MIDI Import）で「行=固定12個」の制約を撤廃した。行はGM2ノート番号を
+// キーとする可変長リスト（`rows: [{note, label, steps[16]}]`）で持ち、Rust側
+// （midi_out.rs）もノート番号で直接引く128行分のパターンへ変更済み。既定は従来と同じ
+// 12行（DEFAULT_ROW_NOTES/DEFAULT_ROW_LABELS）。行数が増えて1行18px未満になる場合は
+// 18px固定にしてホイールで縦スクロールする（メロディ画面と同じ方式）。
 
 import { isActive } from './screens.js';
 import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.js';
 import { pushUndo } from './undo-manager.js';
 
-const ROWS = 12;
-const STEPS = 16;
+// MIDI Import/Export（project-file.js）が1小節のステップ数として参照するためexportする。
+export const STEPS = 16;
 const STEP_GROUP = 4; // 4ステップ（1拍）ごとに区切り線を太くする
 const LABEL_WIDTH = 74;
 const TOP_MARGIN = 40; // 上部の余白（画面タブ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と最下段の行が重ならないための余白
+const MIN_ROW_H = 18; // これを下回る行高になる場合は固定してスクロールに切り替える
 
-// Rust側`DRUM_NOTES`（midi_out.rs）と行の並びを一致させること。JSは行番号だけを
-// やり取りし、実際のGM2ノート番号はRust側が持つ。
-const ROW_LABELS = [
-  'Crash', 'Ride', 'OpenHH', 'ClosedHH', 'Clap', 'Rim',
-  'Snare', 'E.Snare', 'HiTom', 'MidTom', 'LoTom', 'Kick',
-];
+// 既定12行のノート番号と短縮ラベル（見た目は従来のまま）。Rust側は行の概念を持たず
+// ノート番号で直接引くため、この対応表はJS側だけが持つ。project-state.jsの
+// v1(.gap505)互換読込（`patternV1ToRows`）でも使う。
+export const DEFAULT_ROW_NOTES = [49, 51, 46, 42, 39, 37, 38, 40, 48, 45, 41, 36];
+export const DEFAULT_ROW_LABELS = ['Crash', 'Ride', 'OpenHH', 'ClosedHH', 'Clap', 'Rim', 'Snare', 'E.Snare', 'HiTom', 'MidTom', 'LoTom', 'Kick'];
 
 // [消音, 通常, アクセント, 弱]。Rust側の0〜3と対応。
 const LEVEL_COLORS = ['#1c1c1c', 'hsl(200,55%,42%)', 'hsl(32,90%,55%)', 'hsl(200,35%,26%)'];
 
-let pattern = Array.from({ length: ROWS }, () => new Array(STEPS).fill(0));
+/** @type {Array<{note: number, label: string, steps: number[]}>} */
+let rows = DEFAULT_ROW_NOTES.map((note, i) => ({ note, label: DEFAULT_ROW_LABELS[i], steps: new Array(STEPS).fill(0) }));
+let scrollRow = 0;
 let currentStep = -1;
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
 
 onRhythmStepTick((step) => {
   currentStep = step;
@@ -46,40 +58,77 @@ export function setupRhythmScreen(canvas) {
     if (!isActive('rhythm') || e.button !== 0) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
-    const next = (pattern[cell.row][cell.step] + 1) % 4;
+    const row = rows[cell.rowIndex];
+    const next = (row.steps[cell.step] + 1) % 4;
     pushUndo();
-    pattern[cell.row][cell.step] = next;
-    setRhythmStep(cell.row, cell.step, next);
+    row.steps[cell.step] = next;
+    setRhythmStep(row.note, cell.step, next);
   });
+
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      if (!isActive('rhythm')) return;
+      const { visibleRows } = gridMetrics(canvas);
+      if (visibleRows >= rows.length) return; // 全行表示できているならスクロール不要
+      e.preventDefault();
+      scrollRow = clamp(scrollRow + Math.sign(e.deltaY), 0, Math.max(0, rows.length - visibleRows));
+    },
+    { passive: false },
+  );
 
   return { draw: (ctx) => draw(ctx, canvas) };
 }
 
 /**
- * このリズム画面が持つ状態（パターン）を取得する。project-state.jsがプロジェクト全体の
- * スナップショットを組み立てる際に呼ぶ。`pattern`は以後この画面側でセルごとに書き換えられて
- * いく実体なので、スナップショットには複製を返す（統合Undo/Redoのスタックへ積んだ後で
- * 元の配列が書き換わり、過去のスナップショットまで壊れてしまう事故を防ぐため）。
+ * このリズム画面が持つ状態（行構成込みのパターン）を取得する。project-state.jsが
+ * プロジェクト全体のスナップショットを組み立てる際に呼ぶ。`rows`は以後この画面側で
+ * セルごとに書き換えられていく実体なので、スナップショットには複製を返す
+ * （統合Undo/Redoのスタックへ積んだ後で元の配列が書き換わり、過去のスナップショットまで
+ * 壊れてしまう事故を防ぐため）。
  */
-export function getPattern() {
-  return pattern.map((row) => row.slice());
+export function getRows() {
+  return rows.map((r) => ({ note: r.note, label: r.label, steps: r.steps.slice() }));
 }
 
 /**
- * 統合Undo/Redo・ファイル読込による復元用。セルごとに現在値と比較し、変化した位置だけ
- * Rust側の共有パターンへ`setRhythmStep`でミラーする（192セル全部を無条件で送ると、
- * リズムを一切編集していないUndo/Redoでも毎回192回のinvokeが走ってしまうため）。
+ * 統合Undo/Redo・ファイル読込（Open/Import）による復元用。行の集合自体が変わりうる
+ * （Importで未知のノート番号の行が増減する）ため、ノート番号をキーに差分を取る:
+ * - 新しい側に無いノートは全ステップを消音にしてRustへ送る
+ * - 残る/新規のノートはステップごとに現在値と比較し、変化した位置だけ送る
+ * （192セル全部を無条件送信すると、リズムを一切編集していないUndo/Redoでも
+ * 毎回大量のinvokeが走ってしまうため）。
  */
-export function setPattern(newPattern) {
-  for (let row = 0; row < ROWS; row++) {
+export function setRows(newRows) {
+  const oldByNote = new Map(rows.map((r) => [r.note, r]));
+  const newByNote = new Map(newRows.map((r) => [r.note, r]));
+
+  for (const [note, oldRow] of oldByNote) {
+    if (newByNote.has(note)) continue;
     for (let step = 0; step < STEPS; step++) {
-      const level = newPattern[row][step];
-      if (pattern[row][step] !== level) {
-        pattern[row][step] = level;
-        setRhythmStep(row, step, level);
-      }
+      if (oldRow.steps[step] !== 0) setRhythmStep(note, step, 0);
     }
   }
+  for (const newRow of newRows) {
+    const oldRow = oldByNote.get(newRow.note);
+    for (let step = 0; step < STEPS; step++) {
+      const level = newRow.steps[step];
+      const prevLevel = oldRow ? oldRow.steps[step] : 0;
+      if (level !== prevLevel) setRhythmStep(newRow.note, step, level);
+    }
+  }
+
+  rows = newRows.map((r) => ({ note: r.note, label: r.label, steps: r.steps.slice() }));
+  scrollRow = clamp(scrollRow, 0, Math.max(0, rows.length - 1));
+}
+
+/** v1(.gap505)形式の12×16固定パターンを、現行のrows形式へ変換する（project-state.js参照）。 */
+export function patternV1ToRows(pattern) {
+  return DEFAULT_ROW_NOTES.map((note, i) => ({
+    note,
+    label: DEFAULT_ROW_LABELS[i],
+    steps: pattern[i] ? pattern[i].slice() : new Array(STEPS).fill(0),
+  }));
 }
 
 /** メトロノームON/OFFのチェックボックスを配線する。リズム/メロディ共通の再生/停止
@@ -103,36 +152,44 @@ export function resetRhythmCursor() {
 
 function gridMetrics(canvas) {
   const cw = (canvas.width - LABEL_WIDTH) / STEPS;
-  const ch = (canvas.height - TOP_MARGIN - BOTTOM_MARGIN) / ROWS;
-  return { cw, ch };
+  const bodyH = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
+  const naturalCh = rows.length > 0 ? bodyH / rows.length : bodyH;
+  const ch = Math.max(MIN_ROW_H, naturalCh);
+  const visibleRows = ch <= naturalCh ? rows.length : Math.max(1, Math.floor(bodyH / ch));
+  return { cw, ch, bodyH, visibleRows };
 }
 
 function cellFromPoint(canvas, px, py) {
-  const { cw, ch } = gridMetrics(canvas);
+  const { cw, ch, visibleRows } = gridMetrics(canvas);
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
   if (x < 0 || y < 0) return null;
   const step = Math.floor(x / cw);
-  const row = Math.floor(y / ch);
-  if (step < 0 || step >= STEPS || row < 0 || row >= ROWS) return null;
-  return { row, step };
+  const r = Math.floor(y / ch);
+  if (step < 0 || step >= STEPS || r < 0 || r >= visibleRows) return null;
+  const rowIndex = scrollRow + r;
+  if (rowIndex >= rows.length) return null;
+  return { rowIndex, step };
 }
 
 function draw(ctx, canvas) {
   if (!isActive('rhythm')) return;
   const W = canvas.width;
   const H = canvas.height;
-  const { cw, ch } = gridMetrics(canvas);
-  const gridBottom = TOP_MARGIN + ROWS * ch;
+  const { cw, ch, visibleRows } = gridMetrics(canvas);
+  const gridBottom = TOP_MARGIN + visibleRows * ch;
 
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
 
-  // セル本体
-  for (let row = 0; row < ROWS; row++) {
+  // セル本体（可視範囲のみ）
+  for (let r = 0; r < visibleRows; r++) {
+    const rowIndex = scrollRow + r;
+    if (rowIndex >= rows.length) break;
+    const row = rows[rowIndex];
     for (let step = 0; step < STEPS; step++) {
-      ctx.fillStyle = LEVEL_COLORS[pattern[row][step]];
-      ctx.fillRect(LABEL_WIDTH + step * cw + 1, TOP_MARGIN + row * ch + 1, cw - 2, ch - 2);
+      ctx.fillStyle = LEVEL_COLORS[row.steps[step]];
+      ctx.fillRect(LABEL_WIDTH + step * cw + 1, TOP_MARGIN + r * ch + 1, cw - 2, ch - 2);
     }
   }
 
@@ -148,8 +205,10 @@ function draw(ctx, canvas) {
   ctx.textBaseline = 'middle';
   ctx.font = '12px monospace';
   ctx.fillStyle = '#888';
-  for (let row = 0; row < ROWS; row++) {
-    ctx.fillText(ROW_LABELS[row], 8, TOP_MARGIN + row * ch + ch / 2);
+  for (let r = 0; r < visibleRows; r++) {
+    const rowIndex = scrollRow + r;
+    if (rowIndex >= rows.length) break;
+    ctx.fillText(rows[rowIndex].label, 8, TOP_MARGIN + r * ch + ch / 2);
   }
   ctx.textBaseline = 'alphabetic';
 
@@ -162,8 +221,8 @@ function draw(ctx, canvas) {
     ctx.moveTo(x, TOP_MARGIN);
     ctx.lineTo(x, gridBottom);
   }
-  for (let row = 0; row <= ROWS; row++) {
-    const y = Math.round(TOP_MARGIN + row * ch) + 0.5;
+  for (let r = 0; r <= visibleRows; r++) {
+    const y = Math.round(TOP_MARGIN + r * ch) + 0.5;
     ctx.moveTo(LABEL_WIDTH, y);
     ctx.lineTo(W, y);
   }
