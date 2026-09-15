@@ -39,9 +39,9 @@
 
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
 import { applyTo as applyLfoTo } from './performance-lfo.js';
-import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.js';
-import { voiceChord, rawVoicing } from './voicing.js';
-import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.js';
+import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.ts';
+import { voiceChord, rawVoicing } from './voicing.ts';
+import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.ts';
 import {
   computeCandidateGrid,
   computeProgressionLegend,
@@ -52,9 +52,9 @@ import {
   selectChord,
   jumpTo,
   updateVelocity,
-} from './chord-flow.js';
-import { matchProgressions } from './progressions.js';
-import { computePastSlotGeoms } from './chord-layout.js';
+} from './chord-flow.ts';
+import { matchProgressions } from './progressions.ts';
+import { computePastSlotGeoms } from './chord-layout.ts';
 import { isActive, onScreenChange } from './screens.js';
 import { pushUndo } from './undo-manager.js';
 

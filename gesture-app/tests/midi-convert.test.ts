@@ -10,8 +10,9 @@ import {
   midiEventsToMelodyNotes,
   rhythmRowsToEvents,
   midiEventsToRhythmRows,
-} from '../src/midi-convert.js';
-import { parseSmf, buildSmf } from '../src/smf.js';
+} from '../src/midi-convert.ts';
+import { parseSmf, buildSmf } from '../src/smf.ts';
+import type { SmfEvent, SmfRawEvent } from '../src/types.ts';
 
 const TICKS_PER_MELODY_STEP = 240; // ppq480 / 2（8分音符）
 const TICKS_PER_RHYTHM_STEP = 120; // ppq480 / 4（16分音符）
@@ -30,31 +31,31 @@ test('levelToVelocity/velocityToLevelは3段階を正しく往復する', () => 
 
 test('bpmFromEvents/microsecondsPerQuarterFromBpmは往復する（丸め誤差1bpm以内）', () => {
   const us = microsecondsPerQuarterFromBpm(140);
-  const bpm = bpmFromEvents([{ kind: 'tempo', microsecondsPerQuarter: us }]);
-  assert.ok(Math.abs(bpm - 140) < 1);
+  const bpm = bpmFromEvents([{ tick: 0, kind: 'tempo', microsecondsPerQuarter: us }]);
+  assert.ok(Math.abs(bpm! - 140) < 1);
 });
 
 test('bpmFromEvents: tempoイベントが無ければnull', () => {
-  assert.equal(bpmFromEvents([{ kind: 'noteOn' }]), null);
+  assert.equal(bpmFromEvents([{ tick: 0, kind: 'noteOff', channel: 0, note: 60 }]), null);
 });
 
 test('pickMelodyChannel: ch10(=9)以外でノートがある最小番号のチャンネルを選ぶ', () => {
-  const events = [
-    { kind: 'noteOn', channel: 9, note: 36 },
-    { kind: 'noteOn', channel: 3, note: 60 },
-    { kind: 'noteOn', channel: 1, note: 64 },
+  const events: SmfEvent[] = [
+    { tick: 0, kind: 'noteOn', channel: 9, note: 36, velocity: 100 },
+    { tick: 0, kind: 'noteOn', channel: 3, note: 60, velocity: 100 },
+    { tick: 0, kind: 'noteOn', channel: 1, note: 64, velocity: 100 },
   ];
   assert.equal(pickMelodyChannel(events), 1);
 });
 
 test('pickMelodyChannel: ch10しか無ければnull', () => {
-  assert.equal(pickMelodyChannel([{ kind: 'noteOn', channel: 9, note: 36 }]), null);
+  assert.equal(pickMelodyChannel([{ tick: 0, kind: 'noteOn', channel: 9, note: 36, velocity: 100 }]), null);
 });
 
 // melodyNotesToEvents/rhythmRowsToEventsはsmf.buildSmf()向けの{tick,bytes}形式（生成専用）を
 // 返すため、midiEventsToXxx（parseSmf()の出力である{tick,kind,channel,...}形式を期待する）へ
 // 直接渡すことはできない。実際の使われ方どおりbuildSmf→parseSmfを経由させて往復させる。
-function roundTripEvents(trackEventLists) {
+function roundTripEvents(trackEventLists: SmfRawEvent[][]): SmfEvent[] {
   const bytes = buildSmf({ ppq: 480, tracks: trackEventLists });
   return parseSmf(bytes).events;
 }
@@ -133,7 +134,7 @@ test('midiEventsToRhythmRows: 複数小節では最多出現パターンを採�
 });
 
 test('midiEventsToRhythmRows: 対象チャンネルにヒットが無ければ空配列', () => {
-  assert.deepEqual(midiEventsToRhythmRows([{ kind: 'noteOn', channel: 0, tick: 0, note: 36, velocity: 100 }], 9, TICKS_PER_RHYTHM_STEP, 16), []);
+  assert.deepEqual(midiEventsToRhythmRows([{ tick: 0, kind: 'noteOn', channel: 0, note: 36, velocity: 100 }], 9, TICKS_PER_RHYTHM_STEP, 16), []);
 });
 
 test('Export→SMFバイト列→Import で完全往復する（統合テスト）', () => {
@@ -152,7 +153,7 @@ test('Export→SMFバイト列→Import で完全往復する（統合テスト�
 
   const channel = pickMelodyChannel(events);
   assert.equal(channel, 1);
-  const restoredNotes = midiEventsToMelodyNotes(events, channel, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restoredNotes = midiEventsToMelodyNotes(events, channel!, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
   assert.deepEqual(restoredNotes.map(({ startStep, lengthSteps, pitch, level }) => ({ startStep, lengthSteps, pitch, level })), notes);
 
   const restoredRows = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16);

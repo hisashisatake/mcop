@@ -5,6 +5,7 @@
 // テンション（9th/13th等、interval>=12）は常に「基準ルートの上」に固定した上部構造として扱う。
 // テンションまで回転させると、回転のたびにコアの上へ押し出されて極端な高音になり、
 // 音域が際限なく広がってしまうため。
+import type { ChordLike } from './types.ts';
 
 export const MIN_MIDI = 0;
 export const MAX_MIDI = 127;
@@ -25,7 +26,7 @@ const DENSITY_PENALTY_MAJOR2ND = 0.4; // 隣接音が長2度(2半音)の密集�
  * voiceLeadingCost/centerMidiとの近さだけでは検出できないため、実際に鳴る音の並び
  * （notes、ソート済み）を見て直接評価する。
  */
-function densityPenalty(notes) {
+function densityPenalty(notes: number[]): number {
   let penalty = 0;
   for (let i = 1; i < notes.length; i++) {
     const gap = notes[i] - notes[i - 1];
@@ -36,7 +37,7 @@ function densityPenalty(notes) {
 }
 
 /** 直前のボイシングとの声部移動コスト（新しい各音を、直前ボイシング中の最も近い音へ寄せた距離の平均）。 */
-function voiceLeadingCost(notes, previousNotes) {
+function voiceLeadingCost(notes: number[], previousNotes: number[]): number {
   if (!previousNotes || previousNotes.length === 0) return 0;
   let total = 0;
   for (const n of notes) {
@@ -50,26 +51,35 @@ function voiceLeadingCost(notes, previousNotes) {
   return total / notes.length;
 }
 
-function centroid(notes) {
+function centroid(notes: number[]): number {
   return notes.reduce((a, b) => a + b, 0) / notes.length;
+}
+
+export interface VoiceChordOptions {
+  /** 直前に鳴らしたボイシング（無ければ音域アンカーのみで決まる） */
+  previousNotes?: number[];
+  /** 音域アンカー（基準オクターブ設定から算出、既定は中央ド=60） */
+  centerMidi?: number;
+  /**
+   * trueなら転回（k>0）を候補から外し、根音だけをバスへ強制する
+   * （ドミナント→トニック等の強進行で、移動量最小化のあまりバスが根音へ着地しない
+   * のを防ぐ。theory.jsのisStrongResolution参照）
+   */
+  requireRootInBass?: boolean;
 }
 
 /**
  * コードの構成音を、直前のボイシングに一番近い転回形・オクターブで実際に鳴らすMIDIノート配列へ変換する。
- * @param {{rootPc: number, intervals: number[]}} chord
- * @param {{previousNotes?: number[], centerMidi?: number, requireRootInBass?: boolean}} [opts]
- *   previousNotes: 直前に鳴らしたボイシング（無ければ音域アンカーのみで決まる）
- *   centerMidi: 音域アンカー（基準オクターブ設定から算出、既定は中央ド=60）
- *   requireRootInBass: trueなら転回（k>0）を候補から外し、根音だけをバスへ強制する
- *     （ドミナント→トニック等の強進行で、移動量最小化のあまりバスが根音へ着地しない
- *     のを防ぐ。theory.jsのisStrongResolution参照）
- * @returns {number[]} 昇順ソート済みのMIDIノート番号配列
+ * @returns 昇順ソート済みのMIDIノート番号配列
  */
-export function voiceChord(chord, { previousNotes = [], centerMidi = 60, requireRootInBass = false } = {}) {
+export function voiceChord(
+  chord: ChordLike,
+  { previousNotes = [], centerMidi = 60, requireRootInBass = false }: VoiceChordOptions = {},
+): number[] {
   const core = chord.intervals.filter((i) => i < 12);
   const tensions = chord.intervals.filter((i) => i >= 12);
 
-  let bestNotes = null;
+  let bestNotes: number[] | null = null;
   let bestCost = Infinity;
 
   const maxK = requireRootInBass ? 1 : core.length;
@@ -94,16 +104,13 @@ export function voiceChord(chord, { previousNotes = [], centerMidi = 60, require
     }
   }
 
-  return bestNotes;
+  return bestNotes as number[];
 }
 
 /**
  * 自動転回OFF時（従来方式）のボイシング：ルートの上にintervalsをそのまま積む。
  * baseOctaveは基準オクターブの手動±調整（1=+12半音、-1=-12半音）。
- * @param {{rootMidi: number, intervals: number[]}} chord
- * @param {number} [baseOctave]
- * @returns {number[]}
  */
-export function rawVoicing(chord, baseOctave = 0) {
+export function rawVoicing(chord: { rootMidi: number; intervals: number[] }, baseOctave = 0): number[] {
   return chord.intervals.map((i) => chord.rootMidi + 12 * baseOctave + i).sort((a, b) => a - b);
 }

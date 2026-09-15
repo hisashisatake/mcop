@@ -3,7 +3,7 @@
 // 既定12行自体のラベル（Crash/Ride/OpenHH等）はrhythm-screen.jsが個別に持つ短縮名を
 // 優先するため、ここには含めない（rowLabel()参照）。
 
-const GM2_PERCUSSION_NAMES = {
+const GM2_PERCUSSION_NAMES: Record<number, string> = {
   27: 'High Q', 28: 'Slap', 29: 'Scratch Push', 30: 'Scratch Pull', 31: 'Sticks',
   32: 'Square Click', 33: 'Metronome Click', 34: 'Metronome Bell',
   35: 'Ac. Bass Drum', 36: 'Bass Drum 1', 37: 'Side Stick', 38: 'Ac. Snare',
@@ -22,6 +22,6 @@ const GM2_PERCUSSION_NAMES = {
 };
 
 /** GM2ノート番号(0〜127)から表示名を返す。テーブル外は`Note ##`にフォールバックする。 */
-export function gm2DrumName(note) {
+export function gm2DrumName(note: number): string {
   return GM2_PERCUSSION_NAMES[note] ?? `Note ${note}`;
 }

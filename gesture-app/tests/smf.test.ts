@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSmf, buildSmf, noteOnEvent, noteOffEvent, tempoMetaEvent, timeSignatureMetaEvent } from '../src/smf.js';
+import { parseSmf, buildSmf, noteOnEvent, noteOffEvent, tempoMetaEvent, timeSignatureMetaEvent } from '../src/smf.ts';
 
 test('buildSmf→parseSmfのラウンドトリップ: NoteOn/NoteOffが正しく復元される', () => {
   const bytes = buildSmf({

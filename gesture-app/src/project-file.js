@@ -6,10 +6,10 @@ import { serializeProject, deserializeAndApply } from './project-state.js';
 import { pushUndo, resetUndoHistory } from './undo-manager.js';
 import { getRows, setRows, STEPS as RHYTHM_STEPS_PER_BAR, DEFAULT_ROW_NOTES, DEFAULT_ROW_LABELS } from './rhythm-screen.js';
 import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_STEPS } from './melody-screen.js';
-import { gm2DrumName } from './gm2-drums.js';
+import { gm2DrumName } from './gm2-drums.ts';
 import { getBpm, setBpm } from './tempo-state.js';
 import { tapTempo } from './midi.js';
-import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.js';
+import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.ts';
 import {
   melodyNotesToEvents,
   midiEventsToMelodyNotes,
@@ -18,7 +18,7 @@ import {
   pickMelodyChannel,
   bpmFromEvents,
   microsecondsPerQuarterFromBpm,
-} from './midi-convert.js';
+} from './midi-convert.ts';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外では常にキャンセル扱い）
 const invoke = window.__TAURI__?.core?.invoke ?? (async () => null);

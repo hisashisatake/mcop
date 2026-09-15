@@ -9,19 +9,20 @@ import {
   selectChord,
   jumpTo,
   updateVelocity,
-} from '../src/chord-flow.js';
-import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.js';
+} from '../src/chord-flow.ts';
+import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.ts';
+import type { HistoryEntry, Key, ProgressionMatch } from '../src/types.ts';
 
 const TONIC_MIDI = 60; // C4
-const C_MAJOR_KEY = { tonicPc: 0, mode: 'major' };
+const C_MAJOR_KEY = { tonicPc: 0, mode: 'major' as const };
 
-function rowIndexOf(layer, suffix) {
+function rowIndexOf(layer: typeof NORMAL_LAYER, suffix: string): number {
   const idx = layer.findIndex((e) => e.suffix === suffix);
   assert.notEqual(idx, -1, `suffix "${suffix}" not found in layer`);
   return idx;
 }
 
-function chordFor(semitoneFromC, rowIndex) {
+function chordFor(semitoneFromC: number, rowIndex: number) {
   return chordFromSemitone(semitoneFromC, rowIndex, { tonicMidi: TONIC_MIDI, shiftHeld: false, ctrlHeld: false });
 }
 
@@ -117,7 +118,9 @@ test('computeCandidateGrid: progressionMatchesのターゲットがグリッド�
   const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
   // 度数6(F#)・halfdim(m7b5)はCから見て理論スコアが低く(0.45程度)、
   // cols=1,rows=3の3枠には通常入らないgray候補になる
-  const progressionMatches = [{ id: 'test-progression', name: 'テスト進行', position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } }];
+  const progressionMatches: ProgressionMatch[] = [
+    { id: 'test-progression', name: 'テスト進行', matchedLength: 1, position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } },
+  ];
   const grid = computeCandidateGrid({
     lastChord: c,
     key: C_MAJOR_KEY,
@@ -131,18 +134,18 @@ test('computeCandidateGrid: progressionMatchesのターゲットがグリッド�
   assert.equal(grid.length, 3);
   const hinted = grid.find((cell) => cell.progressionHints.some((h) => h.id === 'test-progression'));
   assert.ok(hinted, 'ターゲットが強制的にグリッドへ割り込んでいるはず');
-  const degree = (((hinted.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
+  const degree = (((hinted!.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
   assert.equal(degree, 6);
-  assert.equal(hinted.row, 2, '末尾（最もスコアの低いセル）と入れ替わっているはず');
+  assert.equal(hinted!.row, 2, '末尾（最もスコアの低いセル）と入れ替わっているはず');
 });
 
 test('computeCandidateGrid: 割り込み数の上限はfloor(cols*rows/2)', () => {
   const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
   // グリッド外に落ちる3件のターゲットを渡すが、cols*rows=4なら上限floor(4/2)=2件までしか割り込まない
-  const progressionMatches = [
-    { id: 'p1', name: 'p1', position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } },
-    { id: 'p2', name: 'p2', position: 1, total: 2, next: { degree: 1, families: ['halfdim'] } },
-    { id: 'p3', name: 'p3', position: 1, total: 2, next: { degree: 11, families: ['halfdim'] } },
+  const progressionMatches: ProgressionMatch[] = [
+    { id: 'p1', name: 'p1', matchedLength: 1, position: 1, total: 2, next: { degree: 6, families: ['halfdim'] } },
+    { id: 'p2', name: 'p2', matchedLength: 1, position: 1, total: 2, next: { degree: 1, families: ['halfdim'] } },
+    { id: 'p3', name: 'p3', matchedLength: 1, position: 1, total: 2, next: { degree: 11, families: ['halfdim'] } },
   ];
   const grid = computeCandidateGrid({
     lastChord: c,
@@ -165,11 +168,13 @@ test('computeCandidateGrid: progressionKeyがkeyと異なる場合、next.degree
   // 絶対ピッチクラス9(A)を指すはずで、もしkey(Aマイナー)基準のまま解決すると別の音
   // (絶対ピッチクラス6=F#)を指してしまう。IV→IIIaugで実際に踏んだ回帰。
   const lastChord = chordFor(4, rowIndexOf(NORMAL_LAYER, '')); // 便宜上の直前コード(スコアリングに影響するのみ)
-  const A_MINOR_KEY = { tonicPc: 9, mode: 'minor' };
+  const A_MINOR_KEY = { tonicPc: 9, mode: 'minor' as const };
   // familiesではなくsuffixes指定にして、4レイヤー横断探索が'm6'/'mMaj7'等の別layer専用
   // バリエーションを最高スコアとして選んでしまう可能性を排除し、NORMAL_LAYERの'm'に固定する
   // （このテストの主眼はprogressionKey basisの検証であり、レイヤー横断選択自体は別テストの範囲）
-  const progressionMatches = [{ id: 'test-anchor', name: 'テスト', position: 1, total: 2, next: { degree: 9, suffixes: ['m'] } }];
+  const progressionMatches: ProgressionMatch[] = [
+    { id: 'test-anchor', name: 'テスト', matchedLength: 1, position: 1, total: 2, next: { degree: 9, suffixes: ['m'] } },
+  ];
   const grid = computeCandidateGrid({
     lastChord,
     key: A_MINOR_KEY,
@@ -183,9 +188,9 @@ test('computeCandidateGrid: progressionKeyがkeyと異なる場合、next.degree
   });
   const hinted = grid.find((cell) => cell.progressionHints.some((h) => h.id === 'test-anchor'));
   assert.ok(hinted, 'ターゲットが見つかるはず');
-  const degreeFromAnchor = (((hinted.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
+  const degreeFromAnchor = (((hinted!.chord.rootPc - C_MAJOR_KEY.tonicPc) % 12) + 12) % 12;
   assert.equal(degreeFromAnchor, 9, 'progressionKey(Cメジャー)基準で度数9(A)に解決されるはず');
-  const degreeFromDisplayKey = (((hinted.chord.rootPc - A_MINOR_KEY.tonicPc) % 12) + 12) % 12;
+  const degreeFromDisplayKey = (((hinted!.chord.rootPc - A_MINOR_KEY.tonicPc) % 12) + 12) % 12;
   assert.notEqual(degreeFromDisplayKey, 9, '表示key(Aマイナー)基準の度数9(F#)ではないはず');
 });
 
@@ -207,10 +212,18 @@ test('computeCandidateGrid: 直前コードが無い1手目でも候補が出る
 // 履歴モデル
 // ─────────────────────────────────────────────
 
-const INITIAL_KEY = { tonicMidi: 60, mode: 'major' };
+const INITIAL_KEY: Key = { tonicMidi: 60, mode: 'major' };
 
-function entryFor(name) {
-  return { chord: { name }, key: { tonicMidi: 60, mode: 'major' }, pendingPivot: null };
+/** テスト用の最小限のHistoryEntry。chord.nameとvelocity/keyのみアサーションで参照するため、
+ * それ以外のChordフィールドはダミー値で埋める。 */
+function entryFor(name: string): HistoryEntry {
+  return {
+    chord: { name, suffix: '', rootMidi: 60, rootPc: 0, family: 'maj', intervals: [0, 4, 7] },
+    key: { tonicMidi: 60, mode: 'major' },
+    pendingPivot: null,
+    velocity: 100,
+    voicing: [60, 64, 67],
+  };
 }
 
 test('history: 初期状態はcursor=-1でinitialKeyを返す', () => {
@@ -226,7 +239,7 @@ test('history: selectChordで積み上がりcursorが進む', () => {
   h = selectChord(h, entryFor('C'));
   h = selectChord(h, entryFor('F'));
   assert.equal(h.cursor, 1);
-  assert.equal(currentEntry(h).chord.name, 'F');
+  assert.equal(currentEntry(h)!.chord.name, 'F');
 });
 
 test('history: 戻ってから新しいコードを選ぶと、その先の履歴は破棄される（上書き）', () => {
@@ -247,7 +260,7 @@ test('history: jumpToで任意の地点へ移動でき、キー状態も復元�
   h = selectChord(h, { ...entryFor('D7'), key: { tonicMidi: 60, mode: 'major' } });
   h = selectChord(h, { ...entryFor('G'), key: { tonicMidi: 67, mode: 'major' } }); // 転調したとする
   h = jumpTo(h, 0);
-  assert.equal(currentEntry(h).chord.name, 'C');
+  assert.equal(currentEntry(h)!.chord.name, 'C');
   assert.deepEqual(keyAt(h), { tonicMidi: 60, mode: 'major' });
   h = jumpTo(h, 2);
   assert.deepEqual(keyAt(h), { tonicMidi: 67, mode: 'major' });

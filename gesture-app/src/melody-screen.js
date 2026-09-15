@@ -16,7 +16,7 @@
 // rhythmの`set_rhythm_step`と同じfire-and-forget方式に揃える）。
 
 import { isActive } from './screens.js';
-import { NOTE_NAMES } from './chords.js';
+import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.js';
 import { pushUndo } from './undo-manager.js';
 

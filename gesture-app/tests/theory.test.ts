@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from '../src/chords.js';
+import { chordFromSemitone, NORMAL_LAYER, SHIFT_LAYER, CTRL_LAYER, CTRL_SHIFT_LAYER } from '../src/chords.ts';
 import {
   classifyProgression,
   isDiatonic,
@@ -12,12 +12,13 @@ import {
   degreeName,
   chordFunction,
   isStrongResolution,
-} from '../src/theory.js';
+} from '../src/theory.ts';
+import type { ChordTypeDef } from '../src/types.ts';
 
 const TONIC_MIDI = 60; // C4
 
 /** Cを基準にした半音オフセットと行インデックスから、実際のchordFromSemitone()と同じコード構築経路でコードを作る。 */
-function chordFor(semitoneFromC, rowIndex, mods = {}) {
+function chordFor(semitoneFromC: number, rowIndex: number, mods: { shift?: boolean; ctrl?: boolean } = {}) {
   return chordFromSemitone(semitoneFromC, rowIndex, {
     tonicMidi: TONIC_MIDI,
     shiftHeld: !!mods.shift,
@@ -25,14 +26,14 @@ function chordFor(semitoneFromC, rowIndex, mods = {}) {
   });
 }
 
-function rowIndexOf(layer, suffix) {
+function rowIndexOf(layer: ChordTypeDef[], suffix: string): number {
   const idx = layer.findIndex((e) => e.suffix === suffix);
   assert.notEqual(idx, -1, `suffix "${suffix}" not found in layer`);
   return idx;
 }
 
-const C_MAJOR = { tonicPc: 0, mode: 'major' };
-const A_MINOR = { tonicPc: 9, mode: 'minor' };
+const C_MAJOR = { tonicPc: 0, mode: 'major' as const };
+const A_MINOR = { tonicPc: 9, mode: 'minor' as const };
 
 // ダイアトニック度数のショートカット（Cメジャー基準の半音オフセット）
 const C = 0, D = 2, E = 4, F = 5, G = 7, A = 9, B = 11;
@@ -156,7 +157,7 @@ test('ピボット: Cメジャーで Am は G メジャーへのピボットと�
 
 test('接近: D7はGメジャーへ接近するが確定はしない／Gそのものが鳴って初めて確定する', () => {
   const d7 = chordFor(D, rowIndexOf(NORMAL_LAYER, '7'));
-  const gMajorKey = { tonicPc: 7, mode: 'major' };
+  const gMajorKey = { tonicPc: 7, mode: 'major' as const };
 
   // D7(=V7/V)はGメジャーへ接近している(approachesKey)が、まだ転調を確定させない
   assert.equal(approachesKey(d7, gMajorKey, C_MAJOR), true);

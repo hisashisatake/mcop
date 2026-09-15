@@ -5,13 +5,24 @@
 // （遠近法的な配置）。描画側（chord-screen.jsのdraw）と当たり判定側（cellFromPoint）が
 // 必ず同じ配列を参照することで、フロー方式刷新時に踏んだ「当たり判定と描画位置がズレる」
 // バグ（[[project_gesture_app_3screen_minidaw_redesign]]参照）を構造的に防ぐ。
+import type { PastSlotGeom } from './types.ts';
+
+export interface ComputePastSlotGeomsArgs {
+  currentX: number;
+  currentSize: number;
+  slotY: number;
+  baseSize: number;
+  count: number;
+  minSize?: number;
+  shrink?: number;
+  gapRatio?: number;
+  leftMargin?: number;
+}
 
 /**
  * 現在スロットの左に並ぶ過去スロットの幾何（中心座標とサイズ）を返す。
  * index=0が現在の直前（cursor-1相当）。左端（leftMargin）に収まらなくなった時点、
  * またはcount個に達した時点で打ち切るため、固定の上限個数は持たない。
- *
- * @returns {Array<{index: number, x: number, y: number, size: number}>}
  */
 export function computePastSlotGeoms({
   currentX,
@@ -23,8 +34,8 @@ export function computePastSlotGeoms({
   shrink = 0.8,
   gapRatio = 0.125,
   leftMargin = 16,
-}) {
-  const geoms = [];
+}: ComputePastSlotGeomsArgs): PastSlotGeom[] {
+  const geoms: PastSlotGeom[] = [];
   let rightEdge = currentX - currentSize / 2;
   for (let i = 0; i < count; i++) {
     const size = Math.max(minSize, baseSize * shrink ** i);

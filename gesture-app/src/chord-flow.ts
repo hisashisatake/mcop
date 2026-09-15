@@ -19,21 +19,47 @@
 //   （このモジュールはselectChord/jumpToという状態遷移の定義のみを持ち、
 //   「取り消し操作の履歴」という概念は持たない）。
 
-import { ROWS, chordFromSemitone } from './chords.js';
-import { classifyProgression, classifyInitial, pivotKeysFor, confirmsModulation, normalizeFamily } from './theory.js';
+import { ROWS, chordFromSemitone } from './chords.ts';
+import { classifyProgression, classifyInitial, pivotKeysFor, confirmsModulation, normalizeFamily } from './theory.ts';
+import type {
+  CandidateCell,
+  CandidateGridCell,
+  Chord,
+  ChordHistory,
+  HistoryEntry,
+  Key,
+  KeyObj,
+  PendingPivot,
+  ProgressionHint,
+  ProgressionLegendEntry,
+  ProgressionMatch,
+  ProgressionStep,
+} from './types.ts';
 
 const MIN_SEMITONE = -6;
 const MAX_SEMITONE = 5;
 
-const mod12 = (n) => ((n % 12) + 12) % 12;
+const mod12 = (n: number) => ((n % 12) + 12) % 12;
+
+interface ClassifyAllCellsArgs {
+  lastChord: Chord | null;
+  key: KeyObj;
+  tonicMidi: number;
+  shiftHeld: boolean;
+  ctrlHeld: boolean;
+  pendingPivot?: PendingPivot | null;
+}
 
 /**
  * 108セル（12半音×9行）を採点し、重複コード名を除去した上で
  * GREEN/YELLOW/無印（灰）のスコア降順リストへ分ける。
- * @returns {{green: Array, yellow: Array, gray: Array}}
  */
-function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot }) {
-  const byName = new Map();
+function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot }: ClassifyAllCellsArgs): {
+  green: CandidateCell[];
+  yellow: CandidateCell[];
+  gray: CandidateCell[];
+} {
+  const byName = new Map<string, CandidateCell>();
   for (let semitone = MIN_SEMITONE; semitone <= MAX_SEMITONE; semitone++) {
     for (let row = 0; row < ROWS; row++) {
       const chord = chordFromSemitone(semitone, row, { tonicMidi, shiftHeld, ctrlHeld });
@@ -48,14 +74,14 @@ function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pend
       // あるとき、そのトニックそのものに一致するセルだけを「ここを弾けば転調確定」として
       // 区別する（isPivotの青枠＝まだ確定していない将来の可能性とは別軸）。
       const confirmsPivot = pendingPivot ? pendingPivot.keys.some((k) => confirmsModulation(chord, k)) : false;
-      const entry = { chord, score, category, isPivot, confirmsPivot };
+      const entry: CandidateCell = { chord, score, category, isPivot, confirmsPivot };
       const existing = byName.get(chord.name);
       if (!existing || entry.score > existing.score) byName.set(chord.name, entry);
     }
   }
 
   const all = [...byName.values()];
-  const byScoreDesc = (a, b) => b.score - a.score;
+  const byScoreDesc = (a: CandidateCell, b: CandidateCell) => b.score - a.score;
   return {
     green: all.filter((c) => c.category === 'GREEN').sort(byScoreDesc),
     yellow: all.filter((c) => c.category === 'YELLOW').sort(byScoreDesc),
@@ -64,21 +90,32 @@ function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pend
 }
 
 /** 4レイヤー全ての{shiftHeld, ctrlHeld}組み合わせ。名前はchords.jsのlayersContainingSuffix()と対応。 */
-const LAYER_MODS = [
+const LAYER_MODS: Array<{ name: string; shiftHeld: boolean; ctrlHeld: boolean }> = [
   { name: 'normal', shiftHeld: false, ctrlHeld: false },
   { name: 'shift', shiftHeld: true, ctrlHeld: false },
   { name: 'ctrl', shiftHeld: false, ctrlHeld: true },
   { name: 'ctrlShift', shiftHeld: true, ctrlHeld: true },
 ];
 
+interface ClassifyAllLayersArgs {
+  lastChord: Chord | null;
+  key: KeyObj;
+  tonicMidi: number;
+}
+
+interface ScoredCell {
+  chord: Chord;
+  score: number;
+}
+
 /**
  * 進行テンプレートの「次の一手」探索専用に、4レイヤー全て（432セル）を横断して採点する。
  * 現在保持している修飾キーに関わらず候補を探すため、classifyAllCellsとは別に持つ
  * （line-cliche等、次の一手が現在のレイヤーに無いケースでもテンプレートを検出できるようにする）。
- * @returns {Array<{chord, score}>} 重複コード名は除去済み（同名は同じfamily/intervalsのためスコアも同一）
+ * @returns 重複コード名は除去済み（同名は同じfamily/intervalsのためスコアも同一）
  */
-function classifyAllLayers({ lastChord, key, tonicMidi }) {
-  const byName = new Map();
+function classifyAllLayers({ lastChord, key, tonicMidi }: ClassifyAllLayersArgs): ScoredCell[] {
+  const byName = new Map<string, ScoredCell>();
   for (const { shiftHeld, ctrlHeld } of LAYER_MODS) {
     for (let semitone = MIN_SEMITONE; semitone <= MAX_SEMITONE; semitone++) {
       for (let row = 0; row < ROWS; row++) {
@@ -94,23 +131,34 @@ function classifyAllLayers({ lastChord, key, tonicMidi }) {
 
 /**
  * cellsの中から、進行テンプレートの「次の一手」stepに一致するもののうち最高スコアの1件を探す。
- * @param {Array<{chord, score}>} cells
- * @param {{degree: number, families?: string[], suffixes?: string[]}} step
- * @param {{tonicPc: number, mode: string}} key
  */
-function findBestCellForStep(cells, step, key) {
-  let best = null;
+function findBestCellForStep(cells: ScoredCell[], step: ProgressionStep, key: KeyObj): ScoredCell | null {
+  let best: ScoredCell | null = null;
   for (const cell of cells) {
     const degree = mod12(cell.chord.rootPc - key.tonicPc);
     if (degree !== step.degree) continue;
     if (step.suffixes) {
       if (!step.suffixes.includes(cell.chord.suffix)) continue;
-    } else if (!step.families.includes(normalizeFamily(cell.chord, key))) {
-      continue;
+    } else {
+      const normFamily = normalizeFamily(cell.chord, key);
+      if (normFamily == null || !step.families!.includes(normFamily)) continue;
     }
     if (!best || cell.score > best.score) best = cell;
   }
   return best;
+}
+
+export interface ComputeCandidateGridArgs {
+  lastChord: Chord | null;
+  key: KeyObj;
+  progressionKey?: KeyObj;
+  tonicMidi: number;
+  shiftHeld: boolean;
+  ctrlHeld: boolean;
+  cols: number;
+  rows: number;
+  progressionMatches?: ProgressionMatch[];
+  pendingPivot?: PendingPivot | null;
 }
 
 /**
@@ -134,7 +182,6 @@ function findBestCellForStep(cells, step, key) {
  * 直後、next.degreeはCメジャー基準のままなのにkeyがAマイナーになり、ターゲットセルの
  * 取り違えが起きたバグの修正）。候補セル自体のスコアリング(classifyAllCells/classifyAllLayers)は
  * 表示上のkeyのままでよい（転調後の実際の響きを正しく採点するため）。
- * @returns {Array<{col: number, row: number, chord, score, category, isPivot, confirmsPivot, progressionHints: Array}>}
  */
 export function computeCandidateGrid({
   lastChord,
@@ -147,12 +194,12 @@ export function computeCandidateGrid({
   rows,
   progressionMatches,
   pendingPivot,
-}) {
+}: ComputeCandidateGridArgs): CandidateGridCell[] {
   const { green, yellow, gray } = classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot });
   const allCells = [...green, ...yellow, ...gray];
   const sequence = allCells.slice(0, cols * rows);
 
-  const hintsByChordName = new Map();
+  const hintsByChordName = new Map<string, ProgressionHint[]>();
   if (progressionMatches && progressionMatches.length > 0) {
     const allLayerCells = classifyAllLayers({ lastChord, key, tonicMidi });
     const maxInterrupts = Math.min(progressionMatches.length, Math.floor((cols * rows) / 2));
@@ -181,18 +228,35 @@ export function computeCandidateGrid({
   }));
 }
 
+export interface ComputeProgressionLegendArgs {
+  lastChord: Chord | null;
+  key: KeyObj;
+  progressionKey?: KeyObj;
+  tonicMidi: number;
+  shiftHeld: boolean;
+  ctrlHeld: boolean;
+  progressionMatches?: ProgressionMatch[];
+}
+
 /**
  * 進行テンプレートの凡例（画面上部のヒント文字列）用データを作る。4レイヤー横断で
  * 「次の一手」を探し、現在のレイヤーに無ければlayerName（chords.jsのlayersContainingSuffix()が
  * 返す名前の1つ）を添える。computeCandidateGrid()と別関数にしているのは、こちらは
  * グリッド外（現在のレイヤーに無いケース）も含めて全件を返す必要があるため。
- * @returns {Array<{badgeIndex: number, name: string, position: number, total: number, targetSuffix: string, inCurrentLayer: boolean}>}
  */
-export function computeProgressionLegend({ lastChord, key, progressionKey = key, tonicMidi, shiftHeld, ctrlHeld, progressionMatches }) {
+export function computeProgressionLegend({
+  lastChord,
+  key,
+  progressionKey = key,
+  tonicMidi,
+  shiftHeld,
+  ctrlHeld,
+  progressionMatches,
+}: ComputeProgressionLegendArgs): ProgressionLegendEntry[] {
   if (!progressionMatches || progressionMatches.length === 0) return [];
   const allLayerCells = classifyAllLayers({ lastChord, key, tonicMidi });
   const currentLayerName = shiftHeld && ctrlHeld ? 'ctrlShift' : ctrlHeld ? 'ctrl' : shiftHeld ? 'shift' : 'normal';
-  const results = [];
+  const results: ProgressionLegendEntry[] = [];
   progressionMatches.forEach((match, matchIndex) => {
     const target = findBestCellForStep(allLayerCells, match.next, progressionKey);
     if (!target) return;
@@ -212,44 +276,42 @@ export function computeProgressionLegend({ lastChord, key, progressionKey = key,
 // 履歴モデル（線形・上書き方式）
 // ─────────────────────────────────────────────
 
-/** @param {{tonicMidi: number, mode: string}} initialKey */
-export function createHistory(initialKey) {
+export function createHistory(initialKey: Key): ChordHistory {
   return { entries: [], cursor: -1, initialKey };
 }
 
 /** cursor時点のキー状態（未選択なら初期キー）。 */
-export function keyAt(state) {
+export function keyAt(state: ChordHistory): Key {
   return state.cursor >= 0 ? state.entries[state.cursor].key : state.initialKey;
 }
 
 /** cursor時点のエントリ（未選択ならnull）。 */
-export function currentEntry(state) {
+export function currentEntry(state: ChordHistory): HistoryEntry | null {
   return state.cursor >= 0 ? state.entries[state.cursor] : null;
 }
 
 /** cursor時点のpendingPivot（未選択またはピボット無しならnull）。 */
-export function pendingPivotAt(state) {
-  return state.cursor >= 0 ? state.entries[state.cursor].pendingPivot ?? null : null;
+export function pendingPivotAt(state: ChordHistory): PendingPivot | null {
+  return state.cursor >= 0 ? (state.entries[state.cursor].pendingPivot ?? null) : null;
 }
 
 /**
  * 新しいコードを選択する。cursorより先の履歴（redo可能だった分）は破棄する。
- * @param {{chord, key: {tonicMidi, mode}, pendingPivot: object|null, velocity: number}} entry
  */
-export function selectChord(state, entry) {
+export function selectChord(state: ChordHistory, entry: HistoryEntry): ChordHistory {
   const entries = state.entries.slice(0, state.cursor + 1);
   entries.push(entry);
   return { ...state, entries, cursor: entries.length - 1 };
 }
 
 /** 過去/未来コードのクリック用。indexは0-indexed（-1=初期状態）。範囲外なら変化なし。 */
-export function jumpTo(state, index) {
+export function jumpTo(state: ChordHistory, index: number): ChordHistory {
   if (index < -1 || index > state.entries.length - 1) return state;
   return { ...state, cursor: index };
 }
 
 /** 現在コードスロットの中央列クリック（音量再調整）用。指定indexのentryのvelocityだけを差し替える。範囲外なら変化なし。 */
-export function updateVelocity(state, index, velocity) {
+export function updateVelocity(state: ChordHistory, index: number, velocity: number): ChordHistory {
   if (index < 0 || index >= state.entries.length) return state;
   const entries = state.entries.slice();
   entries[index] = { ...entries[index], velocity };

@@ -12,10 +12,12 @@
 //
 // sus4/augは3度・5度そのものを書き換える和音なので、7th/9thを積む既存2レイヤーの縦軸には
 // 構造的に乗らない（詳細はplan「gesture-app フェーズ2」参照）。
+import type { Chord, ChordTypeDef, LayerName, Mods } from './types.ts';
+
 export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 /** 通常レイヤー（トライアド中心）。配列順=画面の上から下。 */
-export const NORMAL_LAYER = [
+export const NORMAL_LAYER: ChordTypeDef[] = [
   { row: 4, suffix: '13', intervals: [0, 4, 7, 10, 14, 21], family: 'dom' },
   { row: 3, suffix: '7', intervals: [0, 4, 7, 10], family: 'dom' },
   { row: 2, suffix: 'maj9', intervals: [0, 4, 7, 11, 14], family: 'maj' },
@@ -28,7 +30,7 @@ export const NORMAL_LAYER = [
 ];
 
 /** Shiftレイヤー（4和音中心）。中心がmaj7、その真上がドミナント7th。 */
-export const SHIFT_LAYER = [
+export const SHIFT_LAYER: ChordTypeDef[] = [
   { row: 4, suffix: '7#9', intervals: [0, 4, 7, 10, 15], family: 'dom' },
   { row: 3, suffix: '13', intervals: [0, 4, 7, 10, 14, 21], family: 'dom' },
   { row: 2, suffix: '9', intervals: [0, 4, 7, 10, 14], family: 'dom' },
@@ -41,7 +43,7 @@ export const SHIFT_LAYER = [
 ];
 
 /** Ctrlレイヤー（sus・付加音系）。中心がsus4で、上=解決したがる緊張／下=甘く静か。 */
-export const CTRL_LAYER = [
+export const CTRL_LAYER: ChordTypeDef[] = [
   { row: 4, suffix: '7sus4b9', intervals: [0, 5, 7, 10, 13], family: 'sus' },
   { row: 3, suffix: '13sus4', intervals: [0, 5, 7, 10, 14, 21], family: 'sus' },
   { row: 2, suffix: '9sus4', intervals: [0, 5, 7, 10, 14], family: 'sus' },
@@ -54,7 +56,7 @@ export const CTRL_LAYER = [
 ];
 
 /** Ctrl+Shiftレイヤー（aug・オルタード系）。中心がaug、上=ドミナント側／下=マイナー・減系。 */
-export const CTRL_SHIFT_LAYER = [
+export const CTRL_SHIFT_LAYER: ChordTypeDef[] = [
   { row: 4, suffix: '7#9#5', intervals: [0, 4, 8, 10, 15], family: 'aug' },
   { row: 3, suffix: '7#5', intervals: [0, 4, 8, 10], family: 'aug' },
   { row: 2, suffix: '7b9', intervals: [0, 4, 7, 10, 13], family: 'aug' },
@@ -72,7 +74,7 @@ export const ROWS = NORMAL_LAYER.length; // 9
 export const DEFAULT_TONIC_MIDI = 60;
 
 /** 修飾キーの状態からレイヤー配列を選ぶ。 */
-export function layerFor(mods) {
+export function layerFor(mods?: Mods): ChordTypeDef[] {
   const ctrlHeld = mods?.ctrlHeld ?? false;
   const shiftHeld = mods?.shiftHeld ?? false;
   if (ctrlHeld && shiftHeld) return CTRL_SHIFT_LAYER;
@@ -84,20 +86,24 @@ export function layerFor(mods) {
 /**
  * 行インデックス（0=最上段）と修飾キー状態から、コード種類を引く。
  */
-export function chordTypeAt(rowIndex, mods) {
+export function chordTypeAt(rowIndex: number, mods?: Mods): ChordTypeDef {
   const layer = layerFor(mods);
   return layer[Math.max(0, Math.min(layer.length - 1, rowIndex))];
 }
 
-const LAYERS_BY_NAME = { normal: NORMAL_LAYER, shift: SHIFT_LAYER, ctrl: CTRL_LAYER, ctrlShift: CTRL_SHIFT_LAYER };
+const LAYERS_BY_NAME: Record<LayerName, ChordTypeDef[]> = {
+  normal: NORMAL_LAYER,
+  shift: SHIFT_LAYER,
+  ctrl: CTRL_LAYER,
+  ctrlShift: CTRL_SHIFT_LAYER,
+};
 
 /**
  * suffixからそれを含むレイヤー名の一覧を逆引きする（layerFor/chordTypeAtは順方向のみのため新設）。
  * 進行テンプレートの「次の一手」が現在のレイヤーに無いとき、ヒント文へ切り替え先を示すのに使う。
- * @returns {Array<'normal' | 'shift' | 'ctrl' | 'ctrlShift'>}
  */
-export function layersContainingSuffix(suffix) {
-  return Object.entries(LAYERS_BY_NAME)
+export function layersContainingSuffix(suffix: string): LayerName[] {
+  return (Object.entries(LAYERS_BY_NAME) as [LayerName, ChordTypeDef[]][])
     .filter(([, layer]) => layer.some((e) => e.suffix === suffix))
     .map(([name]) => name);
 }
@@ -106,9 +112,12 @@ export function layersContainingSuffix(suffix) {
  * トニックからの半音オフセットと行インデックスからコードを組み立てる。
  * 実際に鳴らすMIDIノート配列（ボイシング）はここでは持たない。voicing.jsのvoiceChord()/
  * rawVoicing()が、直前のボイシングや基準オクターブ設定を踏まえて別途計算する。
- * @returns {{name: string, suffix: string, rootMidi: number, rootPc: number, family: string, intervals: number[]}}
  */
-export function chordFromSemitone(semitone, rowIndex, { tonicMidi, shiftHeld, ctrlHeld }) {
+export function chordFromSemitone(
+  semitone: number,
+  rowIndex: number,
+  { tonicMidi, shiftHeld, ctrlHeld }: { tonicMidi: number; shiftHeld: boolean; ctrlHeld: boolean },
+): Chord {
   const type = chordTypeAt(rowIndex, { shiftHeld, ctrlHeld });
   const rootMidi = tonicMidi + semitone;
   const rootPc = ((rootMidi % 12) + 12) % 12;
@@ -132,7 +141,7 @@ export const VELOCITY_MAX = 127;
  * セル内縦位置（0=上端, 1=下端）をベロシティへ変換する。
  * 上下いっぱいにすると無音になってしまうため上限を設ける。
  */
-export function velocityFromCellY(ratio) {
+export function velocityFromCellY(ratio: number): number {
   const t = 1 - Math.max(0, Math.min(1, ratio));
   return Math.round(VELOCITY_MIN + (VELOCITY_MAX - VELOCITY_MIN) * t);
 }

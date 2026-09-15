@@ -10,15 +10,9 @@
 // 値('maj'|'dom'|'min'|'halfdim'|'dim')の配列で、いずれかに一致すればそのステップにマッチする。
 // line-cliche（半音下降ラインクリシェ）だけはfamiliesで区別が付かない(全ステップ度数0・min系)ため、
 // familiesの代わりにsuffixes（chord.suffixの完全一致）を使う。
+import type { PlayedChordSummary, Progression, ProgressionMatch, ProgressionStep } from './types.ts';
 
-/** @typedef {{degree: number, families?: string[], suffixes?: string[]}} ProgressionStep */
-/**
- * @typedef {{id: string, name: string, mode: 'major'|'minor', cyclic: boolean, steps: ProgressionStep[], minMatch?: number}} Progression
- *   minMatch: このテンプレートだけに適用する最小一致手数の上書き（省略時は既定値2）。
- */
-
-/** @type {Progression[]} */
-export const PROGRESSIONS = [
+export const PROGRESSIONS: Progression[] = [
   // ─────────────────────────────────────────────
   // ジャズ寄り(12)
   // ─────────────────────────────────────────────
@@ -284,29 +278,30 @@ export const PROGRESSIONS = [
   },
 ];
 
-/** @param {ProgressionStep} step @param {{degree: number, normFamily: string, suffix: string}} played */
-function stepMatches(step, played) {
+function stepMatches(step: ProgressionStep, played: PlayedChordSummary): boolean {
   if (step.degree !== played.degree) return false;
   if (step.suffixes) return step.suffixes.includes(played.suffix);
-  return step.families.includes(played.normFamily);
+  return played.normFamily != null && step.families!.includes(played.normFamily);
 }
 
 /** recentTail(長さn、古い順)が、steps[0..n-1]（テンプレートの先頭から連続）と一致するか。 */
-function windowMatches(recentTail, steps, n) {
+function windowMatches(recentTail: PlayedChordSummary[], steps: Progression['steps'], n: number): boolean {
   for (let i = 0; i < n; i++) {
     if (!stepMatches(steps[i], recentTail[i])) return false;
   }
   return true;
 }
 
+export interface MatchProgressionsOptions {
+  /** 最小一致手数は各テンプレートのminMatch（省略時2、詳細はPROGRESSIONS内のコメント参照）で決まるため、ここでは変更できない */
+  maxResults?: number;
+}
+
 /**
  * 直近の演奏履歴が、登録済みテンプレートのどれかと連続一致しているかを判定する。
- * @param {Array<{degree: number, normFamily: string, suffix: string}>} recent 古い順（末尾が直前のコード）
- * @param {'major'|'minor'} mode 現在のキーのモード（一致するテンプレートのみ対象）
- * @param {{maxResults?: number}} [opts] 最小一致手数は各テンプレートのminMatch（省略時2、
- *   詳細はPROGRESSIONS内のコメント参照）で決まるため、ここでは変更できない
- * @returns {Array<{id: string, name: string, matchedLength: number, position: number, total: number, next: ProgressionStep}>}
- *   一致した手数の長い順、最大maxResults件（次の一手が無い＝非cyclicで末尾到達したものは含まない）
+ * @param recent 古い順（末尾が直前のコード）
+ * @param mode 現在のキーのモード（一致するテンプレートのみ対象）
+ * @returns 一致した手数の長い順、最大maxResults件（次の一手が無い＝非cyclicで末尾到達したものは含まない）
  *
  * 一致は必ずテンプレートの先頭(steps[0])から連続していることを要求する（途中や末尾の
  * 部分列だけが偶然一致しても採用しない）。これが無いと、例えば6451進行(vi→IV→V→I)の
@@ -318,13 +313,17 @@ function windowMatches(recentTail, steps, n) {
  * （2026-09-10）。トレードオフとして「途中から気づいて弾き始めた場合の先読み」は
  * 失われるが、進捗表示の正確さを優先する。
  */
-export function matchProgressions(recent, mode, { maxResults = Infinity } = {}) {
-  const results = [];
+export function matchProgressions(
+  recent: PlayedChordSummary[],
+  mode: 'major' | 'minor',
+  { maxResults = Infinity }: MatchProgressionsOptions = {},
+): ProgressionMatch[] {
+  const results: ProgressionMatch[] = [];
   for (const prog of PROGRESSIONS) {
     if (prog.mode !== mode) continue;
     const steps = prog.steps;
     const progMinMatch = prog.minMatch ?? 2;
-    let best = null; // { n, endIndex }
+    let best: { n: number; endIndex: number } | null = null;
     for (let endIndex = 0; endIndex < steps.length; endIndex++) {
       const n = endIndex + 1; // 先頭からendIndexまでの連続一致のみを見る
       if (n > recent.length) break; // これ以上長い一致はrecentの手数を超える

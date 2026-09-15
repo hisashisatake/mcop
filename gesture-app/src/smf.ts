@@ -5,8 +5,9 @@
 // （SMPTEタイミングは非対応）。gesture-appのImport/Exportに必要な最小限のイベント種別
 // （NoteOn/NoteOff/Program/ControlChange/PitchBend/Tempoメタ）のみ解釈し、それ以外
 // （SysEx・他のメタイベント等）は読み飛ばす。
+import type { SmfEvent, SmfParseResult, SmfRawEvent } from './types.ts';
 
-function readVlq(data, i) {
+function readVlq(data: Uint8Array, i: number): [number, number] {
   // 32bitのビット演算だと4バイト目でオーバーフローしうるため、乗算で桁上げする
   // （Rust版はu64蓄積だがJSではNumberの安全な整数範囲で十分）。
   let val = 0;
@@ -19,7 +20,7 @@ function readVlq(data, i) {
   return [val, i];
 }
 
-function bytesToAscii(data, start, end) {
+function bytesToAscii(data: Uint8Array, start: number, end: number): string {
   let s = '';
   for (let i = start; i < end; i++) s += String.fromCharCode(data[i] ?? 0);
   return s;
@@ -27,16 +28,9 @@ function bytesToAscii(data, start, end) {
 
 /**
  * SMFバイト列をパースする。
- * @returns {{division: number, events: Array}} eventsはtick昇順（同tick内はファイル出現順）。
- *   種別ごとのフィールド:
- *   - {tick, kind:'noteOn', channel, note, velocity}
- *   - {tick, kind:'noteOff', channel, note}
- *   - {tick, kind:'program', channel, program}
- *   - {tick, kind:'controlChange', channel, cc, value}
- *   - {tick, kind:'pitchBend', channel, value}  // raw 14bit、中心=0
- *   - {tick, kind:'tempo', microsecondsPerQuarter}
+ * @returns eventsはtick昇順（同tick内はファイル出現順）。
  */
-export function parseSmf(data) {
+export function parseSmf(data: Uint8Array): SmfParseResult {
   if (data.length < 14 || bytesToAscii(data, 0, 4) !== 'MThd') {
     throw new Error('MThdヘッダがありません');
   }
@@ -46,7 +40,7 @@ export function parseSmf(data) {
     throw new Error('SMPTEタイミング(division<0)は未対応です');
   }
 
-  const events = [];
+  const events: SmfEvent[] = [];
   let i = 14;
   for (let t = 0; t < ntrk; t++) {
     if (i + 8 > data.length || bytesToAscii(data, i, i + 4) !== 'MTrk') break;
@@ -126,26 +120,25 @@ export function parseSmf(data) {
 // 生成（Format 1、複数トラック）
 // ─────────────────────────────────────────────
 
-/** @returns {{tick: number, bytes: number[]}} */
-export function noteOnEvent(tick, channel, note, velocity) {
+export function noteOnEvent(tick: number, channel: number, note: number, velocity: number): SmfRawEvent {
   return { tick, bytes: [0x90 | (channel & 0x0f), note & 0x7f, velocity & 0x7f] };
 }
 
-export function noteOffEvent(tick, channel, note) {
+export function noteOffEvent(tick: number, channel: number, note: number): SmfRawEvent {
   return { tick, bytes: [0x80 | (channel & 0x0f), note & 0x7f, 0] };
 }
 
-export function tempoMetaEvent(tick, microsecondsPerQuarter) {
+export function tempoMetaEvent(tick: number, microsecondsPerQuarter: number): SmfRawEvent {
   const us = microsecondsPerQuarter & 0xffffff;
   return { tick, bytes: [0xff, 0x51, 0x03, (us >> 16) & 0xff, (us >> 8) & 0xff, us & 0xff] };
 }
 
 /** 4/4拍子固定（gesture-appは他の拍子を扱わないため）。 */
-export function timeSignatureMetaEvent(tick) {
+export function timeSignatureMetaEvent(tick: number): SmfRawEvent {
   return { tick, bytes: [0xff, 0x58, 0x04, 4, 2, 24, 8] };
 }
 
-function writeVlq(buf, value) {
+function writeVlq(buf: number[], value: number): void {
   const stack = [value & 0x7f];
   value = Math.floor(value / 128);
   while (value > 0) {
@@ -155,21 +148,21 @@ function writeVlq(buf, value) {
   for (let i = stack.length - 1; i >= 0; i--) buf.push(stack[i]);
 }
 
-function pushString(buf, s) {
+function pushString(buf: number[], s: string): void {
   for (let i = 0; i < s.length; i++) buf.push(s.charCodeAt(i));
 }
 
-function pushU32(buf, v) {
+function pushU32(buf: number[], v: number): void {
   buf.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff);
 }
 
-function pushU16(buf, v) {
+function pushU16(buf: number[], v: number): void {
   buf.push((v >>> 8) & 0xff, v & 0xff);
 }
 
-function serializeTrack(events) {
+function serializeTrack(events: SmfRawEvent[]): number[] {
   const sorted = [...events].sort((a, b) => a.tick - b.tick);
-  const buf = [];
+  const buf: number[] = [];
   let prevTick = 0;
   for (const { tick, bytes } of sorted) {
     writeVlq(buf, Math.max(0, tick - prevTick));
@@ -180,13 +173,16 @@ function serializeTrack(events) {
   return buf;
 }
 
+export interface BuildSmfSpec {
+  ppq: number;
+  tracks: SmfRawEvent[][];
+}
+
 /**
  * SMF Format 1のバイト列を組み立てる。各トラックの末尾にEnd of Trackを自動付与する。
- * @param {{ppq: number, tracks: Array<Array<{tick: number, bytes: number[]}>>}} spec
- * @returns {Uint8Array}
  */
-export function buildSmf({ ppq, tracks }) {
-  const buf = [];
+export function buildSmf({ ppq, tracks }: BuildSmfSpec): Uint8Array {
+  const buf: number[] = [];
   pushString(buf, 'MThd');
   pushU32(buf, 6);
   pushU16(buf, 1); // format 1

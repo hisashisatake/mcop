@@ -1,21 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.js';
-import { voiceChord, rawVoicing, MIN_MIDI, MAX_MIDI } from '../src/voicing.js';
+import { chordFromSemitone, NORMAL_LAYER } from '../src/chords.ts';
+import { voiceChord, rawVoicing, MIN_MIDI, MAX_MIDI } from '../src/voicing.ts';
 
 const TONIC_MIDI = 60; // C4
 
-function chordFor(semitoneFromC, suffix) {
+function chordFor(semitoneFromC: number, suffix: string) {
   const rowIndex = NORMAL_LAYER.findIndex((e) => e.suffix === suffix);
   assert.notEqual(rowIndex, -1, `suffix "${suffix}" not found in NORMAL_LAYER`);
   return chordFromSemitone(semitoneFromC, rowIndex, { tonicMidi: TONIC_MIDI, shiftHeld: false, ctrlHeld: false });
 }
 
-function pitchClassSet(notes) {
+function pitchClassSet(notes: number[]): Set<number> {
   return new Set(notes.map((n) => ((n % 12) + 12) % 12));
 }
 
-function avgMovement(notes, previousNotes) {
+function avgMovement(notes: number[], previousNotes: number[]): number {
   let total = 0;
   for (const n of notes) {
     let best = Infinity;
@@ -112,9 +112,9 @@ test('requireRootInBass: 移動量最小化だけだとバスが根音に着地�
 test('voiceChordは短2度(半音)で密集する配置を選ばない（テンションがコアトーンの転回に埋もれて濁る問題の回帰テスト）', () => {
   // maj9のコアトーン(0,4,7,11)が転回で1オクターブ上がると、11(長7度)と12(オクターブ上の
   // ルート)が半音で隣接し、さらに9th(14)がその間に埋もれる形になっていた
-  const maj9Def = NORMAL_LAYER.find((d) => d.suffix === 'maj9');
+  const maj9Def = NORMAL_LAYER.find((d) => d.suffix === 'maj9')!;
   for (let rootPc = 0; rootPc < 12; rootPc++) {
-    const notes = voiceChord({ rootPc, intervals: maj9Def.intervals }, { previousNotes: [], centerMidi: 60 });
+    const notes = voiceChord({ rootPc, family: maj9Def.family, intervals: maj9Def.intervals }, { previousNotes: [], centerMidi: 60 });
     for (let i = 1; i < notes.length; i++) {
       assert.notEqual(notes[i] - notes[i - 1], 1, `半音で密集: root=${rootPc} notes=[${notes.join(',')}]`);
     }
