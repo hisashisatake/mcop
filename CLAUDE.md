@@ -330,6 +330,7 @@ cargo build --release -p op505-standalone
 Start-Process target\release\op505-standalone.exe
 
 cd gesture-app
+npm install  # 初回のみ
 npm run tauri dev
 ```
 
@@ -392,11 +393,23 @@ MIDI・ジェスチャー解釈・UIはコアの外側で行う。
   演奏系LFO（Vキーのビブラート⇔トレモロ切替）のEG形状自体はもう組み立てない——standalone側の
   `op505-midi`が「プリセットが形を持たずCC由来のdepthが正のときだけ標準形状を自動生成する」
   演奏用FGフォールバック（Step 2で実装済み）に委ねている。
-- `set_tempo`（タップテンポ）はMIDI経由の対応先が無いため撤去済み（TimeEgのテンポ同期は
-  MIDI Clock等を別途実装しない限り効かない、既知の制約）。
+- タップテンポは2026-09-04にMIDI Clock方式で復活済み（`src-tauri/src/midi_out.rs`のクロック
+  送信スレッドが24 PPQN間隔で`0xF8`を送り続け、Tauriコマンド`tap_tempo(bpm)`でBPM値を更新する。
+  standalone側`tempo_clock.rs`が受信してTimeEgのテンポ同期に反映。詳細はmemory
+  `project_bpm_supply_midi_clock.md`）。確定したBPMは`tempo-state.svelte.ts`の`$state`
+  （`tempoState.bpm`）が保持し、メニューバーのテンポ表示はこれを直接読むだけで自動追随する。
 - `.op505`プリセットの一覧・名前解決（`op505_presets.rs`）は読み取り専用で残す。実際の音色選択は
   Bank Select(CC0/32) + Program Changeとして送るだけで、ファイル編集（Open/Save/Save As/
   +New Voice/Delete）はstandaloneのトレイ起動音色エディタが担う。
+- フロントエンド（`src/`）はTypeScript + Svelte 5（Vite、runesベース）。DOM部分（メニューバー・
+  ドロワー・ステータスパネル・HUD等）は`src/components/`のSvelteコンポーネントへ分割し、
+  それらが読む表示用の小さな状態（テンポ・アクティブ画面・コード候補設定・演奏LFO表示等）は
+  `*.svelte.ts`の`$state`に置く（2026-09-15〜16のSvelte移行、詳細はmemory
+  `project_gesture_app_svelte_migration_consult.md`）。一方、コード履歴・リズムパターン・
+  メロディノートはSvelteの深いプロキシとUndo/Redoの不変スナップショット前提が食い違うため
+  あえて`$state`化せず、従来どおり各画面モジュール（`chord-screen.ts`等）内のプレーンな変数＋
+  `getXxxState()`/`setXxxState()`で扱う。Canvas描画（コード/リズム/メロディ3画面）も命令的な
+  実装のまま変えていない。
 
 ### ジェスチャーUI
 
