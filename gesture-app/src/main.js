@@ -1,15 +1,17 @@
 // エントリポイント。画面（現状はコード画面のみ）の起動と、画面共通のパネル類を配線する。
 
-import { setProgram, tapTempo, openEditor, queryProgramName, setSequencerRunning, CHORD_CHANNEL } from './midi.js';
-import { setupMidiLog } from './midi-log.js';
-import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.js';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauri } from '@tauri-apps/api/core';
+import { setProgram, tapTempo, openEditor, queryProgramName, setSequencerRunning, CHORD_CHANNEL } from './midi.ts';
+import { setupMidiLog } from './midi-log.ts';
+import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.ts';
 import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
 import { setupRhythmScreen, bindRhythmScreenControls, resetRhythmCursor } from './rhythm-screen.js';
 import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from './melody-screen.js';
-import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
-import { getBpm, setBpm } from './tempo-state.js';
-import { undo, redo } from './undo-manager.js';
-import { openProject, saveProject, saveProjectAs, importMidi, exportMidi } from './project-file.js';
+import { activeScreen, bindScreenTabs, onScreenChange } from './screens.ts';
+import { getBpm, setBpm } from './tempo-state.ts';
+import { undo, redo } from './undo-manager.ts';
+import { openProject, saveProject, saveProjectAs, importMidi, exportMidi } from './project-file.ts';
 
 setupMidiLog(document.getElementById('midi-log'));
 
@@ -47,7 +49,8 @@ resize();
 // 'SouthEast'（斜め）のみ使う——横だけ/縦だけ動かせば実質その方向だけのリサイズになる。
 document.getElementById('resize-grip').addEventListener('mousedown', async (e) => {
   e.preventDefault();
-  await window.__TAURI__?.window?.getCurrentWindow().startResizeDragging('SouthEast');
+  if (!isTauri()) return;
+  await getCurrentWindow().startResizeDragging('SouthEast');
 });
 
 // ─────────────────────────────────────────────
@@ -134,9 +137,11 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
   // エディタを開いて閉じた場合も、standaloneのタスクトレイメニューから開いて閉じた場合も、
   // Domino等で別音色を鳴らしてから戻ってきた場合も、このイベント1つで表示が追随する
   // （エディタは別ウィンドウのため、閉じれば必ずgesture-appへフォーカスが戻る）。
-  window.__TAURI__?.window?.getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-    if (focused) refreshProgramLabel();
-  });
+  if (isTauri()) {
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) refreshProgramLabel();
+    });
+  }
 })();
 
 // ─────────────────────────────────────────────

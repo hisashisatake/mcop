@@ -37,8 +37,8 @@
 // 状態で新しいコードを選ぶと、その先の履歴（未来スロットに見えていた続き）は破棄される
 // （分岐は保持しない設計判断。詳細はplan「gesture-app コード画面をグリッド方式からフロー方式へ刷新」）。
 
-import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.js';
-import { applyTo as applyLfoTo } from './performance-lfo.js';
+import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.ts';
+import { applyTo as applyLfoTo } from './performance-lfo.ts';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.ts';
 import { voiceChord, rawVoicing } from './voicing.ts';
 import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.ts';
@@ -55,8 +55,8 @@ import {
 } from './chord-flow.ts';
 import { matchProgressions } from './progressions.ts';
 import { computePastSlotGeoms } from './chord-layout.ts';
-import { isActive, onScreenChange } from './screens.js';
-import { pushUndo } from './undo-manager.js';
+import { isActive, onScreenChange } from './screens.ts';
+import { pushUndo } from './undo-manager.ts';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白

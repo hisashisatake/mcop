@@ -19,9 +19,9 @@
 // 12行（DEFAULT_ROW_NOTES/DEFAULT_ROW_LABELS）。行数が増えて1行18px未満になる場合は
 // 18px固定にしてホイールで縦スクロールする（メロディ画面と同じ方式）。
 
-import { isActive } from './screens.js';
-import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.js';
-import { pushUndo } from './undo-manager.js';
+import { isActive } from './screens.ts';
+import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.ts';
+import { pushUndo } from './undo-manager.ts';
 
 // MIDI Import/Export（project-file.js）が1小節のステップ数として参照するためexportする。
 export const STEPS = 16;

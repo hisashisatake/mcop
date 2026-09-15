@@ -17,6 +17,8 @@ export interface ChordTypeDef {
 
 export type LayerName = 'normal' | 'shift' | 'ctrl' | 'ctrlShift';
 
+export type ScreenName = 'chord' | 'rhythm' | 'melody';
+
 export interface Mods {
   shiftHeld?: boolean;
   ctrlHeld?: boolean;
@@ -278,4 +280,15 @@ export interface ProgramInfo {
   program: number;
   name?: string;
   status: ProgramInfoStatus;
+}
+
+/** op505_set_performance_lfoコマンドへ渡す引数（performance-lfo.ts参照）。 */
+export interface PerformanceLfoArgs {
+  channel: number;
+  rate: number;
+  delay: number;
+  destination: number;
+  cc77: number;
+  cc1: number;
+  modDepthRange: number;
 }

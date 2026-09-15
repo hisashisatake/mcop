@@ -3,7 +3,7 @@
 // （質感LFO退役に伴い独立したLFOスロットは無くなり、選ばれなかった側のFGは音色プリセット
 // 本来の値へ戻される。バックエンド側はsrc-tauri/src/main.rsのop505_set_performance_lfo参照）。
 
-import { setPerformanceLfo } from './midi.js';
+import { setPerformanceLfo } from './midi.ts';
 
 const LFO_RATE_DEFAULT = 140; // 中程度の速さ
 const LFO_RATE_STEP = 8;
@@ -18,10 +18,18 @@ const CC77_BASE = 0; // Depthベース値は0固定。深さはマウスホイ�
 let modWheel = 0; // CC1相当。0〜255
 let lfoDestination = LFO_DEST_PITCH;
 let lfoRate = LFO_RATE_DEFAULT;
-let indicatorEls = null; // { label, depthBar, rateLabel, rateBar }（ドロワー内のDOM要素）
+
+export interface LfoIndicatorEls {
+  label: HTMLElement;
+  depthBar: HTMLElement;
+  rateLabel: HTMLElement;
+  rateBar: HTMLElement;
+}
+
+let indicatorEls: LfoIndicatorEls | null = null; // ドロワー内のDOM要素
 
 /** 指定チャンネルへ現在のLFO設定を送る。発音直前に呼ぶ。 */
-export function applyTo(channel) {
+export function applyTo(channel: number): Promise<unknown> {
   return setPerformanceLfo({
     channel,
     rate: lfoRate,
@@ -35,10 +43,10 @@ export function applyTo(channel) {
 
 /**
  * ホイール（Depth）とV/C/Bキー（行き先・Rate）のハンドラを登録する。
- * @param {HTMLElement} target ホイールを拾う要素
- * @param {() => number[]} activeChannels 変更を即時反映する発音中チャンネル
+ * @param target ホイールを拾う要素
+ * @param activeChannels 変更を即時反映する発音中チャンネル
  */
-export function setupPerformanceLfo(target, activeChannels) {
+export function setupPerformanceLfo(target: HTMLElement, activeChannels: () => number[]): void {
   const applyToActive = async () => {
     for (const ch of activeChannels()) {
       await applyTo(ch);
@@ -47,7 +55,7 @@ export function setupPerformanceLfo(target, activeChannels) {
 
   target.addEventListener(
     'wheel',
-    async (e) => {
+    async (e: WheelEvent) => {
       e.preventDefault();
       modWheel = Math.max(0, Math.min(255, modWheel - Math.sign(e.deltaY) * 8));
       updateIndicator();
@@ -77,14 +85,13 @@ export function setupPerformanceLfo(target, activeChannels) {
 /**
  * ドロワー内のLFO状態表示（DOM）を配線する。以前はcanvasへ毎フレーム描画していたが、
  * 常時表示の操作UIをドロワーへ集約する仕様変更に伴いDOM表示へ切り替えた。
- * @param {{label: HTMLElement, depthBar: HTMLElement, rateLabel: HTMLElement, rateBar: HTMLElement}} els
  */
-export function bindLfoIndicator(els) {
+export function bindLfoIndicator(els: LfoIndicatorEls): void {
   indicatorEls = els;
   updateIndicator();
 }
 
-function updateIndicator() {
+function updateIndicator(): void {
   if (!indicatorEls) return;
   const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Gain FG)' : 'Vibrato (Pitch FG)';
   indicatorEls.label.textContent = `LFO: ${label} (V)`;

@@ -2,13 +2,14 @@
 // ファイルI/O自体（ダイアログ表示・読み書き）はRust側（src-tauri/src/project_file.rs）が
 // 行い、ここではJSON文字列の受け渡しと「今どのパスを開いているか」の記憶だけを持つ。
 
-import { serializeProject, deserializeAndApply } from './project-state.js';
-import { pushUndo, resetUndoHistory } from './undo-manager.js';
+import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
+import { serializeProject, deserializeAndApply } from './project-state.ts';
+import { pushUndo, resetUndoHistory } from './undo-manager.ts';
 import { getRows, setRows, STEPS as RHYTHM_STEPS_PER_BAR, DEFAULT_ROW_NOTES, DEFAULT_ROW_LABELS } from './rhythm-screen.js';
 import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_STEPS } from './melody-screen.js';
 import { gm2DrumName } from './gm2-drums.ts';
-import { getBpm, setBpm } from './tempo-state.js';
-import { tapTempo } from './midi.js';
+import { getBpm, setBpm } from './tempo-state.ts';
+import { tapTempo } from './midi.ts';
 import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.ts';
 import {
   melodyNotesToEvents,
@@ -21,7 +22,10 @@ import {
 } from './midi-convert.ts';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外では常にキャンセル扱い）
-const invoke = window.__TAURI__?.core?.invoke ?? (async () => null);
+function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
+  if (!isTauri()) return Promise.resolve(null);
+  return tauriInvoke<T>(cmd, args);
+}
 
 // gesture-app独自のチャンネル割り当て（Rust側main.rs CHORD_CHANNEL等と対にはならない、
 // standaloneへ送るMIDIチャンネルの規約。詳細はmemory
@@ -34,15 +38,20 @@ const TICKS_PER_RHYTHM_STEP = PPQ / 4; // 16分音符単位
 const MELODY_BARS = 8;
 const DEFAULT_EXPORT_BPM = 120; // タップテンポ未確定時のExport既定値
 
-let currentPath = null;
+let currentPath: string | null = null;
 
-export function currentProjectPath() {
+export function currentProjectPath(): string | null {
   return currentPath;
 }
 
-/** @returns {Promise<boolean>} 実際に開けたか（キャンセル・失敗ならfalse） */
-export async function openProject() {
-  const result = await invoke('open_project');
+interface OpenProjectResult {
+  json: string;
+  path: string;
+}
+
+/** @returns 実際に開けたか（キャンセル・失敗ならfalse） */
+export async function openProject(): Promise<boolean> {
+  const result = await invoke<OpenProjectResult>('open_project');
   if (!result) return false;
   deserializeAndApply(result.json);
   resetUndoHistory();
@@ -51,16 +60,17 @@ export async function openProject() {
 }
 
 /** 既知のパスがあれば上書き保存、無ければSave Asと同じ動作にフォールバックする。 */
-export async function saveProject() {
+export async function saveProject(): Promise<boolean> {
   if (!currentPath) return saveProjectAs();
   const json = serializeProject();
-  return invoke('save_project_to', { path: currentPath, json });
+  await invoke('save_project_to', { path: currentPath, json });
+  return true;
 }
 
-/** @returns {Promise<boolean>} 実際に保存したか（キャンセルならfalse） */
-export async function saveProjectAs() {
+/** @returns 実際に保存したか（キャンセルならfalse） */
+export async function saveProjectAs(): Promise<boolean> {
   const json = serializeProject();
-  const path = await invoke('save_project_as', { json });
+  const path = await invoke<string>('save_project_as', { json });
   if (!path) return false;
   currentPath = path;
   return true;
@@ -75,15 +85,20 @@ export async function saveProjectAs() {
 // （無関係な空データで上書きしてしまわないようにするため）。
 // ─────────────────────────────────────────────
 
+interface ImportMidiResult {
+  bytes: number[];
+}
+
 /**
- * @returns {Promise<boolean>} 実際に取り込めたか（キャンセル・パース失敗・
+ * @returns 実際に取り込めたか（キャンセル・パース失敗・
  *   有効なチャンネルが無かった場合はfalse）
  */
-export async function importMidi() {
-  const result = await invoke('import_midi');
+export async function importMidi(): Promise<boolean> {
+  const result = await invoke<ImportMidiResult>('import_midi');
   if (!result) return false;
 
-  let division, events;
+  let division: number;
+  let events: ReturnType<typeof parseSmf>['events'];
   try {
     ({ division, events } = parseSmf(new Uint8Array(result.bytes)));
   } catch {
@@ -122,8 +137,8 @@ export async function importMidi() {
   return true;
 }
 
-/** @returns {Promise<boolean>} 実際に保存したか（キャンセルならfalse） */
-export async function exportMidi() {
+/** @returns 実際に保存したか（キャンセルならfalse） */
+export async function exportMidi(): Promise<boolean> {
   const bpm = getBpm() ?? DEFAULT_EXPORT_BPM;
   const melodyEvents = melodyNotesToEvents(getNotes(), MELODY_CHANNEL, TICKS_PER_MELODY_STEP);
   const rhythmEvents = rhythmRowsToEvents(getRows(), RHYTHM_CHANNEL, TICKS_PER_RHYTHM_STEP, RHYTHM_STEPS_PER_BAR, MELODY_BARS);
@@ -135,6 +150,6 @@ export async function exportMidi() {
       rhythmEvents,
     ],
   });
-  const path = await invoke('export_midi', { bytes: Array.from(bytes) });
+  const path = await invoke<string>('export_midi', { bytes: Array.from(bytes) });
   return path != null;
 }

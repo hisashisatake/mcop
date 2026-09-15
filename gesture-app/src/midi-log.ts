@@ -4,14 +4,14 @@
 // 同じ経路を通る限り自動的に可視化される。
 
 const MAX_ENTRIES = 16;
-const entries = [];
-let listEl = null;
+const entries: string[] = [];
+let listEl: HTMLElement | null = null;
 
-export function setupMidiLog(el) {
+export function setupMidiLog(el: HTMLElement): void {
   listEl = el;
 }
 
-export function pushLog(text) {
+export function pushLog(text: string): void {
   const now = new Date();
   const time = now.toLocaleTimeString('ja-JP', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
   entries.push(`${time}  ${text}`);
@@ -19,7 +19,7 @@ export function pushLog(text) {
   render();
 }
 
-function render() {
+function render(): void {
   if (!listEl) return;
   listEl.textContent = entries.join('\n');
   listEl.scrollTop = listEl.scrollHeight;
