@@ -198,7 +198,11 @@ bindChordScreenControls({
 });
 
 const rhythmScreen = setupRhythmScreen(canvas);
-bindRhythmScreenControls({ metronomeToggle: document.getElementById('metronome-toggle') });
+bindRhythmScreenControls({
+  metronomeToggle: document.getElementById('metronome-toggle'),
+  playButton: document.getElementById('rhythm-play-btn'),
+  stopButton: document.getElementById('rhythm-stop-btn'),
+});
 
 const melodyScreen = setupMelodyScreen(canvas);
 
@@ -221,7 +225,7 @@ const rhythmControlsEl = document.getElementById('rhythm-controls');
 const statusKeyRowEl = document.getElementById('status-key-row'); // 常時表示の#status-panel内、Key選択はコード画面専用
 const hintEl = document.getElementById('hint');
 const CHORD_HINT = hintEl.innerHTML;
-const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>メトロノームON/OFFは下の音源パネルのチェックボックスから<br>E: 音色エディタ';
+const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>再生/停止・メトロノームON/OFFは下の音源パネルから（再生にはTAPでテンポ確定が必要）<br>E: 音色エディタ';
 const MELODY_HINT = '<div class="drawer-section-title">操作</div>メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
 
 onScreenChange((next) => {

@@ -218,6 +218,13 @@ fn set_rhythm_step(row: u8, step: u8, level: u8) {
     midi_out::set_rhythm_step(row, step, level);
 }
 
+/// リズム画面の再生/停止ボタンで呼ばれる。クロック自体（メトロノーム・TimeEgテンポ同期）は
+/// 止めず、パターンの発音・再生カーソル通知だけを止める。
+#[tauri::command]
+fn set_rhythm_running(running: bool) {
+    midi_out::set_rhythm_running(running);
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -236,6 +243,7 @@ fn main() {
             tap_tempo,
             set_metronome_enabled,
             set_rhythm_step,
+            set_rhythm_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
