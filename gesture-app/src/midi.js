@@ -67,10 +67,11 @@ export function onSequencerTick(callback) {
   tauriEvent.listen('sequencer-tick', (event) => callback(event.payload));
 }
 
-/** リズム画面のグリッドセルのベロシティ段階を設定する。`level`は0(消音)〜3(弱)。
+/** リズム画面のグリッドセルのベロシティ段階を設定する。`note`はGM2ノート番号
+ * （行の対応表自体はJS側rhythm-screen.jsが持つ）、`level`は0(消音)〜3(弱)。
  * 実際の発音判定・送信はRust側`clock_loop`が持つ共有パターンへの書き込みのみ行う。 */
-export function setRhythmStep(row, step, level) {
-  return invoke('set_rhythm_step', { row, step, level });
+export function setRhythmStep(note, step, level) {
+  return invoke('set_rhythm_step', { note, step, level });
 }
 
 /** Rust側`clock_loop`が16分音符（6クロック）ごとに送る`rhythm-step`（payload=小節内の
@@ -80,9 +81,34 @@ export function onRhythmStepTick(callback) {
   tauriEvent.listen('rhythm-step', (event) => callback(event.payload));
 }
 
-/** リズム画面の再生/停止ボタン。MIDI Clock自体（メトロノーム・TimeEgテンポ同期）は
- * 止めず、パターンの発音・再生カーソル通知だけを止める。 */
-export function setRhythmRunning(running) {
-  pushLog(`rhythm ${running ? 'play' : 'stop'}`);
-  return invoke('set_rhythm_running', { running });
+/** リズム/メロディ画面共通の再生/停止ボタン。MIDI Clock自体（メトロノーム・
+ * TimeEgテンポ同期）は止めず、両パターンの発音・再生カーソル通知だけを止める。 */
+export function setSequencerRunning(running) {
+  pushLog(`sequencer ${running ? 'play' : 'stop'}`);
+  return invoke('set_sequencer_running', { running });
+}
+
+/** メロディ画面で新規ノートを作成する。`id`はJS側（melody-screen.js）が採番した
+ * 一意な値。実際の発音判定はRust側`clock_loop`が持つ共有ノートリストへの
+ * 書き込みのみ行う。 */
+export function addMelodyNote(id, startStep, lengthSteps, pitch, level) {
+  return invoke('add_melody_note', { id, startStep, lengthSteps, pitch, level });
+}
+
+/** メロディ画面でのノート移動・リサイズ・音量サイクルで呼ぶ（全フィールドを
+ * 丸ごと書き換える）。 */
+export function updateMelodyNote(id, startStep, lengthSteps, pitch, level) {
+  return invoke('update_melody_note', { id, startStep, lengthSteps, pitch, level });
+}
+
+/** メロディ画面のDELキーでのノート削除。 */
+export function deleteMelodyNote(id) {
+  return invoke('delete_melody_note', { id });
+}
+
+/** Rust側`clock_loop`が8分音符（12クロック）ごとに送る`melody-step`（payload=
+ * ループ全体でのステップ番号0〜63）を購読する。メロディ画面の再生カーソル描画専用。 */
+export function onMelodyStepTick(callback) {
+  if (!tauriEvent?.listen) return;
+  tauriEvent.listen('melody-step', (event) => callback(event.payload));
 }

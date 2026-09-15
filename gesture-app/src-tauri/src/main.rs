@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod midi_out;
+mod project_file;
 mod query_client;
 
 /// コード発音に使うMIDIチャンネル。1チャンネルへ最大8声を重ねて鳴らす。
@@ -210,19 +211,39 @@ fn set_metronome_enabled(enabled: bool) {
     midi_out::set_metronome_enabled(enabled);
 }
 
-/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`level`は0(消音)〜
-/// 3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、ここでは
-/// 共有パターンへ書き込むだけ。
+/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`note`はGM2ノート番号
+/// （行の対応表自体はJS側`rhythm-screen.js`が持つ、フェーズ3で行の固定12個制約を撤廃）、
+/// `level`は0(消音)〜3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、
+/// ここでは共有パターンへ書き込むだけ。
 #[tauri::command]
-fn set_rhythm_step(row: u8, step: u8, level: u8) {
-    midi_out::set_rhythm_step(row, step, level);
+fn set_rhythm_step(note: u8, step: u8, level: u8) {
+    midi_out::set_rhythm_step(note, step, level);
 }
 
-/// リズム画面の再生/停止ボタンで呼ばれる。クロック自体（メトロノーム・TimeEgテンポ同期）は
-/// 止めず、パターンの発音・再生カーソル通知だけを止める。
+/// リズム/メロディ画面共通の再生/停止ボタンで呼ばれる。クロック自体（メトロノーム・
+/// TimeEgテンポ同期）は止めず、両パターンの発音・再生カーソル通知だけを止める。
 #[tauri::command]
-fn set_rhythm_running(running: bool) {
-    midi_out::set_rhythm_running(running);
+fn set_sequencer_running(running: bool) {
+    midi_out::set_sequencer_running(running);
+}
+
+/// メロディ画面で新規ノートを作成したときに呼ばれる。`id`はJS側が採番した一意な値。
+#[tauri::command]
+fn add_melody_note(id: u32, start_step: u16, length_steps: u16, pitch: u8, level: u8) {
+    midi_out::add_melody_note(id, start_step, length_steps, pitch, level);
+}
+
+/// メロディ画面でノートを移動・リサイズ・音量サイクルしたときに呼ばれる
+/// （全フィールドを丸ごと書き換える）。
+#[tauri::command]
+fn update_melody_note(id: u32, start_step: u16, length_steps: u16, pitch: u8, level: u8) {
+    midi_out::update_melody_note(id, start_step, length_steps, pitch, level);
+}
+
+/// メロディ画面でDELキーによりノートを削除したときに呼ばれる。
+#[tauri::command]
+fn delete_melody_note(id: u32) {
+    midi_out::delete_melody_note(id);
 }
 
 fn main() {
@@ -243,7 +264,15 @@ fn main() {
             tap_tempo,
             set_metronome_enabled,
             set_rhythm_step,
-            set_rhythm_running,
+            set_sequencer_running,
+            add_melody_note,
+            update_melody_note,
+            delete_melody_note,
+            project_file::open_project,
+            project_file::save_project_as,
+            project_file::save_project_to,
+            project_file::import_midi,
+            project_file::export_midi,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -52,7 +52,7 @@
        帯自体は塗りつぶした背景を持つが、中の項目（☰・画面ごとのアイコンボタン）は
        枠なし・非ホバー時透明のフラットなツールバー項目にする（「押しっぱなしの
        ボタン」に見えないようにするのが狙い）。ハンバーガーメニューを左端に置き、
-       画面ごとに出し入れするアイコンボタン（現状はRHYTHM画面の再生/停止）を
+       画面ごとに出し入れするアイコンボタン（現状はRHYTHM/MELODY画面共通の再生/停止）を
        右へ続けて並べる。これ以外の操作UI・ログ・設定は全てハンバーガーメニューの
        ドロワーの中。 */
     #menu-bar {
@@ -120,6 +120,15 @@
     #drawer-tabs button.active {
       background: #2a4a3a; color: #dfd; border-color: #3a6a4a;
     }
+
+    /* Fileメニュー（Open/Save/Save As） */
+    #file-section .program-row { gap: 6px; }
+    #file-section button {
+      flex: 1;
+      background: #1a1a1a; color: #ccc; border: 1px solid #333;
+      font-family: monospace; font-size: 12px; padding: 8px 4px; cursor: pointer;
+    }
+    #file-section button:hover { background: #242424; }
 
     /* LFO/Rateインジケーター（旧: canvas描画。ドロワー内のDOM表示へ変更） */
     .lfo-row { font-size: 13px; color: #666; }
@@ -215,8 +224,8 @@
 
   <div id="menu-bar">
     <button type="button" id="menu-toggle" title="メニュー">☰</button>
-    <button type="button" id="rhythm-play-btn" title="再生" hidden>▶</button>
-    <button type="button" id="rhythm-stop-btn" title="停止" hidden disabled>■</button>
+    <button type="button" id="sequencer-play-btn" title="再生" hidden>▶</button>
+    <button type="button" id="sequencer-stop-btn" title="停止" hidden disabled>■</button>
     <span id="tempo-display" class="menu-bar-label">120 BPM</span>
     <button id="tap-tempo-btn" type="button" title="タップテンポ">TAP</button>
   </div>
@@ -226,6 +235,19 @@
       <button type="button" id="tab-chord">CHORD</button>
       <button type="button" id="tab-rhythm">RHYTHM</button>
       <button type="button" id="tab-melody">MELODY</button>
+    </div>
+
+    <div id="file-section">
+      <div class="drawer-section-title">FILE</div>
+      <div class="program-row">
+        <button type="button" id="file-open-btn">Open</button>
+        <button type="button" id="file-save-btn">Save</button>
+        <button type="button" id="file-save-as-btn">Save As</button>
+      </div>
+      <div class="program-row">
+        <button type="button" id="file-import-btn">Import .mid</button>
+        <button type="button" id="file-export-btn">Export .mid</button>
+      </div>
     </div>
 
     <div id="lfo-section">

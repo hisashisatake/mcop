@@ -8,8 +8,11 @@
 //     操作自体を取り消し、上書き前のentries全体（上書きされる前に見えていた続きも含む）へ
 //     丸ごと復元する。例: A-B-C-Dと選んでからBまで戻りEを選ぶとA-B-Eになるが、Ctrl+Zを押すと
 //     A-B-C-D（カーソルはB）に戻る）。編集操作でないただのカーソル移動（過去/未来クリックや
-//     Ctrl+Z/Y自体）はこのUndo/Redoスタックに積まない
+//     Ctrl+Z/Y自体）はこのUndo/Redoスタックに積まない。
+//   - Ctrl+Z/Yのキー捕捉自体と履歴スタックの実体はundo-manager.jsへ統合済み（CHORD/RHYTHM/MELODY
+//     3画面共通、main.jsがグローバルに配線する）。このファイルはpushUndo()を呼ぶ側でしかない
 //
+
 // 操作:
 //   候補セルをクリック … 押している間だけ発音し、離しても選択は確定して現在コードになる
 //                        （セル内上下でベロシティ、上側ほど強い）。cursorより先の履歴が
@@ -53,6 +56,7 @@ import {
 import { matchProgressions } from './progressions.js';
 import { computePastSlotGeoms } from './chord-layout.js';
 import { isActive, onScreenChange } from './screens.js';
+import { pushUndo } from './undo-manager.js';
 
 const TOP_MARGIN = 40; // 上部の余白（画面タブ・ヒント・ログ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 左下固定の#hud（コード名の大きな表示）・右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と過去/現在/未来スロット・候補ブロックが重ならないための余白
@@ -128,11 +132,9 @@ let pointerHeld = false; // マウスボタンを押している最中か（awai
 let history = createHistory({ tonicMidi, mode });
 let candidateCache = null; // { cacheKey, grid: [...] }
 
-// Ctrl+Z/Ctrl+Yの編集Undo/Redo用スタック（Mementoパターン）。要素はcommitSelection直前のhistory
-// スナップショットそのもの（historyは常に新しいオブジェクトを返す設計のため、参照を保持するだけで
-// 安全に巻き戻せる）。過去/未来クリックによるcursor移動はここへ積まない（編集操作ではないため）。
-let undoStack = [];
-let redoStack = [];
+// setupChordScreen()に渡されたonChordChangeを保持する（Undo/Redo・ファイル読込による
+// 復元時にもHUD更新を呼べるようにするため、モジュール変数として持つ）。
+let onChangeCallback = null;
 
 let tonicSelectEl = null;
 let modeSelectEl = null;
@@ -209,8 +211,6 @@ function syncControlsFromState() {
 
 function resetHistory() {
   history = createHistory({ tonicMidi, mode });
-  undoStack = [];
-  redoStack = [];
   invalidateCandidates();
   syncControlsFromState();
 }
@@ -386,14 +386,13 @@ function voicingForPlayback(index) {
 
 /**
  * 候補コードの選択を即座に確定する（発音は呼び出し側が行う）。選択は保持時間に関わらず確定する。
- * 編集操作なのでundoStackへ直前のhistoryを積み、redoStackは破棄する（一般的なUndo/Redoの規約）。
+ * 編集操作なので統合Undo/Redo（undo-manager.js）へ直前の状態を積む。
  * velocity・voicingは選択時に一度だけentryへ焼き付ける（過去/未来クリックでの再訪では変化しない）。
  */
 function commitSelection(chord, velocity) {
   const { key, pendingPivot } = evaluateTheoryTransition(chord);
   const voicing = voicingFor(chord);
-  undoStack.push(history);
-  redoStack = [];
+  pushUndo();
   history = selectChord(history, { chord, key, pendingPivot, velocity, voicing });
   applyKey(key);
   invalidateCandidates();
@@ -402,8 +401,8 @@ function commitSelection(chord, velocity) {
 
 /**
  * 自動転回ON/OFF・基準オクターブ設定を反映して、履歴全体のvoicingを先頭から計算し直す
- * （各entryは新規オブジェクトとして作り直す。undoStackが古いentry参照を保持しているため、
- * 既存entryを書き換えるとUndoスナップショットまで巻き込んで壊れる）。
+ * （各entryは新規オブジェクトとして作り直す。統合Undo/Redoのスナップショットが古いentry参照を
+ * 保持しているため、既存entryを書き換えるとそちらまで巻き込んで壊れる）。
  */
 function revoiceHistory() {
   const centerMidi = 60 + 12 * baseOctave;
@@ -432,26 +431,26 @@ function jumpToIndex(index) {
   startSlide(direction);
 }
 
-/** 直前のコード選択（過去へ戻った上での上書きも含む）を取り消し、その操作の直前のhistoryへ丸ごと復元する。 */
-function undoEdit() {
-  if (undoStack.length === 0) return;
-  redoStack.push(history);
-  history = undoStack.pop();
-  revoiceHistory(); // 現在の自動転回/基準オクターブ設定を常に反映させる
-  applyKey(keyAt(history));
-  invalidateCandidates();
-  startSlide(-1);
+/**
+ * このコード画面が持つ状態（履歴）を取得する。project-state.jsがプロジェクト全体の
+ * スナップショットを組み立てる際に呼ぶ。historyは常に新規オブジェクトを返す設計
+ * （chord-flow.js参照）なので、参照をそのまま返してよい。
+ */
+export function getChordState() {
+  return history;
 }
 
-/** undoEditで取り消したコード選択をやり直す。 */
-function redoEdit() {
-  if (redoStack.length === 0) return;
-  undoStack.push(history);
-  history = redoStack.pop();
+/**
+ * 統合Undo/Redo・ファイル読込による復元用。historyを丸ごと差し替え、現在の自動転回/
+ * 基準オクターブ設定を反映するためrevoiceHistory()を呼んでからHUDへ通知する
+ * （旧undoEdit/redoEditと同じ手順）。
+ */
+export function setChordState(newHistory) {
+  history = newHistory;
   revoiceHistory();
   applyKey(keyAt(history));
   invalidateCandidates();
-  startSlide(1);
+  onChangeCallback?.(chordDisplayInfo(currentEntry(history)));
 }
 
 async function playChord(notes, velocity) {
@@ -464,6 +463,7 @@ async function playChord(notes, velocity) {
 }
 
 export function setupChordScreen(canvas, { onChordChange } = {}) {
+  onChangeCallback = onChordChange;
   canvas.addEventListener('mousemove', (e) => {
     if (!isActive('chord')) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
@@ -510,8 +510,7 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
         pointerHeld = false;
       } else if (cell.col === 'center') {
         const velocity = velocityFromCellY(cell.yRatio);
-        undoStack.push(history);
-        redoStack = [];
+        pushUndo();
         history = updateVelocity(history, history.cursor, velocity);
         await playChord(voicingForPlayback(history.cursor), velocity);
       } else if (cell.col === 'right') {
@@ -578,15 +577,6 @@ export function setupChordScreen(canvas, { onChordChange } = {}) {
       e.preventDefault();
       altHeld = true;
       syncAutoVoicingToggleDisplay();
-    } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if (e.shiftKey) redoEdit();
-      else undoEdit();
-      onChordChange?.(chordDisplayInfo(currentEntry(history)));
-    } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      redoEdit();
-      onChordChange?.(chordDisplayInfo(currentEntry(history)));
     } else if (e.key === 'ArrowDown') {
       assistRows = Math.max(MIN_ROWS, assistRows - 1);
       invalidateCandidates();
