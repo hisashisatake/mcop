@@ -1,4 +1,5 @@
 gesture-app/node_modules/
+gesture-app/dist/
 gesture-app/src-tauri/gen/
 .vscode/
 docs/
