@@ -216,6 +216,11 @@ fn rhythm_pattern() -> &'static Mutex<[[u8; RHYTHM_STEPS]; RHYTHM_ROWS]> {
     RHYTHM_PATTERN.get_or_init(|| Mutex::new([[0; RHYTHM_STEPS]; RHYTHM_ROWS]))
 }
 
+/// リズム画面の再生/停止ボタンの状態。MIDI Clock自体（メトロノーム・TimeEgテンポ同期が
+/// 依存する）は止めず、パターンの発音とステップ通知だけをゲートする。既定は停止中
+/// （テンポをタップしただけでは鳴らず、再生ボタンを押すまでパターンは待機する）。
+static RHYTHM_RUNNING: AtomicBool = AtomicBool::new(false);
+
 /// リズム画面のグリッドクリックで呼ばれる。`level`は0〜3（4以上は3にクランプ）。
 /// パターンはテンポが未設定（クロック未送出）でも保持され、`tap_tempo`後に反映される。
 pub fn set_rhythm_step(row: u8, step: u8, level: u8) {
@@ -224,6 +229,12 @@ pub fn set_rhythm_step(row: u8, step: u8, level: u8) {
         return;
     }
     rhythm_pattern().lock().unwrap()[row][step] = level.min(3);
+}
+
+/// リズム画面の再生/停止ボタン。停止中はステップの発音・`rhythm-step`イベント送出を
+/// 両方止める（クロック自体・メトロノームは影響を受けない）。
+pub fn set_rhythm_running(running: bool) {
+    RHYTHM_RUNNING.store(running, Ordering::Relaxed);
 }
 
 /// `sequencer-tick`イベントの送信先。`main.rs`の`setup`から一度だけ渡す。
@@ -277,7 +288,7 @@ fn clock_loop() {
             }
         }
 
-        if clock_in_bar % CLOCKS_PER_STEP == 0 {
+        if clock_in_bar % CLOCKS_PER_STEP == 0 && RHYTHM_RUNNING.load(Ordering::Relaxed) {
             let step = (clock_in_bar / CLOCKS_PER_STEP) as usize;
             {
                 let pattern = rhythm_pattern().lock().unwrap();

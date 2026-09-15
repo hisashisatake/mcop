@@ -79,3 +79,10 @@ export function onRhythmStepTick(callback) {
   if (!tauriEvent?.listen) return;
   tauriEvent.listen('rhythm-step', (event) => callback(event.payload));
 }
+
+/** リズム画面の再生/停止ボタン。MIDI Clock自体（メトロノーム・TimeEgテンポ同期）は
+ * 止めず、パターンの発音・再生カーソル通知だけを止める。 */
+export function setRhythmRunning(running) {
+  pushLog(`rhythm ${running ? 'play' : 'stop'}`);
+  return invoke('set_rhythm_running', { running });
+}

@@ -4,14 +4,16 @@
 // 消音→通常→アクセント→弱→消音…の順にベロシティが巡回する（3段階＋消音）。
 // 発音のタイミング自体はRust側`clock_loop`が持つ（JSタイマーは数十msの誤差が
 // 出るため使わない）。JSはパターンをRustへミラーし、`rhythm-step`イベントで
-// 受け取った再生位置をカーソルとして描くだけ。パターンはテンポ（タップテンポ）が
-// 設定されクロックが走っている間、画面を切り替えても裏で鳴り続ける
+// 受け取った再生位置をカーソルとして描くだけ。パターンの発音は再生/停止ボタンの
+// ON/OFF（Rust側`RHYTHM_RUNNING`）でゲートされ、テンポ（タップテンポ）が設定され
+// クロックが走っている間は、画面を切り替えても再生中のパターンは裏で鳴り続ける
 // （「ループ再生の上に各パートを重ねる」というミニDAWの設計意図どおり）。
 //
-// メトロノームのON/OFFはリズムパターンとは独立で、フェーズ3から変更なし。
+// メトロノームのON/OFF・MIDI Clock自体（TimeEgテンポ同期が使う）は再生/停止ボタンとは
+// 独立で、停止中も動き続ける。
 
 import { isActive } from './screens.js';
-import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.js';
+import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep, setRhythmRunning } from './midi.js';
 
 const ROWS = 12;
 const STEPS = 16;
@@ -50,13 +52,36 @@ export function setupRhythmScreen(canvas) {
   return { draw: (ctx) => draw(ctx, canvas) };
 }
 
-/** メトロノームON/OFFのチェックボックスを配線する。 */
-export function bindRhythmScreenControls({ metronomeToggle }) {
-  if (!metronomeToggle) return;
-  metronomeToggle.checked = false;
-  metronomeToggle.addEventListener('change', () => {
-    setMetronomeEnabled(metronomeToggle.checked);
-  });
+/** メトロノームON/OFFのチェックボックスと、パターン再生/停止ボタンを配線する。
+ * 再生/停止はパターンの発音・再生カーソルだけを止める（MIDI Clock自体・メトロノームは
+ * 独立して動き続ける、詳細はmidi_out.rs `RHYTHM_RUNNING`のコメント参照）。 */
+export function bindRhythmScreenControls({ metronomeToggle, playButton, stopButton }) {
+  if (metronomeToggle) {
+    metronomeToggle.checked = false;
+    metronomeToggle.addEventListener('change', () => {
+      setMetronomeEnabled(metronomeToggle.checked);
+    });
+  }
+
+  const updateButtons = (running) => {
+    if (playButton) playButton.disabled = running;
+    if (stopButton) stopButton.disabled = !running;
+  };
+  updateButtons(false);
+
+  if (playButton) {
+    playButton.addEventListener('click', () => {
+      updateButtons(true);
+      setRhythmRunning(true);
+    });
+  }
+  if (stopButton) {
+    stopButton.addEventListener('click', () => {
+      updateButtons(false);
+      currentStep = -1;
+      setRhythmRunning(false);
+    });
+  }
 }
 
 function gridMetrics(canvas) {

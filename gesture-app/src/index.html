@@ -143,6 +143,9 @@
     #program-panel input[type="number"]:disabled {
       opacity: 0.4;
     }
+    #program-panel button:disabled, #status-panel button:disabled {
+      opacity: 0.4; cursor: default;
+    }
     #program-panel select, #status-panel select {
       background: #222; color: #eee; border: 1px solid #444;
       font-family: monospace; font-size: 12px; padding: 2px 4px;
@@ -223,6 +226,10 @@
       <div id="rhythm-controls" hidden>
         <div class="program-row">
           <label><input type="checkbox" id="metronome-toggle"> メトロノーム</label>
+        </div>
+        <div class="program-row">
+          <button type="button" id="rhythm-play-btn">▶ 再生</button>
+          <button type="button" id="rhythm-stop-btn" disabled>■ 停止</button>
         </div>
       </div>
     </div>
