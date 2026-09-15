@@ -1,11 +1,11 @@
 // エントリポイント。画面（現状はコード画面のみ）の起動と、画面共通のパネル類を配線する。
 
-import { setProgram, tapTempo, openEditor, queryProgramName, CHORD_CHANNEL } from './midi.js';
+import { setProgram, tapTempo, openEditor, queryProgramName, setSequencerRunning, CHORD_CHANNEL } from './midi.js';
 import { setupMidiLog } from './midi-log.js';
 import { setupPerformanceLfo, bindLfoIndicator } from './performance-lfo.js';
 import { setupChordScreen, bindChordScreenControls, activeChannels } from './chord-screen.js';
-import { setupRhythmScreen, bindRhythmScreenControls } from './rhythm-screen.js';
-import { setupMelodyScreen } from './melody-screen.js';
+import { setupRhythmScreen, bindRhythmScreenControls, resetRhythmCursor } from './rhythm-screen.js';
+import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from './melody-screen.js';
 import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
 
 setupMidiLog(document.getElementById('midi-log'));
@@ -198,15 +198,33 @@ bindChordScreenControls({
 });
 
 const rhythmScreen = setupRhythmScreen(canvas);
-const rhythmPlayBtn = document.getElementById('rhythm-play-btn');
-const rhythmStopBtn = document.getElementById('rhythm-stop-btn');
 bindRhythmScreenControls({
   metronomeToggle: document.getElementById('metronome-toggle'),
-  playButton: rhythmPlayBtn,
-  stopButton: rhythmStopBtn,
 });
 
 const melodyScreen = setupMelodyScreen(canvas);
+
+// リズム/メロディ共通の再生/停止ボタン（メニューバー）。両画面のパターンを同時に
+// 再生/停止する。停止時は両画面の再生カーソルも揃えてリセットする（Rust側は
+// `rhythm-step`/`melody-step`イベントの送出を止めるだけで、直前のカーソル位置は
+// 明示的に片付けてくれないため）。
+const sequencerPlayBtn = document.getElementById('sequencer-play-btn');
+const sequencerStopBtn = document.getElementById('sequencer-stop-btn');
+function updateSequencerButtons(running) {
+  sequencerPlayBtn.disabled = running;
+  sequencerStopBtn.disabled = !running;
+}
+updateSequencerButtons(false);
+sequencerPlayBtn.addEventListener('click', () => {
+  updateSequencerButtons(true);
+  setSequencerRunning(true);
+});
+sequencerStopBtn.addEventListener('click', () => {
+  updateSequencerButtons(false);
+  resetRhythmCursor();
+  resetMelodyCursor();
+  setSequencerRunning(false);
+});
 
 bindScreenTabs({
   chord: document.getElementById('tab-chord'),
@@ -228,14 +246,14 @@ const statusKeyRowEl = document.getElementById('status-key-row'); // 常時表�
 const hintEl = document.getElementById('hint');
 const CHORD_HINT = hintEl.innerHTML;
 const RHYTHM_HINT = '<div class="drawer-section-title">操作</div>クリック: セルのベロシティを巡回（消音→通常→アクセント→弱）<br>再生/停止は左上メニューバーのアイコンから（再生にはTAPでテンポ確定が必要）<br>メトロノームON/OFFは下の音源パネルから<br>E: 音色エディタ';
-const MELODY_HINT = '<div class="drawer-section-title">操作</div>メロディ画面は準備中（フェーズ6）<br>E: 音色エディタ';
+const MELODY_HINT = '<div class="drawer-section-title">操作</div>空セルをクリック+ドラッグ: ノート作成（長さ調整）<br>ノートをクリック: 選択<br>選択中ノートをクリック: 音量を巡回（通常→アクセント→弱）<br>選択中ノートをドラッグ: 移動<br>ノート右端をドラッグ: 長さ変更<br>DEL: 選択中ノートを削除<br>ホイール: 音域スクロール　Shift+ホイール: 小節スクロール<br>再生/停止はリズムと共通（左上メニューバー）<br>E: 音色エディタ';
 
 onScreenChange((next) => {
   chordControlsEl.hidden = next !== 'chord';
   rhythmControlsEl.hidden = next !== 'rhythm';
   statusKeyRowEl.hidden = next !== 'chord';
-  rhythmPlayBtn.hidden = next !== 'rhythm';
-  rhythmStopBtn.hidden = next !== 'rhythm';
+  sequencerPlayBtn.hidden = next !== 'rhythm' && next !== 'melody';
+  sequencerStopBtn.hidden = next !== 'rhythm' && next !== 'melody';
   hintEl.innerHTML = next === 'chord' ? CHORD_HINT : next === 'rhythm' ? RHYTHM_HINT : MELODY_HINT;
 });
 
@@ -250,6 +268,8 @@ bindLfoIndicator({
 window.addEventListener('keydown', async (e) => {
   if (e.key.toLowerCase() === 'e') {
     await openEditor();
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && activeScreen() === 'melody') {
+    deleteSelectedMelodyNote();
   }
 });
 

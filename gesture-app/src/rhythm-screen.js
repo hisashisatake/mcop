@@ -5,15 +5,16 @@
 // 発音のタイミング自体はRust側`clock_loop`が持つ（JSタイマーは数十msの誤差が
 // 出るため使わない）。JSはパターンをRustへミラーし、`rhythm-step`イベントで
 // 受け取った再生位置をカーソルとして描くだけ。パターンの発音は再生/停止ボタンの
-// ON/OFF（Rust側`RHYTHM_RUNNING`）でゲートされ、テンポ（タップテンポ）が設定され
-// クロックが走っている間は、画面を切り替えても再生中のパターンは裏で鳴り続ける
-// （「ループ再生の上に各パートを重ねる」というミニDAWの設計意図どおり）。
+// ON/OFF（Rust側`SEQUENCER_RUNNING`、メロディ画面と共通）でゲートされ、テンポ
+// （タップテンポ）が設定されクロックが走っている間は、画面を切り替えても再生中の
+// パターンは裏で鳴り続ける（「ループ再生の上に各パートを重ねる」というミニDAWの
+// 設計意図どおり）。
 //
 // メトロノームのON/OFF・MIDI Clock自体（TimeEgテンポ同期が使う）は再生/停止ボタンとは
 // 独立で、停止中も動き続ける。
 
 import { isActive } from './screens.js';
-import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep, setRhythmRunning } from './midi.js';
+import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.js';
 
 const ROWS = 12;
 const STEPS = 16;
@@ -52,36 +53,23 @@ export function setupRhythmScreen(canvas) {
   return { draw: (ctx) => draw(ctx, canvas) };
 }
 
-/** メトロノームON/OFFのチェックボックスと、パターン再生/停止ボタンを配線する。
- * 再生/停止はパターンの発音・再生カーソルだけを止める（MIDI Clock自体・メトロノームは
- * 独立して動き続ける、詳細はmidi_out.rs `RHYTHM_RUNNING`のコメント参照）。 */
-export function bindRhythmScreenControls({ metronomeToggle, playButton, stopButton }) {
-  if (metronomeToggle) {
-    metronomeToggle.checked = false;
-    metronomeToggle.addEventListener('change', () => {
-      setMetronomeEnabled(metronomeToggle.checked);
-    });
-  }
+/** メトロノームON/OFFのチェックボックスを配線する。リズム/メロディ共通の再生/停止
+ * ボタンはmain.js側でまとめて配線する（停止時に両画面のカーソルを揃えてリセットする
+ * 必要があるため、両画面を知っているmain.jsが持つのが自然。詳細はmidi_out.rs
+ * `SEQUENCER_RUNNING`のコメント参照）。 */
+export function bindRhythmScreenControls({ metronomeToggle }) {
+  if (!metronomeToggle) return;
+  metronomeToggle.checked = false;
+  metronomeToggle.addEventListener('change', () => {
+    setMetronomeEnabled(metronomeToggle.checked);
+  });
+}
 
-  const updateButtons = (running) => {
-    if (playButton) playButton.disabled = running;
-    if (stopButton) stopButton.disabled = !running;
-  };
-  updateButtons(false);
-
-  if (playButton) {
-    playButton.addEventListener('click', () => {
-      updateButtons(true);
-      setRhythmRunning(true);
-    });
-  }
-  if (stopButton) {
-    stopButton.addEventListener('click', () => {
-      updateButtons(false);
-      currentStep = -1;
-      setRhythmRunning(false);
-    });
-  }
+/** 再生/停止ボタンの停止側からmain.js経由で呼ばれる。再生カーソルのハイライトを
+ * 即座に消す（Rust側は`rhythm-step`イベントの送出自体を止めるだけで、直前のカーソル
+ * 位置を明示的に片付けてはくれないため）。 */
+export function resetRhythmCursor() {
+  currentStep = -1;
 }
 
 function gridMetrics(canvas) {

@@ -52,7 +52,7 @@
        帯自体は塗りつぶした背景を持つが、中の項目（☰・画面ごとのアイコンボタン）は
        枠なし・非ホバー時透明のフラットなツールバー項目にする（「押しっぱなしの
        ボタン」に見えないようにするのが狙い）。ハンバーガーメニューを左端に置き、
-       画面ごとに出し入れするアイコンボタン（現状はRHYTHM画面の再生/停止）を
+       画面ごとに出し入れするアイコンボタン（現状はRHYTHM/MELODY画面共通の再生/停止）を
        右へ続けて並べる。これ以外の操作UI・ログ・設定は全てハンバーガーメニューの
        ドロワーの中。 */
     #menu-bar {
@@ -215,8 +215,8 @@
 
   <div id="menu-bar">
     <button type="button" id="menu-toggle" title="メニュー">☰</button>
-    <button type="button" id="rhythm-play-btn" title="再生" hidden>▶</button>
-    <button type="button" id="rhythm-stop-btn" title="停止" hidden disabled>■</button>
+    <button type="button" id="sequencer-play-btn" title="再生" hidden>▶</button>
+    <button type="button" id="sequencer-stop-btn" title="停止" hidden disabled>■</button>
     <span id="tempo-display" class="menu-bar-label">120 BPM</span>
     <button id="tap-tempo-btn" type="button" title="タップテンポ">TAP</button>
   </div>
