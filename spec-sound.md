@@ -62,9 +62,10 @@ op505固有のパラメーター仕様は`op505/core`のソースコード直下
    の前後半2分割とした（波形32種×ADSR2種＝重複なくちょうど64通り、Program 64〜127は使わない。
    「下半分がピアノ系・上半分がリード系」という把握しやすさを優先し、かつ「同一波形があるなら
    64個にまとめてほしい」という指示で重複ゼロにした、ユーザー指定）。境界値は
-   `waveform_memory_bank.py`の`LEAD_RANGE_START`と`gesture-app/src/main.js`の
-   `WAVEFORM_MEMORY_LEAD_START`の両方に定数として持たせてある（表示名と実体がずれないよう
-   一致必須）。
+   `waveform_memory_bank.py`の`LEAD_RANGE_START`に定数として持たせてある。gesture-app側は
+   Piano/Lead範囲を判定するロジックを持たない（音色名表示はstandaloneへの問い合わせ
+   `queryProgramName`で得た実際の`.op505`プリセット名をそのまま出すだけで、フロントエンドで
+   名前を推測しない設計。詳細はmemory`project_gesture_app_program_name_standalone_query.md`）。
 
 ### 音色の構成
 

@@ -91,9 +91,10 @@ OP505（主力チップ）は専用のspec文書をまだ持たない。進捗�
                            ジェスチャーをMIDIへ変換してop505-standaloneへ送るだけのコントローラー。
                            2026-09-01のMIDI送信化、詳細はCLAUDE.md gesture-app節）
     package.json
-    src/                   ← フロントエンド（HTML/JS）
+    src/                   ← フロントエンド（TypeScript + Svelte 5、Vite）
       index.html
-      main.js              ← キャリブレーション・ジェスチャーUI
+      main.ts              ← App.svelteのマウント + グローバルキー配線のみ
+      components/          ← 画面共通パネル類（MenuBar/Drawer/StatusPanel/Hud等）のSvelteコンポーネント
     src-tauri/             ← Rustバックエンド
       Cargo.toml
       build.rs
