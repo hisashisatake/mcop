@@ -262,7 +262,7 @@ pub fn bool_checkbox(ui: &mut egui::Ui, handle: &dyn BoolParamHandle, label: &st
 /// （「−」ボタンだけASCII "+"と縦位置がズレて見える不具合が、ASCIIハイフンへ替えても
 /// 解消しなかったため——同じフォントの異なるグリフでも、字形自体の見た目の重心が
 /// 左右で揃うとは限らない。フォントに一切依存させないのが根本対策。実機確認で確定）。
-#[derive(Clone, Copy, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub(crate) enum SpinGlyph {
     Minus,
     Plus,

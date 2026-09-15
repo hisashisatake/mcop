@@ -238,7 +238,7 @@ impl eframe::App for EditorApp {
         };
 
         let mut presets_events = egui::Panel::top("editor_top_bar")
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 draw_editor_top_bar(ui, &mut self.presets, &host, undo_ui, message, |ui| {
                     let selected_text = match self.edit_channel {
                         None => "(None)".to_string(),
@@ -260,11 +260,11 @@ impl eframe::App for EditorApp {
             })
             .inner;
 
-        egui::Panel::bottom("editor_keyboard").show_inside(ui, |ui| {
+        egui::Panel::bottom("editor_keyboard").show(ui, |ui| {
             keyboard::draw_keyboard(ui, &mut self.keyboard, &self.midi_sink, self.edit_channel);
         });
 
-        let central_response = egui::CentralPanel::default().show_inside(ui, |ui| {
+        let central_response = egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt("op505_editor_scroll").show(ui, |ui| {
                 let source = PatchPanelSource {
                     patch: self.patch.clone(),

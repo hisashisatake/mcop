@@ -210,7 +210,7 @@ impl App {
         let Some(mut state) = TextEditState::load(ctx, editor_id) else { return };
         let Some(range) = state.cursor.char_range() else { return };
         let sorted = range.as_sorted_char_range();
-        let (new_text, new_start, new_end) = apply_tab(&self.xml, sorted.start, sorted.end, shift_tab);
+        let (new_text, new_start, new_end) = apply_tab(&self.xml, sorted.start.into(), sorted.end.into(), shift_tab);
         self.xml = new_text;
         state
             .cursor
@@ -295,7 +295,7 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("toolbar").show_inside(ui, |ui| {
+        egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("XML panel DSL (native)");
                 ui.separator();
@@ -314,16 +314,16 @@ impl eframe::App for App {
         egui::Panel::left("editor_panel")
             .resizable(true)
             .default_size(ui.available_width() * 0.5)
-            .show_inside(ui, |ui| self.draw_editor(ui));
+            .show(ui, |ui| self.draw_editor(ui));
 
         if self.show_rust {
             egui::Panel::right("rust_panel")
                 .resizable(true)
                 .default_size(ui.available_width() * 0.4)
-                .show_inside(ui, |ui| self.draw_rust_out(ui));
+                .show(ui, |ui| self.draw_rust_out(ui));
         }
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if self.undocked {
                 ui.vertical_centered(|ui| {
                     ui.add_space(24.0);
@@ -341,7 +341,7 @@ impl eframe::App for App {
                 viewport_id,
                 egui::ViewportBuilder::default().with_title("プレビュー").with_inner_size([960.0, 800.0]),
                 |ui, _class| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         self.draw_preview_inner(ui);
                     });
                     if ui.ctx().input(|i| i.viewport().close_requested()) {

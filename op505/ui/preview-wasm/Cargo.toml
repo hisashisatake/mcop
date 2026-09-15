@@ -14,8 +14,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-egui = "0.34"
-eframe = { version = "0.34", default-features = false, features = ["glow"] }
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["glow"] }
 ui-core = { path = "../../../ui/core", features = ["preview"] }
 ui-codegen = { path = "../../../ui/codegen" }
 # wasm-bindgen-cli（ビルド時に別途インストールするツール）とクレートのバージョンは完全一致が

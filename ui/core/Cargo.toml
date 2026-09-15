@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-egui = "0.34"
+egui = "0.36"
 sound-core = { path = "../../sound/core" }
 ui-layout = { path = "../layout" }
 # フェーズBのプレビュー用インタープリタ(interpret.rs)専用の任意依存。VST/gesture-appは
@@ -16,4 +16,4 @@ preview = ["dep:ui-codegen"]
 
 [dev-dependencies]
 # time_eg_preview_demo等のネイティブプレビュー用（VST/wasmビルドには影響しない）。
-eframe = { version = "0.34", default-features = false, features = ["glow"] }
+eframe = { version = "0.36", default-features = false, features = ["glow"] }

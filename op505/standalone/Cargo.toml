@@ -35,7 +35,7 @@ tray-icon = "0.24"
 # `EventLoopBuilderExtWindows::with_any_thread(true)`により起動する（`editor`モジュール参照）。
 # このクレートはワークスペースメンバーのため`cargo check --workspace`にwinit/glowが混ざる
 # トレードオフを受け入れている（要否は導入時にユーザー確認済み）。
-eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts"] }
-egui = "0.34"
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.36"
 winit = "0.30"
 rfd = "0.15"
