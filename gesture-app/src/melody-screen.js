@@ -18,6 +18,7 @@
 import { isActive } from './screens.js';
 import { NOTE_NAMES } from './chords.js';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.js';
+import { pushUndo } from './undo-manager.js';
 
 const MIN_PITCH = 21; // A0
 const MAX_PITCH = 108; // C8
@@ -64,9 +65,49 @@ export function resetMelodyCursor() {
 /** DELキー押下でmain.jsから呼ばれる。選択中ノートが無ければ何もしない。 */
 export function deleteSelectedMelodyNote() {
   if (selectedId == null) return;
+  pushUndo();
   notes.delete(selectedId);
   deleteMelodyNote(selectedId);
   selectedId = null;
+}
+
+/**
+ * このメロディ画面が持つ状態（ノート一覧）を取得する。project-state.jsがプロジェクト全体の
+ * スナップショットを組み立てる際に呼ぶ。`notes`はMapのままだとJSON化できないため配列形式
+ * （{id, startStep, lengthSteps, pitch, level}[]）へ変換して返す。
+ */
+export function getNotes() {
+  return [...notes.entries()].map(([id, n]) => ({ id, ...n }));
+}
+
+/**
+ * 統合Undo/Redo・ファイル読込による復元用。現在のnotesとidベースで差分を取り、
+ * 変化した分だけRust側の共有ノートリストへadd/update/deleteをミラーする
+ * （編集していないUndo/Redoで全ノートを送り直さずに済む）。
+ */
+export function setNotes(notesArray) {
+  const nextNotes = new Map(
+    notesArray.map((n) => [n.id, { startStep: n.startStep, lengthSteps: n.lengthSteps, pitch: n.pitch, level: n.level }]),
+  );
+  for (const id of notes.keys()) {
+    if (!nextNotes.has(id)) deleteMelodyNote(id);
+  }
+  for (const [id, n] of nextNotes) {
+    const prev = notes.get(id);
+    if (!prev) {
+      addMelodyNote(id, n.startStep, n.lengthSteps, n.pitch, n.level);
+    } else if (
+      prev.startStep !== n.startStep ||
+      prev.lengthSteps !== n.lengthSteps ||
+      prev.pitch !== n.pitch ||
+      prev.level !== n.level
+    ) {
+      updateMelodyNote(id, n.startStep, n.lengthSteps, n.pitch, n.level);
+    }
+  }
+  notes = nextNotes;
+  nextNoteId = notesArray.reduce((max, n) => Math.max(max, n.id), 0) + 1;
+  if (selectedId != null && !notes.has(selectedId)) selectedId = null;
 }
 
 function pitchName(pitch) {
@@ -149,6 +190,7 @@ export function setupMelodyScreen(canvas) {
     if (hit) {
       const rightX = stepToX(hit.note.startStep + hit.note.lengthSteps);
       if (e.clientX >= rightX - EDGE_ZONE_PX && e.clientX < rightX) {
+        pushUndo(); // リサイズは掴んだ時点で編集開始とみなす（離すまで実際に長さが変わるかは未確定だが、掴み直しての微調整も含め1操作として扱う）
         drag = { mode: 'resize', id: hit.id, startClientX: e.clientX, startClientY: e.clientY, moved: false };
       } else if (hit.id === selectedId) {
         drag = { mode: 'pendingMoveOrCycle', id: hit.id, startClientX: e.clientX, startClientY: e.clientY, moved: false };
@@ -157,6 +199,7 @@ export function setupMelodyScreen(canvas) {
         drag = { mode: 'pendingMoveOrClick', id: hit.id, startClientX: e.clientX, startClientY: e.clientY, moved: false };
       }
     } else {
+      pushUndo();
       const id = nextNoteId++;
       notes.set(id, { startStep: cell.step, lengthSteps: 1, pitch: cell.pitch, level: 1 });
       selectedId = id;
@@ -173,6 +216,7 @@ export function setupMelodyScreen(canvas) {
       const dx = e.clientX - drag.startClientX;
       const dy = e.clientY - drag.startClientY;
       if (!drag.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+        pushUndo(); // 実際に動かし始めた瞬間（=編集開始）を捉える。単なる選択クリックは積まない
         drag.moved = true;
         drag.mode = 'move';
       } else if (!drag.moved) {
@@ -200,6 +244,7 @@ export function setupMelodyScreen(canvas) {
       } else if (drag.mode === 'resize' || drag.mode === 'move') {
         commitNote(drag.id);
       } else if (drag.mode === 'pendingMoveOrCycle' && !drag.moved) {
+        pushUndo();
         n.level = (n.level % 3) + 1; // 通常→アクセント→弱→通常
         commitNote(drag.id);
       }

@@ -15,6 +15,7 @@
 
 import { isActive } from './screens.js';
 import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.js';
+import { pushUndo } from './undo-manager.js';
 
 const ROWS = 12;
 const STEPS = 16;
@@ -46,11 +47,39 @@ export function setupRhythmScreen(canvas) {
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
     const next = (pattern[cell.row][cell.step] + 1) % 4;
+    pushUndo();
     pattern[cell.row][cell.step] = next;
     setRhythmStep(cell.row, cell.step, next);
   });
 
   return { draw: (ctx) => draw(ctx, canvas) };
+}
+
+/**
+ * このリズム画面が持つ状態（パターン）を取得する。project-state.jsがプロジェクト全体の
+ * スナップショットを組み立てる際に呼ぶ。`pattern`は以後この画面側でセルごとに書き換えられて
+ * いく実体なので、スナップショットには複製を返す（統合Undo/Redoのスタックへ積んだ後で
+ * 元の配列が書き換わり、過去のスナップショットまで壊れてしまう事故を防ぐため）。
+ */
+export function getPattern() {
+  return pattern.map((row) => row.slice());
+}
+
+/**
+ * 統合Undo/Redo・ファイル読込による復元用。セルごとに現在値と比較し、変化した位置だけ
+ * Rust側の共有パターンへ`setRhythmStep`でミラーする（192セル全部を無条件で送ると、
+ * リズムを一切編集していないUndo/Redoでも毎回192回のinvokeが走ってしまうため）。
+ */
+export function setPattern(newPattern) {
+  for (let row = 0; row < ROWS; row++) {
+    for (let step = 0; step < STEPS; step++) {
+      const level = newPattern[row][step];
+      if (pattern[row][step] !== level) {
+        pattern[row][step] = level;
+        setRhythmStep(row, step, level);
+      }
+    }
+  }
 }
 
 /** メトロノームON/OFFのチェックボックスを配線する。リズム/メロディ共通の再生/停止

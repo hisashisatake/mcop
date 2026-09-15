@@ -121,6 +121,15 @@
       background: #2a4a3a; color: #dfd; border-color: #3a6a4a;
     }
 
+    /* Fileメニュー（Open/Save/Save As） */
+    #file-section .program-row { gap: 6px; }
+    #file-section button {
+      flex: 1;
+      background: #1a1a1a; color: #ccc; border: 1px solid #333;
+      font-family: monospace; font-size: 12px; padding: 8px 4px; cursor: pointer;
+    }
+    #file-section button:hover { background: #242424; }
+
     /* LFO/Rateインジケーター（旧: canvas描画。ドロワー内のDOM表示へ変更） */
     .lfo-row { font-size: 13px; color: #666; }
     .lfo-bar-track {
@@ -226,6 +235,15 @@
       <button type="button" id="tab-chord">CHORD</button>
       <button type="button" id="tab-rhythm">RHYTHM</button>
       <button type="button" id="tab-melody">MELODY</button>
+    </div>
+
+    <div id="file-section">
+      <div class="drawer-section-title">FILE</div>
+      <div class="program-row">
+        <button type="button" id="file-open-btn">Open</button>
+        <button type="button" id="file-save-btn">Save</button>
+        <button type="button" id="file-save-as-btn">Save As</button>
+      </div>
     </div>
 
     <div id="lfo-section">

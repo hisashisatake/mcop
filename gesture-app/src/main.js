@@ -7,6 +7,9 @@ import { setupChordScreen, bindChordScreenControls, activeChannels } from './cho
 import { setupRhythmScreen, bindRhythmScreenControls, resetRhythmCursor } from './rhythm-screen.js';
 import { setupMelodyScreen, resetMelodyCursor, deleteSelectedMelodyNote } from './melody-screen.js';
 import { activeScreen, bindScreenTabs, onScreenChange } from './screens.js';
+import { getBpm, setBpm } from './tempo-state.js';
+import { undo, redo } from './undo-manager.js';
+import { openProject, saveProject, saveProjectAs } from './project-file.js';
 
 setupMidiLog(document.getElementById('midi-log'));
 
@@ -144,9 +147,19 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
 // 確定したBPMはtap_tempoコマンド経由でstandaloneへ送られ、MIDI Clock(0xF8)として
 // 実際に送出される（クロック送信スレッド自体はsrc-tauri/src/midi_out.rsが持つ）。
 // ─────────────────────────────────────────────
+const tempoDisplayEl = document.getElementById('tempo-display');
+
+/** tempo-state.jsの現在値を#tempo-displayへ反映する。Undo/Redo・ファイル読込でBPMが
+ * 変わった際、main.js側からこれを呼んで表示を追随させる（tapTempo()自体はMIDI Clock送出
+ * のみでDOM更新は行わないため）。 */
+function refreshTempoDisplay() {
+  const bpm = getBpm();
+  tempoDisplayEl.textContent = bpm == null ? '— BPM' : `${Math.round(bpm)} BPM`;
+}
+refreshTempoDisplay();
+
 (() => {
   const tapBtn = document.getElementById('tap-tempo-btn');
-  const displayEl = document.getElementById('tempo-display');
   const MIN_BPM = 40;
   const MAX_BPM = 300;
   const RESET_GAP_MS = 2000;
@@ -172,7 +185,8 @@ document.getElementById('resize-grip').addEventListener('mousedown', async (e) =
     }
     const avgIntervalMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
     const bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, 60000 / avgIntervalMs));
-    displayEl.textContent = `${Math.round(bpm)} BPM`;
+    setBpm(bpm);
+    refreshTempoDisplay();
     await tapTempo(bpm);
   });
 })();
@@ -265,13 +279,36 @@ bindLfoIndicator({
   rateBar: document.getElementById('lfo-rate-bar'),
 });
 
+// Ctrl+Z/Ctrl+Yは統合Undo/Redo（undo-manager.js）として、アクティブな画面を問わず
+// グローバルに配線する（CHORD画面だけがアクティブな時に効く、という以前の制約を撤廃）。
+// undo()/redo()はプロジェクト全体を復元するだけでDOM更新は行わないため、BPM表示だけは
+// ここで明示的にrefreshTempoDisplay()する（コード/リズム/メロディの画面自体は各screen
+// モジュール内の状態更新とアニメーションループの再描画で自動的に追随する）。
 window.addEventListener('keydown', async (e) => {
   if (e.key.toLowerCase() === 'e') {
     await openEditor();
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && activeScreen() === 'melody') {
     deleteSelectedMelodyNote();
+  } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+    refreshTempoDisplay();
+  } else if (e.key.toLowerCase() === 'y' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    redo();
+    refreshTempoDisplay();
   }
 });
+
+// ─────────────────────────────────────────────
+// Fileメニュー（Open/Save/Save As、独自プロジェクト形式.gap505）
+// ─────────────────────────────────────────────
+document.getElementById('file-open-btn').addEventListener('click', async () => {
+  if (await openProject()) refreshTempoDisplay();
+});
+document.getElementById('file-save-btn').addEventListener('click', () => saveProject());
+document.getElementById('file-save-as-btn').addEventListener('click', () => saveProjectAs());
 
 // ─────────────────────────────────────────────
 // アニメーションループ

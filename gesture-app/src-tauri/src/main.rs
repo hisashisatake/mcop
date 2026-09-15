@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod midi_out;
+mod project_file;
 mod query_client;
 
 /// コード発音に使うMIDIチャンネル。1チャンネルへ最大8声を重ねて鳴らす。
@@ -266,6 +267,9 @@ fn main() {
             add_melody_note,
             update_melody_note,
             delete_melody_note,
+            project_file::open_project,
+            project_file::save_project_as,
+            project_file::save_project_to,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
