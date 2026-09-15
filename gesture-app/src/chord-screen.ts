@@ -38,7 +38,7 @@
 // （分岐は保持しない設計判断。詳細はplan「gesture-app コード画面をグリッド方式からフロー方式へ刷新」）。
 
 import { CHORD_CHANNEL, noteOn, noteOff, allNotesOff } from './midi.ts';
-import { applyTo as applyLfoTo } from './performance-lfo.ts';
+import { applyTo as applyLfoTo } from './performance-lfo.svelte.ts';
 import { DEFAULT_TONIC_MIDI, NOTE_NAMES, velocityFromCellY, VELOCITY_MIN, VELOCITY_MAX, layersContainingSuffix } from './chords.ts';
 import { voiceChord, rawVoicing } from './voicing.ts';
 import { pivotKeysFor, confirmsModulation, approachesKey, degreeName, chordFunction, isStrongResolution, normalizeFamily } from './theory.ts';
@@ -55,8 +55,9 @@ import {
 } from './chord-flow.ts';
 import { matchProgressions } from './progressions.ts';
 import { computePastSlotGeoms } from './chord-layout.ts';
-import { isActive, onScreenChange } from './screens.ts';
+import { isActive, onScreenChange } from './screens.svelte.ts';
 import { pushUndo } from './undo-manager.ts';
+import { chordSettings } from './chord-settings.svelte.ts';
 import type {
   CandidateGridCell,
   Chord,
@@ -121,16 +122,14 @@ const MIN_BASE_OCTAVE = -2;
 const MAX_BASE_OCTAVE = 2;
 const DEFAULT_COLS = 3;
 
-let tonicMidi = DEFAULT_TONIC_MIDI;
-let mode: Mode = 'major';
-let assistRows = DEFAULT_ROWS;
-let assistCols = DEFAULT_COLS;
-let autoVoicing = false; // 直前ボイシングに一番近い転回形を自動選択するか（OFF=ルート上に素直に積む従来方式）
-let baseOctave = 0; // 基準オクターブの手動±調整
+// 調・候補行数列数・自動転回・基準オクターブ・ALT押下状態はchord-settings.svelte.tsの
+// $stateへ移した（段階C）。ProgramPanel/StatusPanelコンポーネントが直接参照する。
+chordSettings.tonicMidi = DEFAULT_TONIC_MIDI;
+chordSettings.rows = DEFAULT_ROWS;
+chordSettings.cols = DEFAULT_COLS;
 
 let shiftHeld = false;
 let ctrlHeld = false;
-let altHeld = false; // 押している間だけ自動転回ON/OFFを反転する一時トグル
 
 interface HoverCandidate {
   col: number;
@@ -155,7 +154,7 @@ let pointerHeld = false; // マウスボタンを押している最中か（awai
 // voicingは選択時に直前エントリのvoicingを踏まえて一度だけ計算し焼き付ける（実際に鳴らすMIDI
 // ノート配列。過去/未来クリックでの再訪では保存済みの値をそのまま鳴らし、毎回同じ響きにする）。
 // 自動転回ON/OFF・基準オクターブ設定が変わったときだけ、revoiceHistory()で履歴全体を計算し直す。
-let history: ChordHistory = createHistory({ tonicMidi, mode });
+let history: ChordHistory = createHistory({ tonicMidi: chordSettings.tonicMidi, mode: chordSettings.mode });
 
 interface CandidateCache {
   cacheKey: string;
@@ -173,9 +172,6 @@ export interface ChordDisplayInfo {
 // setupChordScreen()に渡されたonChordChangeを保持する（Undo/Redo・ファイル読込による
 // 復元時にもHUD更新を呼べるようにするため、モジュール変数として持つ）。
 let onChangeCallback: ((info: ChordDisplayInfo | null) => void) | null = null;
-
-let tonicSelectEl: HTMLSelectElement | null = null;
-let modeSelectEl: HTMLSelectElement | null = null;
 
 // 選択・Undo/Redo時の横スライド演出用（純粋に見た目だけの補間。ロジック上は瞬時に切り替わる）
 let slideDirection = 0; // +1 = 前進（右→左へ流れる）, -1 = 後退
@@ -241,16 +237,9 @@ function invalidateCandidates(): void {
   candidateCache = null;
 }
 
-function syncControlsFromState(): void {
-  const k = keyAt(history);
-  if (tonicSelectEl) tonicSelectEl.value = String(((k.tonicMidi % 12) + 12) % 12);
-  if (modeSelectEl) modeSelectEl.value = k.mode;
-}
-
 function resetHistory(): void {
-  history = createHistory({ tonicMidi, mode });
+  history = createHistory({ tonicMidi: chordSettings.tonicMidi, mode: chordSettings.mode });
   invalidateCandidates();
-  syncControlsFromState();
 }
 
 function startSlide(direction: number): void {
@@ -276,7 +265,7 @@ function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): CellH
     const localY = py - layout.candidateOriginY;
     const col = Math.floor(localX / layout.cellW);
     const row = Math.floor(localY / layout.cellH);
-    if (col < 0 || col >= assistCols || row < 0 || row >= assistRows) return null;
+    if (col < 0 || col >= chordSettings.cols || row < 0 || row >= chordSettings.rows) return null;
     return { kind: 'candidate', col, row, yRatio: (localY - row * layout.cellH) / layout.cellH };
   }
 
@@ -339,16 +328,16 @@ function computeLayout(canvas: HTMLCanvasElement): Layout {
   const bodyH = Math.max(1, H - TOP_MARGIN - BOTTOM_MARGIN);
   // 候補セルは正方形（横長だとセル内上下の位置＝ベロシティの変化が実感しにくいため）。
   // 行数から決まる高さと、画面右端に収まる幅の両方で頭打ちにする（候補ブロックは右端寄せ）。
-  const cellSize = Math.min(84, bodyH / assistRows, (W - RIGHT_MARGIN) / assistCols);
+  const cellSize = Math.min(84, bodyH / chordSettings.rows, (W - RIGHT_MARGIN) / chordSettings.cols);
   const cellW = cellSize;
   const cellH = cellSize;
-  const candidateX = W - assistCols * cellSize - RIGHT_MARGIN;
+  const candidateX = W - chordSettings.cols * cellSize - RIGHT_MARGIN;
   // 現在スロットは、候補ブロックの左に未来スロット最大MAX_FUTURE_SLOTS個分の領域を
   // 確保した位置に置く。過去領域（0〜currentX）はウィンドウ幅に応じて自然に増減し、
   // 狭ければ過去スロットが入るだけ表示される（個数の固定上限は持たない）。
   const currentX = candidateX - (CURRENT_SIZE / 2 + MAX_FUTURE_SLOTS * FUTURE_SLOT_GAP + 16);
   // 候補ブロックは縦方向中央揃えで描く（draw()・cellFromPoint()の両方がここを基準にする）
-  const candidateOriginY = TOP_MARGIN + (bodyH - assistRows * cellH) / 2;
+  const candidateOriginY = TOP_MARGIN + (bodyH - chordSettings.rows * cellH) / 2;
   const slotY = TOP_MARGIN + bodyH / 2;
   // count=cursor+1で、選択済みの過去コードに加えて「初期状態（"—"、まだ何も選んでいない状態）」
   // へ戻るスロットを1つ多く確保する（history.cursor - 1 - g.index が -1 になる末尾のスロットが
@@ -384,7 +373,7 @@ async function stopChord(): Promise<void> {
 function evaluateTheoryTransition(chord: Chord): { key: Key; pendingPivot: PendingPivot | null } {
   const key = currentKeyObj();
   const prevPivot = pendingPivotAt(history);
-  let newKey: Key = { tonicMidi, mode };
+  let newKey: Key = { tonicMidi: chordSettings.tonicMidi, mode: chordSettings.mode };
   let carriedPivotKeys: KeyObj[] | null = null;
   if (prevPivot) {
     const confirmed = prevPivot.keys.find((k) => confirmsModulation(chord, k));
@@ -402,24 +391,23 @@ function evaluateTheoryTransition(chord: Chord): { key: Key; pendingPivot: Pendi
 }
 
 function applyKey(newKey: Key): void {
-  tonicMidi = newKey.tonicMidi;
-  mode = newKey.mode;
-  syncControlsFromState();
+  chordSettings.tonicMidi = newKey.tonicMidi;
+  chordSettings.mode = newKey.mode;
 }
 
 /** ALTキーを押している間だけ自動転回ON/OFFを反転した、実際に使う値。 */
-function effectiveAutoVoicing(): boolean {
-  return altHeld ? !autoVoicing : autoVoicing;
+export function effectiveAutoVoicing(): boolean {
+  return chordSettings.altHeld ? !chordSettings.autoVoicing : chordSettings.autoVoicing;
 }
 
 /** prevEntry（直前のコード、無ければnull）とkey（isStrongResolution判定用）を踏まえて、chordのボイシングを計算する。 */
 function computeVoicing(chord: Chord, prevEntry: HistoryEntry | null, key: KeyObj): number[] {
   const previousNotes = prevEntry ? prevEntry.voicing : [];
-  const centerMidi = 60 + 12 * baseOctave;
+  const centerMidi = 60 + 12 * chordSettings.baseOctave;
   const requireRootInBass = prevEntry ? isStrongResolution(prevEntry.chord, chord, key) : false;
   return effectiveAutoVoicing()
     ? voiceChord(chord, { previousNotes, centerMidi, requireRootInBass })
-    : rawVoicing(chord, baseOctave);
+    : rawVoicing(chord, chordSettings.baseOctave);
 }
 
 /** 現在のcursor位置（＝選択直前の直前コード）のvoicingを踏まえて、chordのボイシングを計算する。 */
@@ -435,7 +423,7 @@ function voicingFor(chord: Chord): number[] {
  */
 function voicingForPlayback(index: number): number[] {
   const entry = history.entries[index];
-  if (!altHeld) return entry.voicing;
+  if (!chordSettings.altHeld) return entry.voicing;
   const prevEntry = index > 0 ? history.entries[index - 1] : null;
   const prevKey = toKeyObj(prevEntry ? prevEntry.key : history.initialKey);
   return computeVoicing(entry.chord, prevEntry, prevKey);
@@ -462,15 +450,15 @@ function commitSelection(chord: Chord, velocity: number): void {
  * 保持しているため、既存entryを書き換えるとそちらまで巻き込んで壊れる）。
  */
 function revoiceHistory(): void {
-  const centerMidi = 60 + 12 * baseOctave;
+  const centerMidi = 60 + 12 * chordSettings.baseOctave;
   let previousNotes: number[] = [];
   let previousChord: Chord | null = null;
   let previousKey = toKeyObj(history.initialKey);
   const entries = history.entries.map((entry) => {
     const requireRootInBass = previousChord ? isStrongResolution(previousChord, entry.chord, previousKey) : false;
-    const voicing = autoVoicing
+    const voicing = chordSettings.autoVoicing
       ? voiceChord(entry.chord, { previousNotes, centerMidi, requireRootInBass })
-      : rawVoicing(entry.chord, baseOctave);
+      : rawVoicing(entry.chord, chordSettings.baseOctave);
     previousNotes = voicing;
     previousChord = entry.chord;
     previousKey = toKeyObj(entry.key);
@@ -636,24 +624,19 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
     } else if (e.key === 'Alt') {
       // ブラウザ既定のAltキー副作用（メニューバーへのフォーカス移動等）を止める
       e.preventDefault();
-      altHeld = true;
-      syncAutoVoicingToggleDisplay();
+      chordSettings.altHeld = true;
     } else if (e.key === 'ArrowDown') {
-      assistRows = Math.max(MIN_ROWS, assistRows - 1);
+      chordSettings.rows = Math.max(MIN_ROWS, chordSettings.rows - 1);
       invalidateCandidates();
-      syncRowsCols();
     } else if (e.key === 'ArrowUp') {
-      assistRows = Math.min(MAX_ROWS, assistRows + 1);
+      chordSettings.rows = Math.min(MAX_ROWS, chordSettings.rows + 1);
       invalidateCandidates();
-      syncRowsCols();
     } else if (e.key === 'ArrowLeft') {
-      assistCols = Math.max(MIN_COLS, assistCols - 1);
+      chordSettings.cols = Math.max(MIN_COLS, chordSettings.cols - 1);
       invalidateCandidates();
-      syncRowsCols();
     } else if (e.key === 'ArrowRight') {
-      assistCols = Math.min(MAX_COLS, assistCols + 1);
+      chordSettings.cols = Math.min(MAX_COLS, chordSettings.cols + 1);
       invalidateCandidates();
-      syncRowsCols();
     }
   });
   window.addEventListener('keyup', (e) => {
@@ -669,14 +652,12 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
       invalidateCandidates();
     } else if (e.key === 'Alt') {
       e.preventDefault();
-      altHeld = false;
-      syncAutoVoicingToggleDisplay();
+      chordSettings.altHeld = false;
     }
   });
   // ウィンドウがフォーカスを失うとkeyupを取りこぼすため、押しっぱなし状態を解除する
   window.addEventListener('blur', () => {
-    altHeld = false;
-    syncAutoVoicingToggleDisplay();
+    chordSettings.altHeld = false;
     shiftHeld = false;
     ctrlHeld = false;
     invalidateCandidates();
@@ -686,105 +667,45 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
   return { draw: (ctx: CanvasRenderingContext2D) => isActive('chord') && draw(ctx, canvas) };
 }
 
-let rowsInputEl: HTMLInputElement | null = null;
-let colsInputEl: HTMLInputElement | null = null;
-let autoVoicingToggleEl: HTMLInputElement | null = null;
-function syncRowsCols(): void {
-  if (rowsInputEl) rowsInputEl.value = String(assistRows);
-  if (colsInputEl) colsInputEl.value = String(assistCols);
+// 調・候補の行数/列数・自動転回/基準オクターブは、値をchordSettings（$state）から直接読み、
+// 変更はここに並ぶ関数経由で行う（段階C、DrawerのProgramPanel/StatusPanelコンポーネントから
+// 呼ばれる）。副作用（発音停止・履歴リセット・再ボイシング）を伴うため単純なbind:valueに
+// せず、明示的な関数呼び出しの形を保つ。
+
+/** 調（トニックのピッチクラス0〜11）を変更する。調が変わると同じ候補が別のコードを指すため、鳴りっぱなしを避けて止める。 */
+export async function setTonicPitchClass(pitchClass: number): Promise<void> {
+  await stopChord();
+  await allNotesOff(CHORD_CHANNEL);
+  chordSettings.tonicMidi = 60 + pitchClass;
+  resetHistory();
 }
 
-/** ALTキーの押下/解放時、自動転回チェックボックスの見た目だけ実効値に合わせる（autoVoicing本体は変えない）。 */
-function syncAutoVoicingToggleDisplay(): void {
-  if (autoVoicingToggleEl) autoVoicingToggleEl.checked = effectiveAutoVoicing();
+/** 調（メジャー/マイナー）を変更する。 */
+export async function setChordMode(newMode: Mode): Promise<void> {
+  await stopChord();
+  await allNotesOff(CHORD_CHANNEL);
+  chordSettings.mode = newMode;
+  resetHistory();
 }
 
-export interface BindChordScreenControlsOptions {
-  tonicSelect?: HTMLSelectElement | null;
-  modeSelect?: HTMLSelectElement | null;
-  rowsInput?: HTMLInputElement | null;
-  colsInput?: HTMLInputElement | null;
-  autoVoicingToggle?: HTMLInputElement | null;
-  baseOctaveInput?: HTMLInputElement | null;
+export function setAssistRows(rows: number): void {
+  chordSettings.rows = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Number.isFinite(rows) ? rows : DEFAULT_ROWS));
+  invalidateCandidates();
 }
 
-/** 調・候補の行数/列数・自動転回/基準オクターブを切り替えるUIを配線する。 */
-export function bindChordScreenControls({
-  tonicSelect,
-  modeSelect,
-  rowsInput,
-  colsInput,
-  autoVoicingToggle,
-  baseOctaveInput,
-}: BindChordScreenControlsOptions = {}): void {
-  tonicSelectEl = tonicSelect ?? null;
-  modeSelectEl = modeSelect ?? null;
-  rowsInputEl = rowsInput ?? null;
-  colsInputEl = colsInput ?? null;
-  autoVoicingToggleEl = autoVoicingToggle ?? null;
+export function setAssistCols(cols: number): void {
+  chordSettings.cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Number.isFinite(cols) ? cols : DEFAULT_COLS));
+  invalidateCandidates();
+}
 
-  if (tonicSelect) {
-    NOTE_NAMES.forEach((name, i) => {
-      const opt = document.createElement('option');
-      opt.value = String(i);
-      opt.textContent = name;
-      tonicSelect.appendChild(opt);
-    });
-    tonicSelect.value = String(DEFAULT_TONIC_MIDI % 12);
-    tonicSelect.addEventListener('change', async () => {
-      // 調が変わると同じ候補が別のコードを指すため、鳴りっぱなしを避けて止める
-      await stopChord();
-      await allNotesOff(CHORD_CHANNEL);
-      const pitchClass = parseInt(tonicSelect.value, 10) || 0;
-      tonicMidi = 60 + pitchClass;
-      resetHistory();
-    });
-  }
+export function setAutoVoicing(on: boolean): void {
+  chordSettings.autoVoicing = on;
+  revoiceHistory();
+}
 
-  if (modeSelect) {
-    modeSelect.value = mode;
-    modeSelect.addEventListener('change', async () => {
-      await stopChord();
-      await allNotesOff(CHORD_CHANNEL);
-      mode = modeSelect.value === 'minor' ? 'minor' : 'major';
-      resetHistory();
-    });
-  }
-
-  if (rowsInput) {
-    rowsInput.value = String(assistRows);
-    rowsInput.addEventListener('input', () => {
-      const raw = parseInt(rowsInput.value, 10) || DEFAULT_ROWS;
-      assistRows = Math.max(MIN_ROWS, Math.min(MAX_ROWS, raw));
-      invalidateCandidates();
-    });
-  }
-
-  if (colsInput) {
-    colsInput.value = String(assistCols);
-    colsInput.addEventListener('input', () => {
-      const raw = parseInt(colsInput.value, 10) || DEFAULT_COLS;
-      assistCols = Math.max(MIN_COLS, Math.min(MAX_COLS, raw));
-      invalidateCandidates();
-    });
-  }
-
-  if (autoVoicingToggle) {
-    autoVoicingToggle.checked = autoVoicing;
-    autoVoicingToggle.addEventListener('change', () => {
-      autoVoicing = autoVoicingToggle.checked;
-      revoiceHistory();
-    });
-  }
-
-  if (baseOctaveInput) {
-    baseOctaveInput.value = String(baseOctave);
-    baseOctaveInput.addEventListener('input', () => {
-      const raw = parseInt(baseOctaveInput.value, 10);
-      baseOctave = Number.isFinite(raw) ? Math.max(MIN_BASE_OCTAVE, Math.min(MAX_BASE_OCTAVE, raw)) : 0;
-      revoiceHistory();
-    });
-  }
+export function setBaseOctave(octave: number): void {
+  chordSettings.baseOctave = Number.isFinite(octave) ? Math.max(MIN_BASE_OCTAVE, Math.min(MAX_BASE_OCTAVE, octave)) : 0;
+  revoiceHistory();
 }
 
 /**
@@ -837,8 +758,8 @@ function computeCandidates(): CandidateGridCell[] {
     key,
     shiftHeld,
     ctrlHeld,
-    rows: assistRows,
-    cols: assistCols,
+    rows: chordSettings.rows,
+    cols: chordSettings.cols,
     recent,
     pendingPivot,
   });
@@ -849,11 +770,11 @@ function computeCandidates(): CandidateGridCell[] {
     lastChord: entry?.chord ?? null,
     key,
     progressionKey,
-    tonicMidi,
+    tonicMidi: chordSettings.tonicMidi,
     shiftHeld,
     ctrlHeld,
-    cols: assistCols,
-    rows: assistRows,
+    cols: chordSettings.cols,
+    rows: chordSettings.rows,
     progressionMatches,
     pendingPivot,
   });
@@ -861,7 +782,7 @@ function computeCandidates(): CandidateGridCell[] {
     lastChord: entry?.chord ?? null,
     key,
     progressionKey,
-    tonicMidi,
+    tonicMidi: chordSettings.tonicMidi,
     shiftHeld,
     ctrlHeld,
     progressionMatches,
@@ -1280,6 +1201,6 @@ function drawLayerHint(ctx: CanvasRenderingContext2D, W: number, H: number): voi
   ctx.textAlign = 'right';
   ctx.font = '13px monospace';
   ctx.fillStyle = color;
-  const keyLabel = `${NOTE_NAMES[((tonicMidi % 12) + 12) % 12]} ${mode === 'minor' ? 'Minor' : 'Major'}`;
+  const keyLabel = `${NOTE_NAMES[((chordSettings.tonicMidi % 12) + 12) % 12]} ${chordSettings.mode === 'minor' ? 'Minor' : 'Major'}`;
   ctx.fillText(`${label}　調 = ${keyLabel}`, W - 18, H - 22);
 }
