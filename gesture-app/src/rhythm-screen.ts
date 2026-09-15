@@ -19,8 +19,8 @@
 // 12行（DEFAULT_ROW_NOTES/DEFAULT_ROW_LABELS）。行数が増えて1行18px未満になる場合は
 // 18px固定にしてホイールで縦スクロールする（メロディ画面と同じ方式）。
 
-import { isActive } from './screens.ts';
-import { setMetronomeEnabled, onRhythmStepTick, setRhythmStep } from './midi.ts';
+import { isActive } from './screens.svelte.ts';
+import { onRhythmStepTick, setRhythmStep } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
 import type { RhythmRow } from './types.ts';
 
@@ -131,19 +131,7 @@ export function patternV1ToRows(pattern: number[][]): RhythmRow[] {
   }));
 }
 
-/** メトロノームON/OFFのチェックボックスを配線する。リズム/メロディ共通の再生/停止
- * ボタンはmain.js側でまとめて配線する（停止時に両画面のカーソルを揃えてリセットする
- * 必要があるため、両画面を知っているmain.jsが持つのが自然。詳細はmidi_out.rs
- * `SEQUENCER_RUNNING`のコメント参照）。 */
-export function bindRhythmScreenControls({ metronomeToggle }: { metronomeToggle?: HTMLInputElement | null }): void {
-  if (!metronomeToggle) return;
-  metronomeToggle.checked = false;
-  metronomeToggle.addEventListener('change', () => {
-    setMetronomeEnabled(metronomeToggle.checked);
-  });
-}
-
-/** 再生/停止ボタンの停止側からmain.js経由で呼ばれる。再生カーソルのハイライトを
+/** 再生/停止ボタンの停止側からmain.ts経由で呼ばれる。再生カーソルのハイライトを
  * 即座に消す（Rust側は`rhythm-step`イベントの送出自体を止めるだけで、直前のカーソル
  * 位置を明示的に片付けてはくれないため）。 */
 export function resetRhythmCursor(): void {

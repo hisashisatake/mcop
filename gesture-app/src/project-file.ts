@@ -8,7 +8,7 @@ import { pushUndo, resetUndoHistory } from './undo-manager.ts';
 import { getRows, setRows, STEPS as RHYTHM_STEPS_PER_BAR, DEFAULT_ROW_NOTES, DEFAULT_ROW_LABELS } from './rhythm-screen.ts';
 import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_STEPS } from './melody-screen.ts';
 import { gm2DrumName } from './gm2-drums.ts';
-import { getBpm, setBpm } from './tempo-state.ts';
+import { getBpm, setBpm } from './tempo-state.svelte.ts';
 import { tapTempo } from './midi.ts';
 import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.ts';
 import {

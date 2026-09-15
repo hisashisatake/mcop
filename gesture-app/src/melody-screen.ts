@@ -15,7 +15,7 @@
 // ノートのID発行はJS側が担う（Rustが非同期でID発行するとJS側が往復待ちになるため、
 // rhythmの`set_rhythm_step`と同じfire-and-forget方式に揃える）。
 
-import { isActive } from './screens.ts';
+import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';

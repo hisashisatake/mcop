@@ -2,6 +2,9 @@
 // ビブラート(Pitch)はPitch FGのループ、トレモロ(Volume)はGain FGのループへ配線される
 // （質感LFO退役に伴い独立したLFOスロットは無くなり、選ばれなかった側のFGは音色プリセット
 // 本来の値へ戻される。バックエンド側はsrc-tauri/src/main.rsのop505_set_performance_lfo参照）。
+//
+// modWheel/lfoDestination/lfoRateは段階Cで$state化した。ドロワー内の表示（LfoSectionコンポーネント）
+// はこれを直接読むため、旧bindLfoIndicator()/updateIndicator()のような手動DOM同期は不要。
 
 import { setPerformanceLfo } from './midi.ts';
 
@@ -15,28 +18,21 @@ const LFO_DEST_VOLUME = 2; // トレモロ
 const MOD_DEPTH_RANGE = 64; // RPN0,5デフォルト（約50セント相当）
 const CC77_BASE = 0; // Depthベース値は0固定。深さはマウスホイール（CC1相当）のみで制御
 
-let modWheel = 0; // CC1相当。0〜255
-let lfoDestination = LFO_DEST_PITCH;
-let lfoRate = LFO_RATE_DEFAULT;
-
-export interface LfoIndicatorEls {
-  label: HTMLElement;
-  depthBar: HTMLElement;
-  rateLabel: HTMLElement;
-  rateBar: HTMLElement;
-}
-
-let indicatorEls: LfoIndicatorEls | null = null; // ドロワー内のDOM要素
+export const performanceLfoState: { modWheel: number; destination: number; rate: number } = $state({
+  modWheel: 0, // CC1相当。0〜255
+  destination: LFO_DEST_PITCH,
+  rate: LFO_RATE_DEFAULT,
+});
 
 /** 指定チャンネルへ現在のLFO設定を送る。発音直前に呼ぶ。 */
 export function applyTo(channel: number): Promise<unknown> {
   return setPerformanceLfo({
     channel,
-    rate: lfoRate,
+    rate: performanceLfoState.rate,
     delay: LFO_DELAY,
-    destination: lfoDestination,
+    destination: performanceLfoState.destination,
     cc77: CC77_BASE,
-    cc1: modWheel,
+    cc1: performanceLfoState.modWheel,
     modDepthRange: MOD_DEPTH_RANGE,
   });
 }
@@ -57,8 +53,7 @@ export function setupPerformanceLfo(target: HTMLElement, activeChannels: () => n
     'wheel',
     async (e: WheelEvent) => {
       e.preventDefault();
-      modWheel = Math.max(0, Math.min(255, modWheel - Math.sign(e.deltaY) * 8));
-      updateIndicator();
+      performanceLfoState.modWheel = Math.max(0, Math.min(255, performanceLfoState.modWheel - Math.sign(e.deltaY) * 8));
       await applyToActive();
     },
     { passive: false },
@@ -67,36 +62,19 @@ export function setupPerformanceLfo(target: HTMLElement, activeChannels: () => n
   window.addEventListener('keydown', async (e) => {
     const key = e.key.toLowerCase();
     if (key === 'v') {
-      lfoDestination = lfoDestination === LFO_DEST_PITCH ? LFO_DEST_VOLUME : LFO_DEST_PITCH;
-      updateIndicator();
+      performanceLfoState.destination = performanceLfoState.destination === LFO_DEST_PITCH ? LFO_DEST_VOLUME : LFO_DEST_PITCH;
       await applyToActive();
     } else if (key === 'c') {
-      lfoRate = Math.max(0, lfoRate - LFO_RATE_STEP);
-      updateIndicator();
+      performanceLfoState.rate = Math.max(0, performanceLfoState.rate - LFO_RATE_STEP);
       await applyToActive();
     } else if (key === 'b') {
-      lfoRate = Math.min(255, lfoRate + LFO_RATE_STEP);
-      updateIndicator();
+      performanceLfoState.rate = Math.min(255, performanceLfoState.rate + LFO_RATE_STEP);
       await applyToActive();
     }
   });
 }
 
-/**
- * ドロワー内のLFO状態表示（DOM）を配線する。以前はcanvasへ毎フレーム描画していたが、
- * 常時表示の操作UIをドロワーへ集約する仕様変更に伴いDOM表示へ切り替えた。
- */
-export function bindLfoIndicator(els: LfoIndicatorEls): void {
-  indicatorEls = els;
-  updateIndicator();
-}
-
-function updateIndicator(): void {
-  if (!indicatorEls) return;
-  const label = lfoDestination === LFO_DEST_VOLUME ? 'Tremolo (Gain FG)' : 'Vibrato (Pitch FG)';
-  indicatorEls.label.textContent = `LFO: ${label} (V)`;
-  indicatorEls.label.style.color = modWheel > 0 ? '#4af' : '#666';
-  indicatorEls.depthBar.style.width = `${(modWheel / 255) * 100}%`;
-  indicatorEls.rateLabel.textContent = `Rate: ${lfoRate} (C/B)`;
-  indicatorEls.rateBar.style.width = `${(lfoRate / 255) * 100}%`;
+/** LfoSectionコンポーネント向けの表示用ラベル・比率。 */
+export function lfoDestinationLabel(): string {
+  return performanceLfoState.destination === LFO_DEST_VOLUME ? 'Tremolo (Gain FG)' : 'Vibrato (Pitch FG)';
 }

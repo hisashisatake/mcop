@@ -11,7 +11,7 @@
 import { getChordState, setChordState } from './chord-screen.ts';
 import { getRows, setRows, patternV1ToRows } from './rhythm-screen.ts';
 import { getNotes, setNotes } from './melody-screen.ts';
-import { getBpm, setBpm } from './tempo-state.ts';
+import { getBpm, setBpm } from './tempo-state.svelte.ts';
 import { tapTempo } from './midi.ts';
 import type { ProjectState } from './types.ts';
 

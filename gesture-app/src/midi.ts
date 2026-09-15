@@ -3,7 +3,7 @@
 
 import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { pushLog } from './midi-log.ts';
+import { pushLog } from './midi-log.svelte.ts';
 import type { PerformanceLfoArgs, ProgramInfo } from './types.ts';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外ではMIDIは飛ばない）。
