@@ -9,6 +9,7 @@ import { getRows, setRows, STEPS as RHYTHM_STEPS_PER_BAR, DEFAULT_ROW_NOTES, DEF
 import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_STEPS } from './melody-screen.ts';
 import { gm2DrumName } from './gm2-drums.ts';
 import { getBpm, setBpm } from './tempo-state.svelte.ts';
+import { rhythmSnap, melodySnap } from './grid-zoom.svelte.ts';
 import { tapTempo } from './midi.ts';
 import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.ts';
 import {
@@ -112,14 +113,16 @@ export async function importMidi(): Promise<boolean> {
   const scale = division / PPQ;
   const ticksPerPulse = TICKS_PER_PULSE * scale;
 
+  // 量子化グリッドは「今画面に見えている倍率」をそのまま使う（見えているグリッドに
+  // 取り込まれるという直感的な仕様、詳細はmemory project_gesture_app_grid_zoom_plan参照）。
   const melodyChannel = pickMelodyChannel(events);
   const newNotes = melodyChannel != null
-    ? midiEventsToMelodyNotes(events, melodyChannel, ticksPerPulse, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH)
+    ? midiEventsToMelodyNotes(events, melodyChannel, ticksPerPulse, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, melodySnap())
     : null;
   // midiEventsToRhythmRowsは{note,steps}のみ返す（表示名の概念を持たない汎用ロジックのため）。
   // 既定12行に一致するノートは短縮ラベルを、それ以外はGM2名を付けてrows形式を完成させる
   // （行を動的に追加するというフェーズ3の設計方針、DEFAULT_ROW_NOTES参照）。
-  const newRows = midiEventsToRhythmRows(events, RHYTHM_CHANNEL, ticksPerPulse, RHYTHM_STEPS_PER_BAR).map((r) => {
+  const newRows = midiEventsToRhythmRows(events, RHYTHM_CHANNEL, ticksPerPulse, RHYTHM_STEPS_PER_BAR, rhythmSnap()).map((r) => {
     const idx = DEFAULT_ROW_NOTES.indexOf(r.note);
     return { note: r.note, steps: r.steps, label: idx >= 0 ? DEFAULT_ROW_LABELS[idx] : gm2DrumName(r.note) };
   });

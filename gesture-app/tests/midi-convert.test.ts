@@ -66,7 +66,7 @@ test('melodyNotesToEvents→midiEventsToMelodyNotesのラウンドトリップ',
     { startStep: 8, lengthSteps: 3, pitch: 60, level: 2 },
   ];
   const events = roundTripEvents([melodyNotesToEvents(notes, 1, TICKS_PER_MELODY_STEP)]);
-  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, 1);
   assert.equal(restored.length, 2);
   assert.deepEqual(
     restored.map(({ startStep, lengthSteps, pitch, level }) => ({ startStep, lengthSteps, pitch, level })),
@@ -76,7 +76,7 @@ test('melodyNotesToEvents→midiEventsToMelodyNotesのラウンドトリップ',
 
 test('midiEventsToMelodyNotes: 音域外(MIN_PITCH未満)のノートは捨てる', () => {
   const events = roundTripEvents([melodyNotesToEvents([{ startStep: 0, lengthSteps: 1, pitch: 10, level: 1 }], 1, TICKS_PER_MELODY_STEP)]);
-  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, 1);
   assert.equal(restored.length, 0);
 });
 
@@ -84,7 +84,7 @@ test('midiEventsToMelodyNotes: 8小節を超える位置のノートは捨てる
   const events = roundTripEvents([
     melodyNotesToEvents([{ startStep: MELODY_TOTAL_STEPS + 10, lengthSteps: 1, pitch: 60, level: 1 }], 1, TICKS_PER_MELODY_STEP),
   ]);
-  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, 1);
   assert.equal(restored.length, 0);
 });
 
@@ -102,7 +102,7 @@ test('midiEventsToMelodyNotes: 同じ音高がlegato気味に重なる場合は�
       TICKS_PER_MELODY_STEP,
     ),
   ]);
-  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, 1);
   assert.equal(restored.length, 2);
   assert.equal(restored[0].startStep, 0);
   assert.equal(restored[0].lengthSteps, 4); // 4で打ち切られる
@@ -116,7 +116,7 @@ test('rhythmRowsToEvents→midiEventsToRhythmRowsのラウンドトリップ（1
     { note: 38, steps: [0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
   ];
   const events = roundTripEvents([rhythmRowsToEvents(rows, 9, TICKS_PER_RHYTHM_STEP, 16, 1)]);
-  const restored = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16);
+  const restored = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16, 1);
   assert.deepEqual(restored, rows);
 });
 
@@ -129,12 +129,12 @@ test('midiEventsToRhythmRows: 複数小節では最多出現パターンを採�
     tick: e.tick + 16 * TICKS_PER_RHYTHM_STEP, // 2小節目以降へシフト
   }));
   const events = roundTripEvents([[...introEvents, ...mainEvents]]);
-  const restored = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16);
+  const restored = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16, 1);
   assert.deepEqual(restored, mainRow);
 });
 
 test('midiEventsToRhythmRows: 対象チャンネルにヒットが無ければ空配列', () => {
-  assert.deepEqual(midiEventsToRhythmRows([{ tick: 0, kind: 'noteOn', channel: 0, note: 36, velocity: 100 }], 9, TICKS_PER_RHYTHM_STEP, 16), []);
+  assert.deepEqual(midiEventsToRhythmRows([{ tick: 0, kind: 'noteOn', channel: 0, note: 36, velocity: 100 }], 9, TICKS_PER_RHYTHM_STEP, 16, 1), []);
 });
 
 test('Export→SMFバイト列→Import で完全往復する（統合テスト）', () => {
@@ -153,9 +153,41 @@ test('Export→SMFバイト列→Import で完全往復する（統合テスト�
 
   const channel = pickMelodyChannel(events);
   assert.equal(channel, 1);
-  const restoredNotes = midiEventsToMelodyNotes(events, channel!, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH);
+  const restoredNotes = midiEventsToMelodyNotes(events, channel!, TICKS_PER_MELODY_STEP, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH, 1);
   assert.deepEqual(restoredNotes.map(({ startStep, lengthSteps, pitch, level }) => ({ startStep, lengthSteps, pitch, level })), notes);
 
-  const restoredRows = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16);
+  const restoredRows = midiEventsToRhythmRows(events, 9, TICKS_PER_RHYTHM_STEP, 16, 1);
   assert.deepEqual(restoredRows, rows);
+});
+
+test('midiEventsToMelodyNotes: quantizePulsesで開始/終了位置を指定グリッドへ丸める', () => {
+  const TICKS_PER_PULSE = 20; // ppq480 / 24
+  // 6パルス(16分)グリッドに対し1パルスずれた生の演奏データを想定
+  const events: SmfEvent[] = [
+    { tick: 7 * TICKS_PER_PULSE, kind: 'noteOn', channel: 1, note: 60, velocity: 100 },
+    { tick: 13 * TICKS_PER_PULSE, kind: 'noteOff', channel: 1, note: 60 },
+  ];
+  const restored = midiEventsToMelodyNotes(events, 1, TICKS_PER_PULSE, 96, MIN_PITCH, MAX_PITCH, 6);
+  assert.equal(restored.length, 1);
+  assert.equal(restored[0].startStep, 6); // 7パルス→最寄りの6の倍数(6)へスナップ
+  assert.equal(restored[0].lengthSteps, 6); // 13パルス→12へスナップ、長さ=12-6=6
+});
+
+test('midiEventsToRhythmRows: quantizePulsesでゆらぎを吸収し複数小節が同一パターンへ畳まれる', () => {
+  const TICKS_PER_PULSE = 20; // ppq480 / 24
+  const STEPS_PER_BAR = 96;
+  const ticksPerBar = TICKS_PER_PULSE * STEPS_PER_BAR;
+  // 意図は3小節とも16分グリッド(6パルス)上のキックだが、人間の演奏で±1パルスゆらいでいる想定
+  const events: SmfEvent[] = [
+    { tick: 0 * ticksPerBar + 6 * TICKS_PER_PULSE, kind: 'noteOn', channel: 9, note: 36, velocity: 100 },
+    { tick: 1 * ticksPerBar + 7 * TICKS_PER_PULSE, kind: 'noteOn', channel: 9, note: 36, velocity: 100 },
+    { tick: 2 * ticksPerBar + 5 * TICKS_PER_PULSE, kind: 'noteOn', channel: 9, note: 36, velocity: 100 },
+  ];
+
+  // 既定のquantizePulses=6(16分)なら3小節とも同じステップへ揃い、1パターンへ畳まれる
+  const quantized = midiEventsToRhythmRows(events, 9, TICKS_PER_PULSE, STEPS_PER_BAR);
+  assert.equal(quantized.length, 1);
+  assert.equal(quantized[0].note, 36);
+  assert.deepEqual(quantized[0].steps.filter((v) => v !== 0), [1]);
+  assert.equal(quantized[0].steps.indexOf(1), 6);
 });

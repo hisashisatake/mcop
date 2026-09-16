@@ -5,6 +5,7 @@
 // `project_gesture_app_melody_screen_and_file_menu_plan.md`「フェーズ3」節参照。
 
 import { noteOnEvent, noteOffEvent } from './smf.ts';
+import { snapRound } from './grid-units.ts';
 import type { MelodyNote, RhythmRowData, SmfEvent, SmfRawEvent } from './types.ts';
 
 const RHYTHM_CHANNEL = 9; // ch10（0-indexed）。standalone側のGM2リズムチャンネルと一致。
@@ -79,6 +80,9 @@ export function melodyNotesToEvents(
 /**
  * @param events parseSmf()の出力
  * @param channel pickMelodyChannel()で決めた取込元チャンネル
+ * @param quantizePulses 開始/終了位置を丸めるグリッド幅（パルス単位、既定6＝16分音符）。
+ *   人間の演奏はグリッドぴったりに乗らないため、ticksPerStep基準の生パルスをそのまま使うと
+ *   startStep/lengthStepsが1パルス単位でばらつく（見た目のスナップと一致しない）。
  */
 export function midiEventsToMelodyNotes(
   events: SmfEvent[],
@@ -87,6 +91,7 @@ export function midiEventsToMelodyNotes(
   totalSteps: number,
   minPitch: number,
   maxPitch: number,
+  quantizePulses: number = 6,
 ): MelodyNote[] {
   // 同じ音高のノートが（legatoの重なり等で）連続するSMFでは、noteOn/noteOffの対応関係が
   // 単純な「ピッチごとに1個」のスロットでは壊れる（後発のnoteOnが先発の対応情報を上書きし、
@@ -111,8 +116,8 @@ export function midiEventsToMelodyNotes(
 
   const quantized = raw
     .map((r) => {
-      const startStep = Math.max(0, Math.round(r.startTick / ticksPerStep));
-      const endStep = Math.max(startStep + 1, Math.round(r.endTick / ticksPerStep));
+      const startStep = Math.max(0, snapRound(r.startTick / ticksPerStep, quantizePulses));
+      const endStep = Math.max(startStep + quantizePulses, snapRound(r.endTick / ticksPerStep, quantizePulses));
       return { startStep, lengthSteps: endStep - startStep, pitch: r.pitch, velocity: r.velocity };
     })
     .filter((n) => n.startStep < totalSteps && n.pitch >= minPitch && n.pitch <= maxPitch)
@@ -189,9 +194,12 @@ function barPatternKey(stepsByNote: Map<number, Map<number, number>>): string {
 
 /**
  * @param events parseSmf()の出力
+ * @param quantizePulses ステップ位置を丸めるグリッド幅（パルス単位、既定6＝16分音符）。
+ *   量子化しないと人間の演奏の数パルスのゆらぎで小節ごとにステップ位置がずれ、
+ *   「最多出現パターンへ畳む」処理が一致を検出できなくなる。
  * @returns 該当ヒットが無ければ空配列
  */
-export function midiEventsToRhythmRows(events: SmfEvent[], channel: number, ticksPerStep: number, stepsPerBar: number): RhythmRowData[] {
+export function midiEventsToRhythmRows(events: SmfEvent[], channel: number, ticksPerStep: number, stepsPerBar: number, quantizePulses: number = 6): RhythmRowData[] {
   const hits = events.filter((e): e is Extract<SmfEvent, { kind: 'noteOn' }> => e.kind === 'noteOn' && e.channel === channel);
   if (hits.length === 0) return [];
 
@@ -203,7 +211,7 @@ export function midiEventsToRhythmRows(events: SmfEvent[], channel: number, tick
   for (const e of hits) {
     const bar = Math.floor(e.tick / ticksPerBar);
     const localTick = e.tick - bar * ticksPerBar;
-    const step = Math.round(localTick / ticksPerStep) % stepsPerBar;
+    const step = snapRound(localTick / ticksPerStep, quantizePulses) % stepsPerBar;
     if (!barPatterns[bar].has(e.note)) barPatterns[bar].set(e.note, new Map());
     barPatterns[bar].get(e.note)!.set(step, e.velocity);
   }
