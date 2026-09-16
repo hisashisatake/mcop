@@ -24,7 +24,7 @@ import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, setMelodyNotesBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, snapFloor } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, snapFloor, snapCeil } from './grid-units.ts';
 import { melodySnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { MelodyNote } from './types.ts';
@@ -45,7 +45,7 @@ const TOP_MARGIN = 40; // メニューバー(高さ40px)の直下、他画面と
 const BOTTOM_MARGIN = 180; // 右下固定の#status-panelと最下段の行が重ならないための余白
 
 const DRAG_THRESHOLD_PX = 4;
-const EDGE_ZONE_PX = 6;
+const EDGE_ZONE_PX = Math.min(6, CELL_W / 3);
 
 // [未使用, 通常, アクセント, 弱]。index0は「ノートが存在しない」ため使わない
 // （rhythmのLEVEL_COLORSと違い、メロディは存在しないセルを描かないため）。
@@ -173,16 +173,18 @@ function rowIndexToY(rowIndex: number): number {
   return TOP_MARGIN + (rowIndex - scrollRow) * CELL_H;
 }
 
-/** 画面座標(px,py) → { step, pitch }。`step`はマスの先頭パルス。グリッド外ならnull。 */
-function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { step: number; pitch: number } | null {
+/** 画面座標(px,py) → { pulse, rawPulse, pitch }。`pulse`はマスの先頭パルス（スナップ済み）、
+ * `rawPulse`はスナップ前の連続位置（リサイズの伸縮量計算に使う）。グリッド外ならnull。 */
+function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { pulse: number; rawPulse: number; pitch: number } | null {
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
   if (x < 0 || y < 0) return null;
-  const col = Math.floor(x / CELL_W);
-  const step = scrollStep + col * melodySnap();
+  const snap = melodySnap();
+  const rawPulse = scrollStep + (x / CELL_W) * snap;
+  const pulse = snapFloor(rawPulse, snap);
   const rowIndex = Math.floor(y / CELL_H) + scrollRow;
-  if (step < 0 || step >= TOTAL_STEPS || rowIndex < 0 || rowIndex >= ROWS) return null;
-  return { step, pitch: rowIndexToPitch(rowIndex) };
+  if (pulse < 0 || pulse >= TOTAL_STEPS || rowIndex < 0 || rowIndex >= ROWS) return null;
+  return { pulse, rawPulse, pitch: rowIndexToPitch(rowIndex) };
 }
 
 /** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
@@ -262,7 +264,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 
     const cell = pointToCell(canvas, e.clientX, e.clientY);
     if (!cell) return;
-    const hit = findNoteAt(cell.step, cell.pitch);
+    const hit = findNoteAt(cell.pulse, cell.pitch);
 
     if (hit) {
       const rightX = stepToX(hit.note.startStep + hit.note.lengthSteps, melodySnap());
@@ -278,9 +280,9 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     } else {
       pushUndo();
       const id = nextNoteId++;
-      notes.set(id, { startStep: cell.step, lengthSteps: melodySnap(), pitch: cell.pitch, level: 1 });
+      notes.set(id, { startStep: cell.pulse, lengthSteps: melodySnap(), pitch: cell.pitch, level: 1 });
       selectedId = id;
-      drag = { mode: 'create', id, startStep: cell.step };
+      drag = { mode: 'create', id, startStep: cell.pulse };
     }
   });
 
@@ -305,11 +307,12 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     if (!cell) return;
 
     if (drag.mode === 'create' || drag.mode === 'resize') {
-      // カーソルが乗っているマスの末尾まで伸ばす（cell.stepはそのマスの先頭パルス）。
+      // カーソルの連続位置(rawPulse)が属するマスの末尾まで伸ばす。
       const snap = melodySnap();
-      n.lengthSteps = Math.max(snap, cell.step - n.startStep + snap);
+      n.lengthSteps = Math.max(snap, snapCeil(cell.rawPulse + 1, snap) - n.startStep);
     } else if (drag.mode === 'move') {
-      n.startStep = clamp(cell.step, 0, TOTAL_STEPS - n.lengthSteps);
+      // 開始位置だけスナップし、長さは保持する。
+      n.startStep = clamp(cell.pulse, 0, TOTAL_STEPS - n.lengthSteps);
       n.pitch = clamp(cell.pitch, MIN_PITCH, MAX_PITCH);
     }
   });
@@ -444,7 +447,7 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   }
   ctx.textBaseline = 'alphabetic';
 
-  // 格子線（1マスごとに細く、1小節=96パルスごとに太く）
+  // マス線（可視セルの境界、細）
   ctx.strokeStyle = '#2a2a2a';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -462,11 +465,25 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   }
   ctx.stroke();
 
+  // 拍線（24パルスごと、中太）。3連符系のスナップだと拍頭がマス境界に乗らないため、
+  // マス格子とは独立にパルス単位で描く。
+  const visibleEndPulse = scrollStep + visibleCols * snap;
   ctx.strokeStyle = '#4a4a4a';
   ctx.beginPath();
-  for (let step = 0; step <= TOTAL_STEPS; step += PULSES_PER_BAR) {
-    if (step < scrollStep || step > scrollStep + visibleCols * snap) continue;
-    const x = Math.round(stepToX(step, snap)) + 0.5;
+  for (let pulse = 0; pulse <= TOTAL_STEPS; pulse += PULSES_PER_BEAT) {
+    if (pulse < scrollStep || pulse > visibleEndPulse) continue;
+    const x = Math.round(stepToX(pulse, snap)) + 0.5;
+    ctx.moveTo(x, TOP_MARGIN);
+    ctx.lineTo(x, gridBottom);
+  }
+  ctx.stroke();
+
+  // 小節線（96パルスごと、さらに太く）。
+  ctx.strokeStyle = '#6a6a6a';
+  ctx.beginPath();
+  for (let pulse = 0; pulse <= TOTAL_STEPS; pulse += PULSES_PER_BAR) {
+    if (pulse < scrollStep || pulse > visibleEndPulse) continue;
+    const x = Math.round(stepToX(pulse, snap)) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
     ctx.lineTo(x, gridBottom);
   }
