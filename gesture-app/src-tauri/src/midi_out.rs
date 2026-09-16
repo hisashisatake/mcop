@@ -194,7 +194,7 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 // 1小節=96パルス（1パルス=1/96小節、CLAUDE.mdのグリッド解像度細分化参照）。行は
 // op505/tools/patchlab/python/gm2_drum_kit.pyのSTANDARD_KIT（メトロノーム用note33/34を
 // 除く12音色）と対応させる。パターンの編集はJS側（rhythm-screen.ts）が発生源で、
-// `set_rhythm_step`/`set_rhythm_range`/`set_rhythm_rows`経由でここへミラーするだけ
+// `set_rhythm_range`/`set_rhythm_rows`経由でここへミラーするだけ
 // （読み出しはこのクロックスレッドのみ）。発音の判定・送信自体は必ずこのスレッドが
 // 行う（JS側のrequestAnimationFrameは数十msの誤差が出るため刻みに使わない）。
 // ─────────────────────────────────────────────
@@ -233,16 +233,6 @@ fn apply_rhythm_level(state: &mut RhythmState, note: usize, pulse: usize, level:
         state.hit_counts[pulse] -= 1;
     }
     state.pattern[note][pulse] = level;
-}
-
-/// リズム画面のグリッドクリックで呼ばれる。`note`はGM2ノート番号、`level`は0〜3（4以上は3に
-/// クランプ）。パターンはテンポが未設定（クロック未送出）でも保持され、`tap_tempo`後に反映される。
-pub fn set_rhythm_step(note: u8, step: u8, level: u8) {
-    let step = step as usize;
-    if step >= RHYTHM_STEPS {
-        return;
-    }
-    apply_rhythm_level(&mut rhythm_state().lock().unwrap(), note as usize, step, level.min(3));
 }
 
 /// 「見たまま＝鳴る」の粗い倍率での範囲編集用（`rhythm-screen.ts`のクリック処理が

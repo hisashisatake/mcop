@@ -211,15 +211,6 @@ fn set_metronome_enabled(enabled: bool) {
     midi_out::set_metronome_enabled(enabled);
 }
 
-/// リズム画面のステップシーケンサーグリッドのクリックで呼ばれる。`note`はGM2ノート番号
-/// （行の対応表自体はJS側`rhythm-screen.js`が持つ、フェーズ3で行の固定12個制約を撤廃）、
-/// `level`は0(消音)〜3(弱)。パターンの発音判定自体は`midi_out::clock_loop`が持つため、
-/// ここでは共有パターンへ書き込むだけ。
-#[tauri::command]
-fn set_rhythm_step(note: u8, step: u8, level: u8) {
-    midi_out::set_rhythm_step(note, step, level);
-}
-
 /// リズム画面の「見たまま＝鳴る」範囲編集（粗い倍率でのマスクリック）で呼ばれる。
 /// [start, start+len)のパルス範囲を`level`で一括上書きする。
 #[tauri::command]
@@ -284,7 +275,6 @@ fn main() {
             op505_open_editor,
             tap_tempo,
             set_metronome_enabled,
-            set_rhythm_step,
             set_rhythm_range,
             set_rhythm_rows,
             set_sequencer_running,

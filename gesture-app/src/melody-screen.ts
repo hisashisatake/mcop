@@ -17,7 +17,7 @@
 // サイズ+スクロールオフセット」で描画する。
 //
 // ノートのID発行はJS側が担う（Rustが非同期でID発行するとJS側が往復待ちになるため、
-// rhythmの`set_rhythm_step`と同じfire-and-forget方式に揃える）。
+// rhythmの`set_rhythm_range`と同じfire-and-forget方式に揃える）。
 
 import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
