@@ -251,6 +251,18 @@ export interface MelodyNote {
 // プロジェクトファイル（project-state.ts）
 // ─────────────────────────────────────────────
 
+// v2→v3: リズム/メロディの内部単位を「1パルス=1/96小節」へ統一した
+// （グリッド解像度細分化、RhythmRow.steps/MelodyNote.startStep・lengthStepsの意味が
+// 変わるだけで、型の形自体はv2と同じ）。
+
+export interface ProjectStateV3 {
+  version: 3;
+  bpm: number | null;
+  chord: ChordHistory;
+  rhythm: { rows: RhythmRow[] };
+  melody: { notes: MelodyNote[] };
+}
+
 export interface ProjectStateV2 {
   version: 2;
   bpm: number | null;
@@ -267,7 +279,7 @@ export interface ProjectStateV1 {
   melody: { notes: MelodyNote[] };
 }
 
-export type ProjectState = ProjectStateV1 | ProjectStateV2;
+export type ProjectState = ProjectStateV1 | ProjectStateV2 | ProjectStateV3;
 
 // ─────────────────────────────────────────────
 // MIDI（midi.ts）

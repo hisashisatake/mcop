@@ -13,11 +13,13 @@ import { getRows, setRows, patternV1ToRows } from './rhythm-screen.ts';
 import { getNotes, setNotes } from './melody-screen.ts';
 import { getBpm, setBpm } from './tempo-state.svelte.ts';
 import { tapTempo } from './midi.ts';
-import type { ProjectState } from './types.ts';
+import { expandRhythmSteps16To96, expandMelodyNotesV2 } from './grid-migrate.ts';
+import type { ProjectState, RhythmRow, MelodyNote } from './types.ts';
 
 // v1→v2: リズムの「12行固定パターン」を「ノート番号キーの可変長rows」へ変更した
 // （フェーズ3、MIDI Importで未知のノート番号の行が増減できるようにするため）。
-const VERSION = 2;
+// v2→v3: リズム/メロディの内部単位を1パルス=1/96小節へ統一した（グリッド解像度細分化）。
+const VERSION = 3;
 
 /** プロジェクト全体の現在状態を1個のプレーンオブジェクトへ集約する。 */
 export function captureProjectState(): ProjectState {
@@ -31,12 +33,26 @@ export function captureProjectState(): ProjectState {
 }
 
 /** captureProjectState()の形式の状態を各画面へ丸ごと反映する。version 1（rhythm.pattern
- * 形式）のファイルもDEFAULT_ROW_NOTES対応で読み込める。 */
+ * 形式）のファイルもDEFAULT_ROW_NOTES対応で読み込める。version 1/2は旧16/8ステップ単位の
+ * ため、grid-migrate.tsで1パルス=1/96小節へ展開してから反映する。 */
 export function applyProjectState(state: ProjectState): void {
   setChordState(state.chord);
-  const rows = state.version === 2 ? state.rhythm.rows : patternV1ToRows(state.rhythm.pattern);
+
+  let rows: RhythmRow[];
+  let notes: MelodyNote[];
+  if (state.version === 3) {
+    rows = state.rhythm.rows;
+    notes = state.melody.notes;
+  } else if (state.version === 2) {
+    rows = state.rhythm.rows.map((r) => ({ ...r, steps: expandRhythmSteps16To96(r.steps) }));
+    notes = expandMelodyNotesV2(state.melody.notes);
+  } else {
+    rows = patternV1ToRows(state.rhythm.pattern);
+    notes = expandMelodyNotesV2(state.melody.notes);
+  }
+
   setRows(rows);
-  setNotes(state.melody.notes);
+  setNotes(notes);
   setBpm(state.bpm ?? null);
   if (state.bpm != null) tapTempo(state.bpm);
 }

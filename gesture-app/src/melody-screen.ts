@@ -4,21 +4,26 @@
 // （JSタイマーは数十msの誤差が出るため使わない）、JSはノートをRustへミラーし、
 // `melody-step`イベントで受け取った再生位置をカーソルとして描くだけ。
 //
-// RHYTHM画面が「固定16ステップ×12行のグリッド」なのに対し、メロディは音オブジェクト
-// （可変の開始位置・長さ・音高を持つノート）のリストで表現する。1小節=8ステップ
-// （8分音符単位、リズムの16分割より粗い）、ループ長は基本8小節（64ステップ、Rust側
-// `MELODY_BARS`×`MELODY_STEPS_PER_BAR`と一致させること）。フルピアノ音域
-// （A0=MIDI21〜C8=MIDI108、88鍵）を縦スクロールで、64ステップ全体を横スクロールで
-// 見せるため、rhythmの「コンテナに合わせて等分割」ではなく「固定セルサイズ+
-// スクロールオフセット」で描画する。
+// 内部データ（`startStep`/`lengthSteps`）は1パルス=1/96小節（`grid-units.ts`参照）で
+// 持つ。このステップではまだ「マス幅を変えられる」倍率UIを持たないため、既定の
+// 8分音符(FIXED_SNAP=12パルス/マス)に固定した見た目（従来と同じ64マス/8小節）で
+// 描画・クリック判定する（倍率スライダー自体は次のステップで追加する）。
+//
+// RHYTHM画面が「固定マス×12行のグリッド」なのに対し、メロディは音オブジェクト
+// （可変の開始位置・長さ・音高を持つノート）のリストで表現する。ループ長は基本8小節
+// （768パルス、Rust側`MELODY_BARS`×`MELODY_STEPS_PER_BAR`と一致させること）。
+// フルピアノ音域（A0=MIDI21〜C8=MIDI108、88鍵）を縦スクロールで、768パルス全体を
+// 横スクロールで見せるため、rhythmの「コンテナに合わせて等分割」ではなく「固定セル
+// サイズ+スクロールオフセット」で描画する。
 //
 // ノートのID発行はJS側が担う（Rustが非同期でID発行するとJS側が往復待ちになるため、
 // rhythmの`set_rhythm_step`と同じfire-and-forget方式に揃える）。
 
 import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
-import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick } from './midi.ts';
+import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, setMelodyNotesBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
+import { PULSES_PER_BAR, SNAP_PULSES } from './grid-units.ts';
 import type { MelodyNote } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
@@ -27,9 +32,11 @@ export const MIN_PITCH = 21; // A0
 export const MAX_PITCH = 108; // C8
 const ROWS = MAX_PITCH - MIN_PITCH + 1; // 88
 
-const STEPS_PER_BAR = 8;
 const BARS = 8;
-export const TOTAL_STEPS = STEPS_PER_BAR * BARS; // 64
+export const TOTAL_STEPS = PULSES_PER_BAR * BARS; // 768
+
+// 倍率UI導入までの固定スナップ（8分音符=12パルス/マス、従来の見た目と一致させる）。
+const FIXED_SNAP = SNAP_PULSES[2];
 
 const CELL_W = 40;
 const CELL_H = 18;
@@ -95,31 +102,15 @@ export function getNotes(): MelodyNote[] {
 }
 
 /**
- * 統合Undo/Redo・ファイル読込による復元用。現在のnotesとidベースで差分を取り、
- * 変化した分だけRust側の共有ノートリストへadd/update/deleteをミラーする
- * （編集していないUndo/Redoで全ノートを送り直さずに済む）。
+ * 統合Undo/Redo・ファイル読込による復元用。ノート集合を丸ごと置換する。768パルス化で
+ * 差分invokeループが編集していないUndo/Redoでも大量に飛びうるため、Rust側の
+ * `set_melody_notes`（全置換）を1回だけ呼ぶバルク方式にする。
  */
 export function setNotes(notesArray: MelodyNote[]): void {
-  const nextNotes = new Map<number, NoteData>(
+  notes = new Map<number, NoteData>(
     notesArray.map((n) => [n.id, { startStep: n.startStep, lengthSteps: n.lengthSteps, pitch: n.pitch, level: n.level }]),
   );
-  for (const id of notes.keys()) {
-    if (!nextNotes.has(id)) deleteMelodyNote(id);
-  }
-  for (const [id, n] of nextNotes) {
-    const prev = notes.get(id);
-    if (!prev) {
-      addMelodyNote(id, n.startStep, n.lengthSteps, n.pitch, n.level);
-    } else if (
-      prev.startStep !== n.startStep ||
-      prev.lengthSteps !== n.lengthSteps ||
-      prev.pitch !== n.pitch ||
-      prev.level !== n.level
-    ) {
-      updateMelodyNote(id, n.startStep, n.lengthSteps, n.pitch, n.level);
-    }
-  }
-  notes = nextNotes;
+  setMelodyNotesBulk(notesArray);
   nextNoteId = notesArray.reduce((max, n) => Math.max(max, n.id), 0) + 1;
   if (selectedId != null && !notes.has(selectedId)) selectedId = null;
 }
@@ -164,20 +155,22 @@ function ensureScrollInitialized(canvas: HTMLCanvasElement): void {
   scrollInitialized = true;
 }
 
+/** `step`はパルス単位（`scrollStep`もパルス単位、常にFIXED_SNAPの倍数）。 */
 function stepToX(step: number): number {
-  return LABEL_WIDTH + (step - scrollStep) * CELL_W;
+  return LABEL_WIDTH + ((step - scrollStep) / FIXED_SNAP) * CELL_W;
 }
 
 function rowIndexToY(rowIndex: number): number {
   return TOP_MARGIN + (rowIndex - scrollRow) * CELL_H;
 }
 
-/** 画面座標(px,py) → { step, pitch }。グリッド外ならnull。 */
+/** 画面座標(px,py) → { step, pitch }。`step`はマスの先頭パルス。グリッド外ならnull。 */
 function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { step: number; pitch: number } | null {
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
   if (x < 0 || y < 0) return null;
-  const step = Math.floor(x / CELL_W) + scrollStep;
+  const col = Math.floor(x / CELL_W);
+  const step = scrollStep + col * FIXED_SNAP;
   const rowIndex = Math.floor(y / CELL_H) + scrollRow;
   if (step < 0 || step >= TOTAL_STEPS || rowIndex < 0 || rowIndex >= ROWS) return null;
   return { step, pitch: rowIndexToPitch(rowIndex) };
@@ -220,7 +213,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     } else {
       pushUndo();
       const id = nextNoteId++;
-      notes.set(id, { startStep: cell.step, lengthSteps: 1, pitch: cell.pitch, level: 1 });
+      notes.set(id, { startStep: cell.step, lengthSteps: FIXED_SNAP, pitch: cell.pitch, level: 1 });
       selectedId = id;
       drag = { mode: 'create', id, startStep: cell.step };
     }
@@ -247,7 +240,8 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     if (!cell) return;
 
     if (drag.mode === 'create' || drag.mode === 'resize') {
-      n.lengthSteps = Math.max(1, cell.step - n.startStep + 1);
+      // カーソルが乗っているマスの末尾まで伸ばす（cell.stepはそのマスの先頭パルス）。
+      n.lengthSteps = Math.max(FIXED_SNAP, cell.step - n.startStep + FIXED_SNAP);
     } else if (drag.mode === 'move') {
       n.startStep = clamp(cell.step, 0, TOTAL_STEPS - n.lengthSteps);
       n.pitch = clamp(cell.pitch, MIN_PITCH, MAX_PITCH);
@@ -281,7 +275,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       const { visibleCols, visibleRows } = gridMetrics(canvas);
       const dir = Math.sign(e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaY);
       if (e.shiftKey) {
-        scrollStep = clamp(scrollStep + dir * 2, 0, Math.max(0, TOTAL_STEPS - visibleCols));
+        scrollStep = clamp(scrollStep + dir * 2 * FIXED_SNAP, 0, Math.max(0, TOTAL_STEPS - visibleCols * FIXED_SNAP));
       } else {
         scrollRow = clamp(scrollRow + dir * 2, 0, Math.max(0, ROWS - visibleRows));
       }
@@ -318,7 +312,7 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   for (const [id, n] of notes) {
     const rowIndex = pitchToRowIndex(n.pitch);
     if (rowIndex < scrollRow || rowIndex >= scrollRow + visibleRows) continue;
-    if (n.startStep + n.lengthSteps <= scrollStep || n.startStep >= scrollStep + visibleCols) continue;
+    if (n.startStep + n.lengthSteps <= scrollStep || n.startStep >= scrollStep + visibleCols * FIXED_SNAP) continue;
     const x0 = Math.max(LABEL_WIDTH, stepToX(n.startStep));
     const x1 = Math.min(gridRight, stepToX(n.startStep + n.lengthSteps));
     const y = rowIndexToY(rowIndex);
@@ -331,10 +325,12 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     }
   }
 
-  // 再生カーソル
-  if (currentStep >= scrollStep && currentStep < scrollStep + visibleCols) {
+  // 再生カーソル。`currentStep`はRust側`melody-step`の旧スケール(0〜63、8分音符単位)の
+  // ままイベント頻度を維持しているため、パルス単位へ変換してから比較・描画する。
+  const currentPulse = currentStep * FIXED_SNAP;
+  if (currentStep >= 0 && currentPulse >= scrollStep && currentPulse < scrollStep + visibleCols * FIXED_SNAP) {
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(stepToX(currentStep), TOP_MARGIN, CELL_W, gridBottom - TOP_MARGIN);
+    ctx.fillRect(stepToX(currentPulse), TOP_MARGIN, CELL_W, gridBottom - TOP_MARGIN);
   }
 
   // 行ラベル（音名）
@@ -350,12 +346,12 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   }
   ctx.textBaseline = 'alphabetic';
 
-  // 格子線（1ステップごとに細く、1小節=8ステップごとに太く）
+  // 格子線（1マスごとに細く、1小節=96パルスごとに太く）
   ctx.strokeStyle = '#2a2a2a';
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let c = 0; c <= visibleCols; c++) {
-    const step = scrollStep + c;
+    const step = scrollStep + c * FIXED_SNAP;
     if (step > TOTAL_STEPS) break;
     const x = Math.round(stepToX(step)) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
@@ -370,8 +366,8 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
 
   ctx.strokeStyle = '#4a4a4a';
   ctx.beginPath();
-  for (let step = 0; step <= TOTAL_STEPS; step += STEPS_PER_BAR) {
-    if (step < scrollStep || step > scrollStep + visibleCols) continue;
+  for (let step = 0; step <= TOTAL_STEPS; step += PULSES_PER_BAR) {
+    if (step < scrollStep || step > scrollStep + visibleCols * FIXED_SNAP) continue;
     const x = Math.round(stepToX(step)) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
     ctx.lineTo(x, gridBottom);

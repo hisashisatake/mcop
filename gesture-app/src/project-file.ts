@@ -33,8 +33,9 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | nul
 const PPQ = 480;
 const MELODY_CHANNEL = 1; // ch2（0-indexed）
 const RHYTHM_CHANNEL = 9; // ch10（0-indexed）
-const TICKS_PER_MELODY_STEP = PPQ / 2; // 8分音符単位
-const TICKS_PER_RHYTHM_STEP = PPQ / 4; // 16分音符単位
+// リズム/メロディとも内部単位は1パルス=1/96小節（PULSES_PER_BEAT=24）に統一済み
+// （グリッド解像度細分化）のため、tick換算も1本化できる。
+const TICKS_PER_PULSE = PPQ / 24; // 20
 const MELODY_BARS = 8;
 const DEFAULT_EXPORT_BPM = 120; // タップテンポ未確定時のExport既定値
 
@@ -109,17 +110,16 @@ export async function importMidi(): Promise<boolean> {
   // スケールする必要がある（Exportは常にPPQ=480で書き出すが、Importは他ソフト製の
   // 任意divisionのファイルを受け付けるため）。
   const scale = division / PPQ;
-  const ticksPerMelodyStep = TICKS_PER_MELODY_STEP * scale;
-  const ticksPerRhythmStep = TICKS_PER_RHYTHM_STEP * scale;
+  const ticksPerPulse = TICKS_PER_PULSE * scale;
 
   const melodyChannel = pickMelodyChannel(events);
   const newNotes = melodyChannel != null
-    ? midiEventsToMelodyNotes(events, melodyChannel, ticksPerMelodyStep, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH)
+    ? midiEventsToMelodyNotes(events, melodyChannel, ticksPerPulse, MELODY_TOTAL_STEPS, MIN_PITCH, MAX_PITCH)
     : null;
   // midiEventsToRhythmRowsは{note,steps}のみ返す（表示名の概念を持たない汎用ロジックのため）。
   // 既定12行に一致するノートは短縮ラベルを、それ以外はGM2名を付けてrows形式を完成させる
   // （行を動的に追加するというフェーズ3の設計方針、DEFAULT_ROW_NOTES参照）。
-  const newRows = midiEventsToRhythmRows(events, RHYTHM_CHANNEL, ticksPerRhythmStep, RHYTHM_STEPS_PER_BAR).map((r) => {
+  const newRows = midiEventsToRhythmRows(events, RHYTHM_CHANNEL, ticksPerPulse, RHYTHM_STEPS_PER_BAR).map((r) => {
     const idx = DEFAULT_ROW_NOTES.indexOf(r.note);
     return { note: r.note, steps: r.steps, label: idx >= 0 ? DEFAULT_ROW_LABELS[idx] : gm2DrumName(r.note) };
   });
@@ -140,8 +140,8 @@ export async function importMidi(): Promise<boolean> {
 /** @returns 実際に保存したか（キャンセルならfalse） */
 export async function exportMidi(): Promise<boolean> {
   const bpm = getBpm() ?? DEFAULT_EXPORT_BPM;
-  const melodyEvents = melodyNotesToEvents(getNotes(), MELODY_CHANNEL, TICKS_PER_MELODY_STEP);
-  const rhythmEvents = rhythmRowsToEvents(getRows(), RHYTHM_CHANNEL, TICKS_PER_RHYTHM_STEP, RHYTHM_STEPS_PER_BAR, MELODY_BARS);
+  const melodyEvents = melodyNotesToEvents(getNotes(), MELODY_CHANNEL, TICKS_PER_PULSE);
+  const rhythmEvents = rhythmRowsToEvents(getRows(), RHYTHM_CHANNEL, TICKS_PER_PULSE, RHYTHM_STEPS_PER_BAR, MELODY_BARS);
   const bytes = buildSmf({
     ppq: PPQ,
     tracks: [

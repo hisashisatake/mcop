@@ -17,14 +17,21 @@ const PULSES_PER_OLD_MELODY_STEP = PULSES_PER_BAR / OLD_MELODY_STEPS_PER_BAR; //
 const DEFAULT_ROW_NOTES = [49, 51, 46, 42, 39, 37, 38, 40, 48, 45, 41, 36];
 const DEFAULT_ROW_LABELS = ['Crash', 'Ride', 'OpenHH', 'ClosedHH', 'Clap', 'Rim', 'Snare', 'E.Snare', 'HiTom', 'MidTom', 'LoTom', 'Kick'];
 
-/** 旧16ステップ/小節のstepsを、1パルス=1/96小節の96要素配列へ展開する（各ステップを6パルスへ複製）。 */
+/**
+ * 旧16ステップ/小節のstepsを、1パルス=1/96小節の96要素配列へ展開する
+ * （新パルス位置 = 旧index×6、他のパルスは0のまま）。
+ *
+ * 6パルス全体を同じレベルで埋めない理由: リズムの発音判定は1パルスごとに「非0なら
+ * 発音」を行う（毎パルス走査、clock_loop参照）。6パルス全部を埋めると1個の16分音符が
+ * 6回連続で再トリガーされてしまうため、旧データの各ヒットは必ず単一パルスとして
+ * 配置する（描画側は`cellLevel()`が範囲内の最大値を読むため、単一パルスでも
+ * 従来と同じ見た目になる）。
+ */
 export function expandRhythmSteps16To96(steps: number[]): number[] {
   const result = new Array(PULSES_PER_BAR).fill(0);
   for (let i = 0; i < OLD_RHYTHM_STEPS; i++) {
     const level = steps[i] ?? 0;
-    for (let p = 0; p < PULSES_PER_OLD_RHYTHM_STEP; p++) {
-      result[i * PULSES_PER_OLD_RHYTHM_STEP + p] = level;
-    }
+    if (level !== 0) result[i * PULSES_PER_OLD_RHYTHM_STEP] = level;
   }
   return result;
 }

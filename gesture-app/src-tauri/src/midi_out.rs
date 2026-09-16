@@ -190,27 +190,49 @@ static METRONOME_ENABLED: AtomicBool = AtomicBool::new(false);
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
 // ─────────────────────────────────────────────
-// ステップシーケンサー（フェーズ4：リズム画面本体）
-// 1小節=16ステップ固定。行はop505/tools/patchlab/python/gm2_drum_kit.pyの
-// STANDARD_KIT（メトロノーム用note33/34を除く12音色）と対応させる。パターンの
-// 編集はJS側（rhythm-screen.js）が発生源で、`set_rhythm_step`経由でここへミラーする
-// だけ（読み出しはこのクロックスレッドのみ）。発音の判定・送信自体は必ずこのスレッドが
+// ステップシーケンサー（フェーズ4：リズム画面本体、グリッド解像度細分化で1パルス=1/96小節へ）
+// 1小節=96パルス（1パルス=1/96小節、CLAUDE.mdのグリッド解像度細分化参照）。行は
+// op505/tools/patchlab/python/gm2_drum_kit.pyのSTANDARD_KIT（メトロノーム用note33/34を
+// 除く12音色）と対応させる。パターンの編集はJS側（rhythm-screen.ts）が発生源で、
+// `set_rhythm_step`/`set_rhythm_range`/`set_rhythm_rows`経由でここへミラーするだけ
+// （読み出しはこのクロックスレッドのみ）。発音の判定・送信自体は必ずこのスレッドが
 // 行う（JS側のrequestAnimationFrameは数十msの誤差が出るため刻みに使わない）。
 // ─────────────────────────────────────────────
-const RHYTHM_STEPS: usize = 16;
-const CLOCKS_PER_STEP: u32 = CLOCKS_PER_BAR / RHYTHM_STEPS as u32;
+const RHYTHM_STEPS: usize = CLOCKS_PER_BAR as usize; // 96
+/// 再生カーソル通知(`rhythm-step`)の間引き間隔。旧16分音符間隔(6パルス)をそのまま
+/// 維持する（理由は`clock_loop`のドキュメントコメント参照）。発音判定自体は
+/// パルス粒度のデータに合わせて毎パルス行う。
+const RHYTHM_STEP_EVENT_PULSES: u32 = 6;
 
 const RHYTHM_VELOCITY_NORMAL: u8 = 95;
 const RHYTHM_VELOCITY_ACCENT: u8 = 127;
 const RHYTHM_VELOCITY_WEAK: u8 = 55;
 
-/// [note][step] = 0(消音)/1(通常)/2(アクセント)/3(弱)。GM2ノート番号(0〜127)で直接引く
-/// （フェーズ3で行の固定12個制約を撤廃。どのノート番号をどの見た目の行として表示するかは
-/// JS側（rhythm-screen.js）だけの関心事にし、Rust側は行の概念を持たない）。
-static RHYTHM_PATTERN: OnceLock<Mutex<[[u8; RHYTHM_STEPS]; 128]>> = OnceLock::new();
+/// リズムパターン本体。毎パルス128ノートを走査すると重いため、`hit_counts[pulse]`
+/// （そのパルスで鳴る非0ノート数）を同じMutex内に持ち、0ならO(1)でスキップできるように
+/// する（set_rhythm_*側で差分更新、走査はclock_loopのみ）。
+struct RhythmState {
+    /// [note][pulse] = 0(消音)/1(通常)/2(アクセント)/3(弱)。GM2ノート番号(0〜127)で直接引く
+    /// （フェーズ3で行の固定12個制約を撤廃。どのノート番号をどの見た目の行として表示するかは
+    /// JS側（rhythm-screen.ts）だけの関心事にし、Rust側は行の概念を持たない）。
+    pattern: [[u8; RHYTHM_STEPS]; 128],
+    hit_counts: [u16; RHYTHM_STEPS],
+}
 
-fn rhythm_pattern() -> &'static Mutex<[[u8; RHYTHM_STEPS]; 128]> {
-    RHYTHM_PATTERN.get_or_init(|| Mutex::new([[0; RHYTHM_STEPS]; 128]))
+static RHYTHM_STATE: OnceLock<Mutex<RhythmState>> = OnceLock::new();
+
+fn rhythm_state() -> &'static Mutex<RhythmState> {
+    RHYTHM_STATE.get_or_init(|| Mutex::new(RhythmState { pattern: [[0; RHYTHM_STEPS]; 128], hit_counts: [0; RHYTHM_STEPS] }))
+}
+
+fn apply_rhythm_level(state: &mut RhythmState, note: usize, pulse: usize, level: u8) {
+    let old = state.pattern[note][pulse];
+    if old == 0 && level != 0 {
+        state.hit_counts[pulse] += 1;
+    } else if old != 0 && level == 0 {
+        state.hit_counts[pulse] -= 1;
+    }
+    state.pattern[note][pulse] = level;
 }
 
 /// リズム画面のグリッドクリックで呼ばれる。`note`はGM2ノート番号、`level`は0〜3（4以上は3に
@@ -220,24 +242,74 @@ pub fn set_rhythm_step(note: u8, step: u8, level: u8) {
     if step >= RHYTHM_STEPS {
         return;
     }
-    rhythm_pattern().lock().unwrap()[note as usize][step] = level.min(3);
+    apply_rhythm_level(&mut rhythm_state().lock().unwrap(), note as usize, step, level.min(3));
+}
+
+/// 「見たまま＝鳴る」の粗い倍率での範囲編集用（`rhythm-screen.ts`のクリック処理が
+/// 1マス分の範囲をまとめて書き換える際に呼ぶ）。[start, start+len)を`level`で一括上書きする。
+pub fn set_rhythm_range(note: u8, start: u16, len: u16, level: u8) {
+    let note = note as usize;
+    if note >= 128 {
+        return;
+    }
+    let level = level.min(3);
+    let start = start as usize;
+    let end = (start + len as usize).min(RHYTHM_STEPS);
+    let mut state = rhythm_state().lock().unwrap();
+    for pulse in start..end {
+        apply_rhythm_level(&mut state, note, pulse, level);
+    }
+}
+
+/// JSから受け取る1行分のバルク置換データ（`set_rhythm_rows`）。JS側はcamelCaseで
+/// 送るため`rename_all`で変換する。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RhythmRowInput {
+    note: u8,
+    steps: Vec<u8>,
+}
+
+/// リズム画面の全行を一括で置き換える。Undo/Redo・ファイル読込で使う（96パルス化で
+/// 差分invokeループだと1回あたり最大1000回超のinvokeが飛びうるため、バルク化した）。
+pub fn set_rhythm_rows(rows: Vec<RhythmRowInput>) {
+    let mut state = rhythm_state().lock().unwrap();
+    state.pattern = [[0; RHYTHM_STEPS]; 128];
+    state.hit_counts = [0; RHYTHM_STEPS];
+    for row in rows {
+        let note = row.note as usize;
+        if note >= 128 {
+            continue;
+        }
+        for (pulse, &level) in row.steps.iter().take(RHYTHM_STEPS).enumerate() {
+            let level = level.min(3);
+            state.pattern[note][pulse] = level;
+            if level != 0 {
+                state.hit_counts[pulse] += 1;
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────
-// ピアノロール（フェーズ6：メロディ画面本体）
-// リズムの「行=固定16ステップグリッド」と違い、メロディは音オブジェクト（可変の
-// 開始位置・長さ・音高を持つノート）のリストで表現する。1小節=8ステップ（8分音符単位、
-// リズムの16分割より粗い）、ループ長は基本8小節（`MELODY_BARS`）。将来「8小節パーツを
-// 複数組み合わせる」構想があるため、小節数はこの1定数に閉じ込めてある。
-// 編集の発生源はJS側（melody-screen.js）で、IDはJS側が採番してRustへ渡す
+// ピアノロール（フェーズ6：メロディ画面本体、グリッド解像度細分化で1パルス=1/96小節へ）
+// リズムの「行=固定グリッド」と違い、メロディは音オブジェクト（可変の開始位置・長さ・
+// 音高を持つノート）のリストで表現する。1小節=96パルス（1パルス=1/96小節）、ループ長は
+// 基本8小節（`MELODY_BARS`）。将来「8小節パーツを複数組み合わせる」構想があるため、
+// 小節数はこの1定数に閉じ込めてある。
+// 編集の発生源はJS側（melody-screen.ts）で、IDはJS側が採番してRustへ渡す
 // （Rustが非同期でID発行するとJS側が往復待ちになるため、rhythmと同じfire-and-forget
 // 方式に揃える）。
 // ─────────────────────────────────────────────
 const MELODY_CHANNEL: u8 = 1; // ch2（0-indexed）
-const MELODY_STEPS_PER_BAR: u32 = 8;
+const MELODY_STEPS_PER_BAR: u32 = CLOCKS_PER_BAR; // 96
 const MELODY_BARS: u32 = 8;
-const MELODY_TOTAL_STEPS: u32 = MELODY_STEPS_PER_BAR * MELODY_BARS; // 64
-const CLOCKS_PER_MELODY_STEP: u32 = CLOCKS_PER_BAR / MELODY_STEPS_PER_BAR; // 12
+const MELODY_TOTAL_STEPS: u32 = MELODY_STEPS_PER_BAR * MELODY_BARS; // 768
+/// 再生カーソル通知(`melody-step`)の間引き間隔。旧8分音符間隔(12パルス)をそのまま
+/// 維持する（毎パルス送出すると`handle.emit`頻度がタイミングクリティカルなclock
+/// スレッド上で大幅に増え、既知のタイマー精度問題を悪化させうるため）。発音判定自体は
+/// パルス粒度のデータに合わせて毎パルス行う（このスレッド最下部のメロディ処理参照）。
+const MELODY_STEP_EVENT_PULSES: u32 = 12;
 
 /// 音オブジェクト1個分。`level`はリズムと同じ3段階（1=通常/2=アクセント/3=弱）で、
 /// 0(消音)は「このVecに存在しない」で表現するためここには出てこない。
@@ -284,6 +356,33 @@ pub fn delete_melody_note(id: u32) {
     melody_notes().lock().unwrap().retain(|n| n.id != id);
 }
 
+/// JSから受け取るノート1個分のバルク置換データ（`set_melody_notes`）。JS側の
+/// `MelodyNote`型はcamelCase（startStep/lengthSteps）のため`rename_all`で変換する。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MelodyNoteInput {
+    id: u32,
+    start_step: u16,
+    length_steps: u16,
+    pitch: u8,
+    level: u8,
+}
+
+/// メロディ画面の全ノートを一括で置き換える。Undo/Redo・ファイル読込で使う
+/// （768パルス化で差分invokeループが編集していないUndo/Redoでも大量に飛びうるため、
+/// バルク化した）。
+pub fn set_melody_notes(notes_in: Vec<MelodyNoteInput>) {
+    let mut notes = melody_notes().lock().unwrap();
+    notes.clear();
+    notes.extend(notes_in.into_iter().map(|n| MelodyNote {
+        id: n.id,
+        start_step: n.start_step,
+        length_steps: n.length_steps.max(1),
+        pitch: n.pitch,
+        level: n.level.clamp(1, 3),
+    }));
+}
+
 /// リズム画面・メロディ画面共通の再生/停止ボタンの状態。MIDI Clock自体（メトロノーム・
 /// TimeEgテンポ同期が依存する）は止めず、両パターンの発音とステップ通知だけをゲートする。
 /// 既定は停止中（テンポをタップしただけでは鳴らず、再生ボタンを押すまでパターンは待機する）。
@@ -327,10 +426,17 @@ fn ensure_clock_thread() {
 /// 位置は1本の`clock_total`（0〜`CLOCKS_PER_BAR * MELODY_BARS - 1`、メロディの
 /// ループ全体をカバーする）で管理する。リズム・メトロノームは`clock_total % CLOCKS_PER_BAR`
 /// （＝`clock_in_bar`、0〜95）を使い、これまで通り1小節ごとに繰り返す。拍の頭
-/// （24クロックごと）でメトロノームのNote On/Offと`sequencer-tick`、ステップの頭
-/// （6クロックごと＝16分音符単位）でリズムパターンの発音と`rhythm-step`イベント送出を
-/// 行う。メロディは`clock_total`をそのまま使い、12クロックごと（8分音符単位）で
-/// ノートの発音判定・終了判定・`melody-step`イベント送出を行う。
+/// （24クロックごと）でメトロノームのNote On/Offと`sequencer-tick`を送出する。
+///
+/// グリッド解像度細分化（1パルス=1/96小節）以降、リズム・メロディともパターンの
+/// データ粒度がパルス単位になったため、発音判定自体は**毎パルス**行う
+/// （`clock_in_bar`・`clock_total`をそのまま参照、旧来の6/12クロックごとの間引きは
+/// 発音判定からは無くした）。一方、`rhythm-step`/`melody-step`イベントの送出頻度は
+/// 旧来の間隔（6/12パルスごと）を維持する（毎パルス送出すると`handle.emit`頻度が
+/// タイミングクリティカルなclockスレッド上で大幅に増え、既知のタイマー精度問題
+/// （memory `project_bpm_supply_midi_clock.md`）を悪化させうるため）。ペイロードも旧スケール
+/// （rhythm:0〜15、melody:0〜63）のまま据え置き、JS側の再生カーソル描画コードは
+/// 無改修で済ませる。
 fn clock_loop() {
     let mut clock_total: u32 = 0;
     // 発音中（note_on済みでまだnote_offしていない）メロディノートの(pitch, 終了ステップ)。
@@ -360,26 +466,30 @@ fn clock_loop() {
 
         let running = SEQUENCER_RUNNING.load(Ordering::Relaxed);
 
-        if clock_in_bar % CLOCKS_PER_STEP == 0 && running {
-            let step = (clock_in_bar / CLOCKS_PER_STEP) as usize;
+        if running {
+            let pulse = clock_in_bar as usize; // 0..95、1パルス=1マス
             {
-                let pattern = rhythm_pattern().lock().unwrap();
-                for note in 0..128usize {
-                    let level = pattern[note][step];
-                    if level == 0 {
-                        continue;
+                let state = rhythm_state().lock().unwrap();
+                if state.hit_counts[pulse] != 0 {
+                    for note in 0..128usize {
+                        let level = state.pattern[note][pulse];
+                        if level == 0 {
+                            continue;
+                        }
+                        let velocity = match level {
+                            2 => RHYTHM_VELOCITY_ACCENT,
+                            3 => RHYTHM_VELOCITY_WEAK,
+                            _ => RHYTHM_VELOCITY_NORMAL,
+                        };
+                        note_on(RHYTHM_CHANNEL, note as u8, velocity);
+                        note_off(RHYTHM_CHANNEL, note as u8);
                     }
-                    let velocity = match level {
-                        2 => RHYTHM_VELOCITY_ACCENT,
-                        3 => RHYTHM_VELOCITY_WEAK,
-                        _ => RHYTHM_VELOCITY_NORMAL,
-                    };
-                    note_on(RHYTHM_CHANNEL, note as u8, velocity);
-                    note_off(RHYTHM_CHANNEL, note as u8);
                 }
             }
-            if let Some(handle) = APP_HANDLE.get() {
-                let _ = handle.emit("rhythm-step", step);
+            if clock_in_bar % RHYTHM_STEP_EVENT_PULSES == 0 {
+                if let Some(handle) = APP_HANDLE.get() {
+                    let _ = handle.emit("rhythm-step", pulse / RHYTHM_STEP_EVENT_PULSES as usize);
+                }
             }
         }
 
@@ -392,10 +502,12 @@ fn clock_loop() {
         }
         was_running = running;
 
-        if clock_total % CLOCKS_PER_MELODY_STEP == 0 && running {
-            let melody_step = ((clock_total / CLOCKS_PER_MELODY_STEP) % MELODY_TOTAL_STEPS) as u16;
-            active_melody_notes.retain(|&(pitch, end_step)| {
-                if end_step == melody_step {
+        if running {
+            // clock_totalは既にMELODY_TOTAL_STEPS周期でラップ済み（ループ末尾参照）なので、
+            // そのままパルス位置として使える。
+            let melody_pulse = clock_total as u16;
+            active_melody_notes.retain(|&(pitch, end_pulse)| {
+                if end_pulse == melody_pulse {
                     note_off(MELODY_CHANNEL, pitch);
                     false
                 } else {
@@ -404,7 +516,7 @@ fn clock_loop() {
             });
             {
                 let notes = melody_notes().lock().unwrap();
-                for n in notes.iter().filter(|n| n.start_step == melody_step) {
+                for n in notes.iter().filter(|n| n.start_step == melody_pulse) {
                     let velocity = match n.level {
                         2 => RHYTHM_VELOCITY_ACCENT,
                         3 => RHYTHM_VELOCITY_WEAK,
@@ -415,8 +527,10 @@ fn clock_loop() {
                     active_melody_notes.push((n.pitch, end));
                 }
             }
-            if let Some(handle) = APP_HANDLE.get() {
-                let _ = handle.emit("melody-step", melody_step);
+            if clock_total % MELODY_STEP_EVENT_PULSES == 0 {
+                if let Some(handle) = APP_HANDLE.get() {
+                    let _ = handle.emit("melody-step", (melody_pulse as u32 / MELODY_STEP_EVENT_PULSES) as u16);
+                }
             }
         }
 

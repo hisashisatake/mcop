@@ -4,7 +4,7 @@
 import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { pushLog } from './midi-log.svelte.ts';
-import type { PerformanceLfoArgs, ProgramInfo } from './types.ts';
+import type { PerformanceLfoArgs, ProgramInfo, MelodyNote } from './types.ts';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外ではMIDIは飛ばない）。
 // 旧実装（window.__TAURI__?.core?.invoke ?? (async () => 0)）と同じく、Tauri外では
@@ -89,6 +89,19 @@ export function onRhythmStepTick(callback: (payload: number) => void): void {
   listen<number>('rhythm-step', (event) => callback(event.payload));
 }
 
+/** リズム画面の全行を一括で置き換える。Undo/Redo・ファイル読込で使う
+ * （96パルス化で差分invokeループが1回あたり最大1000回超になりうるため、
+ * バルク版をRust側`set_rhythm_rows`に用意した）。 */
+export function setRhythmRowsBulk(rows: Array<{ note: number; steps: number[] }>): Promise<unknown> {
+  return invoke('set_rhythm_rows', { rows });
+}
+
+/** 「見たまま＝鳴る」の粗い倍率でのマスクリック用。[start, start+len)のパルス範囲を
+ * `level`で一括上書きする（1クリック＝1invoke）。 */
+export function setRhythmRange(note: number, start: number, len: number, level: number): Promise<unknown> {
+  return invoke('set_rhythm_range', { note, start, len, level });
+}
+
 /** リズム/メロディ画面共通の再生/停止ボタン。MIDI Clock自体（メトロノーム・
  * TimeEgテンポ同期）は止めず、両パターンの発音・再生カーソル通知だけを止める。 */
 export function setSequencerRunning(running: boolean): Promise<unknown> {
@@ -112,6 +125,12 @@ export function updateMelodyNote(id: number, startStep: number, lengthSteps: num
 /** メロディ画面のDELキーでのノート削除。 */
 export function deleteMelodyNote(id: number): Promise<unknown> {
   return invoke('delete_melody_note', { id });
+}
+
+/** メロディ画面の全ノートを一括で置き換える。Undo/Redo・ファイル読込で使う
+ * （バルク版をRust側`set_melody_notes`に用意した、rhythmのbulk置換と同じ理由）。 */
+export function setMelodyNotesBulk(notes: MelodyNote[]): Promise<unknown> {
+  return invoke('set_melody_notes', { notes });
 }
 
 /** Rust側`clock_loop`が8分音符（12クロック）ごとに送る`melody-step`（payload=

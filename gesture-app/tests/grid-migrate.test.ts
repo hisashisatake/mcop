@@ -4,7 +4,9 @@ import { expandRhythmSteps16To96, expandMelodyNotesV2, expandPatternV1 } from '.
 import { PULSES_PER_BAR } from '../src/grid-units.ts';
 import type { MelodyNote } from '../src/types.ts';
 
-test('expandRhythmSteps16To96は各ステップを6パルスへ複製する', () => {
+test('expandRhythmSteps16To96は各ステップの値を新index×6の単一パルスへ配置する（複製しない）', () => {
+  // 発音判定が1パルス単位（非0なら発音）になるため、6パルス全部を埋めると
+  // 1ヒットが6回連続で再トリガーされてしまう。単一パルス配置ならその心配が無い。
   const steps = new Array(16).fill(0);
   steps[0] = 1;
   steps[1] = 2;
@@ -12,18 +14,19 @@ test('expandRhythmSteps16To96は各ステップを6パルスへ複製する', ()
 
   const expanded = expandRhythmSteps16To96(steps);
   assert.equal(expanded.length, PULSES_PER_BAR);
-  assert.deepEqual(expanded.slice(0, 6), [1, 1, 1, 1, 1, 1]);
-  assert.deepEqual(expanded.slice(6, 12), [2, 2, 2, 2, 2, 2]);
-  assert.deepEqual(expanded.slice(90, 96), [3, 3, 3, 3, 3, 3]);
-  // 触れていないステップは全て消音のまま
-  assert.deepEqual(expanded.slice(12, 90), new Array(78).fill(0));
+  assert.equal(expanded[0], 1);
+  assert.equal(expanded[6], 2);
+  assert.equal(expanded[90], 3);
+  // それ以外のパルスは全て消音のまま
+  const nonZeroCount = expanded.filter((v) => v !== 0).length;
+  assert.equal(nonZeroCount, 3);
 });
 
 test('expandRhythmSteps16To96は16要素に満たない入力を0で補完する', () => {
   const expanded = expandRhythmSteps16To96([1]);
   assert.equal(expanded.length, PULSES_PER_BAR);
-  assert.deepEqual(expanded.slice(0, 6), [1, 1, 1, 1, 1, 1]);
-  assert.deepEqual(expanded.slice(6), new Array(90).fill(0));
+  assert.equal(expanded[0], 1);
+  assert.equal(expanded.filter((v) => v !== 0).length, 1);
 });
 
 test('expandMelodyNotesV2はstartStep/lengthStepsを×12する', () => {

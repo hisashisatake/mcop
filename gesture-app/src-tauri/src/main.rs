@@ -220,6 +220,20 @@ fn set_rhythm_step(note: u8, step: u8, level: u8) {
     midi_out::set_rhythm_step(note, step, level);
 }
 
+/// リズム画面の「見たまま＝鳴る」範囲編集（粗い倍率でのマスクリック）で呼ばれる。
+/// [start, start+len)のパルス範囲を`level`で一括上書きする。
+#[tauri::command]
+fn set_rhythm_range(note: u8, start: u16, len: u16, level: u8) {
+    midi_out::set_rhythm_range(note, start, len, level);
+}
+
+/// リズム画面の全行を一括で置き換える。Undo/Redo・ファイル読込用（グリッド解像度細分化で
+/// 差分invokeループが大量になったため新設したバルク版）。
+#[tauri::command]
+fn set_rhythm_rows(rows: Vec<midi_out::RhythmRowInput>) {
+    midi_out::set_rhythm_rows(rows);
+}
+
 /// リズム/メロディ画面共通の再生/停止ボタンで呼ばれる。クロック自体（メトロノーム・
 /// TimeEgテンポ同期）は止めず、両パターンの発音・再生カーソル通知だけを止める。
 #[tauri::command]
@@ -246,6 +260,13 @@ fn delete_melody_note(id: u32) {
     midi_out::delete_melody_note(id);
 }
 
+/// メロディ画面の全ノートを一括で置き換える。Undo/Redo・ファイル読込用（グリッド解像度
+/// 細分化で差分invokeループが大量になったため新設したバルク版）。
+#[tauri::command]
+fn set_melody_notes(notes: Vec<midi_out::MelodyNoteInput>) {
+    midi_out::set_melody_notes(notes);
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -264,10 +285,13 @@ fn main() {
             tap_tempo,
             set_metronome_enabled,
             set_rhythm_step,
+            set_rhythm_range,
+            set_rhythm_rows,
             set_sequencer_running,
             add_melody_note,
             update_melody_note,
             delete_melody_note,
+            set_melody_notes,
             project_file::open_project,
             project_file::save_project_as,
             project_file::save_project_to,
