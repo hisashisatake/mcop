@@ -1,9 +1,9 @@
 // リズム画面（フェーズ4：ステップシーケンサー本体、フェーズ3で行の動的化に対応）。
 //
-// 内部データは1パルス=1/96小節（`grid-units.ts`参照）で持つ。このステップではまだ
-// 「マス幅を変えられる」倍率UIを持たないため、既定の16分音符(FIXED_SNAP=6パルス/マス)に
-// 固定した見た目（従来と同じ16マス/行）で描画・クリック判定する（倍率スライダー自体は
-// 次のステップで追加する）。
+// 内部データは1パルス=1/96小節（`grid-units.ts`参照）で持つ。マス幅（スナップ単位）は
+// `grid-zoom.svelte.ts`の`gridZoomState.rhythm`（`GridZoomSlider.svelte`のスライダー・
+// −/+ボタン、またはCtrl+ホイールで変更）が持ち、`rhythmSnap()`で毎回読む。既定値
+// （16分音符=6パルス/マス、16マス/行）は倍率UI導入前と同じ見た目を保つ。
 //
 // セル幅はmelody-screen.tsと同じ「固定セル＋スクロール」方式: 1小節がウィンドウ幅に
 // 収まるならウィンドウ幅へ引き伸ばし（既定の16分音符では従来とほぼ同じ見た目）、
@@ -39,15 +39,13 @@
 import { isActive } from './screens.svelte.ts';
 import { onRhythmStepTick, setRhythmRange, setRhythmRowsBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, SNAP_PULSES, cellStartPulse, cellLevel } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
+import { rhythmSnap, zoomStep } from './grid-zoom.svelte.ts';
 import type { RhythmRow } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が1小節のパルス数として参照するためexportする。
 export const STEPS = PULSES_PER_BAR;
-// 倍率UI導入までの固定スナップ（16分音符=6パルス/マス、従来の見た目と一致させる）。
-const FIXED_SNAP = SNAP_PULSES[4];
-const VISUAL_CELLS = STEPS / FIXED_SNAP; // 16（従来と同じマス数）
 const LABEL_WIDTH = 74;
 const TOP_MARGIN = 40; // 上部の余白（画面タブ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と最下段の行が重ならないための余白
@@ -65,7 +63,7 @@ const LEVEL_COLORS = ['#1c1c1c', 'hsl(200,55%,42%)', 'hsl(32,90%,55%)', 'hsl(200
 
 let rows: RhythmRow[] = DEFAULT_ROW_NOTES.map((note, i) => ({ note, label: DEFAULT_ROW_LABELS[i], steps: new Array(STEPS).fill(0) }));
 let scrollRow = 0;
-let scrollStep = 0; // パルス単位、常にFIXED_SNAPの倍数
+let scrollStep = 0; // パルス単位、常に現在のスナップ(rhythmSnap())の倍数
 let currentStep = -1;
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -81,30 +79,45 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     if (!isActive('rhythm') || e.button !== 0) return;
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
+    const snap = rhythmSnap();
     const row = rows[cell.rowIndex];
-    const current = cellLevel(row.steps, cell.step, FIXED_SNAP);
+    const current = cellLevel(row.steps, cell.step, snap);
     const next = (current + 1) % 4;
     pushUndo();
-    // マスが覆うFIXED_SNAP個のパルス全体を新レベルで上書きする（「見たまま＝鳴る」、
+    // マスが覆うsnap個のパルス全体を新レベルで上書きする（「見たまま＝鳴る」、
     // 範囲内にあった細かい打ち込みも消音を含めまとめて統一される）。
-    for (let i = 0; i < FIXED_SNAP; i++) row.steps[cell.step + i] = next;
-    setRhythmRange(row.note, cell.step, FIXED_SNAP, next);
+    for (let i = 0; i < snap; i++) row.steps[cell.step + i] = next;
+    setRhythmRange(row.note, cell.step, snap, next);
   });
 
   canvas.addEventListener(
     'wheel',
     (e) => {
       if (!isActive('rhythm')) return;
+      if (e.ctrlKey) {
+        e.preventDefault();
+        // ズームイン(細かく)=スクロール上、ズームアウト(粗く)=スクロール下（DAW慣習）。
+        zoomStep('rhythm', Math.sign(e.deltaY) < 0 ? 1 : -1);
+        const snap = rhythmSnap();
+        const visualCells = STEPS / snap;
+        // 左端の可視パルスを保持しつつ新しいマス境界へ丸める（視点を飛ばさない）。
+        scrollStep = snapFloor(scrollStep, snap);
+        const { visibleCols } = gridMetrics(canvas);
+        scrollStep = clamp(scrollStep, 0, Math.max(0, (visualCells - visibleCols) * snap));
+        return;
+      }
+      const snap = rhythmSnap();
+      const visualCells = STEPS / snap;
       const { visibleRows, visibleCols } = gridMetrics(canvas);
       const needsVScroll = visibleRows < rows.length;
-      const needsHScroll = visibleCols < VISUAL_CELLS;
+      const needsHScroll = visibleCols < visualCells;
       if (!needsVScroll && !needsHScroll) return;
       const horizontal = e.shiftKey && needsHScroll;
       if (!horizontal && !needsVScroll) return;
       e.preventDefault();
       const dir = Math.sign(horizontal ? (e.deltaX || e.deltaY) : e.deltaY);
       if (horizontal) {
-        scrollStep = clamp(scrollStep + dir * FIXED_SNAP, 0, Math.max(0, (VISUAL_CELLS - visibleCols) * FIXED_SNAP));
+        scrollStep = clamp(scrollStep + dir * snap, 0, Math.max(0, (visualCells - visibleCols) * snap));
       } else {
         scrollRow = clamp(scrollRow + dir, 0, Math.max(0, rows.length - visibleRows));
       }
@@ -160,10 +173,11 @@ interface GridMetrics {
 }
 
 function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
+  const visualCells = STEPS / rhythmSnap();
   const availW = canvas.width - LABEL_WIDTH;
-  const naturalCw = availW / VISUAL_CELLS;
+  const naturalCw = availW / visualCells;
   const cw = Math.max(MIN_CELL_W, naturalCw);
-  const visibleCols = cw <= naturalCw ? VISUAL_CELLS : Math.max(1, Math.floor(availW / cw));
+  const visibleCols = cw <= naturalCw ? visualCells : Math.max(1, Math.floor(availW / cw));
   const bodyH = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
   const naturalCh = rows.length > 0 ? bodyH / rows.length : bodyH;
   const ch = Math.max(MIN_ROW_H, naturalCh);
@@ -171,12 +185,12 @@ function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
   return { cw, ch, bodyH, visibleRows, visibleCols };
 }
 
-/** `pulse`をキャンバスX座標へ変換する（`scrollStep`はパルス単位、常にFIXED_SNAPの倍数）。 */
-function pulseToX(pulse: number, scrollStep: number, cw: number): number {
-  return LABEL_WIDTH + ((pulse - scrollStep) / FIXED_SNAP) * cw;
+/** `pulse`をキャンバスX座標へ変換する（`scrollStep`はパルス単位、常に`snap`の倍数）。 */
+function pulseToX(pulse: number, scrollStep: number, cw: number, snap: number): number {
+  return LABEL_WIDTH + ((pulse - scrollStep) / snap) * cw;
 }
 
-/** 戻り値の`step`はマスの先頭パルス（`FIXED_SNAP`刻み）。 */
+/** 戻り値の`step`はマスの先頭パルス（現在のスナップ刻み）。 */
 function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): { rowIndex: number; step: number } | null {
   const { cw, ch, visibleRows, visibleCols } = gridMetrics(canvas);
   const x = px - LABEL_WIDTH;
@@ -187,12 +201,14 @@ function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): { row
   if (col < 0 || col >= visibleCols || r < 0 || r >= visibleRows) return null;
   const rowIndex = scrollRow + r;
   if (rowIndex >= rows.length) return null;
-  const cellIndex = col + scrollStep / FIXED_SNAP;
-  return { rowIndex, step: cellStartPulse(cellIndex, FIXED_SNAP) };
+  const snap = rhythmSnap();
+  const cellIndex = col + scrollStep / snap;
+  return { rowIndex, step: cellStartPulse(cellIndex, snap) };
 }
 
 function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   if (!isActive('rhythm')) return;
+  const snap = rhythmSnap();
   const W = canvas.width;
   const H = canvas.height;
   const { cw, ch, visibleRows, visibleCols } = gridMetrics(canvas);
@@ -202,14 +218,14 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
 
-  // セル本体（可視範囲のみ）。マスが覆うFIXED_SNAP個のパルスのうち最大レベルを代表値として描く。
+  // セル本体（可視範囲のみ）。マスが覆うsnap個のパルスのうち最大レベルを代表値として描く。
   for (let r = 0; r < visibleRows; r++) {
     const rowIndex = scrollRow + r;
     if (rowIndex >= rows.length) break;
     const row = rows[rowIndex];
     for (let c = 0; c < visibleCols; c++) {
-      const pulse = scrollStep + c * FIXED_SNAP;
-      const level = cellLevel(row.steps, pulse, FIXED_SNAP);
+      const pulse = scrollStep + c * snap;
+      const level = cellLevel(row.steps, pulse, snap);
       ctx.fillStyle = LEVEL_COLORS[level];
       ctx.fillRect(LABEL_WIDTH + c * cw + 1, TOP_MARGIN + r * ch + 1, cw - 2, ch - 2);
     }
@@ -217,11 +233,12 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
 
   // 再生カーソル（現在鳴っているステップの列を薄くハイライト）。セル本体より後に
   // 描かないと、不透明なセルの塗りで上書きされて見えなくなる。`currentStep`は
-  // Rust側`rhythm-step`から届く旧スケール(0〜15)のままなのでパルスへ変換する。
-  const currentPulse = currentStep * FIXED_SNAP;
-  if (currentStep >= 0 && currentPulse >= scrollStep && currentPulse < scrollStep + visibleCols * FIXED_SNAP) {
+  // Rust側`rhythm-step`から届く旧スケール(0〜15、16分音符単位)のままなのでパルスへ
+  // 変換する（イベント頻度自体は倍率に関わらず一定、CLAUDE.mdグリッド解像度細分化参照）。
+  const currentPulse = currentStep * 6;
+  if (currentStep >= 0 && currentPulse >= scrollStep && currentPulse < scrollStep + visibleCols * snap) {
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(pulseToX(currentPulse, scrollStep, cw), TOP_MARGIN, cw, gridBottom - TOP_MARGIN);
+    ctx.fillRect(pulseToX(currentPulse, scrollStep, cw, snap), TOP_MARGIN, cw, gridBottom - TOP_MARGIN);
   }
 
   // 行ラベル
@@ -254,12 +271,12 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
 
   // 拍線（24パルスごと、中太）。3連符系のスナップだと拍頭がマス境界に乗らないため、
   // マス格子とは独立にパルス単位で描く。
-  const visibleEndPulse = scrollStep + visibleCols * FIXED_SNAP;
+  const visibleEndPulse = scrollStep + visibleCols * snap;
   ctx.strokeStyle = '#4a4a4a';
   ctx.beginPath();
   for (let pulse = 0; pulse <= STEPS; pulse += PULSES_PER_BEAT) {
     if (pulse < scrollStep || pulse > visibleEndPulse) continue;
-    const x = Math.round(pulseToX(pulse, scrollStep, cw)) + 0.5;
+    const x = Math.round(pulseToX(pulse, scrollStep, cw, snap)) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
     ctx.lineTo(x, gridBottom);
   }
@@ -270,7 +287,7 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   ctx.beginPath();
   for (let pulse = 0; pulse <= STEPS; pulse += PULSES_PER_BAR) {
     if (pulse < scrollStep || pulse > visibleEndPulse) continue;
-    const x = Math.round(pulseToX(pulse, scrollStep, cw)) + 0.5;
+    const x = Math.round(pulseToX(pulse, scrollStep, cw, snap)) + 0.5;
     ctx.moveTo(x, TOP_MARGIN);
     ctx.lineTo(x, gridBottom);
   }

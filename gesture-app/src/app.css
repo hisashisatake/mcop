@@ -41,6 +41,32 @@ body { background: #111; color: #eee; font-family: monospace; overflow: hidden; 
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 
+/* 右下: グリッド倍率スライダー（RHYTHM/MELODY画面専用）。#status-panelの真上、
+   グリッドが空けているBOTTOM_MARGIN=180の帯の中に収める。実機で重なるようなら
+   BOTTOM_MARGINを210へ上げる。 */
+#grid-zoom {
+  position: fixed; right: 16px; bottom: 156px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #888;
+}
+#grid-zoom button {
+  width: 22px; height: 22px;
+  background: transparent; color: #ccc; border: 1px solid #444; border-radius: 3px;
+  cursor: pointer;
+}
+#grid-zoom button:disabled {
+  color: #555; border-color: #333; cursor: default;
+}
+#grid-zoom button:hover:not(:disabled) {
+  background: #262626;
+}
+#grid-zoom input[type="range"] {
+  width: 120px;
+}
+#grid-zoom-label {
+  min-width: 40px;
+}
+
 /* 上部: メニューバー（常時表示、画面幅いっぱい）。音色エディタのメニューバー
    （op505-editor `draw_editor_top_bar`、egui::MenuBar）と同じ見た目に揃える：
    帯自体は塗りつぶした背景を持つが、中の項目（☰・画面ごとのアイコンボタン）は
