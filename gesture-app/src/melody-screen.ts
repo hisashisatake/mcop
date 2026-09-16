@@ -26,6 +26,7 @@ import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, se
 import { pushUndo } from './undo-manager.ts';
 import { PULSES_PER_BAR, snapFloor } from './grid-units.ts';
 import { melodySnap, zoomStep } from './grid-zoom.svelte.ts';
+import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { MelodyNote } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
@@ -71,6 +72,15 @@ interface DragState {
 }
 
 let drag: DragState | null = null;
+
+interface ScrollDragState {
+  axis: 'v' | 'h';
+  geom: ScrollbarGeom;
+  startClientPos: number;
+  snap?: number; // h軸のみ。スクロール量(セル単位)をパルスへ戻すのに要る
+}
+
+let scrollDrag: ScrollDragState | null = null;
 
 onMelodyStepTick((step) => {
   currentStep = step;
@@ -175,6 +185,40 @@ function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { step:
   return { step, pitch: rowIndexToPitch(rowIndex) };
 }
 
+/** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
+ * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
+function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
+  const snap = melodySnap();
+  const visualCells = TOTAL_STEPS / snap;
+  const { visibleRows, visibleCols } = gridMetrics(canvas);
+  const gridRight = LABEL_WIDTH + visibleCols * CELL_W;
+  const gridBottom = TOP_MARGIN + visibleRows * CELL_H;
+  const needsV = ROWS > visibleRows;
+  const needsH = visualCells > visibleCols;
+
+  const vTrackLen = gridBottom - TOP_MARGIN - (needsH ? SB_THICKNESS : 0);
+  const v: ScrollbarGeom = {
+    trackStart: TOP_MARGIN,
+    trackLen: vTrackLen,
+    barStart: gridRight - SB_THICKNESS,
+    thumb: needsV ? computeThumb(TOP_MARGIN, vTrackLen, ROWS, visibleRows, scrollRow) : null,
+    contentUnits: ROWS,
+    viewportUnits: visibleRows,
+  };
+
+  const hTrackLen = gridRight - LABEL_WIDTH - (needsV ? SB_THICKNESS : 0);
+  const h: ScrollbarGeom = {
+    trackStart: LABEL_WIDTH,
+    trackLen: hTrackLen,
+    barStart: gridBottom - SB_THICKNESS,
+    thumb: needsH ? computeThumb(LABEL_WIDTH, hTrackLen, visualCells, visibleCols, scrollStep / snap) : null,
+    contentUnits: visualCells,
+    viewportUnits: visibleCols,
+  };
+
+  return { v, h };
+}
+
 function findNoteAt(step: number, pitch: number): { id: number; note: NoteData } | null {
   for (const [id, n] of notes) {
     if (n.pitch === pitch && step >= n.startStep && step < n.startStep + n.lengthSteps) {
@@ -194,6 +238,28 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
   canvas.addEventListener('mousedown', (e) => {
     if (!isActive('melody') || e.button !== 0) return;
     ensureScrollInitialized(canvas);
+
+    const { v, h } = scrollbarGeometries(canvas);
+    if (v.thumb && e.clientX >= v.barStart && e.clientX < v.barStart + SB_THICKNESS && e.clientY >= v.trackStart && e.clientY < v.trackStart + v.trackLen) {
+      if (isInThumb(e.clientY, v.thumb)) {
+        scrollDrag = { axis: 'v', geom: v, startClientPos: e.clientY };
+      } else {
+        const dir = pageJumpDirection(e.clientY, v.thumb);
+        scrollRow = clamp(scrollRow + dir * v.viewportUnits, 0, Math.max(0, v.contentUnits - v.viewportUnits));
+      }
+      return;
+    }
+    if (h.thumb && e.clientY >= h.barStart && e.clientY < h.barStart + SB_THICKNESS && e.clientX >= h.trackStart && e.clientX < h.trackStart + h.trackLen) {
+      const snap = melodySnap();
+      if (isInThumb(e.clientX, h.thumb)) {
+        scrollDrag = { axis: 'h', geom: h, startClientPos: e.clientX, snap };
+      } else {
+        const dir = pageJumpDirection(e.clientX, h.thumb);
+        scrollStep = clamp(scrollStep + dir * h.viewportUnits * snap, 0, Math.max(0, (h.contentUnits - h.viewportUnits) * snap));
+      }
+      return;
+    }
+
     const cell = pointToCell(canvas, e.clientX, e.clientY);
     if (!cell) return;
     const hit = findNoteAt(cell.step, cell.pitch);
@@ -294,6 +360,25 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     { passive: false },
   );
 
+  window.addEventListener('mousemove', (e) => {
+    if (!scrollDrag) return;
+    const thumb = scrollDrag.geom.thumb!;
+    const clientPos = scrollDrag.axis === 'v' ? e.clientY : e.clientX;
+    const deltaPx = clientPos - scrollDrag.startClientPos;
+    const newThumbStart = thumb.thumbStart + deltaPx;
+    const newScrollUnits = scrollFromThumbStart(scrollDrag.geom.trackStart, scrollDrag.geom.trackLen, thumb, scrollDrag.geom.contentUnits, scrollDrag.geom.viewportUnits, newThumbStart);
+    if (scrollDrag.axis === 'v') {
+      scrollRow = clamp(Math.round(newScrollUnits), 0, Math.max(0, scrollDrag.geom.contentUnits - scrollDrag.geom.viewportUnits));
+    } else {
+      const snap = scrollDrag.snap!;
+      scrollStep = clamp(Math.round(newScrollUnits) * snap, 0, Math.max(0, (scrollDrag.geom.contentUnits - scrollDrag.geom.viewportUnits) * snap));
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    scrollDrag = null;
+  });
+
   return { draw: (ctx: CanvasRenderingContext2D) => draw(ctx, canvas) };
 }
 
@@ -386,4 +471,22 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     ctx.lineTo(x, gridBottom);
   }
   ctx.stroke();
+
+  drawScrollbars(ctx, canvas);
+}
+
+function drawScrollbars(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+  const { v, h } = scrollbarGeometries(canvas);
+  if (v.thumb) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(v.barStart, v.trackStart, SB_THICKNESS, v.trackLen);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillRect(v.barStart + 2, v.thumb.thumbStart, SB_THICKNESS - 4, v.thumb.thumbLen);
+  }
+  if (h.thumb) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(h.trackStart, h.barStart, h.trackLen, SB_THICKNESS);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillRect(h.thumb.thumbStart, h.barStart + 2, h.thumb.thumbLen, SB_THICKNESS - 4);
+  }
 }

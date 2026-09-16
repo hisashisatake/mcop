@@ -42,6 +42,7 @@ import { pushUndo } from './undo-manager.ts';
 import { PULSES_PER_BAR, PULSES_PER_BEAT, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
 import { rhythmSnap, zoomStep } from './grid-zoom.svelte.ts';
+import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { RhythmRow } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が1小節のパルス数として参照するためexportする。
@@ -66,8 +67,51 @@ let scrollRow = 0;
 let scrollStep = 0; // パルス単位、常に現在のスナップ(rhythmSnap())の倍数
 let currentStep = -1;
 
+interface ScrollDragState {
+  axis: 'v' | 'h';
+  geom: ScrollbarGeom;
+  startClientPos: number;
+  snap?: number; // h軸のみ。スクロール量(セル単位)をパルスへ戻すのに要る
+}
+
+let scrollDrag: ScrollDragState | null = null;
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
+ * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
+function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
+  const snap = rhythmSnap();
+  const visualCells = STEPS / snap;
+  const { cw, ch, visibleRows, visibleCols } = gridMetrics(canvas);
+  const gridRight = LABEL_WIDTH + visibleCols * cw;
+  const gridBottom = TOP_MARGIN + visibleRows * ch;
+  const needsV = rows.length > visibleRows;
+  const needsH = visualCells > visibleCols;
+
+  const vTrackLen = gridBottom - TOP_MARGIN - (needsH ? SB_THICKNESS : 0);
+  const v: ScrollbarGeom = {
+    trackStart: TOP_MARGIN,
+    trackLen: vTrackLen,
+    barStart: gridRight - SB_THICKNESS,
+    thumb: needsV ? computeThumb(TOP_MARGIN, vTrackLen, rows.length, visibleRows, scrollRow) : null,
+    contentUnits: rows.length,
+    viewportUnits: visibleRows,
+  };
+
+  const hTrackLen = gridRight - LABEL_WIDTH - (needsV ? SB_THICKNESS : 0);
+  const h: ScrollbarGeom = {
+    trackStart: LABEL_WIDTH,
+    trackLen: hTrackLen,
+    barStart: gridBottom - SB_THICKNESS,
+    thumb: needsH ? computeThumb(LABEL_WIDTH, hTrackLen, visualCells, visibleCols, scrollStep / snap) : null,
+    contentUnits: visualCells,
+    viewportUnits: visibleCols,
+  };
+
+  return { v, h };
 }
 
 onRhythmStepTick((step) => {
@@ -77,6 +121,28 @@ onRhythmStepTick((step) => {
 export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: CanvasRenderingContext2D) => void } {
   canvas.addEventListener('mousedown', (e) => {
     if (!isActive('rhythm') || e.button !== 0) return;
+
+    const { v, h } = scrollbarGeometries(canvas);
+    if (v.thumb && e.clientX >= v.barStart && e.clientX < v.barStart + SB_THICKNESS && e.clientY >= v.trackStart && e.clientY < v.trackStart + v.trackLen) {
+      if (isInThumb(e.clientY, v.thumb)) {
+        scrollDrag = { axis: 'v', geom: v, startClientPos: e.clientY };
+      } else {
+        const dir = pageJumpDirection(e.clientY, v.thumb);
+        scrollRow = clamp(scrollRow + dir * v.viewportUnits, 0, Math.max(0, v.contentUnits - v.viewportUnits));
+      }
+      return;
+    }
+    if (h.thumb && e.clientY >= h.barStart && e.clientY < h.barStart + SB_THICKNESS && e.clientX >= h.trackStart && e.clientX < h.trackStart + h.trackLen) {
+      const snap = rhythmSnap();
+      if (isInThumb(e.clientX, h.thumb)) {
+        scrollDrag = { axis: 'h', geom: h, startClientPos: e.clientX, snap };
+      } else {
+        const dir = pageJumpDirection(e.clientX, h.thumb);
+        scrollStep = clamp(scrollStep + dir * h.viewportUnits * snap, 0, Math.max(0, (h.contentUnits - h.viewportUnits) * snap));
+      }
+      return;
+    }
+
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
     const snap = rhythmSnap();
@@ -88,6 +154,25 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     // 範囲内にあった細かい打ち込みも消音を含めまとめて統一される）。
     for (let i = 0; i < snap; i++) row.steps[cell.step + i] = next;
     setRhythmRange(row.note, cell.step, snap, next);
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!scrollDrag) return;
+    const thumb = scrollDrag.geom.thumb!;
+    const clientPos = scrollDrag.axis === 'v' ? e.clientY : e.clientX;
+    const deltaPx = clientPos - scrollDrag.startClientPos;
+    const newThumbStart = thumb.thumbStart + deltaPx;
+    const newScrollUnits = scrollFromThumbStart(scrollDrag.geom.trackStart, scrollDrag.geom.trackLen, thumb, scrollDrag.geom.contentUnits, scrollDrag.geom.viewportUnits, newThumbStart);
+    if (scrollDrag.axis === 'v') {
+      scrollRow = clamp(Math.round(newScrollUnits), 0, Math.max(0, scrollDrag.geom.contentUnits - scrollDrag.geom.viewportUnits));
+    } else {
+      const snap = scrollDrag.snap!;
+      scrollStep = clamp(Math.round(newScrollUnits) * snap, 0, Math.max(0, (scrollDrag.geom.contentUnits - scrollDrag.geom.viewportUnits) * snap));
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    scrollDrag = null;
   });
 
   canvas.addEventListener(
@@ -292,4 +377,22 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     ctx.lineTo(x, gridBottom);
   }
   ctx.stroke();
+
+  drawScrollbars(ctx, canvas);
+}
+
+function drawScrollbars(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+  const { v, h } = scrollbarGeometries(canvas);
+  if (v.thumb) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(v.barStart, v.trackStart, SB_THICKNESS, v.trackLen);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillRect(v.barStart + 2, v.thumb.thumbStart, SB_THICKNESS - 4, v.thumb.thumbLen);
+  }
+  if (h.thumb) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(h.trackStart, h.barStart, h.trackLen, SB_THICKNESS);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillRect(h.thumb.thumbStart, h.barStart + 2, h.thumb.thumbLen, SB_THICKNESS - 4);
+  }
 }
