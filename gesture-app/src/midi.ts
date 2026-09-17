@@ -102,6 +102,12 @@ export function setSequencerRunning(running: boolean): Promise<unknown> {
   return invoke('set_sequencer_running', { running });
 }
 
+/** タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。停止中のみ
+ * 呼ぶこと（再生中のライブseekはしない設計、詳細はmemory project_gesture_app_timeline_ruler_plan参照）。 */
+export function setPlaybackStartPulse(pulse: number): Promise<unknown> {
+  return invoke('set_playback_start_pulse', { pulse });
+}
+
 /** メロディ画面で新規ノートを作成する。`id`はJS側（melody-screen.js）が採番した
  * 一意な値。実際の発音判定はRust側`clock_loop`が持つ共有ノートリストへの
  * 書き込みのみ行う。 */

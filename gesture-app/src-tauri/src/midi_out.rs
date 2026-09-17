@@ -382,12 +382,24 @@ pub fn set_melody_notes(notes_in: Vec<MelodyNoteInput>) {
 /// 既定は停止中（テンポをタップしただけでは鳴らず、再生ボタンを押すまでパターンは待機する）。
 static SEQUENCER_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// 次回再生開始位置（パルス単位、0〜`SEQUENCE_TOTAL_PULSES - 1`）。タイムライン・ルーラー行
+/// でのクリック/ドラッグにより停止中のみ更新される（再生中のライブseekは行わない設計、
+/// 詳細はmemory `project_gesture_app_timeline_ruler_plan`参照）。`clock_loop`が停止→再生の
+/// 立ち上がりでこの値を読み、`clock_total`へ反映する。
+static PLAYBACK_START_PULSE: AtomicU32 = AtomicU32::new(0);
+
 /// リズム/メロディ画面共通の再生/停止ボタン。停止中はステップの発音・
 /// `rhythm-step`/`melody-step`イベント送出を両方止める（クロック自体・メトロノームは
 /// 影響を受けない）。停止した瞬間、鳴りっぱなしのメロディノートは`clock_loop`側で
 /// note_offされる（`active_melody_notes`参照）。
 pub fn set_sequencer_running(running: bool) {
     SEQUENCER_RUNNING.store(running, Ordering::Relaxed);
+}
+
+/// タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。JS側は
+/// `sequencerState.running`が偽（停止中）のときだけ呼ぶ（再生中のライブseekはしない設計）。
+pub fn set_playback_start_pulse(pulse: u32) {
+    PLAYBACK_START_PULSE.store(pulse % SEQUENCE_TOTAL_PULSES, Ordering::Relaxed);
 }
 
 /// `sequencer-tick`イベントの送信先。`main.rs`の`setup`から一度だけ渡す。
@@ -433,6 +445,11 @@ fn ensure_clock_thread() {
 /// `clock_total`を間引き間隔で割った値（rhythm:0〜127、melody:0〜63）で、JS側の
 /// 再生カーソル描画コードは無改修で済ませる（`currentStep * 6`/`* 12`という既存の
 /// 逆変換がそのまま768パルス全域で成立する）。
+///
+/// `clock_total`は`SEQUENCER_RUNNING`の状態に関わらず常時回り続けるフリーランのカウンタ
+/// だが、停止→再生の立ち上がり（`!was_running && running`）でだけ`PLAYBACK_START_PULSE`へ
+/// ジャンプする（タイムライン・ルーラー行での「再生位置移動」の実体、再生中のライブseekは
+/// しない設計）。
 fn clock_loop() {
     let mut clock_total: u32 = 0;
     // 発音中（note_on済みでまだnote_offしていない）メロディノートの(pitch, 終了ステップ)。
@@ -446,6 +463,14 @@ fn clock_loop() {
             continue;
         }
         let bpm = f32::from_bits(bits);
+
+        let running = SEQUENCER_RUNNING.load(Ordering::Relaxed);
+        if running && !was_running {
+            // 停止→再生の立ち上がり: 次回再生開始位置へジャンプする。ライブseekはしない設計
+            // のため、位置の書き換えはこのタイミングだけで行う（`clock_in_bar`を求める前に
+            // 代入すること。後から代入すると今回のイテレーションが1パルスずれる）。
+            clock_total = PLAYBACK_START_PULSE.load(Ordering::Relaxed) % SEQUENCE_TOTAL_PULSES;
+        }
         let clock_in_bar = clock_total % CLOCKS_PER_BAR;
 
         if clock_in_bar % CLOCK_PPQN == 0 {
@@ -459,8 +484,6 @@ fn clock_loop() {
                 let _ = handle.emit("sequencer-tick", beat_in_bar);
             }
         }
-
-        let running = SEQUENCER_RUNNING.load(Ordering::Relaxed);
 
         if running {
             let pulse = clock_total as usize; // 0..767、1パルス=1マス（8小節共通タイムライン）

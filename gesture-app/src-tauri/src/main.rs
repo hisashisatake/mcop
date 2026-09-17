@@ -232,6 +232,13 @@ fn set_sequencer_running(running: bool) {
     midi_out::set_sequencer_running(running);
 }
 
+/// タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。JS側は
+/// 停止中のみ呼ぶ（再生中のライブseekはしない設計）。
+#[tauri::command]
+fn set_playback_start_pulse(pulse: u32) {
+    midi_out::set_playback_start_pulse(pulse);
+}
+
 /// メロディ画面で新規ノートを作成したときに呼ばれる。`id`はJS側が採番した一意な値。
 #[tauri::command]
 fn add_melody_note(id: u32, start_step: u16, length_steps: u16, pitch: u8, level: u8) {
@@ -278,6 +285,7 @@ fn main() {
             set_rhythm_range,
             set_rhythm_rows,
             set_sequencer_running,
+            set_playback_start_pulse,
             add_melody_note,
             update_melody_note,
             delete_melody_note,
