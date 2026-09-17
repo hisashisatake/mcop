@@ -6,8 +6,24 @@
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
-import { setProgram, queryProgramName, CHORD_CHANNEL } from './midi.ts';
+import { setProgram, queryProgramName, CHORD_CHANNEL, MELODY_CHANNEL, RHYTHM_CHANNEL } from './midi.ts';
+import { activeScreen, onScreenChange } from './screens.svelte.ts';
 import type { ProgramInfo } from './types.ts';
+
+/** 今アクティブな画面が音色を送受信するMIDIチャンネル。CHORD/MELODY/RHYTHM各画面は
+ * それぞれ別チャンネルの音色を持つため、Bank/Program欄の送信先・表示元もこれで決まる
+ * （旧実装は画面によらず常にCHORD_CHANNEL固定だったため、MELODY/RHYTHM画面で音色選択
+ * しても反映されない不具合があった）。 */
+function activeProgramChannel(): number {
+  switch (activeScreen()) {
+    case 'melody':
+      return MELODY_CHANNEL;
+    case 'rhythm':
+      return RHYTHM_CHANNEL;
+    default:
+      return CHORD_CHANNEL;
+  }
+}
 
 // 波形メモリ音色専用のBank Select番号（凍結済みym38x6-coreのWAVEFORM_MEMORY_BANKと一致させていた
 // 値）。op505向けの音色は2026-08-25に移植済み: op505-coreにはこのBankを特別扱いするフォール
@@ -49,9 +65,24 @@ function formatProgramInfo(info: ProgramInfo): string {
 }
 
 export async function refreshProgramLabel(): Promise<void> {
-  const info = await queryProgramName(CHORD_CHANNEL);
+  const info = await queryProgramName(activeProgramChannel());
   programState.label = formatProgramInfo(info);
 }
+
+/** 画面切替時に呼ぶ。その画面のチャンネルの実際の音色をstandaloneへ問い合わせて
+ * Bank/Program欄へ反映するだけで、何も送信はしない（CHORD/MELODY/RHYTHM各画面は
+ * 別チャンネルの音色を持つため、表示側もアクティブ画面に合わせて切り替える必要がある）。 */
+async function syncFromActiveChannel(): Promise<void> {
+  const info = await queryProgramName(activeProgramChannel());
+  programState.waveformMemory = info.bank === WAVEFORM_MEMORY_BANK;
+  programState.bank = info.bank;
+  programState.program = info.program;
+  programState.label = formatProgramInfo(info);
+}
+
+onScreenChange(() => {
+  syncFromActiveChannel();
+});
 
 function syncBankField(): void {
   if (programState.waveformMemory) {
@@ -72,7 +103,7 @@ async function applyProgram(): Promise<void> {
   const bank = programState.waveformMemory ? WAVEFORM_MEMORY_BANK : Math.max(0, Math.min(16383, programState.bank));
   const program = Math.max(0, Math.min(127, programState.program));
   // Bank Select + Program Changeを送るだけ（見つかるかどうかの判断はstandalone任せ）。
-  await setProgram(bank, program);
+  await setProgram(activeProgramChannel(), bank, program);
   await refreshProgramLabel();
 }
 

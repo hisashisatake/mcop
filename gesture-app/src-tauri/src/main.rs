@@ -4,12 +4,6 @@ mod midi_out;
 mod project_file;
 mod query_client;
 
-/// コード発音に使うMIDIチャンネル。1チャンネルへ最大8声を重ねて鳴らす。
-/// 旧「声部ごとに固定チャンネル0〜3」方式は、C13など5音以上のテンションコードを
-/// 鳴らせない上限が問題になったため廃止した（押し直し時の同音チョークは、同一
-/// チャンネル内での同ノート再発音としてstandalone側が処理する）。
-const CHORD_CHANNEL: u8 = 0;
-
 /// マスターエフェクト系NRPN/CCの送信先チャンネル。`NRPN(0,1) Channel Effect Route`を
 /// 誰も送らなければ全チャンネルの`effect_route_slot`は既定0のままなので、チャンネル0で
 /// 送れば全チャンネルが使う共有MasterEffects（スロット0）に反映される。
@@ -138,10 +132,13 @@ fn set_master_effects(
     midi_out::nrpn_data_entry(EFFECTS_CHANNEL, 0, 8, scale_to_7bit(chorus_send_to_reverb));
 }
 
-/// コード発音チャンネルへBank Select + Program Changeを送る（次のnote-onから適用）。
-/// 実際の音色解決はstandalone側が単独で行う（gesture-appはエンジンを持たないため、
-/// 音色の有無を判断する材料自体を持たない。見つかったかどうかの表示は
-/// `op505_query_program_name`で別途問い合わせる）。
+/// 指定チャンネルへBank Select + Program Changeを送る（次のnote-onから適用）。CHORD画面は
+/// ch1、MELODY画面はch2、RHYTHM画面はch10と、アクティブな画面に応じた送信先をJS側
+/// （`midi.ts`の`CHORD_CHANNEL`/`MELODY_CHANNEL`/`RHYTHM_CHANNEL`、`program-state.svelte.ts`が
+/// 選ぶ）から渡す（旧実装は常にコード発音チャンネル固定で送っていたため、MELODY/RHYTHM画面
+/// で音色選択しても反映されない不具合があった）。実際の音色解決はstandalone側が単独で行う
+/// （gesture-appはエンジンを持たないため、音色の有無を判断する材料自体を持たない。
+/// 見つかったかどうかの表示は`op505_query_program_name`で別途問い合わせる）。
 ///
 /// standalone側のProgram Change解決には、GM1互換のため「一度リズムバンク(MSB=120)へ
 /// 入ったチャンネルは、Bank Select MSB=121（旋律復帰の合図）が明示的に来ない限り
@@ -153,13 +150,13 @@ fn set_master_effects(
 /// （ダミーのProgram Changeは次のnote-onより前に本物のProgram Changeで上書きされるため
 /// 発音への影響は無い）。
 #[tauri::command]
-fn op505_set_program(bank: u16, program: u8) {
+fn op505_set_program(channel: u8, bank: u16, program: u8) {
     if !RHYTHM_BANK_RANGE.contains(&bank) {
-        midi_out::bank_select(CHORD_CHANNEL, MELODIC_ESCAPE_BANK);
-        midi_out::program_change(CHORD_CHANNEL, 0);
+        midi_out::bank_select(channel, MELODIC_ESCAPE_BANK);
+        midi_out::program_change(channel, 0);
     }
-    midi_out::bank_select(CHORD_CHANNEL, bank);
-    midi_out::program_change(CHORD_CHANNEL, program);
+    midi_out::bank_select(channel, bank);
+    midi_out::program_change(channel, program);
 }
 
 /// standaloneへ問い合わせて、指定チャンネルの現在の音色名を取得する。`status`は
