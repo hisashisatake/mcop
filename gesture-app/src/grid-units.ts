@@ -9,6 +9,10 @@
 export const PULSES_PER_BEAT = 24;
 export const PULSES_PER_BAR = 96;
 
+/** RHYTHM/MELODY共通のシーケンス長（小節数）。両画面とも同じ長さのタイムラインを持つ。 */
+export const SEQUENCE_BARS = 8;
+export const SEQUENCE_TOTAL_PULSES = PULSES_PER_BAR * SEQUENCE_BARS; // 768
+
 /** スライダー位置(0〜7、添字がそのままgridZoomStateの値)ごとの1マスのパルス数。 */
 export const SNAP_PULSES = [24, 16, 12, 8, 6, 4, 3, 2];
 export const SNAP_LABELS = ['1/4', '1/4T', '1/8', '1/8T', '1/16', '1/16T', '1/32', '1/32T'];

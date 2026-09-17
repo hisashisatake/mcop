@@ -2,27 +2,23 @@
 // 同じ`export const xState = $state({...})`形式。倍率は表示設定のためUndo対象外・
 // プロジェクトファイルにも保存しない（project-state.ts参照）。
 //
-// 値は`grid-units.ts`の`SNAP_PULSES`の添字（0=4分・7=32分3連）。既定はRHYTHM=4（16分、
-// 6パルス/マス）・MELODY=2（8分、12パルス/マス）で、倍率UI導入前の固定スナップと
-// 同じ見た目を保つ。
+// 値は`grid-units.ts`の`SNAP_PULSES`の添字（0=4分・7=32分3連）。RHYTHM/MELODYで
+// 独立していた倍率を1本化し、両画面が同じ倍率を共有する（タイムラインの長さも
+// SEQUENCE_TOTAL_PULSESで共通化済み、ユーザー要望）。既定は4（16分、6パルス/マス、
+// 旧RHYTHM既定と同じ）。
 
 import { SNAP_PULSES } from './grid-units.ts';
 
 export const gridZoomState = $state({
-  rhythm: 4,
-  melody: 2,
+  index: 4,
 });
 
-export function rhythmSnap(): number {
-  return SNAP_PULSES[gridZoomState.rhythm];
-}
-
-export function melodySnap(): number {
-  return SNAP_PULSES[gridZoomState.melody];
+export function gridSnap(): number {
+  return SNAP_PULSES[gridZoomState.index];
 }
 
 /** スライダー・−/+ボタン・Ctrl+ホイールから呼ぶ。0〜(SNAP_PULSES.length-1)にクランプする。 */
-export function zoomStep(screen: 'rhythm' | 'melody', delta: number): void {
-  const next = gridZoomState[screen] + delta;
-  gridZoomState[screen] = Math.max(0, Math.min(SNAP_PULSES.length - 1, next));
+export function zoomStep(delta: number): void {
+  const next = gridZoomState.index + delta;
+  gridZoomState.index = Math.max(0, Math.min(SNAP_PULSES.length - 1, next));
 }

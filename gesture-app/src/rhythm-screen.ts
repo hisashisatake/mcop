@@ -1,8 +1,9 @@
 // リズム画面（フェーズ4：ステップシーケンサー本体、フェーズ3で行の動的化に対応）。
 //
 // 内部データは1パルス=1/96小節（`grid-units.ts`参照）で持つ。マス幅（スナップ単位）は
-// `grid-zoom.svelte.ts`の`gridZoomState.rhythm`（`GridZoomSlider.svelte`のスライダー・
-// −/+ボタン、またはCtrl+ホイールで変更）が持ち、`rhythmSnap()`で毎回読む。既定値
+// `grid-zoom.svelte.ts`の`gridZoomState`（`GridZoomSlider.svelte`のスライダー・
+// −/+ボタン、またはCtrl+ホイールで変更）が持ち、`gridSnap()`で毎回読む。倍率は
+// MELODY画面と共有する（ユーザー要望、両画面で同じスナップ単位になる）。既定値
 // （16分音符=6パルス/マス、16マス/行）は倍率UI導入前と同じ見た目を保つ。
 //
 // セル幅はmelody-screen.tsと同じ「固定セル＋スクロール」方式: 1小節がウィンドウ幅に
@@ -41,7 +42,7 @@ import { onRhythmStepTick, setRhythmRange, setRhythmRowsBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
 import { PULSES_PER_BAR, PULSES_PER_BEAT, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
-import { rhythmSnap, zoomStep } from './grid-zoom.svelte.ts';
+import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { RhythmRow } from './types.ts';
 
@@ -64,7 +65,7 @@ const LEVEL_COLORS = ['#1c1c1c', 'hsl(200,55%,42%)', 'hsl(32,90%,55%)', 'hsl(200
 
 let rows: RhythmRow[] = DEFAULT_ROW_NOTES.map((note, i) => ({ note, label: DEFAULT_ROW_LABELS[i], steps: new Array(STEPS).fill(0) }));
 let scrollRow = 0;
-let scrollStep = 0; // パルス単位、常に現在のスナップ(rhythmSnap())の倍数
+let scrollStep = 0; // パルス単位、常に現在のスナップ(gridSnap())の倍数
 let currentStep = -1;
 
 interface ScrollDragState {
@@ -83,7 +84,7 @@ function clamp(v: number, lo: number, hi: number): number {
 /** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
  * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
 function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
-  const snap = rhythmSnap();
+  const snap = gridSnap();
   const visualCells = STEPS / snap;
   const { cw, ch, visibleRows, visibleCols } = gridMetrics(canvas);
   const gridRight = LABEL_WIDTH + visibleCols * cw;
@@ -133,7 +134,7 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       return;
     }
     if (h.thumb && e.clientY >= h.barStart && e.clientY < h.barStart + SB_THICKNESS && e.clientX >= h.trackStart && e.clientX < h.trackStart + h.trackLen) {
-      const snap = rhythmSnap();
+      const snap = gridSnap();
       if (isInThumb(e.clientX, h.thumb)) {
         scrollDrag = { axis: 'h', geom: h, startClientPos: e.clientX, snap };
       } else {
@@ -145,7 +146,7 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
-    const snap = rhythmSnap();
+    const snap = gridSnap();
     const row = rows[cell.rowIndex];
     const current = cellLevel(row.steps, cell.step, snap);
     const next = (current + 1) % 4;
@@ -182,8 +183,8 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       if (e.ctrlKey) {
         e.preventDefault();
         // ズームイン(細かく)=スクロール上、ズームアウト(粗く)=スクロール下（DAW慣習）。
-        zoomStep('rhythm', Math.sign(e.deltaY) < 0 ? 1 : -1);
-        const snap = rhythmSnap();
+        zoomStep(Math.sign(e.deltaY) < 0 ? 1 : -1);
+        const snap = gridSnap();
         const visualCells = STEPS / snap;
         // 左端の可視パルスを保持しつつ新しいマス境界へ丸める（視点を飛ばさない）。
         scrollStep = snapFloor(scrollStep, snap);
@@ -191,7 +192,7 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
         scrollStep = clamp(scrollStep, 0, Math.max(0, (visualCells - visibleCols) * snap));
         return;
       }
-      const snap = rhythmSnap();
+      const snap = gridSnap();
       const visualCells = STEPS / snap;
       const { visibleRows, visibleCols } = gridMetrics(canvas);
       const needsVScroll = visibleRows < rows.length;
@@ -258,7 +259,7 @@ interface GridMetrics {
 }
 
 function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
-  const visualCells = STEPS / rhythmSnap();
+  const visualCells = STEPS / gridSnap();
   const availW = canvas.width - LABEL_WIDTH;
   const naturalCw = availW / visualCells;
   const cw = Math.max(MIN_CELL_W, naturalCw);
@@ -286,14 +287,14 @@ function cellFromPoint(canvas: HTMLCanvasElement, px: number, py: number): { row
   if (col < 0 || col >= visibleCols || r < 0 || r >= visibleRows) return null;
   const rowIndex = scrollRow + r;
   if (rowIndex >= rows.length) return null;
-  const snap = rhythmSnap();
+  const snap = gridSnap();
   const cellIndex = col + scrollStep / snap;
   return { rowIndex, step: cellStartPulse(cellIndex, snap) };
 }
 
 function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   if (!isActive('rhythm')) return;
-  const snap = rhythmSnap();
+  const snap = gridSnap();
   const W = canvas.width;
   const H = canvas.height;
   const { cw, ch, visibleRows, visibleCols } = gridMetrics(canvas);

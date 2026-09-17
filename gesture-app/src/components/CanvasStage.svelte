@@ -9,7 +9,7 @@
   import { setupRhythmScreen } from '../rhythm-screen.ts';
   import { setupMelodyScreen } from '../melody-screen.ts';
   import { setupPerformanceLfo } from '../performance-lfo.svelte.ts';
-  import { activeScreen } from '../screens.svelte.ts';
+  import { activeScreen, screenState } from '../screens.svelte.ts';
   import { setHudChordInfo } from '../hud-state.svelte.ts';
 
   let canvasEl: HTMLCanvasElement;
@@ -46,4 +46,4 @@
   });
 </script>
 
-<canvas id="canvas" bind:this={canvasEl}></canvas>
+<canvas id="canvas" bind:this={canvasEl} class:default-cursor={screenState.active !== 'chord'}></canvas>

@@ -2,6 +2,7 @@
 body { background: #111; color: #eee; font-family: monospace; overflow: hidden; user-select: none; }
 
 #canvas { display: block; cursor: crosshair; }
+#canvas.default-cursor { cursor: default; }
 
 /* 左下: コード名 */
 #hud {

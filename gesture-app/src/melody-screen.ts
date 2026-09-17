@@ -5,10 +5,10 @@
 // `melody-step`イベントで受け取った再生位置をカーソルとして描くだけ。
 //
 // 内部データ（`startStep`/`lengthSteps`）は1パルス=1/96小節（`grid-units.ts`参照）で
-// 持つ。マス幅（スナップ単位）は`grid-zoom.svelte.ts`の`gridZoomState.melody`
+// 持つ。マス幅（スナップ単位）は`grid-zoom.svelte.ts`の`gridZoomState`
 // （`GridZoomSlider.svelte`のスライダー・−/+ボタン、またはCtrl+ホイールで変更）が持ち、
-// `melodySnap()`で毎回読む。既定値（8分音符=12パルス/マス、64マス/8小節）は倍率UI
-// 導入前と同じ見た目を保つ。
+// `gridSnap()`で毎回読む。倍率はRHYTHM画面と共有する（ユーザー要望）。既定値
+// （16分音符=6パルス/マス）は倍率UI導入前のRHYTHM既定と同じ。
 //
 // RHYTHM画面が「固定マス×12行のグリッド」なのに対し、メロディは音オブジェクト
 // （可変の開始位置・長さ・音高を持つノート）のリストで表現する。ループ長は基本8小節
@@ -25,7 +25,7 @@ import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, setMelodyNotesBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
 import { PULSES_PER_BAR, PULSES_PER_BEAT, snapFloor, snapCeil } from './grid-units.ts';
-import { melodySnap, zoomStep } from './grid-zoom.svelte.ts';
+import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { MelodyNote } from './types.ts';
 
@@ -179,7 +179,7 @@ function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { pulse
   const x = px - LABEL_WIDTH;
   const y = py - TOP_MARGIN;
   if (x < 0 || y < 0) return null;
-  const snap = melodySnap();
+  const snap = gridSnap();
   const rawPulse = scrollStep + (x / CELL_W) * snap;
   const pulse = snapFloor(rawPulse, snap);
   const rowIndex = Math.floor(y / CELL_H) + scrollRow;
@@ -190,7 +190,7 @@ function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { pulse
 /** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
  * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
 function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
-  const snap = melodySnap();
+  const snap = gridSnap();
   const visualCells = TOTAL_STEPS / snap;
   const { visibleRows, visibleCols } = gridMetrics(canvas);
   const gridRight = LABEL_WIDTH + visibleCols * CELL_W;
@@ -252,7 +252,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       return;
     }
     if (h.thumb && e.clientY >= h.barStart && e.clientY < h.barStart + SB_THICKNESS && e.clientX >= h.trackStart && e.clientX < h.trackStart + h.trackLen) {
-      const snap = melodySnap();
+      const snap = gridSnap();
       if (isInThumb(e.clientX, h.thumb)) {
         scrollDrag = { axis: 'h', geom: h, startClientPos: e.clientX, snap };
       } else {
@@ -267,7 +267,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     const hit = findNoteAt(cell.pulse, cell.pitch);
 
     if (hit) {
-      const rightX = stepToX(hit.note.startStep + hit.note.lengthSteps, melodySnap());
+      const rightX = stepToX(hit.note.startStep + hit.note.lengthSteps, gridSnap());
       if (e.clientX >= rightX - EDGE_ZONE_PX && e.clientX < rightX) {
         pushUndo(); // リサイズは掴んだ時点で編集開始とみなす（離すまで実際に長さが変わるかは未確定だが、掴み直しての微調整も含め1操作として扱う）
         drag = { mode: 'resize', id: hit.id, startClientX: e.clientX, startClientY: e.clientY, moved: false };
@@ -280,7 +280,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     } else {
       pushUndo();
       const id = nextNoteId++;
-      notes.set(id, { startStep: cell.pulse, lengthSteps: melodySnap(), pitch: cell.pitch, level: 1 });
+      notes.set(id, { startStep: cell.pulse, lengthSteps: gridSnap(), pitch: cell.pitch, level: 1 });
       selectedId = id;
       drag = { mode: 'create', id, startStep: cell.pulse };
     }
@@ -308,7 +308,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 
     if (drag.mode === 'create' || drag.mode === 'resize') {
       // カーソルの連続位置(rawPulse)が属するマスの末尾まで伸ばす。
-      const snap = melodySnap();
+      const snap = gridSnap();
       n.lengthSteps = Math.max(snap, snapCeil(cell.rawPulse + 1, snap) - n.startStep);
     } else if (drag.mode === 'move') {
       // 開始位置だけスナップし、長さは保持する。
@@ -343,8 +343,8 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       ensureScrollInitialized(canvas);
       if (e.ctrlKey) {
         // ズームイン(細かく)=スクロール上、ズームアウト(粗く)=スクロール下（DAW慣習）。
-        zoomStep('melody', Math.sign(e.deltaY) < 0 ? 1 : -1);
-        const snap = melodySnap();
+        zoomStep(Math.sign(e.deltaY) < 0 ? 1 : -1);
+        const snap = gridSnap();
         // 左端の可視パルスを保持しつつ新しいマス境界へ丸める（視点を飛ばさない）。
         scrollStep = snapFloor(scrollStep, snap);
         const { visibleCols } = gridMetrics(canvas);
@@ -354,7 +354,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
       const { visibleCols, visibleRows } = gridMetrics(canvas);
       const dir = Math.sign(e.shiftKey ? (e.deltaX || e.deltaY) : e.deltaY);
       if (e.shiftKey) {
-        const snap = melodySnap();
+        const snap = gridSnap();
         scrollStep = clamp(scrollStep + dir * 2 * snap, 0, Math.max(0, TOTAL_STEPS - visibleCols * snap));
       } else {
         scrollRow = clamp(scrollRow + dir * 2, 0, Math.max(0, ROWS - visibleRows));
@@ -388,7 +388,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
   if (!isActive('melody')) return;
   ensureScrollInitialized(canvas);
-  const snap = melodySnap();
+  const snap = gridSnap();
 
   const W = canvas.width;
   const H = canvas.height;
