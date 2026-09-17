@@ -4,7 +4,7 @@
 import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { pushLog } from './midi-log.svelte.ts';
-import type { PerformanceLfoArgs, ProgramInfo } from './types.ts';
+import type { PerformanceLfoArgs, ProgramInfo, MelodyNote } from './types.ts';
 
 // フォールバックでブラウザ単体でも開ける（Tauri外ではMIDIは飛ばない）。
 // 旧実装（window.__TAURI__?.core?.invoke ?? (async () => 0)）と同じく、Tauri外では
@@ -75,13 +75,6 @@ export function onSequencerTick(callback: (payload: number) => void): void {
   listen<number>('sequencer-tick', (event) => callback(event.payload));
 }
 
-/** リズム画面のグリッドセルのベロシティ段階を設定する。`note`はGM2ノート番号
- * （行の対応表自体はJS側rhythm-screen.jsが持つ）、`level`は0(消音)〜3(弱)。
- * 実際の発音判定・送信はRust側`clock_loop`が持つ共有パターンへの書き込みのみ行う。 */
-export function setRhythmStep(note: number, step: number, level: number): Promise<unknown> {
-  return invoke('set_rhythm_step', { note, step, level });
-}
-
 /** Rust側`clock_loop`が16分音符（6クロック）ごとに送る`rhythm-step`（payload=小節内の
  * ステップ番号0〜15）を購読する。リズム画面の再生カーソル描画専用。 */
 export function onRhythmStepTick(callback: (payload: number) => void): void {
@@ -89,11 +82,30 @@ export function onRhythmStepTick(callback: (payload: number) => void): void {
   listen<number>('rhythm-step', (event) => callback(event.payload));
 }
 
+/** リズム画面の全行を一括で置き換える。Undo/Redo・ファイル読込で使う
+ * （96パルス化で差分invokeループが1回あたり最大1000回超になりうるため、
+ * バルク版をRust側`set_rhythm_rows`に用意した）。 */
+export function setRhythmRowsBulk(rows: Array<{ note: number; steps: number[] }>): Promise<unknown> {
+  return invoke('set_rhythm_rows', { rows });
+}
+
+/** 「見たまま＝鳴る」の粗い倍率でのマスクリック用。[start, start+len)のパルス範囲を
+ * `level`で一括上書きする（1クリック＝1invoke）。 */
+export function setRhythmRange(note: number, start: number, len: number, level: number): Promise<unknown> {
+  return invoke('set_rhythm_range', { note, start, len, level });
+}
+
 /** リズム/メロディ画面共通の再生/停止ボタン。MIDI Clock自体（メトロノーム・
  * TimeEgテンポ同期）は止めず、両パターンの発音・再生カーソル通知だけを止める。 */
 export function setSequencerRunning(running: boolean): Promise<unknown> {
   pushLog(`sequencer ${running ? 'play' : 'stop'}`);
   return invoke('set_sequencer_running', { running });
+}
+
+/** タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。停止中のみ
+ * 呼ぶこと（再生中のライブseekはしない設計、詳細はmemory project_gesture_app_timeline_ruler_plan参照）。 */
+export function setPlaybackStartPulse(pulse: number): Promise<unknown> {
+  return invoke('set_playback_start_pulse', { pulse });
 }
 
 /** メロディ画面で新規ノートを作成する。`id`はJS側（melody-screen.js）が採番した
@@ -112,6 +124,12 @@ export function updateMelodyNote(id: number, startStep: number, lengthSteps: num
 /** メロディ画面のDELキーでのノート削除。 */
 export function deleteMelodyNote(id: number): Promise<unknown> {
   return invoke('delete_melody_note', { id });
+}
+
+/** メロディ画面の全ノートを一括で置き換える。Undo/Redo・ファイル読込で使う
+ * （バルク版をRust側`set_melody_notes`に用意した、rhythmのbulk置換と同じ理由）。 */
+export function setMelodyNotesBulk(notes: MelodyNote[]): Promise<unknown> {
+  return invoke('set_melody_notes', { notes });
 }
 
 /** Rust側`clock_loop`が8分音符（12クロック）ごとに送る`melody-step`（payload=

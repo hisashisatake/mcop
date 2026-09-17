@@ -7,6 +7,8 @@
   import StatusPanel from './StatusPanel.svelte';
   import Hud from './Hud.svelte';
   import ResizeGrip from './ResizeGrip.svelte';
+  import GridZoomSlider from './GridZoomSlider.svelte';
+  import { screenState } from '../screens.svelte.ts';
 </script>
 
 <CanvasStage />
@@ -15,3 +17,6 @@
 <StatusPanel />
 <Hud />
 <ResizeGrip />
+{#if screenState.active !== 'chord'}
+  <GridZoomSlider />
+{/if}
