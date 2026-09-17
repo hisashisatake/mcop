@@ -13,8 +13,9 @@ import type { ProgramInfo } from './types.ts';
 /** 今アクティブな画面が音色を送受信するMIDIチャンネル。CHORD/MELODY/RHYTHM各画面は
  * それぞれ別チャンネルの音色を持つため、Bank/Program欄の送信先・表示元もこれで決まる
  * （旧実装は画面によらず常にCHORD_CHANNEL固定だったため、MELODY/RHYTHM画面で音色選択
- * しても反映されない不具合があった）。 */
-function activeProgramChannel(): number {
+ * しても反映されない不具合があった）。Eキーでの音色エディタ起動（`main.ts`）も同じ
+ * チャンネルをEdit Channelの初期値としてstandaloneへ渡すため、exportする。 */
+export function activeProgramChannel(): number {
   switch (activeScreen()) {
     case 'melody':
       return MELODY_CHANNEL;
@@ -69,10 +70,13 @@ export async function refreshProgramLabel(): Promise<void> {
   programState.label = formatProgramInfo(info);
 }
 
-/** 画面切替時に呼ぶ。その画面のチャンネルの実際の音色をstandaloneへ問い合わせて
- * Bank/Program欄へ反映するだけで、何も送信はしない（CHORD/MELODY/RHYTHM各画面は
- * 別チャンネルの音色を持つため、表示側もアクティブ画面に合わせて切り替える必要がある）。 */
-async function syncFromActiveChannel(): Promise<void> {
+/** 画面切替時・ウィンドウフォーカス復帰時に呼ぶ。その画面のチャンネルの実際の音色を
+ * standaloneへ問い合わせてBank/Program欄へ反映するだけで、何も送信はしない
+ * （CHORD/MELODY/RHYTHM各画面は別チャンネルの音色を持つため、表示側もアクティブ画面に
+ * 合わせて切り替える必要がある。フォーカス復帰時に呼ぶのは、音色エディタでBank/Programを
+ * 変更してgesture-appへ戻ってきた場合に、表示だけでなく実際のBank/Program欄の値も
+ * 追随させるため——`refreshProgramLabel`は表示ラベルしか更新しないため不十分だった）。 */
+export async function syncFromActiveChannel(): Promise<void> {
   const info = await queryProgramName(activeProgramChannel());
   programState.waveformMemory = info.bank === WAVEFORM_MEMORY_BANK;
   programState.bank = info.bank;
@@ -126,14 +130,14 @@ export async function setProgramNumber(program: number): Promise<void> {
 /** 起動時の初期化。既定の音色（OP505 Bank0/Program0）を反映し、ウィンドウフォーカス復帰時の
  * 再問い合わせも配線する（Eキーでstandaloneのトレイ起動音色エディタを開いて閉じた場合、
  * standaloneのタスクトレイメニューから開いて閉じた場合、Domino等で別音色を鳴らしてから
- * 戻ってきた場合も、このイベント1つで表示が追随する。エディタは別ウィンドウのため、
- * 閉じれば必ずgesture-appへフォーカスが戻る）。 */
+ * 戻ってきた場合も、このイベント1つでBank/Program欄・表示ラベルとも追随する。エディタは
+ * 別ウィンドウのため、閉じれば必ずgesture-appへフォーカスが戻る）。 */
 export function initProgramState(): void {
   syncBankField();
   applyProgram();
   if (isTauri()) {
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused) refreshProgramLabel();
+      if (focused) syncFromActiveChannel();
     });
   }
 }

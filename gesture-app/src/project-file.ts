@@ -7,6 +7,7 @@ import { serializeProject, deserializeAndApply } from './project-state.ts';
 import { pushUndo, resetUndoHistory } from './undo-manager.ts';
 import { getRows, setRows, STEPS as RHYTHM_TOTAL_STEPS, DEFAULT_ROW_NOTES, DEFAULT_ROW_LABELS } from './rhythm-screen.ts';
 import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_STEPS } from './melody-screen.ts';
+import { analyzeMelodyForChordHints } from './melody-analysis.ts';
 import { gm2DrumName } from './gm2-drums.ts';
 import { getBpm, setBpm } from './tempo-state.svelte.ts';
 import { gridSnap } from './grid-zoom.svelte.ts';
@@ -52,6 +53,7 @@ export async function openProject(): Promise<boolean> {
   deserializeAndApply(result.json);
   resetUndoHistory();
   currentPath = result.path;
+  analyzeMelodyForChordHints(getNotes());
   return true;
 }
 
@@ -60,6 +62,7 @@ export async function saveProject(): Promise<boolean> {
   if (!currentPath) return saveProjectAs();
   const json = serializeProject();
   await invoke('save_project_to', { path: currentPath, json });
+  analyzeMelodyForChordHints(getNotes());
   return true;
 }
 
@@ -69,6 +72,7 @@ export async function saveProjectAs(): Promise<boolean> {
   const path = await invoke<string>('save_project_as', { json });
   if (!path) return false;
   currentPath = path;
+  analyzeMelodyForChordHints(getNotes());
   return true;
 }
 
@@ -131,6 +135,7 @@ export async function importMidi(): Promise<boolean> {
     setBpm(bpm);
     tapTempo(bpm);
   }
+  analyzeMelodyForChordHints(getNotes());
   return true;
 }
 
@@ -148,5 +153,7 @@ export async function exportMidi(): Promise<boolean> {
     ],
   });
   const path = await invoke<string>('export_midi', { bytes: Array.from(bytes) });
-  return path != null;
+  if (path == null) return false;
+  analyzeMelodyForChordHints(getNotes());
+  return true;
 }

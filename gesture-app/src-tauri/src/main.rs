@@ -188,10 +188,11 @@ fn op505_query_program_name(channel: u8) -> ProgramInfoDto {
 }
 
 /// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスする）。
-/// gesture-appのEキー押下から呼ぶ。
+/// gesture-appのEキー押下から呼ぶ。`channel`はEキーを押した時点でアクティブな画面の
+/// MIDIチャンネル（`midi.ts`の`CHORD_CHANNEL`/`MELODY_CHANNEL`/`RHYTHM_CHANNEL`）。
 #[tauri::command]
-fn op505_open_editor() {
-    midi_out::open_editor();
+fn op505_open_editor(channel: u8) {
+    midi_out::open_editor(channel);
 }
 
 /// タップテンポで確定したBPMを送る。フロントエンド（main.js）がタップ間隔から算出した値を渡すだけで、

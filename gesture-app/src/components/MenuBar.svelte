@@ -8,7 +8,8 @@
   import { sequencerState } from '../sequencer-state.svelte.ts';
   import { setSequencerRunning, tapTempo } from '../midi.ts';
   import { resetRhythmCursor } from '../rhythm-screen.ts';
-  import { resetMelodyCursor } from '../melody-screen.ts';
+  import { resetMelodyCursor, getNotes } from '../melody-screen.ts';
+  import { analyzeMelodyForChordHints } from '../melody-analysis.ts';
 
   const MIN_BPM = 40;
   const MAX_BPM = 300;
@@ -53,6 +54,10 @@
     setBpm(bpm);
     await tapTempo(bpm);
   }
+
+  function onRefreshMelodyAnalysis(): void {
+    analyzeMelodyForChordHints(getNotes());
+  }
 </script>
 
 <div id="menu-bar">
@@ -61,6 +66,7 @@
     <button type="button" id="sequencer-play-btn" title="再生" disabled={sequencerState.running} onclick={startSequencer}>▶</button>
     <button type="button" id="sequencer-stop-btn" title="停止" disabled={!sequencerState.running} onclick={stopSequencer}>■</button>
   {/if}
+  <button type="button" id="melody-analysis-refresh-btn" title="メロディを解析してコード候補を更新" onclick={onRefreshMelodyAnalysis}>🔄</button>
   <span id="tempo-display" class="menu-bar-label">{tempoLabel}</span>
   <button id="tap-tempo-btn" type="button" title="タップテンポ" onclick={onTapTempo}>TAP</button>
 </div>

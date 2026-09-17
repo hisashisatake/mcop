@@ -20,8 +20,10 @@ const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
 const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
-/// トレイ起動音色エディタを開く/フォーカスする制御フレーム（payload無し）。
+/// トレイ起動音色エディタを開く/フォーカスする制御フレーム（payload=[channel:u8]）。
 /// `op505/standalone/src/sources/pipe_src.rs`のOpenEditorフレーム（kind=3）と対になる。
+/// standalone側はchannelの現在のBank/Program選択から「Edit Channel」欄・PRESETS選択の
+/// 初期値を組み立てる（gesture-appのEキー押下から呼ぶ、`main.rs`の`op505_open_editor`参照）。
 const FRAME_KIND_OPEN_EDITOR: u8 = 3;
 const DEVICE_ID: u8 = 0; // サーバー側は無視する（pipe_src.rsの_device_id）ため固定値で十分。
 
@@ -158,8 +160,13 @@ pub fn nrpn_data_entry(channel: u8, param_msb: u8, param_lsb: u8, value: u8) {
 
 /// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスするだけ）よう
 /// 要求する。gesture-app側のEキー押下から呼ぶ制御フレーム（MIDIメッセージではない）。
-pub fn open_editor() {
-    send_frame(FRAME_KIND_OPEN_EDITOR, &[]);
+/// `channel`は今アクティブな画面のMIDIチャンネル（CHORD/MELODY/RHYTHM、`midi.ts`の
+/// `activeProgramChannel()`参照）。standaloneはこの値からEdit Channel・PRESETS選択の
+/// 初期値を自分で組み立てるため、bank/programはgesture-app側からは渡さない
+/// （standaloneが常時把握している「今のBank/Program選択」が正であり、gesture-app側の
+/// 表示用ミラーは古くなりうるため）。
+pub fn open_editor(channel: u8) {
+    send_frame(FRAME_KIND_OPEN_EDITOR, &[channel & 0x0F]);
 }
 
 // ─────────────────────────────────────────────
@@ -243,7 +250,14 @@ fn apply_rhythm_level(state: &mut RhythmState, note: usize, pulse: usize, level:
 }
 
 /// 「見たまま＝鳴る」の粗い倍率での範囲編集用（`rhythm-screen.ts`のクリック処理が
-/// 1マス分の範囲をまとめて書き換える際に呼ぶ）。[start, start+len)を`level`で一括上書きする。
+/// 1マス分の範囲をまとめて書き換える際に呼ぶ）。`start`（マスの先頭パルス＝実際にクリックした
+/// 位置）だけを`level`で書き込み、`[start+1, start+len)`は無音(0)にする。
+///
+/// `clock_loop`は非0の生パルスを見るたびnote_on/offを発火するため、範囲全体を同じ非0値で
+/// 埋めると「1マス=1ヒット」のはずが、マス幅ぶん（粗い倍率では最大24パルス）だけ高速に
+/// 連打されてしまう（1マスクリックしただけでワンショット音が細かい音符の連続に聞こえる
+/// 不具合、2026-09-17実機確認・修正）。startだけを非0にすれば、`clock_loop`は自然に
+/// 1回だけ発火する（cellLevel()は範囲内の最大値を読むため、この書き方でも見た目は変わらない）。
 pub fn set_rhythm_range(note: u8, start: u16, len: u16, level: u8) {
     let note = note as usize;
     if note >= 128 {
@@ -254,7 +268,8 @@ pub fn set_rhythm_range(note: u8, start: u16, len: u16, level: u8) {
     let end = (start + len as usize).min(RHYTHM_STEPS);
     let mut state = rhythm_state().lock().unwrap();
     for pulse in start..end {
-        apply_rhythm_level(&mut state, note, pulse, level);
+        let value = if pulse == start { level } else { 0 };
+        apply_rhythm_level(&mut state, note, pulse, value);
     }
 }
 
@@ -425,6 +440,23 @@ fn ensure_clock_thread() {
     });
 }
 
+/// ノートの終端(start_step+length_steps)から、note_offを発行すべき`melody_pulse`（0〜767）を
+/// 求める。ループ末尾ちょうど(768)で終わる/それを超えるノートは、生パルス表現では768という
+/// 値そのものが存在しない（`melody_pulse`は0〜767しか取らない）ため、`.min()`で768へ
+/// クランプするだけだと`end_pulse == melody_pulse`が永久に成立せずnote_offが発行されなくなる
+/// （実機確認・修正、2026-09-17）。ループ末尾ちょうどは次ラップの先頭(0)と同じ瞬間なので
+/// そこへ写す——次ラップの0番地でのnote_on走査より前にこのnote_offが発火する順序
+/// （`retain`は`clock_loop`内の該当ブロック先頭で毎回先に評価される）なので、リリース→
+/// 次の発音という自然な順序になる。
+fn melody_note_off_pulse(start_step: u16, length_steps: u16) -> u16 {
+    let end = (start_step + length_steps).min(MELODY_TOTAL_STEPS as u16);
+    if end == MELODY_TOTAL_STEPS as u16 {
+        0
+    } else {
+        end
+    }
+}
+
 /// BPM未設定の間は100ms間隔で設定の有無だけポーリングし、設定後は24 PPQN間隔で
 /// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
 /// 移動平均で吸収される想定のため、高精度タイマーは使わない。
@@ -542,8 +574,7 @@ fn clock_loop() {
                         _ => RHYTHM_VELOCITY_NORMAL,
                     };
                     note_on(MELODY_CHANNEL, n.pitch, velocity);
-                    let end = (n.start_step + n.length_steps).min(MELODY_TOTAL_STEPS as u16);
-                    active_melody_notes.push((n.pitch, end));
+                    active_melody_notes.push((n.pitch, melody_note_off_pulse(n.start_step, n.length_steps)));
                 }
             }
             if clock_total % MELODY_STEP_EVENT_PULSES == 0 {
@@ -558,5 +589,116 @@ fn clock_loop() {
         std::thread::sleep(interval);
 
         clock_total = (clock_total + 1) % SEQUENCE_TOTAL_PULSES;
+    }
+}
+
+#[cfg(test)]
+mod melody_note_off_pulse_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_note_ends_at_start_plus_length() {
+        assert_eq!(melody_note_off_pulse(100, 24), 124);
+    }
+
+    #[test]
+    fn note_ending_exactly_at_loop_end_wraps_to_zero() {
+        // 744 + 24 = 768（8小節ループのちょうど末尾）。
+        assert_eq!(melody_note_off_pulse(744, 24), 0, "ループ末尾ちょうどは次ラップの先頭(0)として扱うはず");
+    }
+
+    #[test]
+    fn note_overshooting_past_loop_end_is_capped_then_wrapped() {
+        // 700 + 200 = 900 > 768。resizeドラッグでオーバーシュートした想定。
+        assert_eq!(melody_note_off_pulse(700, 200), 0, "768へクランプしたうえで0へ写るはず");
+    }
+
+    #[test]
+    fn note_starting_at_zero_spanning_the_whole_loop_ends_at_zero() {
+        assert_eq!(melody_note_off_pulse(0, 768), 0);
+    }
+
+    #[test]
+    fn note_ending_one_pulse_before_loop_end_does_not_wrap() {
+        assert_eq!(melody_note_off_pulse(744, 23), 767, "767は0埋め対象ではない実在するパルスのはず");
+    }
+}
+
+#[cfg(test)]
+mod rhythm_range_tests {
+    use super::*;
+
+    /// テスト間で`RHYTHM_STATE`（`OnceLock`のプロセス全体で1個の状態）を共有してしまうため、
+    /// 各テストの冒頭で対象ノートの行を明示的にクリアしてから検証する
+    /// （`cargo test`はデフォルトで複数テストを並行実行するため、テスト同数分のロックが
+    /// 直列化されるだけで済むよう、ノート番号を使い分けて競合を避ける）。
+    fn clear_note(note: u8) {
+        let mut state = rhythm_state().lock().unwrap();
+        for pulse in 0..RHYTHM_STEPS {
+            apply_rhythm_level(&mut state, note as usize, pulse, 0);
+        }
+    }
+
+    #[test]
+    fn set_rhythm_range_writes_only_the_start_pulse() {
+        let note = 100;
+        clear_note(note);
+        set_rhythm_range(note, 10, 6, 1);
+        let state = rhythm_state().lock().unwrap();
+        assert_eq!(state.pattern[note as usize][10], 1, "先頭パルスだけが新レベルになるはず");
+        for pulse in 11..16 {
+            assert_eq!(state.pattern[note as usize][pulse], 0, "先頭以外は無音になるはず（1マス=1ヒット）");
+        }
+        assert_eq!(state.hit_counts[10], 1);
+        for pulse in 11..16 {
+            assert_eq!(state.hit_counts[pulse], 0);
+        }
+    }
+
+    #[test]
+    fn set_rhythm_range_clears_previous_wide_fill_within_its_own_range() {
+        let note = 101;
+        clear_note(note);
+        // 旧仕様（全パルスを同レベルで埋める）相当のデータが残っている状態を模す。
+        {
+            let mut state = rhythm_state().lock().unwrap();
+            for pulse in 20..26 {
+                apply_rhythm_level(&mut state, note as usize, pulse, 1);
+            }
+        }
+        set_rhythm_range(note, 20, 6, 2);
+        let state = rhythm_state().lock().unwrap();
+        assert_eq!(state.pattern[note as usize][20], 2, "再クリックで先頭パルスは新レベルに更新されるはず");
+        for pulse in 21..26 {
+            assert_eq!(state.pattern[note as usize][pulse], 0, "同じ範囲を再クリックすれば残りは無音へ正規化されるはず");
+        }
+    }
+
+    #[test]
+    fn adjacent_cells_at_the_same_snap_width_each_trigger_independently() {
+        let note = 102;
+        clear_note(note);
+        // snap=6の隙間なく隣接する2マスをそれぞれクリックした状態（連続16分音符パターン相当）。
+        set_rhythm_range(note, 0, 6, 1);
+        set_rhythm_range(note, 6, 6, 1);
+        let state = rhythm_state().lock().unwrap();
+        assert_eq!(state.pattern[note as usize][0], 1, "1つ目のマスの先頭は鳴るはず");
+        assert_eq!(state.pattern[note as usize][6], 1, "隙間なく隣接する2つ目のマスの先頭も独立して鳴るはず");
+        for pulse in [1, 2, 3, 4, 5, 7, 8, 9, 10, 11] {
+            assert_eq!(state.pattern[note as usize][pulse], 0, "先頭以外は無音のはず");
+        }
+    }
+
+    #[test]
+    fn set_rhythm_range_to_level_zero_clears_the_whole_cell() {
+        let note = 103;
+        clear_note(note);
+        set_rhythm_range(note, 30, 6, 1);
+        set_rhythm_range(note, 30, 6, 0); // トグルで消音へ戻したケース
+        let state = rhythm_state().lock().unwrap();
+        for pulse in 30..36 {
+            assert_eq!(state.pattern[note as usize][pulse], 0);
+        }
+        assert_eq!(state.hit_counts[30], 0);
     }
 }

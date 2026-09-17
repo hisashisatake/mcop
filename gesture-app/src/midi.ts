@@ -62,8 +62,11 @@ export function tapTempo(bpm: number): Promise<unknown> {
   return invoke('tap_tempo', { bpm });
 }
 
-export function openEditor(): Promise<unknown> {
-  return invoke('op505_open_editor');
+/** `channel`はEキーを押した時点でアクティブな画面のMIDIチャンネル（呼び出し側で
+ * `program-state.svelte.ts`の`activeProgramChannel()`を渡す）。standalone側がこのチャンネルの
+ * 現在のBank/Program選択からEdit Channel欄・PRESETS選択の初期値を組み立てる。 */
+export function openEditor(channel: number): Promise<unknown> {
+  return invoke('op505_open_editor', { channel });
 }
 
 export function setMetronomeEnabled(enabled: boolean): Promise<unknown> {

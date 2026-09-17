@@ -205,6 +205,35 @@ impl PresetSession {
         self.file_name = bank_file.file_name().map(str::to_string);
         self.unsaved = false;
     }
+
+    /// 指定bankへタブを切り替え、`sync_display_to_registry`と同じ非選択表示（担当ファイルが
+    /// あれば音色名欄の表示だけ合わせ、`has_selection`はfalseのまま）に留める。
+    /// standalone/VSTのEdit Channel連携で、GM2リズムチャンネル（ノートごとに違う音色が鳴るため
+    /// 「今の1音色」という概念が無い）を対象に開いたときに使う（ユーザー確認済み）。
+    fn switch_bank_tab_display_only(&mut self, bank: u16) {
+        self.bank = bank;
+        self.sync_display_to_registry();
+    }
+
+    /// 指定(bank, program)を選択状態として反映する。該当エントリーが見つかればそのパッチを
+    /// 返す（呼び出し側がホストへ適用すること）。見つからなければ`switch_bank_tab_display_only`
+    /// と同じ非選択表示に留め`None`を返す（standalone/VSTのEdit Channel連携で、旋律チャンネルを
+    /// 対象に開いたときに使う）。
+    fn select_open_target(&mut self, bank: u16, program: u8) -> Option<Op505Patch> {
+        self.bank = bank;
+        let entry = self.registry.get(&bank).and_then(|f| f.entries().iter().find(|e| e.program == program)).cloned();
+        match entry {
+            Some(entry) => {
+                self.select_entry(entry.program, entry.name);
+                self.file_name = self.registry.get(&bank).and_then(|f| f.file_name().map(str::to_string));
+                Some(entry.patch)
+            }
+            None => {
+                self.sync_display_to_registry();
+                None
+            }
+        }
+    }
 }
 
 /// `entry`をホストの現在のパッチへ反映する（PRESETSパネルの全操作が最後に通る共通処理）。
@@ -1007,6 +1036,19 @@ impl EditorPresetState {
         self.session.program
     }
 
+    /// 指定bankへタブを切り替え、担当ファイルがあれば音色名欄の表示だけを合わせる
+    /// （`PresetSession::switch_bank_tab_display_only`参照）。standalone/VSTのEdit Channel
+    /// 連携で、GM2リズムチャンネルを対象に開いたときに使う（ユーザー確認済み）。
+    pub fn switch_bank_tab_display_only(&mut self, bank: u16) {
+        self.session.switch_bank_tab_display_only(bank);
+    }
+
+    /// 指定(bank, program)をPRESETSの選択状態として反映する（`PresetSession::select_open_target`
+    /// 参照）。standalone/VSTのEdit Channel連携で、旋律チャンネルを対象に開いたときに使う。
+    pub fn select_open_target(&mut self, bank: u16, program: u8) -> Option<Op505Patch> {
+        self.session.select_open_target(bank, program)
+    }
+
     /// 「Envelope Amp」メニューの初期選択表示を、ホストが持つ「今実際に効いている値」に
     /// 合わせる（`new()`直後、パネル初回描画前に呼ぶこと）。Strict/Tolerantの2値化前に
     /// 保存された値（127/255等）が渡ってきても、0=Strict/それ以外=Tolerant(1)へ正規化する
@@ -1254,6 +1296,52 @@ mod tests {
         session.sync_display_to_registry();
         assert_eq!(session.file_name, None, "担当ファイルが無ければ(unsaved)表示のままのはず");
         assert_eq!(session.program, 0);
+    }
+
+    #[test]
+    fn switch_bank_tab_display_only_shows_entry_without_selecting() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 15360, presets: vec![entry(36, "Kick")] };
+        registry.insert(15360, Op505BankFile::from_loaded(PathBuf::from("kit0.op505"), file, 15360));
+
+        let mut session = PresetSession::new(registry);
+        session.switch_bank_tab_display_only(15360);
+
+        assert_eq!(session.bank, 15360);
+        assert_eq!(session.patch_name, "Kick", "表示だけは先頭エントリーに合わせるはず");
+        assert!(!session.has_selection, "個別のプログラムは選択済み扱いにしないはず（リズムキットの仕様）");
+    }
+
+    #[test]
+    fn select_open_target_selects_matching_entry() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 3, presets: vec![entry(1, "A"), entry(7, "TestPatch")] };
+        registry.insert(3, Op505BankFile::from_loaded(PathBuf::from("bank3.op505"), file, 3));
+
+        let mut session = PresetSession::new(registry);
+        let patch = session.select_open_target(3, 7);
+
+        assert!(patch.is_some(), "見つかったエントリーのパッチを返すはず");
+        assert_eq!(session.bank, 3);
+        assert_eq!(session.program, 7);
+        assert_eq!(session.patch_name, "TestPatch");
+        assert!(session.has_selection, "見つかった場合はPRESETSリストを選択済み表示にするはず");
+        assert_eq!(session.file_name.as_deref(), Some("bank3.op505"));
+    }
+
+    #[test]
+    fn select_open_target_falls_back_to_display_only_when_not_found() {
+        let mut registry = Op505BankRegistry::new();
+        let file = Op505PresetFile::Presets { bank: 3, presets: vec![entry(1, "A")] };
+        registry.insert(3, Op505BankFile::from_loaded(PathBuf::from("bank3.op505"), file, 3));
+
+        let mut session = PresetSession::new(registry);
+        let patch = session.select_open_target(3, 99);
+
+        assert!(patch.is_none(), "見つからなければNoneを返すはず");
+        assert_eq!(session.bank, 3);
+        assert!(!session.has_selection, "見つからない場合は選択済み表示にしないはず");
+        assert_eq!(session.patch_name, "A", "表示だけは先頭エントリーに合わせるはず");
     }
 
     #[test]
