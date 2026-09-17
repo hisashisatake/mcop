@@ -10,7 +10,7 @@ import { getNotes, setNotes, MIN_PITCH, MAX_PITCH, TOTAL_STEPS as MELODY_TOTAL_S
 import { gm2DrumName } from './gm2-drums.ts';
 import { getBpm, setBpm } from './tempo-state.svelte.ts';
 import { gridSnap } from './grid-zoom.svelte.ts';
-import { tapTempo } from './midi.ts';
+import { tapTempo, MELODY_CHANNEL, RHYTHM_CHANNEL } from './midi.ts';
 import { parseSmf, buildSmf, tempoMetaEvent, timeSignatureMetaEvent } from './smf.ts';
 import {
   melodyNotesToEvents,
@@ -28,12 +28,7 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | nul
   return tauriInvoke<T>(cmd, args);
 }
 
-// gesture-app独自のチャンネル割り当て（Rust側main.rs CHORD_CHANNEL等と対にはならない、
-// standaloneへ送るMIDIチャンネルの規約。詳細はmemory
-// `project_gesture_app_melody_screen_and_file_menu_plan.md`参照）。
 const PPQ = 480;
-const MELODY_CHANNEL = 1; // ch2（0-indexed）
-const RHYTHM_CHANNEL = 9; // ch10（0-indexed）
 // リズム/メロディとも内部単位は1パルス=1/96小節（PULSES_PER_BEAT=24）に統一済み
 // （グリッド解像度細分化）のため、tick換算も1本化できる。
 const TICKS_PER_PULSE = PPQ / 24; // 20

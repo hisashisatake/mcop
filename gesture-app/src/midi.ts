@@ -17,6 +17,10 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 
 /** コード発音チャンネル。src-tauri側の`CHORD_CHANNEL`と一致させること。 */
 export const CHORD_CHANNEL = 0;
+/** メロディ発音チャンネル（ch2）。src-tauri側`midi_out.rs`の`MELODY_CHANNEL`と一致させること。 */
+export const MELODY_CHANNEL = 1;
+/** リズム発音チャンネル（ch10）。src-tauri側`midi_out.rs`の`RHYTHM_CHANNEL`と一致させること。 */
+export const RHYTHM_CHANNEL = 9;
 
 export function noteOn(channel: number, note: number, velocity: number): Promise<unknown> {
   pushLog(`ch${channel} note_on  note=${note} vel=${velocity}`);
@@ -33,9 +37,9 @@ export function allNotesOff(channel: number): Promise<unknown> {
   return invoke('all_notes_off', { channel });
 }
 
-export function setProgram(bank: number, program: number): Promise<unknown> {
-  pushLog(`program_change bank=${bank} program=${program}`);
-  return invoke('op505_set_program', { bank, program });
+export function setProgram(channel: number, bank: number, program: number): Promise<unknown> {
+  pushLog(`ch${channel} program_change bank=${bank} program=${program}`);
+  return invoke('op505_set_program', { channel, bank, program });
 }
 
 /** standaloneへ問い合わせて、指定チャンネルの現在の音色名を取得する。

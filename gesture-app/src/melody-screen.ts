@@ -471,11 +471,17 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
 
   // 再生カーソル。`currentStep`はRust側`melody-step`の旧スケール(0〜63、8分音符=12パルス
   // 単位)のままイベント頻度を維持している（倍率に関わらず一定、CLAUDE.mdグリッド解像度
-  // 細分化参照）ため、パルス単位へ変換してから比較・描画する。
+  // 細分化参照）ため、パルス単位へ変換してから比較・描画する。ハイライト帯は現在の
+  // マス幅(snap)ではなく1小節固定で、小節が変わるまで同じ位置に留まる（1マスごとに
+  // 細かく動くと視認しづらいというユーザー要望）。
   const currentPulse = currentStep * 12;
-  if (currentStep >= 0 && currentPulse >= scrollStep && currentPulse < scrollStep + visibleCols * snap) {
+  const barStart = snapFloor(currentPulse, PULSES_PER_BAR);
+  const barEnd = barStart + PULSES_PER_BAR;
+  if (currentStep >= 0 && barEnd > scrollStep && barStart < scrollStep + visibleCols * snap) {
+    const x0 = Math.max(LABEL_WIDTH, stepToX(barStart, snap));
+    const x1 = Math.min(gridRight, stepToX(barEnd, snap));
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(stepToX(currentPulse, snap), TOP_MARGIN, CELL_W, gridBottom - TOP_MARGIN);
+    ctx.fillRect(x0, TOP_MARGIN, x1 - x0, gridBottom - TOP_MARGIN);
   }
 
   // 行ラベル（音名）

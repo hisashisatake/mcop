@@ -364,14 +364,20 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     }
   }
 
-  // 再生カーソル（現在鳴っているステップの列を薄くハイライト）。セル本体より後に
+  // 再生カーソル（現在鳴っている小節を薄くハイライト）。セル本体より後に
   // 描かないと、不透明なセルの塗りで上書きされて見えなくなる。`currentStep`は
   // Rust側`rhythm-step`から届く旧スケール(0〜15、16分音符単位)のままなのでパルスへ
   // 変換する（イベント頻度自体は倍率に関わらず一定、CLAUDE.mdグリッド解像度細分化参照）。
+  // ハイライト帯は現在のマス幅(snap)ではなく1小節固定で、小節が変わるまで同じ位置に
+  // 留まる（1マスごとに細かく動くと視認しづらいというユーザー要望）。
   const currentPulse = currentStep * 6;
-  if (currentStep >= 0 && currentPulse >= scrollStep && currentPulse < scrollStep + visibleCols * snap) {
+  const barStart = snapFloor(currentPulse, PULSES_PER_BAR);
+  const barEnd = barStart + PULSES_PER_BAR;
+  if (currentStep >= 0 && barEnd > scrollStep && barStart < scrollStep + visibleCols * snap) {
+    const x0 = Math.max(LABEL_WIDTH, pulseToX(barStart, scrollStep, cw, snap));
+    const x1 = Math.min(gridRight, pulseToX(barEnd, scrollStep, cw, snap));
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(pulseToX(currentPulse, scrollStep, cw, snap), TOP_MARGIN, cw, gridBottom - TOP_MARGIN);
+    ctx.fillRect(x0, TOP_MARGIN, x1 - x0, gridBottom - TOP_MARGIN);
   }
 
   // 行ラベル
