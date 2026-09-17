@@ -41,10 +41,11 @@
 import { isActive } from './screens.svelte.ts';
 import { onRhythmStepTick, setRhythmRange, setRhythmRowsBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, cellStartPulse, cellLevel, snapFloor, snapRound } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
+import { RULER_H, drawRuler, updateLivePulse, movePlayhead } from './timeline.ts';
 import type { RhythmRow } from './types.ts';
 
 // MIDI Import/Export（project-file.js）がシーケンス全体のパルス数として参照するためexportする。
@@ -84,7 +85,8 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
- * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
+ * 横スクロールバーはルーラー帯の下の独立した帯にあるため、縦スクロールバー（グリッド
+ * 本体の右端にオーバーレイ）とは高さ方向で重ならず、互いのトラック長を縮める必要はない。 */
 function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
   const snap = gridSnap();
   const visualCells = STEPS / snap;
@@ -94,7 +96,7 @@ function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: 
   const needsV = rows.length > visibleRows;
   const needsH = visualCells > visibleCols;
 
-  const vTrackLen = gridBottom - TOP_MARGIN - (needsH ? SB_THICKNESS : 0);
+  const vTrackLen = gridBottom - TOP_MARGIN;
   const v: ScrollbarGeom = {
     trackStart: TOP_MARGIN,
     trackLen: vTrackLen,
@@ -104,11 +106,11 @@ function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: 
     viewportUnits: visibleRows,
   };
 
-  const hTrackLen = gridRight - LABEL_WIDTH - (needsV ? SB_THICKNESS : 0);
+  const hTrackLen = gridRight - LABEL_WIDTH;
   const h: ScrollbarGeom = {
     trackStart: LABEL_WIDTH,
     trackLen: hTrackLen,
-    barStart: gridBottom - SB_THICKNESS,
+    barStart: gridBottom + RULER_H,
     thumb: needsH ? computeThumb(LABEL_WIDTH, hTrackLen, visualCells, visibleCols, scrollStep / snap) : null,
     contentUnits: visualCells,
     viewportUnits: visibleCols,
@@ -119,6 +121,7 @@ function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: 
 
 onRhythmStepTick((step) => {
   currentStep = step;
+  updateLivePulse(step * 6); // Rust側RHYTHM_STEP_EVENT_PULSES(6)と一致させること
 });
 
 export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: CanvasRenderingContext2D) => void } {
@@ -143,6 +146,15 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
         const dir = pageJumpDirection(e.clientX, h.thumb);
         scrollStep = clamp(scrollStep + dir * h.viewportUnits * snap, 0, Math.max(0, (h.contentUnits - h.viewportUnits) * snap));
       }
+      return;
+    }
+
+    const { visibleCols, visibleRows, cw, ch } = gridMetrics(canvas);
+    const gridBottomForRuler = TOP_MARGIN + visibleRows * ch;
+    if (e.clientY >= gridBottomForRuler && e.clientY < gridBottomForRuler + RULER_H && e.clientX >= LABEL_WIDTH && e.clientX < LABEL_WIDTH + visibleCols * cw) {
+      const snap = gridSnap();
+      const rawPulse = scrollStep + ((e.clientX - LABEL_WIDTH) / cw) * snap;
+      movePlayhead(snapRound(rawPulse, snap));
       return;
     }
 
@@ -266,7 +278,9 @@ function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
   const naturalCw = availW / visualCells;
   const cw = Math.max(MIN_CELL_W, naturalCw);
   const visibleCols = cw <= naturalCw ? visualCells : Math.max(1, Math.floor(availW / cw));
-  const bodyH = canvas.height - TOP_MARGIN - BOTTOM_MARGIN;
+  // グリッド本体の下にルーラー帯(RULER_H)＋横スクロールバー帯(SB_THICKNESS)を常時確保する
+  // （ズームで水平スクロールの要不要が切り替わるたびにレイアウトが上下しないようにするため）。
+  const bodyH = canvas.height - TOP_MARGIN - BOTTOM_MARGIN - RULER_H - SB_THICKNESS;
   const naturalCh = rows.length > 0 ? bodyH / rows.length : bodyH;
   const ch = Math.max(MIN_ROW_H, naturalCh);
   const visibleRows = ch <= naturalCh ? rows.length : Math.max(1, Math.floor(bodyH / ch));
@@ -380,6 +394,17 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     ctx.lineTo(x, gridBottom);
   }
   ctx.stroke();
+
+  drawRuler(ctx, {
+    left: LABEL_WIDTH,
+    right: gridRight,
+    top: gridBottom,
+    gridTop: TOP_MARGIN,
+    gridBottom,
+    pulseToX: (pulse) => pulseToX(pulse, scrollStep, cw, snap),
+    visibleStartPulse: scrollStep,
+    visibleEndPulse: visibleEndPulse,
+  });
 
   drawScrollbars(ctx, canvas);
 }

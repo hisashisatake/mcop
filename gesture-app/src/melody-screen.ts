@@ -25,9 +25,10 @@ import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, setMelodyNotesBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, snapFloor, snapCeil } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, snapFloor, snapCeil, snapRound } from './grid-units.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
+import { RULER_H, drawRuler, updateLivePulse, movePlayhead } from './timeline.ts';
 import type { MelodyNote } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
@@ -84,6 +85,7 @@ let scrollDrag: ScrollDragState | null = null;
 
 onMelodyStepTick((step) => {
   currentStep = step;
+  updateLivePulse(step * 12); // Rust側MELODY_STEP_EVENT_PULSES(12)と一致させること
 });
 
 /** 再生/停止ボタンの停止側からmain.js経由で呼ばれる。カーソルのハイライトを
@@ -153,7 +155,9 @@ interface GridMetrics {
 
 function gridMetrics(canvas: HTMLCanvasElement): GridMetrics {
   const visibleCols = Math.max(1, Math.floor((canvas.width - LABEL_WIDTH) / CELL_W));
-  const visibleRows = Math.max(1, Math.floor((canvas.height - TOP_MARGIN - BOTTOM_MARGIN) / CELL_H));
+  // グリッド本体の下にルーラー帯(RULER_H)＋横スクロールバー帯(SB_THICKNESS)を常時確保する
+  // （ズームで水平スクロールの要不要が切り替わるたびにレイアウトが上下しないようにするため）。
+  const visibleRows = Math.max(1, Math.floor((canvas.height - TOP_MARGIN - BOTTOM_MARGIN - RULER_H - SB_THICKNESS) / CELL_H));
   return { visibleCols, visibleRows };
 }
 
@@ -188,7 +192,8 @@ function pointToCell(canvas: HTMLCanvasElement, px: number, py: number): { pulse
 }
 
 /** 縦横スクロールバーのジオメトリ（トラック位置・つまみ位置）をまとめて計算する。
- * 両方とも表示される場合はコーナーで重ならないよう互いのトラック長を1本分縮める。 */
+ * 横スクロールバーはルーラー帯の下の独立した帯にあるため、縦スクロールバー（グリッド
+ * 本体の右端にオーバーレイ）とは高さ方向で重ならず、互いのトラック長を縮める必要はない。 */
 function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: ScrollbarGeom } {
   const snap = gridSnap();
   const visualCells = TOTAL_STEPS / snap;
@@ -198,7 +203,7 @@ function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: 
   const needsV = ROWS > visibleRows;
   const needsH = visualCells > visibleCols;
 
-  const vTrackLen = gridBottom - TOP_MARGIN - (needsH ? SB_THICKNESS : 0);
+  const vTrackLen = gridBottom - TOP_MARGIN;
   const v: ScrollbarGeom = {
     trackStart: TOP_MARGIN,
     trackLen: vTrackLen,
@@ -208,11 +213,11 @@ function scrollbarGeometries(canvas: HTMLCanvasElement): { v: ScrollbarGeom; h: 
     viewportUnits: visibleRows,
   };
 
-  const hTrackLen = gridRight - LABEL_WIDTH - (needsV ? SB_THICKNESS : 0);
+  const hTrackLen = gridRight - LABEL_WIDTH;
   const h: ScrollbarGeom = {
     trackStart: LABEL_WIDTH,
     trackLen: hTrackLen,
-    barStart: gridBottom - SB_THICKNESS,
+    barStart: gridBottom + RULER_H,
     thumb: needsH ? computeThumb(LABEL_WIDTH, hTrackLen, visualCells, visibleCols, scrollStep / snap) : null,
     contentUnits: visualCells,
     viewportUnits: visibleCols,
@@ -259,6 +264,15 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
         const dir = pageJumpDirection(e.clientX, h.thumb);
         scrollStep = clamp(scrollStep + dir * h.viewportUnits * snap, 0, Math.max(0, (h.contentUnits - h.viewportUnits) * snap));
       }
+      return;
+    }
+
+    const { visibleCols, visibleRows } = gridMetrics(canvas);
+    const gridBottomForRuler = TOP_MARGIN + visibleRows * CELL_H;
+    if (e.clientY >= gridBottomForRuler && e.clientY < gridBottomForRuler + RULER_H && e.clientX >= LABEL_WIDTH && e.clientX < LABEL_WIDTH + visibleCols * CELL_W) {
+      const snap = gridSnap();
+      const rawPulse = scrollStep + ((e.clientX - LABEL_WIDTH) / CELL_W) * snap;
+      movePlayhead(snapRound(rawPulse, snap));
       return;
     }
 
@@ -488,6 +502,17 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
     ctx.lineTo(x, gridBottom);
   }
   ctx.stroke();
+
+  drawRuler(ctx, {
+    left: LABEL_WIDTH,
+    right: gridRight,
+    top: gridBottom,
+    gridTop: TOP_MARGIN,
+    gridBottom,
+    pulseToX: (pulse) => stepToX(pulse, snap),
+    visibleStartPulse: scrollStep,
+    visibleEndPulse: visibleEndPulse,
+  });
 
   drawScrollbars(ctx, canvas);
 }
