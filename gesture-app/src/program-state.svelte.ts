@@ -13,8 +13,9 @@ import type { ProgramInfo } from './types.ts';
 /** 今アクティブな画面が音色を送受信するMIDIチャンネル。CHORD/MELODY/RHYTHM各画面は
  * それぞれ別チャンネルの音色を持つため、Bank/Program欄の送信先・表示元もこれで決まる
  * （旧実装は画面によらず常にCHORD_CHANNEL固定だったため、MELODY/RHYTHM画面で音色選択
- * しても反映されない不具合があった）。 */
-function activeProgramChannel(): number {
+ * しても反映されない不具合があった）。Eキーでの音色エディタ起動（`main.ts`）も同じ
+ * チャンネルをEdit Channelの初期値としてstandaloneへ渡すため、exportする。 */
+export function activeProgramChannel(): number {
   switch (activeScreen()) {
     case 'melody':
       return MELODY_CHANNEL;

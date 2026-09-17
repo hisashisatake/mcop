@@ -6,6 +6,7 @@ import App from './components/App.svelte';
 import './app.css';
 import { openEditor } from './midi.ts';
 import { activeScreen } from './screens.svelte.ts';
+import { activeProgramChannel } from './program-state.svelte.ts';
 import { deleteSelectedMelodyNote, getNotes, setNotes } from './melody-screen.ts';
 import { getRows, setRows } from './rhythm-screen.ts';
 import { currentSelection, clearSelection, movePlayhead } from './timeline.ts';
@@ -28,7 +29,7 @@ function deleteTimelineRange(start: number, end: number): void {
 // 追随はtempoState等の$stateが自動で行う（旧refreshTempoDisplay()の手動呼び出しは不要）。
 window.addEventListener('keydown', async (e) => {
   if (e.key.toLowerCase() === 'e') {
-    await openEditor();
+    await openEditor(activeProgramChannel());
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
     const screen = activeScreen();
     const sel = screen === 'rhythm' || screen === 'melody' ? currentSelection() : null;

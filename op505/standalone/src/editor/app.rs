@@ -19,7 +19,7 @@ use sound_core::MeterBridge;
 use super::keyboard::{self, KeyboardState};
 use super::preset_host::StandalonePresetHost;
 use crate::midi_source::MidiSink;
-use crate::shared::SharedEditState;
+use crate::shared::{EditTarget, SharedEditState};
 
 pub struct EditorApp {
     shared: Arc<SharedEditState>,
@@ -134,6 +134,24 @@ impl EditorApp {
         }
     }
 
+    /// gesture-appのEキー押下（`SharedEditState::request_open_target`経由）が予約した
+    /// チャンネル/バンク/プログラムをこのフレームへ反映する。`ui()`の`previous_edit_channel`
+    /// キャプチャ直後・`undo.begin_frame`より前に呼ぶこと——前者は末尾のedit_channel差分検知に
+    /// 「変更あり」を拾わせるため、後者はこの自動読み込み自体をUndo対象にしないため
+    /// （読み込んだ内容がこのフレームのUndoベースラインになる）。
+    fn apply_open_target(&mut self, target: EditTarget) {
+        self.edit_channel = Some(target.channel);
+        match target.program {
+            Some(program) => {
+                if let Some(patch) = self.presets.select_open_target(target.bank, program) {
+                    *self.patch.borrow_mut() = patch;
+                    self.dirty.set(true);
+                }
+            }
+            None => self.presets.switch_bank_tab_display_only(target.bank),
+        }
+    }
+
     /// 未保存の変更がある状態でウィンドウを閉じようとしたときの確認ダイアログを別スレッドで
     /// 表示する。`rfd::MessageDialog::show()`はブロッキング呼び出しで、egui描画コールバック
     /// の内側で直接呼ぶとネストしたメッセージループがホストごとクラッシュしうる
@@ -187,6 +205,10 @@ impl eframe::App for EditorApp {
         ui_core::level_meter::set_segment_gap_px(ui.ctx(), self.level_meter_gap_px);
 
         let previous_edit_channel = self.edit_channel;
+
+        if let Some(target) = self.shared.take_open_target() {
+            self.apply_open_target(target);
+        }
 
         // 未保存（Undo履歴が残っている＝Save/Save Asで基点をクリアしていない）のままウィンドウを
         // 閉じようとした場合、一旦キャンセルして確認ダイアログを出す。standaloneはプリセット

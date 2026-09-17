@@ -20,8 +20,10 @@ const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
 const FRAME_VERSION: u8 = 1;
 const FRAME_KIND_SHORT: u8 = 0;
-/// トレイ起動音色エディタを開く/フォーカスする制御フレーム（payload無し）。
+/// トレイ起動音色エディタを開く/フォーカスする制御フレーム（payload=[channel:u8]）。
 /// `op505/standalone/src/sources/pipe_src.rs`のOpenEditorフレーム（kind=3）と対になる。
+/// standalone側はchannelの現在のBank/Program選択から「Edit Channel」欄・PRESETS選択の
+/// 初期値を組み立てる（gesture-appのEキー押下から呼ぶ、`main.rs`の`op505_open_editor`参照）。
 const FRAME_KIND_OPEN_EDITOR: u8 = 3;
 const DEVICE_ID: u8 = 0; // サーバー側は無視する（pipe_src.rsの_device_id）ため固定値で十分。
 
@@ -158,8 +160,13 @@ pub fn nrpn_data_entry(channel: u8, param_msb: u8, param_lsb: u8, value: u8) {
 
 /// op505-standaloneのトレイ起動音色エディタを開く（既に開いていればフォーカスするだけ）よう
 /// 要求する。gesture-app側のEキー押下から呼ぶ制御フレーム（MIDIメッセージではない）。
-pub fn open_editor() {
-    send_frame(FRAME_KIND_OPEN_EDITOR, &[]);
+/// `channel`は今アクティブな画面のMIDIチャンネル（CHORD/MELODY/RHYTHM、`midi.ts`の
+/// `activeProgramChannel()`参照）。standaloneはこの値からEdit Channel・PRESETS選択の
+/// 初期値を自分で組み立てるため、bank/programはgesture-app側からは渡さない
+/// （standaloneが常時把握している「今のBank/Program選択」が正であり、gesture-app側の
+/// 表示用ミラーは古くなりうるため）。
+pub fn open_editor(channel: u8) {
+    send_frame(FRAME_KIND_OPEN_EDITOR, &[channel & 0x0F]);
 }
 
 // ─────────────────────────────────────────────

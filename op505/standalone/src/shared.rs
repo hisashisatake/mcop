@@ -13,7 +13,7 @@
 //! egui/eframeに依存しない（`op505-core`型のみを扱う）。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use op505_core::{Op505BankFile, Op505Patch, Op505PresetBank};
 use op505_midi::ProgramSelection;
@@ -88,6 +88,11 @@ pub struct SharedEditState {
     /// だけで、クエリスレッドは常に「その時点の最新値」を`load(Relaxed)`で読めば十分
     /// （1ブロック分古い値を読んでも実害が無い）。
     program_selections: [AtomicU32; 16],
+
+    /// gesture-appのEキー押下で要求された、次にエディタが開く/フォーカスする際に合わせる
+    /// チャンネル/バンク/プログラム。GUIスレッドが低頻度で読み書きするだけなので`Mutex`で十分
+    /// （`patch`等のオーディオスレッド境界越しRwLockパターンとは無関係）。
+    open_target: Mutex<Option<EditTarget>>,
 }
 
 /// [`SharedEditState::program_selections`]の1要素の符号化。タグビット(31)で
@@ -115,6 +120,23 @@ pub struct ProgramInfo {
     pub program: u8,
     pub name: String,
     pub status: ProgramStatus,
+}
+
+/// gesture-appのEキー押下（OpenEditorフレームにチャンネル番号が乗ってきた場合）で、
+/// エディタを開く/フォーカスするタイミングに「そのチャンネルへ合わせる」よう要求する内容。
+/// `pipe_src`スレッドが[`SharedEditState::request_open_target`]で積み、エディタの`ui()`が
+/// 毎フレーム[`SharedEditState::take_open_target`]でポーリングする（エディタが未起動→起動
+/// 直後の初回フレーム、既に起動中→次フレームのどちらでも同じ経路で反映される）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditTarget {
+    /// 編集対象にするMIDIチャンネル（0〜15）。
+    pub channel: usize,
+    /// PRESETSパネルで合わせるバンク番号。
+    pub bank: u16,
+    /// PRESETSパネルで選択するprogram番号。`None`ならバンクタブを合わせるだけに留め、
+    /// 個別のプログラムは選択しない（GM2リズムチャンネルはノートごとに違う音色が鳴るため
+    /// 「今選択中の1音色」という概念が無く、バンクタブ合わせのみをユーザー確認済み）。
+    pub program: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +177,7 @@ impl SharedEditState {
             env_amp_epsilon_dirty: AtomicBool::new(false),
             master_meter: Arc::new(MeterBridge::new()),
             program_selections: std::array::from_fn(|_| AtomicU32::new(0)),
+            open_target: Mutex::new(None),
         }
     }
 
@@ -285,6 +308,30 @@ impl SharedEditState {
         for (cell, sel) in self.program_selections.iter().zip(selections.iter()) {
             cell.store(encode_program_selection(*sel), Ordering::Relaxed);
         }
+    }
+
+    // ---- パイプ受信スレッド側API（pipe_src.rsから呼ぶ。ブロックしてよい） ----
+
+    /// gesture-appのOpenEditorフレーム（チャンネル付き）受信時に呼ぶ。エディタが次に
+    /// この値をポーリングするまで保持される（`take_open_target`参照）。
+    pub fn request_open_target(&self, target: EditTarget) {
+        *self.open_target.lock().unwrap() = Some(target);
+    }
+
+    /// 指定チャンネルの現在のProgram Change選択を、`edit_channel`の影響を受けずそのまま返す。
+    /// `resolve_program_name`は表示用に「編集中はEditing扱いでbank=0/programにkit番号を詰める」
+    /// 変換をしてしまう（gesture-appのラベル表示向けの意図的な簡略化）ため、既にそのチャンネルを
+    /// 編集中の状態でもう一度OpenEditorを受けたとき（`pipe_src::build_edit_target`）に
+    /// `resolve_program_name`を使うと、リズムチャンネルの実際のキット番号を取り違える。
+    pub fn channel_program_selection(&self, channel: usize) -> ProgramSelection {
+        decode_program_selection(self.program_selections[channel.min(15)].load(Ordering::Relaxed))
+    }
+
+    // ---- GUIスレッド側API（続き） ----
+
+    /// エディタの`ui()`冒頭で毎フレーム呼ぶ。積まれていれば一度だけ取り出す。
+    pub fn take_open_target(&self) -> Option<EditTarget> {
+        self.open_target.lock().unwrap().take()
     }
 
     // ---- クエリスレッド側API（query_server.rsから呼ぶ。ブロックしてよい） ----
@@ -467,6 +514,29 @@ mod tests {
 
         let info = shared.resolve_program_name(4);
         assert_eq!(info.status, ProgramStatus::Editing);
+    }
+
+    #[test]
+    fn channel_program_selection_ignores_edit_channel_override() {
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
+        let mut selections = [ProgramSelection::Melodic { bank: 0, program: 0 }; 16];
+        selections[9] = ProgramSelection::Rhythm { kit: 2 };
+        shared.publish_program_selections(selections);
+
+        // resolve_program_nameは編集中チャンネルをEditing扱いへ潰すが、channel_program_selection
+        // は生のRhythm選択をそのまま返すはず（build_edit_targetがキット番号を正しく拾うため）。
+        shared.set_edit_channel(Some(9));
+        assert_eq!(shared.channel_program_selection(9), ProgramSelection::Rhythm { kit: 2 });
+        assert_eq!(shared.resolve_program_name(9).status, ProgramStatus::Editing);
+    }
+
+    #[test]
+    fn open_target_round_trips_and_is_consumed_once() {
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
+        assert!(shared.take_open_target().is_none());
+        shared.request_open_target(EditTarget { channel: 1, bank: 3, program: Some(7) });
+        assert_eq!(shared.take_open_target(), Some(EditTarget { channel: 1, bank: 3, program: Some(7) }));
+        assert!(shared.take_open_target().is_none(), "一度取り出したら消費されるはず");
     }
 
     #[test]

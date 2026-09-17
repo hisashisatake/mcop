@@ -8,9 +8,12 @@
 //! payloadをそのままMidiQueueへ積み、GM2 Universal SysEx（Master Volume等）の解釈は
 //! `handle_midi_message`側で行う）,
 //! 2=Reset（payload無し。全16chへAll Sound Off(CC120)を合成して送る）,
-//! 3=OpenEditor（payload無し。トレイ起動音色エディタを開く/フォーカスする。MIDIメッセージ
-//! ではないためMidiQueueを経由せず、直接`EditorHandle::show()`を呼ぶ。`gesture-app`の
-//! Eキー押下専用で、`op505-mme-driver`（Domino等のクライアント）は送らない）。
+//! 3=OpenEditor（payload無し、またはpayload=[channel:u8]（0〜15）。トレイ起動音色エディタを
+//! 開く/フォーカスする。MIDIメッセージではないためMidiQueueを経由せず、直接
+//! `EditorHandle::show()`を呼ぶ。channelが乗っていれば、そのチャンネルの現在のBank/Program
+//! 選択（`SharedEditState::resolve_program_name`）からEdit Channel/PRESETS選択の初期値を
+//! 組み立て、`SharedEditState::request_open_target`で予約する（`gesture-app`のEキー押下専用、
+//! `op505-mme-driver`（Domino等のクライアント）は送らない）。
 //!
 //! 名前付きパイプの「サーバー」役はRust標準ライブラリに無いAPI（CreateNamedPipeW /
 //! ConnectNamedPipe）が必要なため、その2関数だけをkernel32.dllから直接FFI宣言する
@@ -36,7 +39,9 @@ use std::sync::{Arc, OnceLock};
 
 use crate::editor::EditorHandle;
 use crate::midi_source::{MidiSink, MidiSource};
+use crate::shared::{EditTarget, SharedEditState};
 use crate::tempo_clock::TempoClock;
+use op505_midi::ProgramSelection;
 
 const PIPE_PATH: &str = r"\\.\pipe\op505.mme.v1";
 const PIPE_SDDL: &str = "S:(ML;;NW;;;LW)";
@@ -159,12 +164,14 @@ impl MidiSource for PipeSource {
 /// （`main`側で音色エディタスレッド起動後に渡される、モジュールdoc参照）。
 /// `tempo`はMIDI Clock（0xF8/0xFA/0xFB/0xFC）を検出するために持つ（[`crate::tempo_clock`]の
 /// モジュールdoc参照）。gesture-appのタップテンポ等、このパイプ経由で届くクロックにも対応する。
-pub fn spawn(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) -> PipeSource {
-    std::thread::spawn(move || accept_loop(sink, editor, tempo));
+/// `shared`はOpenEditorフレームにチャンネルが乗っていたとき、そのチャンネルの現在のBank/Program
+/// 選択を読み出すために持つ（モジュールdoc参照）。
+pub fn spawn(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>, shared: Arc<SharedEditState>) -> PipeSource {
+    std::thread::spawn(move || accept_loop(sink, editor, tempo, shared));
     PipeSource
 }
 
-fn accept_loop(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
+fn accept_loop(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>, shared: Arc<SharedEditState>) {
     loop {
         let Some(handle) = create_pipe_instance() else {
             crate::log::log(&format!(
@@ -190,7 +197,8 @@ fn accept_loop(sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
         let sink_for_client = sink.clone();
         let editor_for_client = editor.clone();
         let tempo_for_client = tempo.clone();
-        std::thread::spawn(move || serve_client(file, sink_for_client, editor_for_client, tempo_for_client));
+        let shared_for_client = Arc::clone(&shared);
+        std::thread::spawn(move || serve_client(file, sink_for_client, editor_for_client, tempo_for_client, shared_for_client));
         // ループ先頭へ戻り、次のクライアント用に新しいインスタンスを作る
         // （複数のWinMMホストアプリが同時に接続してくる可能性があるため）。
     }
@@ -227,14 +235,17 @@ fn pipe_name_wide() -> Vec<u16> {
     OsStr::new(PIPE_PATH).encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>) {
+fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle, tempo: Arc<TempoClock>, shared: Arc<SharedEditState>) {
     let mut buf = [0u8; 4096];
     loop {
         match file.read(&mut buf) {
             Ok(0) => break, // クライアントが切断
             Ok(n) => {
                 let raw = &buf[..n];
-                if is_open_editor_frame(raw) {
+                if let Some(channel) = parse_open_editor_frame(raw) {
+                    if let Some(channel) = channel {
+                        shared.request_open_target(build_edit_target(&shared, channel));
+                    }
                     editor.show();
                     continue;
                 }
@@ -253,11 +264,38 @@ fn serve_client(mut file: File, sink: MidiSink, editor: EditorHandle, tempo: Arc
     // 使い捨てで、次のクライアントには別インスタンスをaccept_loopが新規作成するため）。
 }
 
-/// OpenEditorフレーム（kind=3、payload無し）かどうかを判定する。MIDIバイト列ではなく
-/// UIへの直接操作要求のため、`decode_frame`のVec<Vec<u8>>（MidiQueueへ積む想定の戻り値）
-/// とは別経路で扱う。
-fn is_open_editor_frame(raw: &[u8]) -> bool {
-    raw.len() >= 5 && raw[0] == FRAME_VERSION && raw[1] == FRAME_KIND_OPEN_EDITOR
+/// OpenEditorフレーム（kind=3）かどうかを判定する。MIDIバイト列ではなくUIへの直接操作要求の
+/// ため、`decode_frame`のVec<Vec<u8>>（MidiQueueへ積む想定の戻り値）とは別経路で扱う。
+/// 戻り値: フレームでなければ`None`。フレームなら`Some(channel)`——payload無し（旧形式）
+/// または`channel`が0〜15の範囲外なら`Some(None)`、有効なchannelが乗っていれば`Some(Some(ch))`。
+fn parse_open_editor_frame(raw: &[u8]) -> Option<Option<u8>> {
+    if raw.len() < 5 || raw[0] != FRAME_VERSION || raw[1] != FRAME_KIND_OPEN_EDITOR {
+        return None;
+    }
+    let len = u16::from_le_bytes([raw[3], raw[4]]) as usize;
+    if raw.len() < 5 + len {
+        return None;
+    }
+    if len >= 1 && raw[5] < 16 {
+        Some(Some(raw[5]))
+    } else {
+        Some(None)
+    }
+}
+
+/// `channel`の現在のBank/Program選択（`SharedEditState::channel_program_selection`、
+/// `edit_channel`の影響を受けない生の値）から、エディタ起動時に合わせるべき[`EditTarget`]を
+/// 組み立てる。リズムチャンネルはバンクタブを合わせるだけに留め、個別のプログラムは選択しない
+/// （`EditTarget::program`のdoc参照）。
+fn build_edit_target(shared: &SharedEditState, channel: u8) -> EditTarget {
+    match shared.channel_program_selection(channel as usize) {
+        ProgramSelection::Rhythm { kit } => {
+            EditTarget { channel: channel as usize, bank: op505_midi::rhythm_bank(kit), program: None }
+        }
+        ProgramSelection::Melodic { bank, program } => {
+            EditTarget { channel: channel as usize, bank, program: Some(program) }
+        }
+    }
 }
 
 /// 1回の`ReadFile`（メッセージモードのため常に1メッセージ境界と一致する）から
@@ -339,6 +377,30 @@ mod tests {
         let mut frame = build_frame(FRAME_KIND_SHORT, &[0x90, 60, 100]);
         frame[0] = FRAME_VERSION + 1;
         assert!(decode_frame(&frame).is_empty());
+    }
+
+    #[test]
+    fn open_editor_frame_without_payload_has_no_channel() {
+        let frame = build_frame(FRAME_KIND_OPEN_EDITOR, &[]);
+        assert_eq!(parse_open_editor_frame(&frame), Some(None));
+    }
+
+    #[test]
+    fn open_editor_frame_with_channel_payload_is_parsed() {
+        let frame = build_frame(FRAME_KIND_OPEN_EDITOR, &[9]);
+        assert_eq!(parse_open_editor_frame(&frame), Some(Some(9)));
+    }
+
+    #[test]
+    fn open_editor_frame_with_out_of_range_channel_is_treated_as_no_channel() {
+        let frame = build_frame(FRAME_KIND_OPEN_EDITOR, &[16]);
+        assert_eq!(parse_open_editor_frame(&frame), Some(None));
+    }
+
+    #[test]
+    fn non_open_editor_frame_is_not_parsed_as_open_editor() {
+        let frame = build_frame(FRAME_KIND_SHORT, &[0x90, 60, 100]);
+        assert_eq!(parse_open_editor_frame(&frame), None);
     }
 
     #[test]

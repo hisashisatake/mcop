@@ -266,7 +266,13 @@ fn main() {
     // 自分で所有・管理する（初回接続もそちら側で行う。設定ファイルの読み込みも同様）。
     // OpenEditorフレーム（kind=3、gesture-appのEキー押下）を受けたら`editor_handle`の
     // クローンで`show()`する（editor_handleが必要なため`pipe_src::spawn`はここまで遅延させる）。
-    registry.add(Box::new(sources::pipe_src::spawn(sink.clone(), editor_handle.clone(), tempo_clock.clone())));
+    // `shared_edit_state`はチャンネル付きOpenEditorの場合にBank/Program選択を読み出すために渡す。
+    registry.add(Box::new(sources::pipe_src::spawn(
+        sink.clone(),
+        editor_handle.clone(),
+        tempo_clock.clone(),
+        Arc::clone(&shared_edit_state),
+    )));
 
     // gesture-appの音色名クエリ用パイプ（`\\.\pipe\op505.query.v1`）。MIDI転送用のpipe_src.rsとは
     // 別チャネルで、リクエスト/レスポンスをその場で返すだけ（監視スレッド・差分検知は持たない、
