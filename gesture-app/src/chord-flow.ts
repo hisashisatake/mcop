@@ -41,6 +41,23 @@ const MAX_SEMITONE = 5;
 
 const mod12 = (n: number) => ((n % 12) + 12) % 12;
 
+// メロディ解析（melody-analysis.ts）が与えるピッチクラス重み1につきスコアへ加える量。
+// theory.jsの遷移ボーナス幅（0.05〜0.18程度）と同程度に揃え、GREEN/YELLOW/灰の分類
+// （score自体はclassifyProgression/classifyInitialが確定済み）を覆さない範囲で、
+// 候補の並び順・明るさだけを後押しする（加点方式、ユーザー確認済み）。
+const MELODY_BOOST_PER_PITCH_CLASS = 0.12;
+
+/** コードの構成音（ピッチクラス集合）のうち、weightsに重みが登録されているものを合算する。 */
+function melodyBoostFor(chord: Chord, weights: Map<number, number> | undefined): number {
+  if (!weights || weights.size === 0) return 0;
+  const pcs = new Set(chord.intervals.map((iv) => mod12(chord.rootPc + iv)));
+  let boost = 0;
+  for (const pc of pcs) {
+    boost += (weights.get(pc) ?? 0) * MELODY_BOOST_PER_PITCH_CLASS;
+  }
+  return boost;
+}
+
 interface ClassifyAllCellsArgs {
   lastChord: Chord | null;
   key: KeyObj;
@@ -48,13 +65,14 @@ interface ClassifyAllCellsArgs {
   shiftHeld: boolean;
   ctrlHeld: boolean;
   pendingPivot?: PendingPivot | null;
+  melodyWeights?: Map<number, number>;
 }
 
 /**
  * 108セル（12半音×9行）を採点し、重複コード名を除去した上で
  * GREEN/YELLOW/無印（灰）のスコア降順リストへ分ける。
  */
-function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot }: ClassifyAllCellsArgs): {
+function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot, melodyWeights }: ClassifyAllCellsArgs): {
   green: CandidateCell[];
   yellow: CandidateCell[];
   gray: CandidateCell[];
@@ -63,9 +81,10 @@ function classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pend
   for (let semitone = MIN_SEMITONE; semitone <= MAX_SEMITONE; semitone++) {
     for (let row = 0; row < ROWS; row++) {
       const chord = chordFromSemitone(semitone, row, { tonicMidi, shiftHeld, ctrlHeld });
-      const { score, category } = lastChord
+      const { score: baseScore, category } = lastChord
         ? classifyProgression(lastChord, chord, key)
         : classifyInitial(chord, key);
+      const score = baseScore + melodyBoostFor(chord, melodyWeights);
       // 直前のコードが無い1手目は「転調予告」という概念自体が成立しない
       // （ダイアトニックコードのほとんどが何らかの近親調のピボットになりうるため、
       // 1手目でも立てるとほぼ全セルが青枠になり情報として機能しない）。
@@ -159,6 +178,10 @@ export interface ComputeCandidateGridArgs {
   rows: number;
   progressionMatches?: ProgressionMatch[];
   pendingPivot?: PendingPivot | null;
+  /** 現在の4分音符スロットのメロディピッチクラス重み（melody-analysis.ts参照）。
+   * 渡された場合、そのスロットのメロディ音を含むコードほどスコアを底上げする
+   * （加点方式、GREEN/YELLOW/灰の分類自体は変えない）。 */
+  melodyWeights?: Map<number, number>;
 }
 
 /**
@@ -194,8 +217,9 @@ export function computeCandidateGrid({
   rows,
   progressionMatches,
   pendingPivot,
+  melodyWeights,
 }: ComputeCandidateGridArgs): CandidateGridCell[] {
-  const { green, yellow, gray } = classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot });
+  const { green, yellow, gray } = classifyAllCells({ lastChord, key, tonicMidi, shiftHeld, ctrlHeld, pendingPivot, melodyWeights });
   const allCells = [...green, ...yellow, ...gray];
   const sequence = allCells.slice(0, cols * rows);
 

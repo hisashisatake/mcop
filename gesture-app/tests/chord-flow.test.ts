@@ -194,6 +194,57 @@ test('computeCandidateGrid: progressionKeyがkeyと異なる場合、next.degree
   assert.notEqual(degreeFromDisplayKey, 9, '表示key(Aマイナー)基準の度数9(F#)ではないはず');
 });
 
+test('computeCandidateGrid: melodyWeightsはその音を含むコードのスコアを底上げする（カテゴリは変えない）', () => {
+  const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
+  const withoutMelody = computeCandidateGrid({
+    lastChord: c,
+    key: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 3,
+    rows: 20,
+  });
+  const target = withoutMelody.find((g) => g.chord.name === 'Dm7');
+  assert.ok(target, 'Dm7が候補に含まれるはず');
+
+  // Dm7の構成音(D,F,A,C = pc 2,5,9,0)のうちpc=2(D)へ強い重みを与える
+  const melodyWeights = new Map<number, number>([[2, 1.0]]);
+  const withMelody = computeCandidateGrid({
+    lastChord: c,
+    key: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 3,
+    rows: 20,
+    melodyWeights,
+  });
+  const boosted = withMelody.find((g) => g.chord.name === 'Dm7');
+  assert.ok(boosted, 'melodyWeights指定後もDm7は候補に含まれるはず');
+  assert.ok(boosted!.score > target!.score, 'メロディの音を含むコードはスコアが上がるはず');
+  assert.equal(boosted!.category, target!.category, 'カテゴリ自体は加点方式では変わらないはず');
+});
+
+test('computeCandidateGrid: melodyWeights未指定なら従来どおりの結果になる（後方互換）', () => {
+  const c = chordFor(0, rowIndexOf(NORMAL_LAYER, ''));
+  const a = computeCandidateGrid({ lastChord: c, key: C_MAJOR_KEY, tonicMidi: TONIC_MIDI, shiftHeld: false, ctrlHeld: false, cols: 3, rows: 5 });
+  const b = computeCandidateGrid({
+    lastChord: c,
+    key: C_MAJOR_KEY,
+    tonicMidi: TONIC_MIDI,
+    shiftHeld: false,
+    ctrlHeld: false,
+    cols: 3,
+    rows: 5,
+    melodyWeights: new Map(),
+  });
+  assert.deepEqual(
+    a.map((g) => [g.chord.name, g.score]),
+    b.map((g) => [g.chord.name, g.score]),
+  );
+});
+
 test('computeCandidateGrid: 直前コードが無い1手目でも候補が出る', () => {
   const grid = computeCandidateGrid({
     lastChord: null,

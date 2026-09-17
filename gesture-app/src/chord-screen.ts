@@ -58,6 +58,8 @@ import { computePastSlotGeoms } from './chord-layout.ts';
 import { isActive, onScreenChange } from './screens.svelte.ts';
 import { pushUndo } from './undo-manager.ts';
 import { chordSettings } from './chord-settings.svelte.ts';
+import { displayPulse } from './timeline.ts';
+import { melodySlotAtPulse, melodyWeightsForSlot, melodyAnalysisVersion } from './melody-analysis.ts';
 import type {
   CandidateGridCell,
   Chord,
@@ -753,6 +755,11 @@ function computeCandidates(): CandidateGridCell[] {
   const entry = currentEntry(history);
   const recent = recentHistoryForProgressionMatch(progressionKey);
   const pendingPivot = pendingPivotAt(history);
+  // 現在の再生位置（停止中は次回開始位置）が属する4分音符スロット。再生が進んでスロットが
+  // 切り替わるたびにcacheKeyが変わり、コード候補がリアルタイムで絞り込み直される
+  // （melody-analysis.ts参照。スロット内の重みテーブル自体は明示的な再解析でのみ更新される
+  // ため、`melodyAnalysisVersion()`もキーへ含めて更新アイコン等での再計算を拾う）。
+  const melodySlot = melodySlotAtPulse(displayPulse());
   const cacheKey = JSON.stringify({
     from: entry ? { rootPc: entry.chord.rootPc, family: entry.chord.family } : null,
     key,
@@ -762,6 +769,8 @@ function computeCandidates(): CandidateGridCell[] {
     cols: chordSettings.cols,
     recent,
     pendingPivot,
+    melodySlot,
+    melodyAnalysisVersion: melodyAnalysisVersion(),
   });
   if (candidateCache && candidateCache.cacheKey === cacheKey) return candidateCache.grid;
 
@@ -777,6 +786,7 @@ function computeCandidates(): CandidateGridCell[] {
     rows: chordSettings.rows,
     progressionMatches,
     pendingPivot,
+    melodyWeights: melodyWeightsForSlot(melodySlot),
   });
   const legend = computeProgressionLegend({
     lastChord: entry?.chord ?? null,
