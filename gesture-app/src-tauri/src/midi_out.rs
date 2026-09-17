@@ -176,6 +176,13 @@ const CLOCK_PPQN: u32 = 24;
 const BEATS_PER_BAR: u32 = 4;
 const CLOCKS_PER_BAR: u32 = CLOCK_PPQN * BEATS_PER_BAR;
 
+/// RHYTHM/MELODY共通のシーケンス長（小節数）。両画面とも同じ長さのタイムラインを持つ
+/// （グリッド倍率の共通化に合わせ、リズムも旧来の1小節ループから8小節へ拡張した）。
+const SEQUENCE_BARS: u32 = 8;
+/// シーケンス全体のパルス数（768）。リズムパターン・メロディノートとも、この長さの
+/// タイムライン上の位置として扱う。
+const SEQUENCE_TOTAL_PULSES: u32 = CLOCKS_PER_BAR * SEQUENCE_BARS;
+
 /// GM2リズムチャンネル（standalone側の`op505-midi::rhythm`がch10＝0-indexed 9をGM2リズムと
 /// 解釈する、CLAUDE.md「GM2リズムチャンネル」節参照）。
 const RHYTHM_CHANNEL: u8 = 9;
@@ -190,15 +197,15 @@ static METRONOME_ENABLED: AtomicBool = AtomicBool::new(false);
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
 // ─────────────────────────────────────────────
-// ステップシーケンサー（フェーズ4：リズム画面本体、グリッド解像度細分化で1パルス=1/96小節へ）
-// 1小節=96パルス（1パルス=1/96小節、CLAUDE.mdのグリッド解像度細分化参照）。行は
+// ステップシーケンサー（フェーズ4：リズム画面本体、グリッド解像度細分化で1パルス=1/96小節へ、
+// タイムライン共通化でMELODYと同じ8小節=768パルスへ拡張）。行は
 // op505/tools/patchlab/python/gm2_drum_kit.pyのSTANDARD_KIT（メトロノーム用note33/34を
 // 除く12音色）と対応させる。パターンの編集はJS側（rhythm-screen.ts）が発生源で、
 // `set_rhythm_range`/`set_rhythm_rows`経由でここへミラーするだけ
 // （読み出しはこのクロックスレッドのみ）。発音の判定・送信自体は必ずこのスレッドが
 // 行う（JS側のrequestAnimationFrameは数十msの誤差が出るため刻みに使わない）。
 // ─────────────────────────────────────────────
-const RHYTHM_STEPS: usize = CLOCKS_PER_BAR as usize; // 96
+const RHYTHM_STEPS: usize = SEQUENCE_TOTAL_PULSES as usize; // 768
 /// 再生カーソル通知(`rhythm-step`)の間引き間隔。旧16分音符間隔(6パルス)をそのまま
 /// 維持する（理由は`clock_loop`のドキュメントコメント参照）。発音判定自体は
 /// パルス粒度のデータに合わせて毎パルス行う。
@@ -284,17 +291,14 @@ pub fn set_rhythm_rows(rows: Vec<RhythmRowInput>) {
 // ─────────────────────────────────────────────
 // ピアノロール（フェーズ6：メロディ画面本体、グリッド解像度細分化で1パルス=1/96小節へ）
 // リズムの「行=固定グリッド」と違い、メロディは音オブジェクト（可変の開始位置・長さ・
-// 音高を持つノート）のリストで表現する。1小節=96パルス（1パルス=1/96小節）、ループ長は
-// 基本8小節（`MELODY_BARS`）。将来「8小節パーツを複数組み合わせる」構想があるため、
-// 小節数はこの1定数に閉じ込めてある。
+// 音高を持つノート）のリストで表現する。ループ長はRHYTHM画面と共通の`SEQUENCE_TOTAL_PULSES`
+// （8小節=768パルス、タイムライン共通化）。
 // 編集の発生源はJS側（melody-screen.ts）で、IDはJS側が採番してRustへ渡す
 // （Rustが非同期でID発行するとJS側が往復待ちになるため、rhythmと同じfire-and-forget
 // 方式に揃える）。
 // ─────────────────────────────────────────────
 const MELODY_CHANNEL: u8 = 1; // ch2（0-indexed）
-const MELODY_STEPS_PER_BAR: u32 = CLOCKS_PER_BAR; // 96
-const MELODY_BARS: u32 = 8;
-const MELODY_TOTAL_STEPS: u32 = MELODY_STEPS_PER_BAR * MELODY_BARS; // 768
+const MELODY_TOTAL_STEPS: u32 = SEQUENCE_TOTAL_PULSES; // 768
 /// 再生カーソル通知(`melody-step`)の間引き間隔。旧8分音符間隔(12パルス)をそのまま
 /// 維持する（毎パルス送出すると`handle.emit`頻度がタイミングクリティカルなclock
 /// スレッド上で大幅に増え、既知のタイマー精度問題を悪化させうるため）。発音判定自体は
@@ -413,20 +417,22 @@ fn ensure_clock_thread() {
 /// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
 /// 移動平均で吸収される想定のため、高精度タイマーは使わない。
 ///
-/// 位置は1本の`clock_total`（0〜`CLOCKS_PER_BAR * MELODY_BARS - 1`、メロディの
-/// ループ全体をカバーする）で管理する。リズム・メトロノームは`clock_total % CLOCKS_PER_BAR`
-/// （＝`clock_in_bar`、0〜95）を使い、これまで通り1小節ごとに繰り返す。拍の頭
-/// （24クロックごと）でメトロノームのNote On/Offと`sequencer-tick`を送出する。
+/// 位置は1本の`clock_total`（0〜`SEQUENCE_TOTAL_PULSES - 1`、リズム・メロディ共通の
+/// 8小節ループ全体をカバーする、タイムライン共通化）で管理する。メトロノームだけは
+/// 従来どおり`clock_total % CLOCKS_PER_BAR`（＝`clock_in_bar`、0〜95）で1小節ごとに
+/// 繰り返す（拍の概念は小節基準のままでよいため）。拍の頭（24クロックごと）で
+/// メトロノームのNote On/Offと`sequencer-tick`を送出する。
 ///
 /// グリッド解像度細分化（1パルス=1/96小節）以降、リズム・メロディともパターンの
 /// データ粒度がパルス単位になったため、発音判定自体は**毎パルス**行う
-/// （`clock_in_bar`・`clock_total`をそのまま参照、旧来の6/12クロックごとの間引きは
-/// 発音判定からは無くした）。一方、`rhythm-step`/`melody-step`イベントの送出頻度は
-/// 旧来の間隔（6/12パルスごと）を維持する（毎パルス送出すると`handle.emit`頻度が
+/// （`clock_total`をそのまま参照、旧来の6/12クロックごとの間引きは発音判定からは
+/// 無くした）。一方、`rhythm-step`/`melody-step`イベントの送出頻度は旧来の間隔
+/// （6/12パルスごと）を維持する（毎パルス送出すると`handle.emit`頻度が
 /// タイミングクリティカルなclockスレッド上で大幅に増え、既知のタイマー精度問題
-/// （memory `project_bpm_supply_midi_clock.md`）を悪化させうるため）。ペイロードも旧スケール
-/// （rhythm:0〜15、melody:0〜63）のまま据え置き、JS側の再生カーソル描画コードは
-/// 無改修で済ませる。
+/// （memory `project_bpm_supply_midi_clock.md`）を悪化させうるため）。ペイロードは
+/// `clock_total`を間引き間隔で割った値（rhythm:0〜127、melody:0〜63）で、JS側の
+/// 再生カーソル描画コードは無改修で済ませる（`currentStep * 6`/`* 12`という既存の
+/// 逆変換がそのまま768パルス全域で成立する）。
 fn clock_loop() {
     let mut clock_total: u32 = 0;
     // 発音中（note_on済みでまだnote_offしていない）メロディノートの(pitch, 終了ステップ)。
@@ -457,7 +463,7 @@ fn clock_loop() {
         let running = SEQUENCER_RUNNING.load(Ordering::Relaxed);
 
         if running {
-            let pulse = clock_in_bar as usize; // 0..95、1パルス=1マス
+            let pulse = clock_total as usize; // 0..767、1パルス=1マス（8小節共通タイムライン）
             {
                 let state = rhythm_state().lock().unwrap();
                 if state.hit_counts[pulse] != 0 {
@@ -476,7 +482,7 @@ fn clock_loop() {
                     }
                 }
             }
-            if clock_in_bar % RHYTHM_STEP_EVENT_PULSES == 0 {
+            if clock_total % RHYTHM_STEP_EVENT_PULSES == 0 {
                 if let Some(handle) = APP_HANDLE.get() {
                     let _ = handle.emit("rhythm-step", pulse / RHYTHM_STEP_EVENT_PULSES as usize);
                 }
@@ -528,6 +534,6 @@ fn clock_loop() {
         let interval = Duration::from_secs_f32(60.0 / bpm / CLOCK_PPQN as f32);
         std::thread::sleep(interval);
 
-        clock_total = (clock_total + 1) % (CLOCKS_PER_BAR * MELODY_BARS);
+        clock_total = (clock_total + 1) % SEQUENCE_TOTAL_PULSES;
     }
 }

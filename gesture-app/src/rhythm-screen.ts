@@ -6,10 +6,11 @@
 // MELODY画面と共有する（ユーザー要望、両画面で同じスナップ単位になる）。既定値
 // （16分音符=6パルス/マス、16マス/行）は倍率UI導入前と同じ見た目を保つ。
 //
-// セル幅はmelody-screen.tsと同じ「固定セル＋スクロール」方式: 1小節がウィンドウ幅に
-// 収まるならウィンドウ幅へ引き伸ばし（既定の16分音符では従来とほぼ同じ見た目）、
-// 収まらなくなったら最小幅(MIN_CELL_W)に張り付いて横スクロールする（縦のMIN_ROW_H/
-// scrollRowと同じ考え方）。
+// タイムラインはMELODY画面と共通の8小節=768パルス（タイムライン共通化、旧来は1小節=96
+// パルスのみだった）。セル幅はmelody-screen.tsと同じ「固定セル＋スクロール」方式:
+// 全体がウィンドウ幅に収まるならウィンドウ幅へ引き伸ばし（既定の16分音符では従来
+// （1小節時代）とほぼ同じ見た目）、収まらなくなったら最小幅(MIN_CELL_W)に張り付いて
+// 横スクロールする（縦のMIN_ROW_H/scrollRowと同じ考え方）。
 //
 // クリック処理は`cellLevel()`でマスが覆う範囲内の最大レベルを読む（そのマスが今どう
 // 聞こえているかの代表値）→ (level+1)%4 → 範囲全体を新レベルで上書き（`setRhythmRange`
@@ -32,7 +33,7 @@
 // 独立で、停止中も動き続ける。
 //
 // フェーズ3（MIDI Import）で「行=固定12個」の制約を撤廃した。行はGM2ノート番号を
-// キーとする可変長リスト（`rows: [{note, label, steps[96]}]`）で持ち、Rust側
+// キーとする可変長リスト（`rows: [{note, label, steps[768]}]`）で持ち、Rust側
 // （midi_out.rs）もノート番号で直接引く128行分のパターンへ変更済み。既定は従来と同じ
 // 12行（DEFAULT_ROW_NOTES/DEFAULT_ROW_LABELS）。行数が増えて1行18px未満になる場合は
 // 18px固定にしてホイールで縦スクロールする（メロディ画面と同じ方式）。
@@ -40,14 +41,15 @@
 import { isActive } from './screens.svelte.ts';
 import { onRhythmStepTick, setRhythmRange, setRhythmRowsBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, cellStartPulse, cellLevel, snapFloor } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { RhythmRow } from './types.ts';
 
-// MIDI Import/Export（project-file.js）が1小節のパルス数として参照するためexportする。
-export const STEPS = PULSES_PER_BAR;
+// MIDI Import/Export（project-file.js）がシーケンス全体のパルス数として参照するためexportする。
+// MELODY画面と共通の8小節タイムライン（タイムライン共通化、旧来は1小節=96パルスのみだった）。
+export const STEPS = SEQUENCE_TOTAL_PULSES;
 const LABEL_WIDTH = 74;
 const TOP_MARGIN = 40; // 上部の余白（画面タブ等はハンバーガーメニューのドロワーへ移動済みのため最小限でよい）
 const BOTTOM_MARGIN = 180; // 右下固定の#status-panel（波形メモリ/Bank・Program/Key/TAPテンポ）と最下段の行が重ならないための余白

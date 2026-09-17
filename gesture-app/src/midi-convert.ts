@@ -152,91 +152,52 @@ export function midiEventsToMelodyNotes(
 }
 
 // ─────────────────────────────────────────────
-// リズム: グリッド → SMFイベント（Export、1小節パターンをbars回繰り返す）
+// リズム: グリッド → SMFイベント（Export、情報を失わない）
 // ─────────────────────────────────────────────
 
-export function rhythmRowsToEvents(
-  rows: RhythmRowData[],
-  channel: number,
-  ticksPerStep: number,
-  stepsPerBar: number,
-  bars: number,
-): SmfRawEvent[] {
+/** `row.steps`の長さぶん（RHYTHM/MELODY共通の8小節タイムライン全体）をそのまま書き出す。 */
+export function rhythmRowsToEvents(rows: RhythmRowData[], channel: number, ticksPerStep: number): SmfRawEvent[] {
   const events: SmfRawEvent[] = [];
-  const ticksPerBar = ticksPerStep * stepsPerBar;
-  for (let bar = 0; bar < bars; bar++) {
-    for (const row of rows) {
-      for (let step = 0; step < stepsPerBar; step++) {
-        const level = row.steps[step];
-        if (!level) continue;
-        const tick = bar * ticksPerBar + step * ticksPerStep;
-        events.push(noteOnEvent(tick, channel, row.note, levelToVelocity(level)));
-        events.push(noteOffEvent(tick + ticksPerStep, channel, row.note));
-      }
+  for (const row of rows) {
+    for (let step = 0; step < row.steps.length; step++) {
+      const level = row.steps[step];
+      if (!level) continue;
+      const tick = step * ticksPerStep;
+      events.push(noteOnEvent(tick, channel, row.note, levelToVelocity(level)));
+      events.push(noteOffEvent(tick + ticksPerStep, channel, row.note));
     }
   }
   return events;
 }
 
 // ─────────────────────────────────────────────
-// リズム: SMFイベント → グリッド（Import、最多出現の1小節パターンへ畳む）
+// リズム: SMFイベント → グリッド（Import、8小節タイムラインへそのまま取り込む）
 // ─────────────────────────────────────────────
-
-function barPatternKey(stepsByNote: Map<number, Map<number, number>>): string {
-  return [...stepsByNote.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([note, stepVel]) => {
-      const steps = [...stepVel.entries()].sort((a, b) => a[0] - b[0]).map(([s, v]) => `${s}:${v}`).join(',');
-      return `${note}=[${steps}]`;
-    })
-    .join('|');
-}
 
 /**
  * @param events parseSmf()の出力
- * @param quantizePulses ステップ位置を丸めるグリッド幅（パルス単位、既定6＝16分音符）。
- *   量子化しないと人間の演奏の数パルスのゆらぎで小節ごとにステップ位置がずれ、
- *   「最多出現パターンへ畳む」処理が一致を検出できなくなる。
+ * @param totalSteps タイムライン全体のパルス数（RHYTHM/MELODY共通の8小節=768）
+ * @param quantizePulses ヒット位置を丸めるグリッド幅（パルス単位、既定6＝16分音符）。
+ *   人間の演奏はグリッドぴったりに乗らないため量子化する（melodyと同じ理由）。
  * @returns 該当ヒットが無ければ空配列
  */
-export function midiEventsToRhythmRows(events: SmfEvent[], channel: number, ticksPerStep: number, stepsPerBar: number, quantizePulses: number = 6): RhythmRowData[] {
+export function midiEventsToRhythmRows(events: SmfEvent[], channel: number, ticksPerStep: number, totalSteps: number, quantizePulses: number = 6): RhythmRowData[] {
   const hits = events.filter((e): e is Extract<SmfEvent, { kind: 'noteOn' }> => e.kind === 'noteOn' && e.channel === channel);
   if (hits.length === 0) return [];
 
-  const ticksPerBar = ticksPerStep * stepsPerBar;
-  const maxTick = Math.max(...hits.map((e) => e.tick));
-  const barCount = Math.floor(maxTick / ticksPerBar) + 1;
-
-  const barPatterns: Array<Map<number, Map<number, number>>> = Array.from({ length: barCount }, () => new Map());
+  const byNote = new Map<number, Map<number, number>>();
   for (const e of hits) {
-    const bar = Math.floor(e.tick / ticksPerBar);
-    const localTick = e.tick - bar * ticksPerBar;
-    const step = snapRound(localTick / ticksPerStep, quantizePulses) % stepsPerBar;
-    if (!barPatterns[bar].has(e.note)) barPatterns[bar].set(e.note, new Map());
-    barPatterns[bar].get(e.note)!.set(step, e.velocity);
+    const step = snapRound(e.tick / ticksPerStep, quantizePulses);
+    if (step < 0 || step >= totalSteps) continue;
+    if (!byNote.has(e.note)) byNote.set(e.note, new Map());
+    byNote.get(e.note)!.set(step, e.velocity);
   }
+  if (byNote.size === 0) return [];
 
-  // 最多出現パターンを選ぶ（空小節は除外、同数なら先に出現した小節を採用）
-  const counts = new Map<string, { count: number; firstIdx: number; pattern: Map<number, Map<number, number>> }>();
-  barPatterns.forEach((pattern, idx) => {
-    if (pattern.size === 0) return;
-    const key = barPatternKey(pattern);
-    if (!counts.has(key)) counts.set(key, { count: 0, firstIdx: idx, pattern });
-    counts.get(key)!.count += 1;
-  });
-  if (counts.size === 0) return [];
-
-  let best: { count: number; firstIdx: number; pattern: Map<number, Map<number, number>> } | null = null;
-  for (const entry of counts.values()) {
-    if (!best || entry.count > best.count || (entry.count === best.count && entry.firstIdx < best.firstIdx)) {
-      best = entry;
-    }
-  }
-
-  const notes = [...best!.pattern.keys()].sort((a, b) => a - b);
+  const notes = [...byNote.keys()].sort((a, b) => a - b);
   return notes.map((note) => {
-    const steps = new Array(stepsPerBar).fill(0);
-    for (const [step, velocity] of best!.pattern.get(note)!) {
+    const steps = new Array(totalSteps).fill(0);
+    for (const [step, velocity] of byNote.get(note)!) {
       steps[step] = velocityToLevel(velocity);
     }
     return { note, steps };

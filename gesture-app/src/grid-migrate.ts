@@ -1,10 +1,11 @@
-// v1/v2プロジェクトファイル（旧16ステップ/小節のリズム・旧8ステップ/小節のメロディ）を、
-// 1パルス=1/96小節の内部形式へ展開する移行関数群。grid-units.tsのみに依存する
+// v1/v2/v3プロジェクトファイル（旧16ステップ/小節のリズム・旧8ステップ/小節のメロディ・
+// リズム=1小節限定だったv3）を、現行の内部形式（1パルス=1/96小節、RHYTHM/MELODY共通の
+// 8小節=768パルスタイムライン）へ展開する移行関数群。grid-units.tsのみに依存する
 // （project-state.tsの`patternV1ToRows`等、後からこのモジュールへ委譲する側から
 // 逆に依存されるため、rhythm-screen.ts等の.svelte.ts/Tauri呼び出しを含む
 // モジュールには依存しない）。
 
-import { PULSES_PER_BAR } from './grid-units.ts';
+import { PULSES_PER_BAR, SEQUENCE_BARS } from './grid-units.ts';
 import type { RhythmRow, MelodyNote } from './types.ts';
 
 const OLD_RHYTHM_STEPS = 16;
@@ -45,11 +46,24 @@ export function expandMelodyNotesV2(notes: MelodyNote[]): MelodyNote[] {
   }));
 }
 
-/** v1(.gap505)の12×16固定パターンを、現行のRhythmRow[]（96パルス/行）へ直接展開する。 */
+/**
+ * 1小節分（96パルス）のリズムstepsを、RHYTHM/MELODY共通の8小節タイムライン（768パルス）へ
+ * そのまま繰り返して展開する（v3までのリズムは1小節ループだったため、毎小節同じ内容を
+ * 繰り返せば聞こえ方が変わらない）。
+ */
+export function repeatRhythmBarToSequence(steps96: number[]): number[] {
+  const result: number[] = [];
+  for (let bar = 0; bar < SEQUENCE_BARS; bar++) {
+    for (let i = 0; i < PULSES_PER_BAR; i++) result.push(steps96[i] ?? 0);
+  }
+  return result;
+}
+
+/** v1(.gap505)の12×16固定パターンを、現行のRhythmRow[]（768パルス/行）へ直接展開する。 */
 export function expandPatternV1(pattern: number[][]): RhythmRow[] {
   return DEFAULT_ROW_NOTES.map((note, i) => ({
     note,
     label: DEFAULT_ROW_LABELS[i],
-    steps: expandRhythmSteps16To96(pattern[i] ?? []),
+    steps: repeatRhythmBarToSequence(expandRhythmSteps16To96(pattern[i] ?? [])),
   }));
 }

@@ -11,8 +11,9 @@
 // （16分音符=6パルス/マス）は倍率UI導入前のRHYTHM既定と同じ。
 //
 // RHYTHM画面が「固定マス×12行のグリッド」なのに対し、メロディは音オブジェクト
-// （可変の開始位置・長さ・音高を持つノート）のリストで表現する。ループ長は基本8小節
-// （768パルス、Rust側`MELODY_BARS`×`MELODY_STEPS_PER_BAR`と一致させること）。
+// （可変の開始位置・長さ・音高を持つノート）のリストで表現する。ループ長はRHYTHM画面と
+// 共通の8小節=768パルス（`grid-units.ts`の`SEQUENCE_TOTAL_PULSES`、タイムライン共通化。
+// Rust側`SEQUENCE_TOTAL_PULSES`と一致させること）。
 // フルピアノ音域（A0=MIDI21〜C8=MIDI108、88鍵）を縦スクロールで、768パルス全体を
 // 横スクロールで見せるため、rhythmの「コンテナに合わせて等分割」ではなく「固定セル
 // サイズ+スクロールオフセット」で描画する。
@@ -24,7 +25,7 @@ import { isActive } from './screens.svelte.ts';
 import { NOTE_NAMES } from './chords.ts';
 import { addMelodyNote, updateMelodyNote, deleteMelodyNote, onMelodyStepTick, setMelodyNotesBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, snapFloor, snapCeil } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, snapFloor, snapCeil } from './grid-units.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
 import type { MelodyNote } from './types.ts';
@@ -35,8 +36,7 @@ export const MIN_PITCH = 21; // A0
 export const MAX_PITCH = 108; // C8
 const ROWS = MAX_PITCH - MIN_PITCH + 1; // 88
 
-const BARS = 8;
-export const TOTAL_STEPS = PULSES_PER_BAR * BARS; // 768
+export const TOTAL_STEPS = SEQUENCE_TOTAL_PULSES; // 768
 
 const CELL_W = 40;
 const CELL_H = 18;
