@@ -41,11 +41,11 @@
 import { isActive } from './screens.svelte.ts';
 import { onRhythmStepTick, setRhythmRange, setRhythmRowsBulk } from './midi.ts';
 import { pushUndo } from './undo-manager.ts';
-import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, cellStartPulse, cellLevel, snapFloor, snapRound } from './grid-units.ts';
+import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, cellStartPulse, cellLevel, snapFloor, snapCeil, snapRound } from './grid-units.ts';
 import { expandPatternV1 } from './grid-migrate.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
-import { RULER_H, drawRuler, updateLivePulse, movePlayhead } from './timeline.ts';
+import { RULER_H, RULER_DRAG_THRESHOLD_PX, drawRuler, updateLivePulse, movePlayhead, setSelection, clearSelection } from './timeline.ts';
 import type { RhythmRow } from './types.ts';
 
 // MIDI Import/Export（project-file.js）がシーケンス全体のパルス数として参照するためexportする。
@@ -79,6 +79,14 @@ interface ScrollDragState {
 }
 
 let scrollDrag: ScrollDragState | null = null;
+
+interface RulerDragState {
+  startClientX: number;
+  startRawPulse: number; // mousedown時点の連続パルス位置（スナップ前）
+  moved: boolean;
+}
+
+let rulerDrag: RulerDragState | null = null;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -154,7 +162,7 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     if (e.clientY >= gridBottomForRuler && e.clientY < gridBottomForRuler + RULER_H && e.clientX >= LABEL_WIDTH && e.clientX < LABEL_WIDTH + visibleCols * cw) {
       const snap = gridSnap();
       const rawPulse = scrollStep + ((e.clientX - LABEL_WIDTH) / cw) * snap;
-      movePlayhead(snapRound(rawPulse, snap));
+      rulerDrag = { startClientX: e.clientX, startRawPulse: rawPulse, moved: false };
       return;
     }
 
@@ -188,6 +196,29 @@ export function setupRhythmScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 
   window.addEventListener('mouseup', () => {
     scrollDrag = null;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!rulerDrag) return;
+    if (!rulerDrag.moved && Math.abs(e.clientX - rulerDrag.startClientX) < RULER_DRAG_THRESHOLD_PX) return;
+    rulerDrag.moved = true;
+    const { cw } = gridMetrics(canvas);
+    const snap = gridSnap();
+    const rawPulseNow = scrollStep + ((e.clientX - LABEL_WIDTH) / cw) * snap;
+    const start = snapFloor(Math.min(rulerDrag.startRawPulse, rawPulseNow), snap);
+    const end = snapCeil(Math.max(rulerDrag.startRawPulse, rawPulseNow), snap);
+    setSelection(clamp(start, 0, STEPS), clamp(end, 0, STEPS));
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!rulerDrag) return;
+    if (!rulerDrag.moved) {
+      // ドラッグせずに離した＝単純クリック。再生位置移動のみを行い、既存の選択はクリアする。
+      const snap = gridSnap();
+      movePlayhead(snapRound(rulerDrag.startRawPulse, snap));
+      clearSelection();
+    }
+    rulerDrag = null;
   });
 
   canvas.addEventListener(

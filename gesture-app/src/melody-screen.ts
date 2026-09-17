@@ -28,7 +28,7 @@ import { pushUndo } from './undo-manager.ts';
 import { PULSES_PER_BAR, PULSES_PER_BEAT, SEQUENCE_TOTAL_PULSES, snapFloor, snapCeil, snapRound } from './grid-units.ts';
 import { gridSnap, zoomStep } from './grid-zoom.svelte.ts';
 import { SB_THICKNESS, computeThumb, isInThumb, scrollFromThumbStart, pageJumpDirection, type ScrollbarGeom } from './scrollbar.ts';
-import { RULER_H, drawRuler, updateLivePulse, movePlayhead } from './timeline.ts';
+import { RULER_H, RULER_DRAG_THRESHOLD_PX, drawRuler, updateLivePulse, movePlayhead, setSelection, clearSelection } from './timeline.ts';
 import type { MelodyNote } from './types.ts';
 
 // MIDI Import/Export（project-file.js）が量子化の範囲・単位として参照するため、
@@ -82,6 +82,14 @@ interface ScrollDragState {
 }
 
 let scrollDrag: ScrollDragState | null = null;
+
+interface RulerDragState {
+  startClientX: number;
+  startRawPulse: number; // mousedown時点の連続パルス位置（スナップ前）
+  moved: boolean;
+}
+
+let rulerDrag: RulerDragState | null = null;
 
 onMelodyStepTick((step) => {
   currentStep = step;
@@ -272,7 +280,7 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
     if (e.clientY >= gridBottomForRuler && e.clientY < gridBottomForRuler + RULER_H && e.clientX >= LABEL_WIDTH && e.clientX < LABEL_WIDTH + visibleCols * CELL_W) {
       const snap = gridSnap();
       const rawPulse = scrollStep + ((e.clientX - LABEL_WIDTH) / CELL_W) * snap;
-      movePlayhead(snapRound(rawPulse, snap));
+      rulerDrag = { startClientX: e.clientX, startRawPulse: rawPulse, moved: false };
       return;
     }
 
@@ -394,6 +402,28 @@ export function setupMelodyScreen(canvas: HTMLCanvasElement): { draw: (ctx: Canv
 
   window.addEventListener('mouseup', () => {
     scrollDrag = null;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!rulerDrag) return;
+    if (!rulerDrag.moved && Math.abs(e.clientX - rulerDrag.startClientX) < RULER_DRAG_THRESHOLD_PX) return;
+    rulerDrag.moved = true;
+    const snap = gridSnap();
+    const rawPulseNow = scrollStep + ((e.clientX - LABEL_WIDTH) / CELL_W) * snap;
+    const start = snapFloor(Math.min(rulerDrag.startRawPulse, rawPulseNow), snap);
+    const end = snapCeil(Math.max(rulerDrag.startRawPulse, rawPulseNow), snap);
+    setSelection(clamp(start, 0, TOTAL_STEPS), clamp(end, 0, TOTAL_STEPS));
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!rulerDrag) return;
+    if (!rulerDrag.moved) {
+      // ドラッグせずに離した＝単純クリック。再生位置移動のみを行い、既存の選択はクリアする。
+      const snap = gridSnap();
+      movePlayhead(snapRound(rulerDrag.startRawPulse, snap));
+      clearSelection();
+    }
+    rulerDrag = null;
   });
 
   return { draw: (ctx: CanvasRenderingContext2D) => draw(ctx, canvas) };

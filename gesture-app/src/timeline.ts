@@ -16,6 +16,8 @@ import { setPlaybackStartPulse } from './midi.ts';
 import { sequencerState } from './sequencer-state.svelte.ts';
 
 export const RULER_H = 18;
+/** ルーラー上でドラッグと単純クリックを区別するしきい値（px、他画面のドラッグ判定と揃える）。 */
+export const RULER_DRAG_THRESHOLD_PX = 4;
 
 interface Selection {
   start: number;
@@ -74,10 +76,23 @@ export interface RulerLayout {
 export function drawRuler(ctx: CanvasRenderingContext2D, layout: RulerLayout): void {
   const { left, right, top, gridTop, gridBottom, pulseToX, visibleStartPulse, visibleEndPulse } = layout;
 
+  const sel = selection;
+  if (sel) {
+    const s = Math.max(sel.start, visibleStartPulse);
+    const e = Math.min(sel.end, visibleEndPulse);
+    if (e > s) {
+      const x0 = pulseToX(s);
+      const x1 = pulseToX(e);
+      // グリッド本体は薄い縦帯、ルーラー帯は濃いめでハイライトする（どの範囲が対象か
+      // 一目で分かるように、CLAUDE.mdタイムライン・ルーラー計画の確定仕様）。
+      ctx.fillStyle = 'rgba(120,170,255,0.12)';
+      ctx.fillRect(x0, gridTop, x1 - x0, gridBottom - gridTop);
+    }
+  }
+
   ctx.fillStyle = '#1c1c1c';
   ctx.fillRect(left, top, right - left, RULER_H);
 
-  const sel = selection;
   if (sel) {
     const s = Math.max(sel.start, visibleStartPulse);
     const e = Math.min(sel.end, visibleEndPulse);
