@@ -410,6 +410,10 @@ fn sync_editor_state(
         state.presets = presets;
     }
 
+    if let Some(update) = shared.take_program_selection_update() {
+        apply_program_selection_update(state, update);
+    }
+
     if let Some((slot, values)) = shared.take_fx_if_dirty() {
         let fx = master.slot_mut((slot as usize).min(EFFECT_SLOT_COUNT - 1));
         fx.set_reverb_send(values[shared::FX_REVERB_SEND]);
@@ -431,6 +435,20 @@ fn sync_editor_state(
     if let Some(v) = shared.take_env_amp_epsilon_if_dirty() {
         op505_midi::apply_engine_control(engine, op505_midi::EngineControlTarget::EnvAmpEpsilon, v);
     }
+}
+
+/// エディタのPRESETS選択（bank, program）を、そのチャンネルの実際のBank Select+Program
+/// Change状態へ反映する（gesture-appの`resolve_program_name`/`channel_program_selection`
+/// クエリが、音色エディタ上で選び直した音色を正しく拾えるようにするため）。リズムチャンネルは
+/// programの意味がノート単位のインストゥルメント選択でありキット切替とは異なるため対象外
+/// （`EditorApp`の`EditTarget::program`と同じ非対称、ユーザー確認済み）。
+fn apply_program_selection_update(state: &mut MidiState, (chi, bank, program): (usize, u16, u8)) {
+    if chi >= state.channels.len() || state.channels[chi].program_state.is_rhythm() {
+        return;
+    }
+    state.channels[chi].program_state.bank_select_msb((bank >> 7) as u8);
+    state.channels[chi].program_state.bank_select_lsb((bank & 0x7f) as u8);
+    state.channels[chi].program_change(program);
 }
 
 /// キューに溜まったMIDIメッセージを全て取り出し、エンジンへ適用する。
@@ -861,6 +879,48 @@ fn handle_control_change(
 // MIDI入力ポートへの接続・選択は sources::midir_src（旧connect_midi_input/select_port_index、
 // コマンドライン引数+stdin対話）へ移動した。設定ファイル（config.rs）+
 // 「ポートが1個だけなら自動選択」方式に置き換え、タスクトレイ化後もstdin無しで動く。
+
+#[cfg(test)]
+mod apply_program_selection_update_tests {
+    use super::*;
+    use op505_midi::RHYTHM_BANK_MSB;
+
+    fn default_state() -> MidiState {
+        MidiState::new(Op505PresetBank::default(), Op505Patch::default())
+    }
+
+    #[test]
+    fn melodic_channel_updates_program_state() {
+        let mut state = default_state();
+        apply_program_selection_update(&mut state, (2, 3, 7));
+        assert_eq!(state.channels[2].program_state.selection(), ProgramSelection::Melodic { bank: 3, program: 7 });
+    }
+
+    #[test]
+    fn out_of_range_channel_is_ignored_without_panicking() {
+        let mut state = default_state();
+        apply_program_selection_update(&mut state, (16, 3, 7));
+    }
+
+    #[test]
+    fn rhythm_channel_is_ignored_to_avoid_kit_number_confusion() {
+        let mut state = default_state();
+        // ch10をリズムモードへ明示的に入れる（GM2 Bank Select MSB=120+PC）。
+        state.channels[9].program_state.bank_select_msb(RHYTHM_BANK_MSB);
+        state.channels[9].program_change(2); // kit=2で開始
+        assert_eq!(state.channels[9].program_state.selection(), ProgramSelection::Rhythm { kit: 2 });
+
+        // エディタでPRESETSからprogram=36(例: キック)を選んでも、キット切替として
+        // 誤解釈してはいけない（programの意味がノート単位のインストゥルメント選択であり
+        // キット番号ではないため）。
+        apply_program_selection_update(&mut state, (9, 3, 36));
+        assert_eq!(
+            state.channels[9].program_state.selection(),
+            ProgramSelection::Rhythm { kit: 2 },
+            "リズムチャンネルは無視され、キット番号が書き換わらないはず"
+        );
+    }
+}
 
 #[cfg(test)]
 mod base_patch_for_tests {

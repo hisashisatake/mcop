@@ -93,6 +93,18 @@ pub struct SharedEditState {
     /// チャンネル/バンク/プログラム。GUIスレッドが低頻度で読み書きするだけなので`Mutex`で十分
     /// （`patch`等のオーディオスレッド境界越しRwLockパターンとは無関係）。
     open_target: Mutex<Option<EditTarget>>,
+
+    /// エディタのPRESETS選択（bank, program）が変わったとき、GUIスレッドが積む
+    /// `(channel, bank, program)`。オーディオスレッドが実際のBank Select+Program Changeとして
+    /// `state.channels[channel].program_state`へ適用する（gesture-appが「今このチャンネルで
+    /// 鳴っている音」を正しく問い合わせられるようにするため。エディタで音色エディタ上の
+    /// PRESETS選択を変えても、従来は実際のProgram Change状態＝クエリ結果が追随しなかった）。
+    /// リズムチャンネル（programがノート単位のインストゥルメント選択でありキット切替とは
+    /// 意味が異なる）はオーディオスレッド側で`is_rhythm()`により除外する。
+    /// `patch`/`presets`と同じRwLock+dirtyフラグ+`try_read()`パターン（オーディオスレッドは
+    /// 決してブロックしない、モジュールdoc参照）。
+    program_selection_update: RwLock<Option<(usize, u16, u8)>>,
+    program_selection_update_dirty: AtomicBool,
 }
 
 /// [`SharedEditState::program_selections`]の1要素の符号化。タグビット(31)で
@@ -178,6 +190,8 @@ impl SharedEditState {
             master_meter: Arc::new(MeterBridge::new()),
             program_selections: std::array::from_fn(|_| AtomicU32::new(0)),
             open_target: Mutex::new(None),
+            program_selection_update: RwLock::new(None),
+            program_selection_update_dirty: AtomicBool::new(false),
         }
     }
 
@@ -332,6 +346,30 @@ impl SharedEditState {
     /// エディタの`ui()`冒頭で毎フレーム呼ぶ。積まれていれば一度だけ取り出す。
     pub fn take_open_target(&self) -> Option<EditTarget> {
         self.open_target.lock().unwrap().take()
+    }
+
+    /// エディタのPRESETS選択（bank, program）が変わったときに呼ぶ。オーディオスレッドが
+    /// 次ブロックで消費するまで保持される（`take_program_selection_update`参照）。
+    pub fn request_program_selection_update(&self, channel: usize, bank: u16, program: u8) {
+        *self.program_selection_update.write().unwrap() = Some((channel, bank, program));
+        self.program_selection_update_dirty.store(true, Ordering::Release);
+    }
+
+    // ---- オーディオスレッド側API（続き） ----
+
+    /// `sync_editor_state`から毎ブロック呼ぶ。dirtyが立っていれば`try_read()`で取り込む
+    /// （`take_patch_if_dirty`と同じ、取得に失敗したら次ブロックで再挑戦するリトライ方式）。
+    pub fn take_program_selection_update(&self) -> Option<(usize, u16, u8)> {
+        if !self.program_selection_update_dirty.swap(false, Ordering::Acquire) {
+            return None;
+        }
+        match self.program_selection_update.try_read() {
+            Ok(guard) => *guard,
+            Err(_) => {
+                self.program_selection_update_dirty.store(true, Ordering::Release);
+                None
+            }
+        }
     }
 
     // ---- クエリスレッド側API（query_server.rsから呼ぶ。ブロックしてよい） ----
@@ -514,6 +552,15 @@ mod tests {
 
         let info = shared.resolve_program_name(4);
         assert_eq!(info.status, ProgramStatus::Editing);
+    }
+
+    #[test]
+    fn program_selection_update_round_trips_and_is_consumed_once() {
+        let shared = SharedEditState::new(Op505Patch::default(), Op505PresetBank::default(), 0);
+        assert!(shared.take_program_selection_update().is_none());
+        shared.request_program_selection_update(2, 3, 7);
+        assert_eq!(shared.take_program_selection_update(), Some((2, 3, 7)));
+        assert!(shared.take_program_selection_update().is_none(), "一度取り出したら消費されるはず");
     }
 
     #[test]

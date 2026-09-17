@@ -54,6 +54,12 @@ pub struct EditorApp {
     /// 確認ダイアログで「閉じる」が選ばれた後に送り直す`ViewportCommand::Close`を、
     /// 同じ未保存チェックで再度横取りしない（無限ループ防止）ためのフラグ。
     close_confirmed: bool,
+    /// 直近で`shared.request_program_selection_update`へ通知した`(channel, bank, program)`。
+    /// `ui()`毎フレーム`(edit_channel, presets.bank(), presets.program())`と比較し、変化して
+    /// いれば再通知する（gesture-app等が音色エディタでのPRESETS選択変更を拾えるようにする、
+    /// `shared.rs`のdoc参照）。チャンネルも比較に含めるのは、たまたま同じ(bank,program)へ
+    /// 別チャンネルを開いた場合でも確実に再通知するため。
+    pushed_program_selection: Option<(usize, u16, u8)>,
 }
 
 impl EditorApp {
@@ -83,6 +89,7 @@ impl EditorApp {
             edit_channel: None,
             pending_close_confirm: None,
             close_confirmed: false,
+            pushed_program_selection: None,
         }
     }
 
@@ -341,6 +348,20 @@ impl eframe::App for EditorApp {
 
         if self.edit_channel != previous_edit_channel {
             self.shared.set_edit_channel(self.edit_channel);
+        }
+
+        // PRESETS選択（bank, program）が変わったら、そのチャンネルの実際のProgram Change状態へ
+        // 反映するようオーディオスレッドへ通知する（gesture-app等が音色エディタ上で選び直した
+        // 音色を正しく問い合わせられるようにするため。`has_selection`がfalseの間（バンクタブを
+        // 開いただけで何も選んでいない見た目上の表示）は通知しない、`shared.rs`のdoc参照）。
+        if let Some(chi) = self.edit_channel {
+            if self.presets.has_selection() {
+                let current = (chi, self.presets.bank(), self.presets.program());
+                if self.pushed_program_selection != Some(current) {
+                    self.pushed_program_selection = Some(current);
+                    self.shared.request_program_selection_update(current.0, current.1, current.2);
+                }
+            }
         }
 
         if self.dirty.get() {
