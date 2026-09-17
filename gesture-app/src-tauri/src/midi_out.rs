@@ -440,6 +440,23 @@ fn ensure_clock_thread() {
     });
 }
 
+/// ノートの終端(start_step+length_steps)から、note_offを発行すべき`melody_pulse`（0〜767）を
+/// 求める。ループ末尾ちょうど(768)で終わる/それを超えるノートは、生パルス表現では768という
+/// 値そのものが存在しない（`melody_pulse`は0〜767しか取らない）ため、`.min()`で768へ
+/// クランプするだけだと`end_pulse == melody_pulse`が永久に成立せずnote_offが発行されなくなる
+/// （実機確認・修正、2026-09-17）。ループ末尾ちょうどは次ラップの先頭(0)と同じ瞬間なので
+/// そこへ写す——次ラップの0番地でのnote_on走査より前にこのnote_offが発火する順序
+/// （`retain`は`clock_loop`内の該当ブロック先頭で毎回先に評価される）なので、リリース→
+/// 次の発音という自然な順序になる。
+fn melody_note_off_pulse(start_step: u16, length_steps: u16) -> u16 {
+    let end = (start_step + length_steps).min(MELODY_TOTAL_STEPS as u16);
+    if end == MELODY_TOTAL_STEPS as u16 {
+        0
+    } else {
+        end
+    }
+}
+
 /// BPM未設定の間は100ms間隔で設定の有無だけポーリングし、設定後は24 PPQN間隔で
 /// 0xF8(Timing Clock)を送り続ける。`thread::sleep`のジッターはstandalone側の
 /// 移動平均で吸収される想定のため、高精度タイマーは使わない。
@@ -557,8 +574,7 @@ fn clock_loop() {
                         _ => RHYTHM_VELOCITY_NORMAL,
                     };
                     note_on(MELODY_CHANNEL, n.pitch, velocity);
-                    let end = (n.start_step + n.length_steps).min(MELODY_TOTAL_STEPS as u16);
-                    active_melody_notes.push((n.pitch, end));
+                    active_melody_notes.push((n.pitch, melody_note_off_pulse(n.start_step, n.length_steps)));
                 }
             }
             if clock_total % MELODY_STEP_EVENT_PULSES == 0 {
@@ -573,6 +589,38 @@ fn clock_loop() {
         std::thread::sleep(interval);
 
         clock_total = (clock_total + 1) % SEQUENCE_TOTAL_PULSES;
+    }
+}
+
+#[cfg(test)]
+mod melody_note_off_pulse_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_note_ends_at_start_plus_length() {
+        assert_eq!(melody_note_off_pulse(100, 24), 124);
+    }
+
+    #[test]
+    fn note_ending_exactly_at_loop_end_wraps_to_zero() {
+        // 744 + 24 = 768（8小節ループのちょうど末尾）。
+        assert_eq!(melody_note_off_pulse(744, 24), 0, "ループ末尾ちょうどは次ラップの先頭(0)として扱うはず");
+    }
+
+    #[test]
+    fn note_overshooting_past_loop_end_is_capped_then_wrapped() {
+        // 700 + 200 = 900 > 768。resizeドラッグでオーバーシュートした想定。
+        assert_eq!(melody_note_off_pulse(700, 200), 0, "768へクランプしたうえで0へ写るはず");
+    }
+
+    #[test]
+    fn note_starting_at_zero_spanning_the_whole_loop_ends_at_zero() {
+        assert_eq!(melody_note_off_pulse(0, 768), 0);
+    }
+
+    #[test]
+    fn note_ending_one_pulse_before_loop_end_does_not_wrap() {
+        assert_eq!(melody_note_off_pulse(744, 23), 767, "767は0埋め対象ではない実在するパルスのはず");
     }
 }
 
