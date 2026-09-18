@@ -5,6 +5,7 @@
 // 参照、Undo/Redoの不変スナップショット前提とSvelteの深いプロキシが食い違うため）。
 
 import type { Mode } from './types.ts';
+import { DEFAULT_STEP_UNIT_INDEX } from './grid-units.ts';
 
 export interface ChordSettings {
   tonicMidi: number;
@@ -14,6 +15,8 @@ export interface ChordSettings {
   autoVoicing: boolean;
   baseOctave: number;
   altHeld: boolean; // 押している間だけ自動転回ON/OFFを反転する一時トグルの実際の押下状態
+  /** コマ送り再生（⏭）の一時停止単位。grid-units.tsのSTEP_UNIT_PULSES/STEP_UNIT_LABELSの添字。 */
+  stepUnitIndex: number;
 }
 
 export const chordSettings: ChordSettings = $state({
@@ -24,4 +27,5 @@ export const chordSettings: ChordSettings = $state({
   autoVoicing: false,
   baseOctave: 0,
   altHeld: false,
+  stepUnitIndex: DEFAULT_STEP_UNIT_INDEX,
 });

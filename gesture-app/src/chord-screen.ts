@@ -60,7 +60,7 @@ import { pushUndo } from './undo-manager.ts';
 import { chordSettings } from './chord-settings.svelte.ts';
 import { RULER_H, drawRuler, displayPulse, movePlayhead } from './timeline.ts';
 import { melodySlotAtPulse, melodyWeightsForSlot, melodyAnalysisVersion } from './melody-analysis.ts';
-import { SEQUENCE_TOTAL_PULSES, PULSES_PER_BEAT, snapRound } from './grid-units.ts';
+import { SEQUENCE_TOTAL_PULSES, STEP_UNIT_PULSES, snapRound } from './grid-units.ts';
 import { sequencerState } from './sequencer-state.svelte.ts';
 import { stepAdvance } from './transport.ts';
 import { onSequencerPaused } from './midi.ts';
@@ -568,7 +568,8 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
     const layout = computeLayout(canvas);
     if (e.clientX >= layout.rulerLeft && e.clientX < layout.rulerRight && e.clientY >= layout.rulerTop && e.clientY < layout.rulerTop + RULER_H) {
       const rawPulse = rulerXToPulse(layout, e.clientX);
-      movePlayhead(Math.max(0, Math.min(SEQUENCE_TOTAL_PULSES - 1, snapRound(rawPulse, PULSES_PER_BEAT))));
+      const stepUnit = STEP_UNIT_PULSES[chordSettings.stepUnitIndex];
+      movePlayhead(Math.max(0, Math.min(SEQUENCE_TOTAL_PULSES - 1, snapRound(rawPulse, stepUnit))));
       return;
     }
 

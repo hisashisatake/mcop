@@ -1,11 +1,13 @@
 <script lang="ts">
-  // 画面ごとの詳細設定パネル。CHORD画面: 候補行数/列数・自動転回・基準オクターブ
-  // （chord-settings.svelte.tsの$stateを読み、変更はchord-screen.tsの関数経由）。
+  // 画面ごとの詳細設定パネル。CHORD画面: 候補行数/列数・自動転回・基準オクターブ・コマ送り単位
+  // （chord-settings.svelte.tsの$stateを読み、変更はchord-screen.ts/transport.tsの関数経由）。
   // RHYTHM画面: メトロノームON/OFF（他モジュールから読まれないため、ここではローカル状態）。
   import { screenState } from '../screens.svelte.ts';
   import { chordSettings } from '../chord-settings.svelte.ts';
   import { setAssistRows, setAssistCols, setAutoVoicing, setBaseOctave, effectiveAutoVoicing } from '../chord-screen.ts';
+  import { setStepUnit } from '../transport.ts';
   import { setMetronomeEnabled } from '../midi.ts';
+  import { STEP_UNIT_LABELS } from '../grid-units.ts';
 
   let metronomeOn = $state(false);
 
@@ -58,6 +60,14 @@
           value={chordSettings.baseOctave}
           oninput={(e) => setBaseOctave(parseInt((e.currentTarget as HTMLInputElement).value, 10))}
         />
+      </div>
+      <div class="program-row">
+        コマ送り単位
+        <select id="step-unit" value={chordSettings.stepUnitIndex} onchange={(e) => setStepUnit(parseInt((e.currentTarget as HTMLSelectElement).value, 10))}>
+          {#each STEP_UNIT_LABELS as label, i (label)}
+            <option value={i}>{label}</option>
+          {/each}
+        </select>
       </div>
     </div>
   {:else if screenState.active === 'rhythm'}

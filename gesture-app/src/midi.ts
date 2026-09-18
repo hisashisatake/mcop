@@ -126,6 +126,11 @@ export function stepAdvance(): Promise<unknown> {
   return invoke('step_advance');
 }
 
+/** コード画面の詳細設定「コマ送り単位」ドロップダウンから呼ぶ。 */
+export function setStepUnitPulses(pulses: number): Promise<unknown> {
+  return invoke('set_step_unit_pulses', { pulses });
+}
+
 /** Rust側`clock_loop`がコマ送りの自動一時停止で送る`sequencer-paused`を購読する
  * （payload=一時停止した位置のパルス、表示には使わずタイミング通知としてのみ使う）。 */
 export function onSequencerPaused(callback: (payload: number) => void): void {

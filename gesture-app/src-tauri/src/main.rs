@@ -249,6 +249,12 @@ fn step_advance() {
     midi_out::step_advance();
 }
 
+/// コード画面の詳細設定「コマ送り単位」ドロップダウンから呼ぶ（詳細は`midi_out::set_step_unit_pulses`）。
+#[tauri::command]
+fn set_step_unit_pulses(pulses: u32) {
+    midi_out::set_step_unit_pulses(pulses);
+}
+
 /// メロディ画面で新規ノートを作成したときに呼ばれる。`id`はJS側が採番した一意な値。
 #[tauri::command]
 fn add_melody_note(id: u32, start_step: u16, length_steps: u16, pitch: u8, level: u8) {
@@ -298,6 +304,7 @@ fn main() {
             set_playback_start_pulse,
             enter_step_mode,
             step_advance,
+            set_step_unit_pulses,
             add_melody_note,
             update_melody_note,
             delete_melody_note,

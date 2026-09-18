@@ -10,6 +10,8 @@
   import { play, stop, enterStepMode } from '../transport.ts';
   import { getNotes } from '../melody-screen.ts';
   import { analyzeMelodyForChordHints } from '../melody-analysis.ts';
+  import { chordSettings } from '../chord-settings.svelte.ts';
+  import { STEP_UNIT_LABELS } from '../grid-units.ts';
 
   const MIN_BPM = 40;
   const MAX_BPM = 300;
@@ -19,6 +21,7 @@
   let tapTimestamps: number[] = [];
 
   const tempoLabel = $derived(tempoState.bpm == null ? '— BPM' : `${Math.round(tempoState.bpm)} BPM`);
+  const stepBtnTitle = $derived(`コマ送り再生（候補や過去/未来コードを押すと${STEP_UNIT_LABELS[chordSettings.stepUnitIndex]}分だけ再生して止まる）`);
 
   async function onTapTempo(): Promise<void> {
     const now = performance.now();
@@ -56,7 +59,7 @@
       type="button"
       id="sequencer-step-btn"
       class:active={sequencerState.stepping}
-      title="コマ送り再生（候補や過去/未来コードを押すと1拍分だけ再生して止まる）"
+      title={stepBtnTitle}
       disabled={tempoState.bpm == null}
       onclick={enterStepMode}
     >

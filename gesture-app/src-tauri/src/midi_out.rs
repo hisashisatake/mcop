@@ -425,6 +425,12 @@ static SUPPRESS_JUMP_ON_RESUME: AtomicBool = AtomicBool::new(false);
 /// trueの間だけ意味を持つ（再開時にここへジャンプする）。
 static STEP_PAUSED_AT_PULSE: AtomicU32 = AtomicU32::new(0);
 
+/// コマ送り再生の一時停止単位（パルス数）。既定は`CLOCKS_PER_BAR`（1小節=96）。
+/// コード画面の詳細設定ドロップダウンから`set_step_unit_pulses`で変更する
+/// （1/4=24・1/2=48・1小節=96・2小節=192の4択、JS側`grid-units.ts`の`STEP_UNIT_PULSES`と
+/// 一致させること）。`should_pause_for_step_mode`がこの値の倍数を一時停止位置として使う。
+static STEP_UNIT_PULSES: AtomicU32 = AtomicU32::new(CLOCKS_PER_BAR);
+
 /// リズム/メロディ画面共通の再生/停止ボタン。停止中はステップの発音・
 /// `rhythm-step`/`melody-step`イベント送出を両方止める（クロック自体・メトロノームは
 /// 影響を受けない）。停止した瞬間、鳴りっぱなしのメロディノートは`clock_loop`側で
@@ -462,6 +468,17 @@ pub fn step_advance() {
         return;
     }
     SEQUENCER_RUNNING.store(true, Ordering::Relaxed);
+}
+
+/// コード画面の詳細設定「コマ送り単位」ドロップダウンから呼ぶ。`SEQUENCE_TOTAL_PULSES`
+/// （768）を割り切れない値は無視する（半端な位置で一時停止判定が一度もtrueにならず
+/// コマ送りが止まらなくなることを防ぐ）。JS起動時にも既定値で一度呼び、JS/Rust間の
+/// 初期値のズレ（開発中のページ再読み込みでJS側だけ初期化される等）を防ぐ。
+pub fn set_step_unit_pulses(pulses: u32) {
+    if pulses == 0 || SEQUENCE_TOTAL_PULSES % pulses != 0 {
+        return;
+    }
+    STEP_UNIT_PULSES.store(pulses, Ordering::Relaxed);
 }
 
 /// タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。JS側は
@@ -658,10 +675,10 @@ fn clock_loop() {
 
         clock_total = (clock_total + 1) % SEQUENCE_TOTAL_PULSES;
 
-        // コマ送りモード中、次の拍の頭へ到達したら自動的に一時停止する（コード画面の⏭ボタン）。
-        // `running`はこのイテレーションで実際に1パルス再生したかどうか（停止中に呼ばれた
-        // インクリメントでは一時停止判定自体が意味を持たない）。
-        if should_pause_for_step_mode(running, STEP_MODE_ACTIVE.load(Ordering::Relaxed), clock_total) {
+        // コマ送りモード中、設定単位（既定1小節）の頭へ到達したら自動的に一時停止する
+        // （コード画面の⏭ボタン）。`running`はこのイテレーションで実際に1パルス再生したか
+        // どうか（停止中に呼ばれたインクリメントでは一時停止判定自体が意味を持たない）。
+        if should_pause_for_step_mode(running, STEP_MODE_ACTIVE.load(Ordering::Relaxed), clock_total, STEP_UNIT_PULSES.load(Ordering::Relaxed)) {
             SEQUENCER_RUNNING.store(false, Ordering::Relaxed);
             STEP_PAUSED_AT_PULSE.store(clock_total, Ordering::Relaxed);
             SUPPRESS_JUMP_ON_RESUME.store(true, Ordering::Relaxed);
@@ -675,8 +692,9 @@ fn clock_loop() {
 /// コマ送りモード中、`clock_total`をインクリメントした直後にこの値で自動的に一時停止すべきかを
 /// 判定する（`clock_loop`から切り出した純粋関数、ユニットテスト用）。`running`はインクリメント
 /// 前のこの1パルスを実際に再生していたか（停止中の空回りでは一時停止判定自体が不要）。
-fn should_pause_for_step_mode(running: bool, step_mode_active: bool, clock_total_after_increment: u32) -> bool {
-    running && step_mode_active && clock_total_after_increment % CLOCK_PPQN == 0
+/// `unit_pulses`はコマ送りの一時停止単位（`STEP_UNIT_PULSES`、1/4=24〜2小節=192）。
+fn should_pause_for_step_mode(running: bool, step_mode_active: bool, clock_total_after_increment: u32, unit_pulses: u32) -> bool {
+    running && step_mode_active && unit_pulses > 0 && clock_total_after_increment % unit_pulses == 0
 }
 
 #[cfg(test)]
@@ -717,30 +735,79 @@ mod step_mode_pause_tests {
 
     #[test]
     fn pauses_at_beat_boundary_when_running_and_step_mode_active() {
-        assert!(should_pause_for_step_mode(true, true, CLOCK_PPQN));
+        assert!(should_pause_for_step_mode(true, true, CLOCK_PPQN, CLOCK_PPQN));
     }
 
     #[test]
     fn pauses_at_loop_start_which_is_also_a_beat_boundary() {
-        assert!(should_pause_for_step_mode(true, true, 0));
+        assert!(should_pause_for_step_mode(true, true, 0, CLOCK_PPQN));
     }
 
     #[test]
     fn does_not_pause_mid_beat() {
-        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN - 1));
-        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN + 1));
+        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN - 1, CLOCK_PPQN));
+        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN + 1, CLOCK_PPQN));
     }
 
     #[test]
     fn does_not_pause_when_step_mode_inactive() {
-        assert!(!should_pause_for_step_mode(true, false, CLOCK_PPQN));
+        assert!(!should_pause_for_step_mode(true, false, CLOCK_PPQN, CLOCK_PPQN));
     }
 
     #[test]
     fn does_not_pause_when_not_actually_running_this_pulse() {
         // 停止中もclock_totalは空回りし続けるが、実際に発音していない
         // （running=false）ので一時停止イベントは出さない。
-        assert!(!should_pause_for_step_mode(false, true, CLOCK_PPQN));
+        assert!(!should_pause_for_step_mode(false, true, CLOCK_PPQN, CLOCK_PPQN));
+    }
+
+    #[test]
+    fn bar_unit_pauses_at_96_but_not_at_a_mere_beat_boundary() {
+        // 1小節=96パルス単位のとき、4分音符境界(24)ではまだ止まらず、
+        // 小節境界(96)で初めて止まる。
+        assert!(!should_pause_for_step_mode(true, true, CLOCKS_PER_BAR / 4, CLOCKS_PER_BAR));
+        assert!(should_pause_for_step_mode(true, true, CLOCKS_PER_BAR, CLOCKS_PER_BAR));
+    }
+
+    #[test]
+    fn two_bar_unit_pauses_only_every_other_bar() {
+        assert!(!should_pause_for_step_mode(true, true, CLOCKS_PER_BAR, CLOCKS_PER_BAR * 2));
+        assert!(should_pause_for_step_mode(true, true, CLOCKS_PER_BAR * 2, CLOCKS_PER_BAR * 2));
+    }
+
+    #[test]
+    fn zero_unit_never_pauses() {
+        // set_step_unit_pulsesは0を弾くため実運用では起きないが、防御的に0除算を避ける。
+        assert!(!should_pause_for_step_mode(true, true, 0, 0));
+    }
+}
+
+#[cfg(test)]
+mod step_unit_pulses_tests {
+    use super::*;
+
+    #[test]
+    fn candidate_units_all_divide_sequence_total_pulses() {
+        for candidate in [CLOCK_PPQN, CLOCK_PPQN * 2, CLOCKS_PER_BAR, CLOCKS_PER_BAR * 2] {
+            assert_eq!(SEQUENCE_TOTAL_PULSES % candidate, 0, "{candidate}はSEQUENCE_TOTAL_PULSESの約数のはず");
+        }
+    }
+
+    /// STEP_UNIT_PULSESはプロセス全体で1個の`static`のため、他のテストとの並行実行による
+    /// 競合を避けて1関数にまとめ、最後に必ず既定値（1小節）へ戻す。
+    #[test]
+    fn set_step_unit_pulses_accepts_valid_divisors_and_rejects_the_rest() {
+        set_step_unit_pulses(CLOCK_PPQN);
+        assert_eq!(STEP_UNIT_PULSES.load(Ordering::Relaxed), CLOCK_PPQN, "24(1/4)は受理されるはず");
+
+        set_step_unit_pulses(0);
+        assert_eq!(STEP_UNIT_PULSES.load(Ordering::Relaxed), CLOCK_PPQN, "0は無視され直前の値を保つはず");
+
+        set_step_unit_pulses(SEQUENCE_TOTAL_PULSES + 1); // 約数でない値
+        assert_eq!(STEP_UNIT_PULSES.load(Ordering::Relaxed), CLOCK_PPQN, "約数でない値は無視され直前の値を保つはず");
+
+        set_step_unit_pulses(CLOCKS_PER_BAR); // 既定値へ戻す
+        assert_eq!(STEP_UNIT_PULSES.load(Ordering::Relaxed), CLOCKS_PER_BAR);
     }
 }
 

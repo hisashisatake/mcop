@@ -10,9 +10,17 @@
 // （ユーザー確認済み: コマ送り中の停止は「コマ送りを始めた位置」へ戻る）。
 
 import { sequencerState } from './sequencer-state.svelte.ts';
-import { setSequencerRunning, enterStepMode as invokeEnterStepMode, stepAdvance as invokeStepAdvance, onSequencerPaused } from './midi.ts';
+import {
+  setSequencerRunning,
+  enterStepMode as invokeEnterStepMode,
+  stepAdvance as invokeStepAdvance,
+  setStepUnitPulses,
+  onSequencerPaused,
+} from './midi.ts';
 import { resetRhythmCursor } from './rhythm-screen.ts';
 import { resetMelodyCursor } from './melody-screen.ts';
+import { chordSettings } from './chord-settings.svelte.ts';
+import { STEP_UNIT_PULSES } from './grid-units.ts';
 
 /** ▶ボタン（3画面共通）。コマ送り中でも通常再生中でも、コマ送りを抜けて通常再生する
  * （コマ送りの一時停止中に押した場合は今の位置から続けて通常再生になる、
@@ -50,7 +58,21 @@ export function stepAdvance(): void {
   invokeStepAdvance();
 }
 
+/** コード画面の詳細設定「コマ送り単位」ドロップダウンから呼ぶ。次の一時停止から新しい単位が効く
+ * （今まさに一時停止している位置が新単位の区切りと合わない場合、次の1回だけ半端な長さになる
+ * ことがあるが、それ以降は揃う——ユーザー確認済みの割り切り）。 */
+export function setStepUnit(index: number): void {
+  chordSettings.stepUnitIndex = index;
+  setStepUnitPulses(STEP_UNIT_PULSES[index]);
+}
+
 // `sequencer-paused`は起動時に一度だけ購読する（複数箇所から呼ばれても二重登録しない）。
 onSequencerPaused(() => {
   sequencerState.running = false;
 });
+
+// 起動時にJS側の既定単位をRustへ一度送る。Rust側の既定値（1小節）はJS側の
+// DEFAULT_STEP_UNIT_INDEXと一致させてあるため通常は無変化のno-opだが、開発中のページ
+// 再読み込み（JS側の$stateだけが初期化され、Rustプロセスの状態は保持されたままになる）で
+// 過去のセッションの設定が残っていた場合にJS/Rustの値を強制的に再同期させる目的もある。
+setStepUnitPulses(STEP_UNIT_PULSES[chordSettings.stepUnitIndex]);
