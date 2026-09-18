@@ -403,12 +403,65 @@ static SEQUENCER_RUNNING: AtomicBool = AtomicBool::new(false);
 /// 立ち上がりでこの値を読み、`clock_total`へ反映する。
 static PLAYBACK_START_PULSE: AtomicU32 = AtomicU32::new(0);
 
+/// コード画面の⏭（コマ送り再生）ボタンでONになる。ONの間、`clock_loop`は再生中に拍の頭へ
+/// 到達するたびSEQUENCER_RUNNINGを自動的にfalseへ戻す（1拍だけ鳴らして一時停止を繰り返す）。
+/// ▶/■（`set_sequencer_running`）を押すと必ずOFFへ戻る。
+static STEP_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 次にSEQUENCER_RUNNINGがfalse→trueへ立ち上がる際、`clock_total`をPLAYBACK_START_PULSEへ
+/// ジャンプさせる代わりに`STEP_PAUSED_AT_PULSE`へジャンプすべきか。コマ送りの自動一時停止
+/// 直後（`step_advance`/▶での再開）だけtrueになり、参照したその場で消費してfalseへ戻す
+/// （`clock_loop`内の`swap`）。
+///
+/// **`clock_total`は一時停止中も止まらない**（`SEQUENCER_RUNNING`の状態に関わらず常に
+/// インクリメントし続けるフリーランのカウンタ、`clock_loop`のdoc参照）。そのため「ジャンプを
+/// 省略して現在値をそのまま使う」という実装では、一時停止からのクリック間隔（ユーザーが
+/// 次のコードを選ぶまでの数百ms〜数秒）ぶんだけ位置がドリフトしてしまうバグがあった
+/// （実機確認で発見・修正、2026-09-19）。`STEP_PAUSED_AT_PULSE`に一時停止した瞬間の値を
+/// 明示的に保存し、再開時は必ずそこへジャンプすることでドリフトを防ぐ。
+static SUPPRESS_JUMP_ON_RESUME: AtomicBool = AtomicBool::new(false);
+
+/// コマ送りモードが直近に自動一時停止した`clock_total`の値。`SUPPRESS_JUMP_ON_RESUME`が
+/// trueの間だけ意味を持つ（再開時にここへジャンプする）。
+static STEP_PAUSED_AT_PULSE: AtomicU32 = AtomicU32::new(0);
+
 /// リズム/メロディ画面共通の再生/停止ボタン。停止中はステップの発音・
 /// `rhythm-step`/`melody-step`イベント送出を両方止める（クロック自体・メトロノームは
 /// 影響を受けない）。停止した瞬間、鳴りっぱなしのメロディノートは`clock_loop`側で
 /// note_offされる（`active_melody_notes`参照）。
+///
+/// コマ送りモード（`STEP_MODE_ACTIVE`）は常にOFFへ戻す。停止（`running=false`）の場合は
+/// `SUPPRESS_JUMP_ON_RESUME`もOFFへ戻すため、次に▶を押すと必ず`PLAYBACK_START_PULSE`
+/// （＝コマ送りを何拍進めていても、そのセッションを始めた位置）へジャンプする。
+/// 再生（`running=true`）の場合は`SUPPRESS_JUMP_ON_RESUME`に触れない——コマ送りの
+/// 一時停止中に▶を押した場合はtrueのままなので、今の位置から続けて通常再生に移行できる
+/// （完全停止からの▶はfalseのままなので、従来どおりジャンプする）。
 pub fn set_sequencer_running(running: bool) {
+    STEP_MODE_ACTIVE.store(false, Ordering::Relaxed);
+    if !running {
+        SUPPRESS_JUMP_ON_RESUME.store(false, Ordering::Relaxed);
+    }
     SEQUENCER_RUNNING.store(running, Ordering::Relaxed);
+}
+
+/// コード画面の⏭ボタン。コマ送りモードへ入る。既に再生中なら`clock_loop`が次の拍の頭で
+/// 自動的に一時停止するようになるだけでその場では止めない。停止中なら位置はそのまま、
+/// `step_advance`が呼ばれるまで待機する。
+pub fn enter_step_mode() {
+    STEP_MODE_ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// コマ送りモード中、候補コード等のクリックで1拍分進める。直前の1拍がまだ鳴っている最中
+/// （＝再生中）なら何もしない——その回はどのみち次の拍の頭で自動的に一時停止する。
+/// コマ送りモードでなければ何もしない。
+pub fn step_advance() {
+    if !STEP_MODE_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    if SEQUENCER_RUNNING.load(Ordering::Relaxed) {
+        return;
+    }
+    SEQUENCER_RUNNING.store(true, Ordering::Relaxed);
 }
 
 /// タイムライン・ルーラー行のクリック/ドラッグで次回再生開始位置を設定する。JS側は
@@ -479,9 +532,18 @@ fn melody_note_off_pulse(start_step: u16, length_steps: u16) -> u16 {
 /// 逆変換がそのまま768パルス全域で成立する）。
 ///
 /// `clock_total`は`SEQUENCER_RUNNING`の状態に関わらず常時回り続けるフリーランのカウンタ
-/// だが、停止→再生の立ち上がり（`!was_running && running`）でだけ`PLAYBACK_START_PULSE`へ
-/// ジャンプする（タイムライン・ルーラー行での「再生位置移動」の実体、再生中のライブseekは
-/// しない設計）。
+/// だが、停止→再生の立ち上がり（`!was_running && running`）でだけジャンプする——通常は
+/// `PLAYBACK_START_PULSE`へ（タイムライン・ルーラー行での「再生位置移動」の実体、再生中の
+/// ライブseekはしない設計）。ただし`SUPPRESS_JUMP_ON_RESUME`が立っている場合は代わりに
+/// `STEP_PAUSED_AT_PULSE`へジャンプする（コマ送りの一時停止から続きを再生する場合）。
+/// **どちらのケースも必ず明示的にジャンプする**——`clock_total`は一時停止中も止まらず
+/// 増え続けるため、「ジャンプを省略して現在値のまま」ではクリック間隔ぶん位置がドリフト
+/// してしまう（詳細は`SUPPRESS_JUMP_ON_RESUME`のdoc参照）。
+///
+/// コマ送りモード（`STEP_MODE_ACTIVE`）中は、1パルス処理するごとに（＝`clock_total`を
+/// インクリメントした直後に）次の拍の頭へ到達したかを`should_pause_for_step_mode`で判定し、
+/// 到達していれば`SEQUENCER_RUNNING`をfalseへ戻して一時停止する。停止した瞬間だけ
+/// `sequencer-paused`を送出し、JS側（chord-screen.ts）が鳴りっぱなしのコードを止める。
 fn clock_loop() {
     let mut clock_total: u32 = 0;
     // 発音中（note_on済みでまだnote_offしていない）メロディノートの(pitch, 終了ステップ)。
@@ -501,7 +563,13 @@ fn clock_loop() {
             // 停止→再生の立ち上がり: 次回再生開始位置へジャンプする。ライブseekはしない設計
             // のため、位置の書き換えはこのタイミングだけで行う（`clock_in_bar`を求める前に
             // 代入すること。後から代入すると今回のイテレーションが1パルスずれる）。
-            clock_total = PLAYBACK_START_PULSE.load(Ordering::Relaxed) % SEQUENCE_TOTAL_PULSES;
+            // SUPPRESS_JUMP_ON_RESUMEが立っていれば消費して、通常のPLAYBACK_START_PULSEでは
+            // なくSTEP_PAUSED_AT_PULSE（コマ送りが直近に一時停止した位置）へジャンプする。
+            clock_total = if SUPPRESS_JUMP_ON_RESUME.swap(false, Ordering::Relaxed) {
+                STEP_PAUSED_AT_PULSE.load(Ordering::Relaxed)
+            } else {
+                PLAYBACK_START_PULSE.load(Ordering::Relaxed) % SEQUENCE_TOTAL_PULSES
+            };
         }
         let clock_in_bar = clock_total % CLOCKS_PER_BAR;
 
@@ -589,7 +657,26 @@ fn clock_loop() {
         std::thread::sleep(interval);
 
         clock_total = (clock_total + 1) % SEQUENCE_TOTAL_PULSES;
+
+        // コマ送りモード中、次の拍の頭へ到達したら自動的に一時停止する（コード画面の⏭ボタン）。
+        // `running`はこのイテレーションで実際に1パルス再生したかどうか（停止中に呼ばれた
+        // インクリメントでは一時停止判定自体が意味を持たない）。
+        if should_pause_for_step_mode(running, STEP_MODE_ACTIVE.load(Ordering::Relaxed), clock_total) {
+            SEQUENCER_RUNNING.store(false, Ordering::Relaxed);
+            STEP_PAUSED_AT_PULSE.store(clock_total, Ordering::Relaxed);
+            SUPPRESS_JUMP_ON_RESUME.store(true, Ordering::Relaxed);
+            if let Some(handle) = APP_HANDLE.get() {
+                let _ = handle.emit("sequencer-paused", clock_total);
+            }
+        }
     }
+}
+
+/// コマ送りモード中、`clock_total`をインクリメントした直後にこの値で自動的に一時停止すべきかを
+/// 判定する（`clock_loop`から切り出した純粋関数、ユニットテスト用）。`running`はインクリメント
+/// 前のこの1パルスを実際に再生していたか（停止中の空回りでは一時停止判定自体が不要）。
+fn should_pause_for_step_mode(running: bool, step_mode_active: bool, clock_total_after_increment: u32) -> bool {
+    running && step_mode_active && clock_total_after_increment % CLOCK_PPQN == 0
 }
 
 #[cfg(test)]
@@ -621,6 +708,39 @@ mod melody_note_off_pulse_tests {
     #[test]
     fn note_ending_one_pulse_before_loop_end_does_not_wrap() {
         assert_eq!(melody_note_off_pulse(744, 23), 767, "767は0埋め対象ではない実在するパルスのはず");
+    }
+}
+
+#[cfg(test)]
+mod step_mode_pause_tests {
+    use super::*;
+
+    #[test]
+    fn pauses_at_beat_boundary_when_running_and_step_mode_active() {
+        assert!(should_pause_for_step_mode(true, true, CLOCK_PPQN));
+    }
+
+    #[test]
+    fn pauses_at_loop_start_which_is_also_a_beat_boundary() {
+        assert!(should_pause_for_step_mode(true, true, 0));
+    }
+
+    #[test]
+    fn does_not_pause_mid_beat() {
+        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN - 1));
+        assert!(!should_pause_for_step_mode(true, true, CLOCK_PPQN + 1));
+    }
+
+    #[test]
+    fn does_not_pause_when_step_mode_inactive() {
+        assert!(!should_pause_for_step_mode(true, false, CLOCK_PPQN));
+    }
+
+    #[test]
+    fn does_not_pause_when_not_actually_running_this_pulse() {
+        // 停止中もclock_totalは空回りし続けるが、実際に発音していない
+        // （running=false）ので一時停止イベントは出さない。
+        assert!(!should_pause_for_step_mode(false, true, CLOCK_PPQN));
     }
 }
 

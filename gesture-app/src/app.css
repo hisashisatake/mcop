@@ -89,6 +89,10 @@ body { background: #111; color: #eee; font-family: monospace; overflow: hidden; 
 }
 #menu-bar button:hover { background: rgba(255,255,255,0.08); }
 #menu-bar button:disabled { opacity: 0.35; cursor: default; background: transparent; }
+/* コマ送り再生（⏭）モード中の視覚的な目印。1拍ごとにrunning/stepping=trueとfalseを
+   行き来しても見た目が点滅しないよう、モード自体（stepping）にだけ連動させる。 */
+#menu-bar button.active { background: rgba(120,170,255,0.28); color: #fff; }
+#menu-bar button.active:hover { background: rgba(120,170,255,0.4); }
 /* テンポ表示+タップテンポボタンはバー右端へ寄せる（左側の☰・画面アイコン群とは独立した
    グループ）。グループ先頭要素（テンポ表示）へmargin-left: autoを付けることで、
    このグループ全体を右端へ押し出す。 */
