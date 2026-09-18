@@ -115,6 +115,29 @@ export function setPlaybackStartPulse(pulse: number): Promise<unknown> {
   return invoke('set_playback_start_pulse', { pulse });
 }
 
+/** コード画面の⏭ボタン。コマ送りモードへ入る（詳細はtransport.ts）。 */
+export function enterStepMode(): Promise<unknown> {
+  pushLog('sequencer step-mode enter');
+  return invoke('enter_step_mode');
+}
+
+/** コマ送りモード中、候補コード等のクリックで1拍分進める。 */
+export function stepAdvance(): Promise<unknown> {
+  return invoke('step_advance');
+}
+
+/** コード画面の詳細設定「コマ送り単位」ドロップダウンから呼ぶ。 */
+export function setStepUnitPulses(pulses: number): Promise<unknown> {
+  return invoke('set_step_unit_pulses', { pulses });
+}
+
+/** Rust側`clock_loop`がコマ送りの自動一時停止で送る`sequencer-paused`を購読する
+ * （payload=一時停止した位置のパルス、表示には使わずタイミング通知としてのみ使う）。 */
+export function onSequencerPaused(callback: (payload: number) => void): void {
+  if (!isTauri()) return;
+  listen<number>('sequencer-paused', (event) => callback(event.payload));
+}
+
 /** メロディ画面で新規ノートを作成する。`id`はJS側（melody-screen.js）が採番した
  * 一意な値。実際の発音判定はRust側`clock_loop`が持つ共有ノートリストへの
  * 書き込みのみ行う。 */

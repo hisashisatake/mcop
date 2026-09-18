@@ -1,15 +1,17 @@
 <script lang="ts">
-  // 常時表示のメニューバー。☰でドロワー開閉、RHYTHM/MELODY画面では再生/停止アイコンを表示、
-  // 右端にテンポ表示とタップテンポボタン（MC-505のタップボタン相当）。
+  // 常時表示のメニューバー。☰でドロワー開閉、3画面共通の再生/停止アイコンとコード画面専用の
+  // コマ送り再生アイコンを表示、右端にテンポ表示とタップテンポボタン（MC-505のタップボタン相当）。
 
   import { toggleDrawer } from '../drawer-state.svelte.ts';
   import { screenState } from '../screens.svelte.ts';
   import { tempoState, setBpm } from '../tempo-state.svelte.ts';
   import { sequencerState } from '../sequencer-state.svelte.ts';
-  import { setSequencerRunning, tapTempo } from '../midi.ts';
-  import { resetRhythmCursor } from '../rhythm-screen.ts';
-  import { resetMelodyCursor, getNotes } from '../melody-screen.ts';
+  import { tapTempo } from '../midi.ts';
+  import { play, stop, enterStepMode } from '../transport.ts';
+  import { getNotes } from '../melody-screen.ts';
   import { analyzeMelodyForChordHints } from '../melody-analysis.ts';
+  import { chordSettings } from '../chord-settings.svelte.ts';
+  import { STEP_UNIT_LABELS } from '../grid-units.ts';
 
   const MIN_BPM = 40;
   const MAX_BPM = 300;
@@ -18,20 +20,8 @@
 
   let tapTimestamps: number[] = [];
 
-  const showSequencerButtons = $derived(screenState.active === 'rhythm' || screenState.active === 'melody');
   const tempoLabel = $derived(tempoState.bpm == null ? '— BPM' : `${Math.round(tempoState.bpm)} BPM`);
-
-  function startSequencer(): void {
-    sequencerState.running = true;
-    setSequencerRunning(true);
-  }
-
-  function stopSequencer(): void {
-    sequencerState.running = false;
-    resetRhythmCursor();
-    resetMelodyCursor();
-    setSequencerRunning(false);
-  }
+  const stepBtnTitle = $derived(`コマ送り再生（候補や過去/未来コードを押すと${STEP_UNIT_LABELS[chordSettings.stepUnitIndex]}分だけ再生して止まる）`);
 
   async function onTapTempo(): Promise<void> {
     const now = performance.now();
@@ -62,9 +52,19 @@
 
 <div id="menu-bar">
   <button type="button" id="menu-toggle" title="メニュー" onclick={toggleDrawer}>☰</button>
-  {#if showSequencerButtons}
-    <button type="button" id="sequencer-play-btn" title="再生" disabled={sequencerState.running} onclick={startSequencer}>▶</button>
-    <button type="button" id="sequencer-stop-btn" title="停止" disabled={!sequencerState.running} onclick={stopSequencer}>■</button>
+  <button type="button" id="sequencer-play-btn" title="再生" disabled={sequencerState.running} onclick={play}>▶</button>
+  <button type="button" id="sequencer-stop-btn" title="停止" disabled={!sequencerState.running && !sequencerState.stepping} onclick={stop}>■</button>
+  {#if screenState.active === 'chord'}
+    <button
+      type="button"
+      id="sequencer-step-btn"
+      class:active={sequencerState.stepping}
+      title={stepBtnTitle}
+      disabled={tempoState.bpm == null}
+      onclick={enterStepMode}
+    >
+      ⏭
+    </button>
   {/if}
   <button type="button" id="melody-analysis-refresh-btn" title="メロディを解析してコード候補を更新" onclick={onRefreshMelodyAnalysis}>🔄</button>
   <span id="tempo-display" class="menu-bar-label">{tempoLabel}</span>

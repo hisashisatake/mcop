@@ -58,8 +58,12 @@ import { computePastSlotGeoms } from './chord-layout.ts';
 import { isActive, onScreenChange } from './screens.svelte.ts';
 import { pushUndo } from './undo-manager.ts';
 import { chordSettings } from './chord-settings.svelte.ts';
-import { displayPulse } from './timeline.ts';
+import { RULER_H, drawRuler, displayPulse, movePlayhead } from './timeline.ts';
 import { melodySlotAtPulse, melodyWeightsForSlot, melodyAnalysisVersion } from './melody-analysis.ts';
+import { SEQUENCE_TOTAL_PULSES, STEP_UNIT_PULSES, snapRound } from './grid-units.ts';
+import { sequencerState } from './sequencer-state.svelte.ts';
+import { stepAdvance } from './transport.ts';
+import { onSequencerPaused } from './midi.ts';
 import type {
   CandidateGridCell,
   Chord,
@@ -149,6 +153,11 @@ let hoverCandidate: HoverCandidate | null = null;
 let hoverSlot: HoverSlot | null = null; // 過去・未来のホバー共通。startTimeは過去スロットのDock風拡大アニメーション用
 let sounding: number[] = []; // 発音中のノート番号
 let pointerHeld = false; // マウスボタンを押している最中か（awaitを跨ぐ取りこぼし対策）
+// コマ送り再生中、直近の発音開始から`sequencer-paused`（1拍分の自動一時停止）を受け取ったか。
+// コマ送り中は「マウスを離す」と「一時停止に到達する」の両方が揃って初めて音を止める
+// （ユーザー確認済み: すぐ離しても拍の終わりまで鳴り続け、押しっぱなしなら離すまで鳴る）。
+// 通常時（コマ送りでない）は無関係（release()側でsteppingを見て分岐するため参照されない）。
+let pausedSinceNoteStart = false;
 
 // { entries: [{chord, key:{tonicMidi,mode}, pendingPivot, velocity, voicing}], cursor, initialKey }
 // velocityは選択時のセル内クリック位置から一度だけ決まり、以後は変化しない（表示用のベロシティ
@@ -320,7 +329,13 @@ interface Layout {
   candidateOriginY: number;
   slotY: number;
   pastGeoms: PastSlotGeom[];
+  rulerLeft: number;
+  rulerRight: number;
+  rulerTop: number;
 }
+
+const RULER_SIDE_MARGIN = 16; // 左右端からの余白（過去列の左マージンPAST_LEFT_MARGINと揃える）
+const RULER_GAP_FROM_BODY = 12; // 過去/現在/未来スロット・候補ブロックの下端からの間隔
 
 function computeLayout(canvas: HTMLCanvasElement): Layout {
   const W = canvas.width;
@@ -355,7 +370,22 @@ function computeLayout(canvas: HTMLCanvasElement): Layout {
     gapRatio: PAST_GAP_RATIO,
     leftMargin: PAST_LEFT_MARGIN,
   });
-  return { W, H, bodyH, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms };
+  // 再生位置ルーラー: 過去/現在/未来スロット・候補ブロックの下（BOTTOM_MARGINの帯の中）に
+  // 画面幅いっぱいで置く。倍率・横スクロールは持たず、8小節全体を常に画面幅へ収める
+  // （RHYTHM/MELODY画面のルーラーとは独立、範囲選択も持たない）。
+  const rulerLeft = RULER_SIDE_MARGIN;
+  const rulerRight = W - RULER_SIDE_MARGIN;
+  const rulerTop = TOP_MARGIN + bodyH + RULER_GAP_FROM_BODY;
+  return { W, H, bodyH, currentX, candidateX, cellW, cellH, candidateOriginY, slotY, pastGeoms, rulerLeft, rulerRight, rulerTop };
+}
+
+/** ルーラー用のpulse↔X変換（倍率・スクロール無し、8小節全体を[rulerLeft, rulerRight]へ均等割り）。 */
+function rulerPulseToX(layout: Layout, pulse: number): number {
+  return layout.rulerLeft + (pulse / SEQUENCE_TOTAL_PULSES) * (layout.rulerRight - layout.rulerLeft);
+}
+
+function rulerXToPulse(layout: Layout, x: number): number {
+  return ((x - layout.rulerLeft) / (layout.rulerRight - layout.rulerLeft)) * SEQUENCE_TOTAL_PULSES;
 }
 
 async function stopChord(): Promise<void> {
@@ -502,6 +532,7 @@ export function setChordState(newHistory: ChordHistory): void {
 
 async function playChord(notes: number[], velocity: number): Promise<void> {
   await stopChord();
+  pausedSinceNoteStart = false;
   await applyLfoTo(CHORD_CHANNEL);
   for (const note of notes) {
     await noteOn(CHORD_CHANNEL, note, velocity);
@@ -531,6 +562,17 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
 
   canvas.addEventListener('mousedown', async (e) => {
     if (!isActive('chord') || e.button !== 0) return;
+
+    // ルーラー（再生位置バー）のクリック。停止中/コマ送り一時停止中はmovePlayhead内部の
+    // ガードで移動し、再生中（コマ送りの1拍再生中含む）は無視される。範囲選択は持たない。
+    const layout = computeLayout(canvas);
+    if (e.clientX >= layout.rulerLeft && e.clientX < layout.rulerRight && e.clientY >= layout.rulerTop && e.clientY < layout.rulerTop + RULER_H) {
+      const rawPulse = rulerXToPulse(layout, e.clientX);
+      const stepUnit = STEP_UNIT_PULSES[chordSettings.stepUnitIndex];
+      movePlayhead(Math.max(0, Math.min(SEQUENCE_TOTAL_PULSES - 1, snapRound(rawPulse, stepUnit))));
+      return;
+    }
+
     const cell = cellFromPoint(canvas, e.clientX, e.clientY);
     if (!cell) return;
     pointerHeld = true;
@@ -546,12 +588,21 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
       const velocity = velocityFromCellY(cell.yRatio);
       commitSelection(found.chord, velocity);
       await playChord(currentEntry(history)!.voicing, velocity);
+      stepAdvance();
     } else if (cell.kind === 'past' || cell.kind === 'future') {
-      // 過去・未来どちらも「その地点へ再生位置を移動するだけ」の操作にする。発音は
-      // 現在コードスロットのクリックでのみ行う（過去/未来クリックのたびに発音されると
-      // 「聞き直す」のか「移動するだけ」なのか区別できなかったため、役割を分離した）。
+      // 過去・未来は通常「その地点へ再生位置を移動するだけ」の操作（発音は現在コード
+      // スロットのクリックでのみ行う）。コマ送り再生中だけは例外で、移動に加えて発音し
+      // 1拍分進める（ユーザー確認済み: コマ送り中は過去/未来コードも押した音で進めたい）。
       jumpToIndex(cell.index);
-      pointerHeld = false;
+      if (sequencerState.stepping) {
+        const entry = currentEntry(history);
+        if (entry) {
+          await playChord(voicingForPlayback(history.cursor), entry.velocity);
+          stepAdvance();
+        }
+      } else {
+        pointerHeld = false;
+      }
     } else if (cell.kind === 'current') {
       // 現在コードスロットは3列（左/中央/右）。中央列は「クリック位置に応じてベロシティを
       // 再調整する」役割（移動なし）。左列は発音のみ（移動なし）。右列は発音した上で、
@@ -564,13 +615,16 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
         pushUndo();
         history = updateVelocity(history, history.cursor, velocity);
         await playChord(voicingForPlayback(history.cursor), velocity);
+        stepAdvance();
       } else if (cell.col === 'right') {
         await playChord(voicingForPlayback(history.cursor), entry.velocity);
         if (history.cursor < history.entries.length - 1) {
           jumpToIndex(history.cursor + 1);
         }
+        stepAdvance();
       } else {
         await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        stepAdvance();
       }
     }
 
@@ -583,6 +637,9 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
   const release = async () => {
     pointerHeld = false;
     if (sounding.length === 0) return;
+    // コマ送り再生中は、マウスを離しても一時停止（sequencer-paused）に到達するまで鳴らし
+    // 続ける（onSequencerPaused側で止める）。それより先に一時停止済みならここで止める。
+    if (sequencerState.stepping && !pausedSinceNoteStart) return;
     await stopChord();
     onChordChange?.(chordDisplayInfo(currentEntry(history)));
   };
@@ -591,6 +648,16 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
   // 他の画面へ切り替えたときも、鳴りっぱなしを残さず止める（画面を跨いだ音の取りこぼし対策）
   onScreenChange((next) => {
     if (next !== 'chord') release();
+  });
+
+  // コマ送り再生の自動一時停止（transport.tsがsequencerState.running=falseへ反映するのと
+  // 同じイベント）。マウスを離すより後に一時停止が来た場合はここで音を止める
+  // （マウスがまだ押されたままなら、release()側の判定に任せて何もしない）。
+  onSequencerPaused(async () => {
+    pausedSinceNoteStart = true;
+    if (pointerHeld || sounding.length === 0) return;
+    await stopChord();
+    onChordChange?.(chordDisplayInfo(currentEntry(history)));
   });
 
   window.addEventListener('keydown', async (e) => {
@@ -603,6 +670,7 @@ export function setupChordScreen(canvas: HTMLCanvasElement, { onChordChange }: S
       const entry = currentEntry(history);
       if (entry) {
         await playChord(voicingForPlayback(history.cursor), entry.velocity);
+        stepAdvance();
         onChordChange?.(chordDisplayInfo(currentEntry(history)));
       }
     } else if (e.key.toLowerCase() === 'a' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1175,6 +1243,19 @@ function draw(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
 
   drawLayerHint(ctx, W, H);
   drawProgressionLegend(ctx, W, candidateOriginY);
+
+  // 再生位置ルーラー（過去/現在/未来スロット・候補ブロックの下、範囲選択は持たない）
+  drawRuler(ctx, {
+    left: layout.rulerLeft,
+    right: layout.rulerRight,
+    top: layout.rulerTop,
+    gridTop: TOP_MARGIN,
+    gridBottom: TOP_MARGIN + layout.bodyH,
+    pulseToX: (pulse) => rulerPulseToX(layout, pulse),
+    visibleStartPulse: 0,
+    visibleEndPulse: SEQUENCE_TOTAL_PULSES,
+    showSelection: false,
+  });
 }
 
 const LAYER_HINT_LABEL: Record<string, string> = { normal: '', shift: '(Shift)', ctrl: '(Ctrl)', ctrlShift: '(Ctrl+Shift)' };

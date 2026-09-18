@@ -17,6 +17,13 @@ export const SEQUENCE_TOTAL_PULSES = PULSES_PER_BAR * SEQUENCE_BARS; // 768
 export const SNAP_PULSES = [24, 16, 12, 8, 6, 4, 3, 2];
 export const SNAP_LABELS = ['1/4', '1/4T', '1/8', '1/8T', '1/16', '1/16T', '1/32', '1/32T'];
 
+/** コード画面のコマ送り再生（⏭）が一時停止する単位（添字がそのままchordSettings.stepUnitIndex
+ * の値）。SEQUENCE_TOTAL_PULSES(768)を必ず割り切る値のみを選ぶ（Rust側`set_step_unit_pulses`が
+ * 割り切れない値を無視して弾くのと同じ制約）。既定(index=2)は1小節。 */
+export const STEP_UNIT_PULSES = [PULSES_PER_BEAT, PULSES_PER_BEAT * 2, PULSES_PER_BAR, PULSES_PER_BAR * 2];
+export const STEP_UNIT_LABELS = ['1/4', '1/2', '1小節', '2小節'];
+export const DEFAULT_STEP_UNIT_INDEX = 2;
+
 /** pulseを含むマスの開始パルスへ切り下げる。 */
 export function snapFloor(pulse: number, snapPulses: number): number {
   return Math.floor(pulse / snapPulses) * snapPulses;

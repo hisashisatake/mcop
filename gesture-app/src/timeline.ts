@@ -10,6 +10,13 @@
 // （再開のたびにRust側`clock_loop`がclock_totalをstartPulseへジャンプさせる実体は
 // `set_playback_start_pulse`、`midi_out.rs`参照）。ライブseekはしない設計のため、
 // 再生中はstartPulseを書き換えない。
+//
+// コード画面のコマ送り再生（`sequencerState.stepping`）中は、1拍ごとにrunningがtrue/false
+// を行き来する（拍の頭で自動的に一時停止するため）。この「一時停止中」はstartPulseではなく
+// livePulseの最後の値を見せ続ける必要がある——さもないと一時停止のたびに表示上の再生位置が
+// 0（またはstartPulse）へ瞬間的に戻って見えてしまう（実機確認で発見・修正、2026-09-18）。
+// stepping中はrunning/stepping問わずlivePulseを表示し、コマ送りを完全に抜けた
+// （stepping=false、■停止）後だけstartPulseへ戻す。
 
 import { PULSES_PER_BEAT, PULSES_PER_BAR, SEQUENCE_TOTAL_PULSES } from './grid-units.ts';
 import { setPlaybackStartPulse } from './midi.ts';
@@ -28,9 +35,10 @@ let startPulse = 0;
 let livePulse = 0;
 let selection: Selection | null = null;
 
-/** 今描画すべき再生位置（停止中はstartPulse、再生中はlivePulse）。 */
+/** 今描画すべき再生位置（通常は停止中=startPulse・再生中=livePulse。コマ送り再生中は
+ * 1拍ごとの自動一時停止でrunningがfalseに戻ってもlivePulseを見せ続ける、上記コメント参照）。 */
 export function displayPulse(): number {
-  return sequencerState.running ? livePulse : startPulse;
+  return sequencerState.running || sequencerState.stepping ? livePulse : startPulse;
 }
 
 /** `rhythm-step`/`melody-step`イベント受信時に呼ぶ（表示専用、値の書き込みはしない）。 */
@@ -66,6 +74,10 @@ export interface RulerLayout {
   pulseToX: (pulse: number) => number;
   visibleStartPulse: number;
   visibleEndPulse: number;
+  /** 範囲選択のハイライトを描くか（既定true）。コード画面は範囲選択・削除を持たないため、
+   * RHYTHM/MELODY画面で選択中の範囲（モジュール共有のselection状態）が紛れ込んで
+   * 見えてしまわないようfalseを渡す。 */
+  showSelection?: boolean;
 }
 
 /**
@@ -74,9 +86,9 @@ export interface RulerLayout {
  * （描画と当たり判定で式を分けるとズレる、という既存の教訓に従う）。
  */
 export function drawRuler(ctx: CanvasRenderingContext2D, layout: RulerLayout): void {
-  const { left, right, top, gridTop, gridBottom, pulseToX, visibleStartPulse, visibleEndPulse } = layout;
+  const { left, right, top, gridTop, gridBottom, pulseToX, visibleStartPulse, visibleEndPulse, showSelection = true } = layout;
 
-  const sel = selection;
+  const sel = showSelection ? selection : null;
   if (sel) {
     const s = Math.max(sel.start, visibleStartPulse);
     const e = Math.min(sel.end, visibleEndPulse);
